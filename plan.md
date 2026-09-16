@@ -10,10 +10,12 @@ Build a mobile operating environment with:
 - A Rust-first userspace for project-owned services and applications.
 - A Rust/Smithay Wayland compositor designed for touch.
 - An Omarchy-inspired visual system and development experience.
-- Optional Hyprland desktop mode later, especially for an external display.
 - A portable hardware abstraction that can later target Solana Seeker.
+- A reproducible virtual AArch64 phone target for daily development and CI.
 
-The first hardware target is the OnePlus Nord N10 5G. The first milestone is not a complete phone. It is a recoverable, observable boot into a project-controlled initramfs without damaging the stock installation.
+The first physical hardware target is the OnePlus Nord N10 5G. The first development target is a generic AArch64 QEMU virtual phone with a Seeker-like product profile. The first physical-device milestone is not a complete phone: it is a recoverable, observable boot into a project-controlled initramfs without damaging the stock installation.
+
+The virtual target is deliberately **not** called a Solana Seeker emulator. It exercises portable product code with phone-shaped display, touch, rotation, battery, charging, connectivity, and telephony mocks; it cannot establish compatibility with Seeker firmware, hardware, secure-element/Seed Vault interfaces, radios, or boot chain.
 
 ## Read This First: Safety Contract
 
@@ -80,14 +82,15 @@ Do not build project-owned userspace against private downstream interfaces when 
 ## Architecture
 
 ```
-OnePlus bootloader
-  -> Linux kernel + DTB + initramfs
-      -> project init / system supervisor
-          -> hardware adapters
-              -> D-Bus service boundary
-                  -> Rust mobile core
-                      -> Rust/Smithay compositor
-                          -> launcher, settings, dialer, messages, browser
+QEMU AArch64 virtual phone                 OnePlus bootloader / future Seeker boot chain
+  -> generic kernel + rootfs                  -> Linux kernel + DTB + initramfs
+       -> mock / generic adapters                  -> hardware-specific adapters
+                    \                              /
+                     -> project init / system supervisor
+                         -> project-owned D-Bus service boundary
+                             -> Rust mobile core
+                                 -> Rust/Smithay compositor
+                                     -> launcher, settings, dialer, messages, browser
 ```
 
 ### Rust-first policy
@@ -139,6 +142,11 @@ Create directories only as they become necessary. Avoid empty scaffolding that i
 │       ├── initramfs/
 │       ├── kernel/
 │       └── manifests/
+├── targets/
+│   └── qemu-aarch64/         # Generic virtual phone and Seeker-like mock profile
+│       ├── README.md
+│       ├── profile.toml
+│       └── scripts/
 ├── image/
 │   ├── initramfs/
 │   ├── rootfs/
@@ -165,6 +173,7 @@ Keep these files current as facts become known:
 - `docs/partition-map.md`: names, sizes, slots, boot-header versions, hashes, and backup status. Never include secrets or raw unique identifiers.
 - `docs/recovery.md`: proven path back to the stock OS, required files, and verification steps.
 - `docs/status.md`: hardware support matrix for downstream and mainline kernels.
+- `targets/qemu-aarch64/README.md`: QEMU prerequisites, launch command, profile contract, and known fidelity limits.
 - `docs/decisions/`: short architecture decision records for consequential choices.
 - `device/oneplus-billie/README.md`: device-specific build, package, and boot-image notes.
 
@@ -183,6 +192,9 @@ Create a reproducible development environment and a testable Rust workspace with
 5. Add a `justfile` or equivalent task runner with discoverable recipes.
 6. Add CI for formatting, Clippy, unit tests, and documentation.
 7. Create `hardware-api` and `hardware-mock` with one small end-to-end example, such as reading a mocked battery state.
+8. Define a versioned `qemu-aarch64` virtual-phone profile. It must specify display dimensions and scale, touch input, rotation, battery/charging behavior, network state, modem state, and a deterministic clock or event source where tests need one.
+9. Add reproducible QEMU build and launch recipes. Start with the generic `virt` machine and a serial-console-first root filesystem; use a graphical or generic DRM backend only after the serial path is reliable.
+10. Add a CI job that runs the portable service and mock profile without any physical device.
 
 ### Minimum Rust policy
 
@@ -200,8 +212,35 @@ Create a reproducible development environment and a testable Rust workspace with
 - `cargo clippy --workspace --all-targets --all-features` passes.
 - `cargo test --workspace` passes.
 - A mock hardware service starts on the development host and exposes one observable state transition.
+- `just qemu-check` (or an equivalently documented command) boots the virtual target to a serial health report and exits or can be stopped deterministically.
+- The virtual-phone profile has a test covering at least one state change, such as unplugged-to-charging battery state.
 - `just --list` describes the supported workflows.
 - No phone partitions have been modified.
+
+## Virtual Development Target: QEMU AArch64 Virtual Phone
+
+### Goal
+
+Make portable mobile software testable before, alongside, and independently of physical-phone bring-up.
+
+### Contract
+
+- Use QEMU's generic AArch64 `virt` machine; do not encode OnePlus or Seeker device-tree, partition, firmware, or boot-image assumptions in this target.
+- Provide a phone-oriented framebuffer or generic DRM display, absolute-pointer touch input, and a configurable portrait resolution. Keep display values product configuration, not hardware facts.
+- Implement battery, charger, Wi-Fi/network, Bluetooth presence, audio-route, modem, SIM, and suspend behavior through `hardware-mock` or clearly named generic adapters.
+- Make mock transitions controllable through a test API, fixture, or command-line input, and keep them deterministic in CI.
+- Run the shell nested on the host when that gives faster feedback. QEMU is the integration target for the AArch64 root filesystem and service lifecycle, not a replacement for nested UI tests.
+
+### Non-goals and fidelity limits
+
+This target does not validate Qualcomm drivers, GPU acceleration, panel timing, touch-controller behavior, UFS, cellular radio operation, camera, fingerprint, Android/vendor compatibility, secure element, Seed Vault, verified boot, or any Seeker-specific interface. Label all virtual-target evidence as `mock` or `QEMU`; it must not be used to mark physical hardware support as working.
+
+### Required workflows
+
+- `just qemu-build`: build the AArch64 kernel/rootfs artifacts needed by the virtual target.
+- `just qemu-run`: launch an interactive virtual phone with serial logs and the configured display/input backend.
+- `just qemu-check`: run a bounded boot-health and mock-state smoke test suitable for CI.
+- `just shell-nested`: run the compositor nested on the development desktop for rapid UI iteration.
 
 ## Phase 1: Non-Destructive Device Audit
 
@@ -459,7 +498,7 @@ Run a touch-first Rust Wayland shell on the phone.
 ### Development sequence
 
 1. Run the shell nested on a desktop Wayland compositor.
-2. Run against QEMU or a generic DRM backend.
+2. Run against the defined `qemu-aarch64` virtual-phone profile and its generic DRM or framebuffer backend.
 3. Run with software rendering on the phone.
 4. Add GPU acceleration after basic correctness.
 
@@ -549,12 +588,14 @@ Prove that product logic is not tied to OnePlus hardware.
 ### Tasks
 
 - Run all project-owned services with mock adapters in CI.
+- Treat the `qemu-aarch64` profile as the contract test for portable product behavior; keep it free of Seeker-only assumptions.
 - Document every `billie`-specific assumption.
 - Keep firmware discovery and packaging under the device directory.
 - Move reusable Qualcomm logic into clearly named shared components only after a second consumer exists.
 - Define the minimum board-support interface for a second phone.
 - Add Solana functionality only above the hardware abstraction boundary.
-- Treat secure-element or Seed Vault access as unavailable until documented and proven.
+- Treat secure-element or Seed Vault access as unavailable until documented and proven on a physical Seeker device.
+- When Seeker access is available, add a separate board-support target and evidence-backed hardware matrix. Do not promote QEMU results to Seeker compatibility claims.
 
 ## Immediate Agent Assignment
 
@@ -564,11 +605,12 @@ An LLM beginning work from this file should execute the following assignment:
 2. Do not overwrite user work or assume the repository is empty.
 3. Create a short implementation plan for Phase 0 only.
 4. Bootstrap the minimal Rust workspace, documentation skeleton, lint/test configuration, and mock battery example.
-5. Add a non-destructive device-audit tool that defaults to redacting unique identifiers.
-6. Do not connect to or modify the phone unless the human explicitly asks during the active session.
-7. Run formatting, linting, and tests.
-8. Update `docs/status.md` with evidence-backed results.
-9. End with:
+5. Add the documented `qemu-aarch64` virtual-phone profile, launch/check recipes, and one deterministic mock-state smoke test.
+6. Add a non-destructive device-audit tool that defaults to redacting unique identifiers.
+7. Do not connect to or modify the phone unless the human explicitly asks during the active session.
+8. Run formatting, linting, and tests.
+9. Update `docs/status.md` with evidence-backed results, labeling virtual-target results as `mock` or `QEMU`.
+10. End with:
   - Files changed
   - Commands run
   - Test results
@@ -589,6 +631,7 @@ Phase 0 is complete when a new contributor or agent can clone the repository, in
 | Carrier bootloader restriction         | Cannot run custom images                          | Verify exact BE2029 unit before hardware work             |
 | Missing complete `billie` mainline DTS | Significant kernel porting work                   | Use downstream kernel only as bring-up scaffolding        |
 | Proprietary firmware                   | Some hardware cannot be redistributed or replaced | Extract locally; store hashes/manifests, not blobs        |
+| Virtual-target fidelity                | False confidence in physical-device compatibility | Keep QEMU generic; label mock evidence; validate hardware on devices |
 | GPU/display dependencies               | No accelerated UI                                 | Start with logs and software rendering                    |
 | Modem/IMS dependency                   | Calls may fail despite data/SMS                   | Isolate telephony backends; track VoLTE separately        |
 | Audio routing complexity               | Calls connect but are unusable                    | Test ALSA/PipeWire routes before dialer polish            |
@@ -614,7 +657,7 @@ Phase 0 is complete when a new contributor or agent can clone the repository, in
 Optimize for a sequence of small, observable, reversible successes:
 
 ```
-build -> inspect -> emulate -> validate -> request approval -> temporarily boot -> collect evidence
+build -> emulate -> validate -> inspect -> request approval -> temporarily boot -> collect evidence
 ```
 
 Do not optimize for the appearance of progress by generating large amounts of untested scaffolding. On phone bring-up, a reliable log from a minimal initramfs is more valuable than a polished shell that cannot boot.
