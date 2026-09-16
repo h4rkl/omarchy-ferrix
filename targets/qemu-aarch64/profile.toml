@@ -1,0 +1,22 @@
+schema_version = 1
+name = "emulator-dev"
+
+[display]
+width = 1080
+height = 2340
+scale = 1.0
+orientation = "portrait"
+
+[input]
+touch = true
+rotation = true
+
+[power]
+battery_percent = 75
+charging = false
+
+[connectivity]
+wifi = "connected"
+bluetooth_present = true
+modem = "registered"
+sim = "present"

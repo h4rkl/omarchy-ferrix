@@ -11,6 +11,8 @@
 
 # Generated QEMU images and build artifacts
 /artifacts/
+/out/
+/.cache/
 /targets/qemu-aarch64/build/
 /targets/qemu-aarch64/out/
 

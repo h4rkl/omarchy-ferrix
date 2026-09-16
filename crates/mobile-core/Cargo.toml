@@ -1,0 +1,12 @@
+[package]
+name = "mobile-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hardware-api = { path = "../hardware-api" }
+hardware-emulator = { path = "../hardware-emulator" }
+
+[lints]
+workspace = true

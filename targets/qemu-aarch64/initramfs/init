@@ -1,0 +1,18 @@
+#!/bin/sh
+mount -t devtmpfs devtmpfs /dev
+exec >/dev/console 2>&1
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mkdir -p /run /etc/omarchy
+cp /profile.toml /etc/omarchy/profile.toml
+if [ -x /usr/bin/mobile-core ]; then
+  /usr/bin/mobile-core /etc/omarchy/profile.toml
+else
+  printf '%s\n' '{"evidence":"mock","event":"boot-health","status":"ok","profile":"emulator-dev","battery_percent":75,"charging":false}'
+fi
+printf '%s\n' '{"evidence":"mock","event":"power-changed","battery_percent":75,"charging":true}'
+printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok"}'
+if grep -q 'omarchy.mode=check' /proc/cmdline; then
+  poweroff -f
+fi
+exec /bin/sh

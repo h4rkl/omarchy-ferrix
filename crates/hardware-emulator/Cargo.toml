@@ -1,0 +1,11 @@
+[package]
+name = "hardware-emulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hardware-api = { path = "../hardware-api" }
+
+[lints]
+workspace = true
