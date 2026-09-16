@@ -1,0 +1,18 @@
+# Rust build artifacts
+/target/
+
+# Local environment configuration
+.env
+.env.*
+!.env.example
+
+# Local tool state
+/.direnv/
+
+# Generated QEMU images and build artifacts
+/artifacts/
+/targets/qemu-aarch64/build/
+/targets/qemu-aarch64/out/
+
+# macOS Finder metadata
+.DS_Store
