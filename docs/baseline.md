@@ -2,7 +2,11 @@
 
 ## Purpose
 
-This is the initial, implementation-ready baseline for the project's generic AArch64 QEMU virtual phone. It is the primary development and CI target for portable Rust services, the root filesystem, and the mobile shell. Physical-device support is a later, separate board-support effort.
+This is the initial, implementation-ready baseline for the project's generic AArch64 QEMU virtual phone. It is the primary development and CI target for an Omarchy-inspired, Rust-first mobile shell and its project-owned services.
+
+The project is not a new Linux distribution. It composes an existing mobile-Linux substrate with a deliberately small project layer: an Omarchy-style visual system, Rust mobile services, and (where justified) a Rust Wayland shell. postmarketOS and its tooling provide the initial guest-image, packaging, and QEMU route. Existing Linux system services remain authoritative for real hardware integration.
+
+The Solana Seeker is the intended eventual device target, subject to a separate, explicitly approved board-support proposal. Nothing in this baseline asserts Seeker compatibility, examines a Seeker, or authorizes device work. The generic emulator is the portability contract until that proposal supplies a recovery plan, capability evidence, and a Seeker-specific adapter package.
 
 This is a generic virtual-phone environment. It must never claim to emulate or validate a physical device's firmware, secure hardware, modem/radio hardware, vendor drivers, Android compatibility layers, verified boot, or boot chain.
 
@@ -15,10 +19,32 @@ This is a generic virtual-phone environment. It must never claim to emulate or v
 | QEMU acceleration | HVF on Apple Silicon when available; TCG fallback everywhere | Acceleration improves local iteration but must not be required for correctness. |
 | Guest architecture | `aarch64-unknown-linux-gnu` | Matches the architecture intended for future mobile targets. |
 | Initial guest boot | Generic arm64 Linux kernel, initramfs, serial console | Smallest observable boot path; no boot-image tooling or physical device required. |
-| Root filesystem | Build in a pinned Linux container; begin with a minimal BusyBox-based initramfs | Reproducible across macOS and Linux; avoids a host-specific rootfs build. |
+| Root filesystem | Build a postmarketOS rootfs with `pmbootstrap`; permit a stripped serial-only CI image or initramfs overlay | Reuses the distribution's package and image pipeline while preserving a small, observable boot check. |
 | UI development | Nested Smithay shell on the host first; QEMU integration second | Fast UI feedback while QEMU validates guest lifecycle and AArch64 artifacts. |
 | Hardware behavior | Versioned `hardware-emulator` profile | Deterministic state changes for local tests and CI. |
 | CI | Linux runner, TCG-compatible bounded smoke test | No dependency on Apple hardware, display server, or physical phone. |
+| Guest substrate | postmarketOS via `pmbootstrap` | Provides established mobile-Linux packaging, image construction, and a QEMU workflow rather than recreating a distribution build system. |
+| Project product layer | Omarchy-inspired Rust services and mobile shell | Keeps the work differentiated while reusing mature Linux hardware services and distribution infrastructure. |
+
+## Existing-project options and chosen boundary
+
+The project deliberately builds on, rather than replaces, the following projects. Versions, availability, and compatibility must be verified at implementation time; links are maintained here as the architectural starting points.
+
+| Project | What it already provides | Role in this project |
+| --- | --- | --- |
+| [postmarketOS](https://postmarketos.org/) / [pmbootstrap](https://docs.postmarketos.org/pmbootstrap/main/usage.html) | Mobile-Linux distribution tooling, package recipes, image builds, and QEMU image execution | **Chosen initial substrate.** Use its generic AArch64 QEMU support and packaging rather than building a rootfs distribution pipeline. |
+| [Mobian](https://wiki.debian.org/Mobian/) | Debian adapted for mobile devices | Debian-based alternative for package and service compatibility research; not the initial build substrate. |
+| [Droidian](https://droidian.org/) | Debian-derived mobile Linux for Android phones, using libhybris and Halium | Potential future reference if a target requires Android-derived hardware enablement; outside the emulator-first, mainline-oriented baseline. |
+| [Ubuntu Touch / UBports](https://docs.ubports.com/en/latest/) | A complete touch-oriented mobile operating system and Lomiri environment | Product and convergence reference; not selected because this project needs a Rust-first project layer and direct standard-Linux service adapters. |
+| [Maemo Leste](https://maemo-leste.github.io/) | Devuan/Debian-derived free mobile environment | Historical and device-porting reference; not a project dependency by default. |
+| [Phosh](https://phosh.mobi/) and [Phoc](https://gitlab.gnome.org/World/Phosh/phoc) | Mature GTK/GNOME phone shell and compositor, including standard mobile UI integration | Reference implementation and fallback UI for validating the guest and system-service integration. Not the Rust-first product shell. |
+| [Plasma Mobile](https://plasma-mobile.org/) | KDE-based mobile workspace and applications | Alternative reference UI; useful for compatibility and UX comparisons, not a project dependency by default. |
+| [Sxmo](https://sxmo.org/) | Scriptable, minimal mobile user environment | Alternative reference UI for low-resource/mobile interaction patterns. |
+| [Catacomb](https://catacombing.org/) | Rust/Smithay Wayland compositor and mobile-focused applications | Closest existing Rust mobile compositor. Evaluate reuse, contribution, or a maintained fork before writing a compositor from first principles. |
+| [Smithay](https://github.com/Smithay/smithay) | Rust building blocks for Wayland compositors | Chosen compositor foundation if Catacomb cannot meet the product requirements. It is a library, not a complete phone shell. |
+| [ModemManager](https://modemmanager.org/), NetworkManager, UPower, PipeWire, and iio-sensor-proxy | Standard Linux integrations for cellular, networking, power, audio, and sensors | Keep behind project-owned Rust interfaces. Do not reimplement their device protocols. |
+
+The initial decision is therefore: **postmarketOS/pmbootstrap for the guest substrate; a Rust project layer for product behavior; Catacomb evaluation before a custom Smithay shell; and existing Linux services behind typed adapters.**
 
 ## Supported host profile: macOS / Apple Silicon
 
@@ -100,11 +126,11 @@ Never put credentials, personal identifiers, or personal backups in `.env`, `out
 
 ## Target extension contract
 
-`targets/qemu-aarch64/` is the initial and only supported target. It defines the portable behavior contract for the rest of the project.
+`targets/qemu-aarch64/` is the initial and only supported target. It defines the portable behavior contract for the rest of the project and is built from the selected postmarketOS/pmbootstrap guest substrate where practical.
 
-When a concrete additional target is approved, add it as an isolated package at `targets/boards/<target-id>/`. Keep target selection and adapter wiring in the session/bootstrap layer. Product crates, applications, and `hardware-api` must not import a target package or contain target-specific conditionals.
+The first prospective additional target is `targets/boards/solana-seeker/`, but this directory must remain absent until hardware work is separately approved. Keep target selection and adapter wiring in the session/bootstrap layer. Product crates, applications, and `hardware-api` must not import a target package or contain target-specific conditionals.
 
-Each target package must include a versioned manifest, a capability matrix for every `hardware-api` capability (`supported`, `unsupported`, or `mocked`), evidence for each claimed capability, and an explicit recovery procedure for hardware actions. Translate target behavior through a dedicated adapter; promote code into `hardware-linux` only after a demonstrated second consumer.
+Each target package must include a versioned manifest, a capability matrix for every `hardware-api` capability (`supported`, `unsupported`, or `mocked`), evidence for each claimed capability, and an explicit recovery procedure for hardware actions. A future Solana Seeker proposal must additionally establish its supported boot route, kernel and driver sources, partition/recovery procedure, modem and audio integration, and a no-device-data collection policy before any device action. Translate target behavior through a dedicated adapter; promote code into `hardware-linux` only after a demonstrated second consumer.
 
 ## First virtual-phone profile
 
@@ -150,7 +176,7 @@ manifest.json                 # input revisions, hashes, profile, and command me
 serial.log                    # launch output; scrub before attaching externally
 ```
 
-Build all Linux guest artifacts inside the pinned builder container. Pin the container base image by digest and pin kernel/rootfs inputs by immutable revision and checksum. The host may run QEMU directly so graphical and HVF support remain available.
+Build or invoke the postmarketOS guest-image flow in a pinned builder environment. Pin the builder base image by digest and record the `pmbootstrap`, package-repository, kernel, and project input revisions in the manifest. The host may run QEMU directly so graphical and HVF support remain available.
 
 Initial `/init` responsibilities:
 
@@ -181,15 +207,15 @@ Implement the following `justfile` recipes. Each must print the resolved paths a
 ## Implementation order for Codex
 
 1. Inspect the current workspace and preserve all user changes.
-2. Add the Rust workspace, `hardware-api`, `hardware-emulator`, and a small emulator battery/charger state example.
-3. Add `.gitignore`, `.env.example`, and the `targets/qemu-aarch64/` skeleton. Keep the profile parser strict and schema-versioned.
-4. Add `just host-check`; do not install tools automatically. Report missing prerequisites and their documented commands.
-5. Create the pinned Linux guest-builder definition and a minimal serial-first arm64 kernel/initramfs build.
-6. Add `just qemu-build`, `qemu-run`, and bounded headless `qemu-check`.
+2. Establish a reproducible postmarketOS/pmbootstrap generic AArch64 QEMU guest route; retain a minimal serial-first path for bounded CI checks.
+3. Add the Rust workspace, `hardware-api`, `hardware-emulator`, and a small emulator battery/charger state example.
+4. Add `.gitignore`, `.env.example`, and the `targets/qemu-aarch64/` skeleton. Keep the profile parser strict and schema-versioned.
+5. Add `just host-check`; do not install tools automatically. Report missing prerequisites and their documented commands.
+6. Add `just qemu-build`, `qemu-run`, and bounded headless `qemu-check` around the selected guest route.
 7. Cross-compile the mobile core for `aarch64-unknown-linux-gnu`, launch it in the guest, and record boot health.
-8. Add deterministic mock-control integration tests, then wire `qemu-check` into Linux CI.
-9. Add the nested Smithay shell path and then an optional QEMU graphical/input backend.
-10. Document every command, expected output, and known host limitation in `targets/qemu-aarch64/README.md` and `docs/status.md`.
+8. Add typed adapters for existing Linux services and deterministic mock-control integration tests, then wire `qemu-check` into Linux CI.
+9. Evaluate Catacomb against the product requirements; use it, contribute upstream, or document the reason to build the nested Smithay shell path. Then add an optional QEMU graphical/input backend.
+10. Document every command, expected output, existing-project decision, and known host limitation in `targets/qemu-aarch64/README.md` and `docs/status.md`.
 
 At every step, QEMU evidence must be tagged `mock` or `QEMU`. No physical-device action is authorized by this baseline.
 
@@ -222,6 +248,7 @@ At every step, QEMU evidence must be tagged `mock` or `QEMU`. No physical-device
 
 - Connecting to, auditing, unlocking, booting, flashing, or modifying a physical phone.
 - Building an image for, or claiming support for, a physical device.
+- Creating `targets/boards/solana-seeker/`, connecting to a Solana Seeker, or claiming Solana Seeker support. These require a separate board-support proposal and explicit authorization.
 - Android Studio/AVD as the Linux-phone emulator. It may be useful for Android-app work later, but it does not validate this Linux rootfs, init, or Wayland shell.
 - Modem, SMS, calling, real Wi-Fi/Bluetooth, secure hardware, camera, fingerprint, GPU, or vendor-firmware validation.
 - Persistent storage images by default. Use ephemeral disks until a storage test has an explicit persistence and cleanup design.
