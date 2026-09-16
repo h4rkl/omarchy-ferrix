@@ -12,6 +12,13 @@ else
 fi
 printf '%s\n' '{"evidence":"mock","event":"power-changed","battery_percent":75,"charging":true}'
 printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok"}'
+if grep -q 'omarchy.graphics=on' /proc/cmdline; then
+  export XDG_RUNTIME_DIR=/run/user/0
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+  weston --backend=drm-backend.so --tty=1 --log=/run/weston.log &
+  printf '%s\n' '{"evidence":"QEMU","event":"wayland-start","compositor":"weston"}'
+fi
 if grep -q 'omarchy.mode=check' /proc/cmdline; then
   poweroff -f
 fi

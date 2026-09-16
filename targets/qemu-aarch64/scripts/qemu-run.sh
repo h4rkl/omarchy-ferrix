@@ -16,7 +16,11 @@ case "$accel" in
 esac
 [ -x "$(command -v qemu-system-aarch64)" ] || { echo "missing qemu-system-aarch64; install with: brew install qemu" >&2; exit 2; }
 [ -f "$out/Image" ] && [ -f "$out/initramfs.cpio.gz" ] || { echo "missing guest artifacts; run: just qemu-build" >&2; exit 2; }
-set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m 1024 -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode" -nographic
-[ "$graphics" = off ] || set -- "$@" -display "$graphics"
+set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m 1024 -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz"
+if [ "$graphics" = off ]; then
+  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode" -nographic
+else
+  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode omarchy.graphics=on" -device virtio-gpu-pci -display "$graphics" -serial mon:stdio
+fi
 printf 'QEMU command:'; printf ' %s' "$@"; printf '\n'
 exec "$@"

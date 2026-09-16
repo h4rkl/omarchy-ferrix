@@ -13,10 +13,13 @@ stage=$(mktemp -d "$out/initramfs-root.XXXXXX")
 printf 'resolved output: %s\n' "$out"
 printf 'builder image: %s\n' "$image"
 docker pull --platform linux/arm64 "$image" >/dev/null
-docker run --rm --platform linux/arm64 -v "$out:/out" "$image" sh -ec 'apk add --no-cache linux-virt >/dev/null; cp /boot/vmlinuz-virt /out/Image'
-docker create --platform linux/arm64 --name "$container" "$image" sh -c true >/dev/null
+docker create --platform linux/arm64 --name "$container" "$image" sh -c 'sleep 600' >/dev/null
+docker start "$container" >/dev/null
+docker exec "$container" sh -ec 'apk add --no-cache linux-virt weston >/dev/null'
 docker export "$container" | tar -xf - -C "$stage"
+docker stop "$container" >/dev/null
 docker rm "$container" >/dev/null
+cp "$stage/boot/vmlinuz-virt" "$out/Image"
 cp "$root/targets/qemu-aarch64/initramfs/init" "$stage/init"
 cp "${OMARCHY_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$stage/profile.toml"
 chmod 0755 "$stage/init"
