@@ -16,8 +16,21 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
   export XDG_RUNTIME_DIR=/run/user/0
   mkdir -p "$XDG_RUNTIME_DIR"
   chmod 700 "$XDG_RUNTIME_DIR"
-  weston --backend=drm-backend.so --tty=1 --log=/run/weston.log &
-  printf '%s\n' '{"evidence":"QEMU","event":"wayland-start","compositor":"weston"}'
+  modprobe virtio_gpu
+  seatd -n -g root &
+  sleep 1
+  weston --backend=drm-backend.so --continue-without-input --log=/run/weston.log &
+  for _ in $(seq 1 50); do
+    [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
+    sleep 0.1
+  done
+  if [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
+    weston-terminal --fullscreen --shell=/usr/bin/mobile-layout &
+    printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0"}'
+  else
+    printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston"}'
+    cat /run/weston.log
+  fi
 fi
 if grep -q 'omarchy.mode=check' /proc/cmdline; then
   poweroff -f
