@@ -35,7 +35,7 @@ Start the interactive serial virtual phone:
 just qemu-run
 ```
 
-The guest starts a BusyBox shell on the serial console. Use `poweroff` to shut it down. To run the bounded CI-style smoke check instead, use:
+The guest starts a BusyBox shell on the serial console. Press `Ctrl-a`, then `x` to terminate QEMU cleanly from the terminal. To run the bounded CI-style smoke check instead, use:
 
 ```sh
 just qemu-check
