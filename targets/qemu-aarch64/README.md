@@ -51,7 +51,13 @@ OMARCHY_QEMU_GRAPHICS=cocoa just qemu-run
 
 This is the first graphical integration step: Weston runs inside the QEMU guest and the window is QEMU's virtual display. The project Rust shell is the next replacement for this reference compositor.
 
-The first visible surface is a fullscreen reference mobile layout showing the emulator profile's battery and network state. It is intentionally a small Wayland reference client, not the final Rust shell.
+The first visible surface is `mobile-basic-screen`, a fullscreen Rust Wayland client (crate `crates/mobile-basic-screen`) that software-renders an Omarchy-styled basic screen — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, launcher grid, and gesture pill — from the emulator profile's battery, network, and display state. It is built on `smithay-client-toolkit`, `tiny-skia`, and `fontdue`, and is intentionally a reference surface, not the final Rust shell or compositor. Preview it on any host without QEMU:
+
+```sh
+cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
+```
+
+`qemu-build` compiles the guest binary for aarch64 musl inside a pinned `rust` container image; its digest and the binary hash are recorded in `out/qemu-aarch64/manifest.json`.
 
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. The initial serial-only image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the planned postmarketOS/pmbootstrap guest remains the full mobile-image route.
 

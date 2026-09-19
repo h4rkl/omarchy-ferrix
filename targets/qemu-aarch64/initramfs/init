@@ -27,29 +27,27 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
     sleep 0.1
   done
   if [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
-    WAYLAND_DEBUG=1 weston-terminal --fullscreen --shell=/usr/bin/mobile-layout >/run/mobile-layout.log 2>&1 &
+    WAYLAND_DISPLAY=wayland-0 /usr/bin/mobile-basic-screen /etc/omarchy/profile.toml >/run/mobile-basic-screen.log 2>&1 &
     client_pid=$!
     client_ready=false
-    for _ in $(seq 1 50); do
-      if kill -0 "$client_pid" 2>/dev/null && grep -q 'get_registry' /run/mobile-layout.log; then
+    for _ in $(seq 1 100); do
+      if grep -q '"event":"basic-screen-frame"' /run/mobile-basic-screen.log 2>/dev/null; then
         client_ready=true
         break
       fi
       kill -0 "$client_pid" 2>/dev/null || break
       sleep 0.1
     done
-    if [ "$client_ready" = true ]; then
-      sleep 1
+    if [ "$client_ready" = true ] && kill -0 "$client_pid" 2>/dev/null; then
+      cat /run/mobile-basic-screen.log
+      printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0","client":"mobile-basic-screen"}'
+    else
       if kill -0 "$client_pid" 2>/dev/null; then
-        printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0","client":"mobile-layout"}'
+        printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"client-connect"}'
       else
         printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"client-exited"}'
-        cat /run/mobile-layout.log
-        cat /run/weston.log
       fi
-    else
-      printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"client-connect"}'
-      cat /run/mobile-layout.log
+      cat /run/mobile-basic-screen.log
       cat /run/weston.log
     fi
   else

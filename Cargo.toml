@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/hardware-api", "crates/hardware-emulator", "crates/mobile-core"]
+members = [
+    "crates/hardware-api",
+    "crates/hardware-emulator",
+    "crates/mobile-basic-screen",
+    "crates/mobile-core",
+]
 resolver = "2"
 
 [workspace.package]

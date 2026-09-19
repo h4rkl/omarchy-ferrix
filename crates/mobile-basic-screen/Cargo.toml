@@ -1,0 +1,16 @@
+[package]
+name = "mobile-basic-screen"
+description = "Omarchy-styled QEMU reference basic screen: a software-rendered Wayland client, not the product shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fontdue = "0.9"
+tiny-skia = "0.11"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { version = "0.20", default-features = false }
