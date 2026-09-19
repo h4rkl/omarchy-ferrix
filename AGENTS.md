@@ -1,60 +1,31 @@
 # Repository instructions
 
-These instructions apply to the entire repository. Read `docs/baseline.md` and `docs/plan.md` before changing architecture, targets, guest-image construction, hardware APIs, or the mobile shell. If they conflict, `docs/baseline.md` is the implementation baseline and `docs/plan.md` supplies the longer-term product direction.
+These rules apply repository-wide. Load only task-relevant detail: `docs/status.md` for implemented state/limitations; `targets/qemu-aarch64/README.md` for QEMU operation; and both `docs/baseline.md` (implementation authority) and `docs/plan.md` (long-term direction) before changing architecture, targets, guest construction, hardware APIs, or the product shell. Baseline wins conflicts.
 
-## Product boundary
+## Boundaries
 
-- This is an emulator-first, Rust-first mobile Linux environment, not a new distribution.
-- The only supported target is generic AArch64 QEMU `virt`. Describe evidence as `mock` or `QEMU`; never present it as physical-device validation.
-- Do not create a board target, inspect or operate a physical phone, add Android boot tooling, or claim Solana Seeker support without a separately approved board-support proposal.
-- Use postmarketOS/pmbootstrap as the intended full guest substrate. A small Alpine/initramfs guest is acceptable only as the explicitly labelled serial/graphical smoke-test route, not as a replacement product distribution.
+- This is an emulator-first, Rust-first mobile Linux environment, not a distribution. Generic AArch64 QEMU `virt` is the only supported target; label evidence `mock` or `QEMU`, never physical-device validation.
+- Do not inspect or operate phones, add board targets or Android boot tooling, or claim Solana Seeker support without a separately approved board-support proposal.
+- postmarketOS/pmbootstrap is the intended full guest substrate. Alpine/initramfs is only the explicitly labelled smoke-test route.
+- Product code depends on `hardware-api`, not QEMU, kernel, vendor, or board details. Put target selection/adapters in session/bootstrap code; keep target conditionals out of apps, `mobile-core`, and `hardware-api`.
+- Put Linux services (NetworkManager, UPower, PipeWire, ModemManager, sensors) behind typed project-owned adapters; do not reimplement their protocols. New project-owned code is Rust unless a documented constraint prevents it.
 
-## Architecture
+## Product shell
 
-- Product behavior depends on `hardware-api`, never directly on QEMU, kernel, vendor, or board-specific details.
-- Target selection and adapter wiring belong in session/bootstrap code. Keep target conditionals out of applications, `mobile-core`, and `hardware-api`.
-- Keep Linux services such as NetworkManager, UPower, PipeWire, ModemManager, and sensor services behind typed project-owned adapters; do not reimplement their device protocols.
-- New project-owned services, tools, applications, and UI are Rust unless a documented constraint makes that impractical.
+- Evaluate Catacomb reuse/contribution/fork before a new compositor; document gaps before choosing Smithay directly. Develop nested on the host with the versioned mock profile, then integrate into QEMU.
+- Weston and `mobile-basic-screen` are diagnostic/reference surfaces, not the product UI. The product shell is minimal, portrait, touch-first, software-rendered by default, and uses focused fullscreen flows rather than desktop window management. Acceleration must not be required for correctness.
+- Resolve UX choices in this order: explicit requirements, an Omarchy-inspired mobile interpretation (restrained, cohesive, low-noise), then GrapheneOS interaction conventions adapted to this visual system. Do not copy its branding; document intentional departures.
+- Phase 3 includes launcher/status surfaces, gestures, on-screen keyboard, rotation, brightness, quick settings, notifications, and crash recovery.
 
-## Mobile shell
+## QEMU and evidence
 
-- Evaluate Catacomb for reuse, contribution, or maintained fork before starting a compositor from scratch. If it cannot satisfy the requirements, document the gap before choosing Smithay directly.
-- Develop the product shell nested on the host first, using the same versioned mock profile; integrate it into QEMU second.
-- Weston, BusyBox, terminal layouts, and other third-party surfaces are diagnostic/reference tools only. Never call a terminal mock, Weston desktop, or plain test client the product mobile UI.
-- The product shell must be touch-first and portrait-oriented. Phase 3 scope includes fullscreen applications, launcher, status surface, navigation gestures, on-screen keyboard integration, rotation, brightness, quick settings, notifications, and crash recovery.
-- Treat the product UX as an Omarchy-style experience adapted deliberately for mobile, not as a generic Linux desktop reduced to a phone-sized screen. Carry Omarchy's restrained, keyboard-efficient, cohesive character into touch-first layouts, motion, typography, color, surfaces, and workflows where those traits translate well to mobile.
-- Keep the experience highly minimal: prefer focused fullscreen flows, low visual noise, a small number of obvious actions, consistent gestures, and purposeful system surfaces over dense controls, decorative chrome, or desktop-style window management.
-- When Omarchy does not define a mobile interaction, use GrapheneOS UX interactions as the fallback reference for navigation, launcher behavior, notifications, quick settings, privacy and permission surfaces, settings, system prompts, and other standard phone conventions. Adapt the interaction pattern to this project's visual system rather than copying GrapheneOS branding or presenting this project as GrapheneOS-derived.
-- Resolve UX decisions in this order: the project's explicit requirements, an Omarchy-inspired mobile interpretation, then the corresponding GrapheneOS interaction. Document intentional departures when a feature needs a different pattern.
-- Begin with software rendering. Graphics acceleration is optional and must not become a correctness requirement.
-- A graphical completion claim requires visual evidence from the actual rendered framebuffer or window plus a successful compositor/client readiness signal. A process-start log alone is insufficient.
+- Keep `just qemu-check` headless, TCG-compatible, timed, display-independent, and noninteractive. Serial remains mandatory with graphics.
+- Readiness must be observable. Wayland requires a compositor socket plus a connected client; preserve logs and emit a machine-readable failure otherwise. A graphical claim also requires inspection/capture of the actual framebuffer or window, not a process-start log.
+- Mock state comes from `targets/qemu-aarch64/profile.toml`; deterministic tests retain at least unplugged-to-charging coverage. Generated files stay ignored under resolved `out/qemu-aarch64/`; manifests retain pinned inputs and hashes.
 
-## Emulator and evidence
+## Work and validation
 
-- Keep `just qemu-check` headless, TCG-compatible, bounded by a timeout, and independent of human input or a display server.
-- Do not emit readiness before the underlying condition is observable. For Wayland, require the compositor socket and a successfully connected client; on failure, emit a machine-readable failure record and preserve the relevant log.
-- Keep the serial console mandatory even when graphical output is enabled.
-- Use the versioned `targets/qemu-aarch64/profile.toml` for mock state. Deterministic tests must cover at least unplugged-to-charging and later the remaining profile transitions.
-- Generated artifacts belong under the resolved `out/qemu-aarch64/` path and remain ignored. Manifests record pinned inputs and hashes.
-
-## Required checks
-
-Before handing off relevant changes, run the applicable subset of:
-
-```sh
-cargo fmt --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
-just qemu-check
-```
-
-For graphical changes, additionally launch the documented graphical command, capture the QEMU framebuffer or inspect the visible window, and verify that it matches the intended mobile surface. Record limitations honestly in `docs/status.md`.
-
-## Working practices
-
-- Reuse popular, maintained libraries first; hand-roll only where popularity is low or existing packages are not fit for purpose, and document that reasoning. Example: Wayland client plumbing comes from `smithay-client-toolkit` and CPU 2D rendering from `tiny-skia`, while the strict profile parser stays hand-rolled to keep the schema contract explicit.
-- Check new dependencies for license compatibility (MIT/Apache-2.0 preferred) and prefer crates from ecosystems the plan already commits to (for example Smithay).
-- Preserve user changes and keep edits scoped.
-- Do not install host tools automatically; `just host-check` reports prerequisites and installation commands.
-- Keep commands reproducible through checked-in scripts or `just` recipes rather than machine-specific steps.
-- Prefer small, observable, reversible progress: build, emulate, validate, record evidence, then extend.
+- Preserve user changes; keep work scoped, reproducible through checked-in scripts/`just` recipes, and do not install host tools automatically (`just host-check` reports prerequisites).
+- Prefer popular, maintained libraries and MIT/Apache-2.0-compatible dependencies from existing ecosystems. Hand-roll only with a documented fit reason.
+- Run the applicable subset before handoff: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, and `just qemu-check`.
+- For graphical changes, also run the documented graphical workflow, inspect/capture its output, and record evidence and limitations honestly in `docs/status.md`.
