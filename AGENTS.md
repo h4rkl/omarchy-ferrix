@@ -1,6 +1,6 @@
 # Repository instructions
 
-These instructions apply to the entire repository. Read `docs/baseline.md` and `plan.md` before changing architecture, targets, guest-image construction, hardware APIs, or the mobile shell. If they conflict, `docs/baseline.md` is the implementation baseline and `plan.md` supplies the longer-term product direction.
+These instructions apply to the entire repository. Read `docs/baseline.md` and `docs/plan.md` before changing architecture, targets, guest-image construction, hardware APIs, or the mobile shell. If they conflict, `docs/baseline.md` is the implementation baseline and `docs/plan.md` supplies the longer-term product direction.
 
 ## Product boundary
 
@@ -22,6 +22,10 @@ These instructions apply to the entire repository. Read `docs/baseline.md` and `
 - Develop the product shell nested on the host first, using the same versioned mock profile; integrate it into QEMU second.
 - Weston, BusyBox, terminal layouts, and other third-party surfaces are diagnostic/reference tools only. Never call a terminal mock, Weston desktop, or plain test client the product mobile UI.
 - The product shell must be touch-first and portrait-oriented. Phase 3 scope includes fullscreen applications, launcher, status surface, navigation gestures, on-screen keyboard integration, rotation, brightness, quick settings, notifications, and crash recovery.
+- Treat the product UX as an Omarchy-style experience adapted deliberately for mobile, not as a generic Linux desktop reduced to a phone-sized screen. Carry Omarchy's restrained, keyboard-efficient, cohesive character into touch-first layouts, motion, typography, color, surfaces, and workflows where those traits translate well to mobile.
+- Keep the experience highly minimal: prefer focused fullscreen flows, low visual noise, a small number of obvious actions, consistent gestures, and purposeful system surfaces over dense controls, decorative chrome, or desktop-style window management.
+- When Omarchy does not define a mobile interaction, use GrapheneOS UX interactions as the fallback reference for navigation, launcher behavior, notifications, quick settings, privacy and permission surfaces, settings, system prompts, and other standard phone conventions. Adapt the interaction pattern to this project's visual system rather than copying GrapheneOS branding or presenting this project as GrapheneOS-derived.
+- Resolve UX decisions in this order: the project's explicit requirements, an Omarchy-inspired mobile interpretation, then the corresponding GrapheneOS interaction. Document intentional departures when a feature needs a different pattern.
 - Begin with software rendering. Graphics acceleration is optional and must not become a correctness requirement.
 - A graphical completion claim requires visual evidence from the actual rendered framebuffer or window plus a successful compositor/client readiness signal. A process-start log alone is insufficient.
 
