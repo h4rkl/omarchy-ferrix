@@ -56,3 +56,67 @@ The first visible surface is a fullscreen reference mobile layout showing the em
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. The initial serial-only image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the planned postmarketOS/pmbootstrap guest remains the full mobile-image route.
 
 The first boot contract is a JSON `boot-health` record on serial. The smoke check also requires a deterministic mock transition from unplugged to charging.
+
+## Agent-operated graphical session
+
+Use the checked-in agent session when an agent needs to inspect and drive the QEMU
+surface. It retains the mandatory serial console as a file, exposes only a local
+QMP Unix socket, and writes all artifacts beneath the resolved ignored output path.
+It is QEMU/mock evidence, not physical-device validation.
+
+```sh
+just qemu-build
+just qemu-agent-start
+just qemu-frame
+```
+
+`qemu-frame` produces `out/qemu-aarch64/agent/frame.png`: the rendered QEMU
+framebuffer. Attach or ask Codex to inspect that exact PNG after the guest has
+reported `wayland-ready` in `out/qemu-aarch64/agent/serial.log`. A running QEMU
+process by itself is not graphical readiness evidence. The command emits a
+machine-readable QEMU record and fails if the framebuffer is entirely blank,
+while retaining the PNG for diagnosis.
+
+The agent session is headless by default (`-display none`) and uses portable TCG
+unless `OMARCHY_QEMU_ACCEL` is explicitly set, so it remains useful on hosts
+without a display server. To simultaneously open a local QEMU window, choose a
+host backend:
+
+```sh
+OMARCHY_QEMU_GRAPHICS=cocoa just qemu-agent-start
+```
+
+For deterministic input, coordinates are portrait framebuffer pixels from
+`profile.toml`; they are converted to QEMU's absolute pointer range:
+
+```sh
+just qemu-tap 540 1170
+just qemu-key esc
+```
+
+Inspect session state with `just qemu-agent-status`, and end it cleanly with
+`just qemu-agent-stop`. Agent artifacts are:
+
+```text
+out/qemu-aarch64/agent/qmp.sock    # local QMP control socket
+out/qemu-aarch64/agent/serial.log  # mandatory serial evidence
+out/qemu-aarch64/agent/frame.png   # latest rendered framebuffer
+out/qemu-aarch64/agent/launch.log  # resolved QEMU command and host errors
+```
+
+`python3` is the only additional host prerequisite for this mode. Its standard
+library is used by the checked-in QMP helper; no Python packages are installed.
+
+### Prompt handoff
+
+Use an explicit evidence loop in agent prompts:
+
+```text
+Start the agent QEMU session if it is not running. Wait for the QEMU
+wayland-ready record in out/qemu-aarch64/agent/serial.log, capture the actual
+framebuffer with just qemu-frame, inspect out/qemu-aarch64/agent/frame.png,
+then make the smallest change. Treat a blank-framebuffer failure as a graphical
+failure even when Wayland is ready. Rebuild/relaunch as needed and capture a new
+framebuffer before claiming a graphical result. Keep all evidence labelled QEMU
+or mock; do not infer physical-device support.
+```

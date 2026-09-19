@@ -15,6 +15,7 @@
 /.cache/
 /targets/qemu-aarch64/build/
 /targets/qemu-aarch64/out/
+/targets/qemu-aarch64/scripts/__pycache__/
 
 # macOS Finder metadata
 .DS_Store

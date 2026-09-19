@@ -3,6 +3,8 @@ mount -t devtmpfs devtmpfs /dev
 exec </dev/console >/dev/console 2>&1
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
 mkdir -p /run /etc/omarchy
 cp /profile.toml /etc/omarchy/profile.toml
 if [ -x /usr/bin/mobile-core ]; then
@@ -19,16 +21,39 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
   modprobe virtio_gpu
   seatd -n -g root &
   sleep 1
-  weston --backend=drm-backend.so --continue-without-input --log=/run/weston.log &
+  weston --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
   for _ in $(seq 1 50); do
     [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
     sleep 0.1
   done
   if [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
-    weston-terminal --fullscreen --shell=/usr/bin/mobile-layout &
-    printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0"}'
+    WAYLAND_DEBUG=1 weston-terminal --fullscreen --shell=/usr/bin/mobile-layout >/run/mobile-layout.log 2>&1 &
+    client_pid=$!
+    client_ready=false
+    for _ in $(seq 1 50); do
+      if kill -0 "$client_pid" 2>/dev/null && grep -q 'get_registry' /run/mobile-layout.log; then
+        client_ready=true
+        break
+      fi
+      kill -0 "$client_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if [ "$client_ready" = true ]; then
+      sleep 1
+      if kill -0 "$client_pid" 2>/dev/null; then
+        printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0","client":"mobile-layout"}'
+      else
+        printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"client-exited"}'
+        cat /run/mobile-layout.log
+        cat /run/weston.log
+      fi
+    else
+      printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"client-connect"}'
+      cat /run/mobile-layout.log
+      cat /run/weston.log
+    fi
   else
-    printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston"}'
+    printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"socket"}'
     cat /run/weston.log
   fi
 fi

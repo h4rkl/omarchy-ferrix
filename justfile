@@ -20,6 +20,24 @@ qemu-build:
 qemu-run:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-run.sh"
 
+qemu-agent-start:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-start.sh"
+
+qemu-agent-status:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-status.sh"
+
+qemu-frame:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-frame.sh"
+
+qemu-tap x y:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" tap "{{x}}" "{{y}}"
+
+qemu-key key:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}"
+
+qemu-agent-stop:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-stop.sh"
+
 qemu-check:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-check.sh"
 
