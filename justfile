@@ -32,6 +32,9 @@ qemu-frame:
 qemu-tap x y:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" tap "{{x}}" "{{y}}"
 
+qemu-swipe x1 y1 x2 y2:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" swipe "{{x1}}" "{{y1}}" "{{x2}}" "{{y2}}"
+
 qemu-key key:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}"
 

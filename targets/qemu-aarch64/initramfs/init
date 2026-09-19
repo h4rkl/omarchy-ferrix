@@ -19,6 +19,11 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
   mkdir -p "$XDG_RUNTIME_DIR"
   chmod 700 "$XDG_RUNTIME_DIR"
   modprobe virtio_gpu
+  modprobe virtio_input
+  mkdir -p /run/udev
+  /sbin/udevd --daemon
+  /sbin/udevadm trigger --action=add
+  /sbin/udevadm settle
   seatd -n -g root &
   sleep 1
   weston --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
@@ -40,6 +45,8 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
     done
     if [ "$client_ready" = true ] && kill -0 "$client_pid" 2>/dev/null; then
       cat /run/mobile-basic-screen.log
+      tail -n 0 -f /run/mobile-basic-screen.log >/dev/console 2>&1 &
+      grep -i 'input\|libinput' /run/weston.log || true
       printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0","client":"mobile-basic-screen"}'
     else
       if kill -0 "$client_pid" 2>/dev/null; then

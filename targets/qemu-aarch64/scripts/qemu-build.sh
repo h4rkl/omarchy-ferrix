@@ -27,7 +27,7 @@ printf 'builder image: %s\n' "$image"
 docker pull --platform linux/arm64 "$image" >/dev/null
 docker create --platform linux/arm64 --name "$container" "$image" sh -c 'sleep 600' >/dev/null
 docker start "$container" >/dev/null
-docker exec "$container" sh -ec 'apk add --no-cache linux-virt weston weston-backend-drm weston-shell-desktop weston-terminal seatd mesa-dri-gallium >/dev/null'
+docker exec "$container" sh -ec 'apk add --no-cache linux-virt weston weston-backend-drm weston-shell-desktop weston-terminal seatd mesa-dri-gallium eudev libinput-udev >/dev/null'
 docker export "$container" | tar -xf - -C "$stage"
 docker stop "$container" >/dev/null
 docker rm "$container" >/dev/null

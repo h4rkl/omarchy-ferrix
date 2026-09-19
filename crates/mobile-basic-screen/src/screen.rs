@@ -5,10 +5,18 @@
 //! product shell.
 
 use crate::draw::{Canvas, Rect, Style, Type};
+use crate::interaction::{AppId, Page, Target, UiState};
 use crate::profile::Profile;
 use crate::theme;
 
-pub fn compose(p: &Profile, minute_of_day: u32, ty: &Type, width: u32, height: u32) -> Canvas {
+pub fn compose(
+    p: &Profile,
+    minute_of_day: u32,
+    ty: &Type,
+    width: u32,
+    height: u32,
+    state: &UiState,
+) -> Canvas {
     let w = width as i32;
     let h = height as i32;
     // All fixed values are tuned for the profile's 1080x2340 portrait panel and
@@ -18,7 +26,13 @@ pub fn compose(p: &Profile, minute_of_day: u32, ty: &Type, width: u32, height: u
     let hour = minute_of_day / 60;
     let clock = format!("{:02}:{:02}", hour, minute_of_day % 60);
 
-    status_bar(&mut c, p, ty, &clock, s(72), s(40));
+    if state.page != Page::Launcher {
+        shell_page(&mut c, p, ty, &clock, state, s(1).max(1));
+        gesture_pill(&mut c, state, s(1).max(1));
+        return c;
+    }
+
+    status_bar(&mut c, p, ty, &clock, s(72), s(40), state);
 
     // Large clock and greeting, GrapheneOS lock-screen style.
     let clock_style = Style::bold(s(170) as f32, theme::FG);
@@ -50,6 +64,7 @@ pub fn compose(p: &Profile, minute_of_day: u32, ty: &Type, width: u32, height: u
             h: card_h,
         },
         s(1).max(1),
+        state.pressed == Some(Target::Battery),
     );
     network_card(
         &mut c,
@@ -62,29 +77,50 @@ pub fn compose(p: &Profile, minute_of_day: u32, ty: &Type, width: u32, height: u
             h: card_h,
         },
         s(1).max(1),
+        state.pressed == Some(Target::Network),
     );
 
-    launcher_grid(&mut c, ty, margin, gap, s(1080), s(1).max(1));
+    launcher_grid(&mut c, ty, margin, gap, s(1080), s(1).max(1), state);
 
     // Honest footer label and GrapheneOS-style gesture pill.
     let caption = "QEMU reference surface - Rust basic screen";
     let cap_style = Style::regular(s(26) as f32, theme::FG_DIM);
     let capw = ty.width(cap_style, caption);
     ty.text(&mut c, cap_style, caption, (w - capw) / 2, h - s(150));
-    c.fill_rounded(
-        Rect {
-            x: (w - s(320)) / 2,
-            y: h - s(60),
-            w: s(320),
-            h: s(12),
-        },
-        s(6),
-        theme::FG_DIM,
-    );
+    gesture_pill(&mut c, state, s(1).max(1));
     c
 }
 
-fn status_bar(c: &mut Canvas, p: &Profile, ty: &Type, clock: &str, bar_h: i32, pad: i32) {
+fn gesture_pill(c: &mut Canvas, state: &UiState, s1: i32) {
+    c.fill_rounded(
+        Rect {
+            x: (c.width() - 320 * s1) / 2,
+            y: c.height() - 60 * s1,
+            w: 320 * s1,
+            h: if state.pressed == Some(Target::Home) {
+                18 * s1
+            } else {
+                12 * s1
+            },
+        },
+        9 * s1,
+        if state.pressed == Some(Target::Home) {
+            theme::BLUE
+        } else {
+            theme::FG_DIM
+        },
+    );
+}
+
+fn status_bar(
+    c: &mut Canvas,
+    p: &Profile,
+    ty: &Type,
+    clock: &str,
+    bar_h: i32,
+    pad: i32,
+    state: &UiState,
+) {
     let w = c.width();
     c.fill_rect(
         Rect {
@@ -93,7 +129,11 @@ fn status_bar(c: &mut Canvas, p: &Profile, ty: &Type, clock: &str, bar_h: i32, p
             w,
             h: bar_h,
         },
-        theme::BG_DARK,
+        if state.pressed == Some(Target::Status) {
+            theme::SURFACE_HI
+        } else {
+            theme::BG_DARK
+        },
     );
     c.fill_rect(
         Rect {
@@ -217,9 +257,22 @@ fn signal_bars(c: &mut Canvas, right: i32, base: i32, size: i32, registered: boo
     }
 }
 
-fn card(c: &mut Canvas, ty: &Type, r: Rect, title: &str, s1: i32) {
-    c.fill_rounded(r, 24 * s1, theme::SURFACE);
-    c.stroke_rounded(r, 24 * s1, 2, theme::BORDER);
+fn card(c: &mut Canvas, ty: &Type, r: Rect, title: &str, s1: i32, pressed: bool) {
+    c.fill_rounded(
+        r,
+        24 * s1,
+        if pressed {
+            theme::SURFACE_HI
+        } else {
+            theme::SURFACE
+        },
+    );
+    c.stroke_rounded(
+        r,
+        24 * s1,
+        if pressed { 5 * s1 } else { 2 },
+        if pressed { theme::BLUE } else { theme::BORDER },
+    );
     ty.text(
         c,
         Style::regular((28 * s1) as f32, theme::FG_DIM),
@@ -229,8 +282,8 @@ fn card(c: &mut Canvas, ty: &Type, r: Rect, title: &str, s1: i32) {
     );
 }
 
-fn battery_card(c: &mut Canvas, p: &Profile, ty: &Type, r: Rect, s1: i32) {
-    card(c, ty, r, "BATTERY", s1);
+fn battery_card(c: &mut Canvas, p: &Profile, ty: &Type, r: Rect, s1: i32, pressed: bool) {
+    card(c, ty, r, "BATTERY", s1, pressed);
     let color = if p.charging {
         theme::GREEN
     } else if p.battery_percent < 20 {
@@ -279,8 +332,8 @@ fn battery_card(c: &mut Canvas, p: &Profile, ty: &Type, r: Rect, s1: i32) {
     );
 }
 
-fn network_card(c: &mut Canvas, p: &Profile, ty: &Type, r: Rect, s1: i32) {
-    card(c, ty, r, "NETWORK", s1);
+fn network_card(c: &mut Canvas, p: &Profile, ty: &Type, r: Rect, s1: i32, pressed: bool) {
+    card(c, ty, r, "NETWORK", s1, pressed);
     let connected = p.wifi == "connected";
     ty.text(
         c,
@@ -326,17 +379,26 @@ fn network_card(c: &mut Canvas, p: &Profile, ty: &Type, r: Rect, s1: i32) {
     );
 }
 
-fn launcher_grid(c: &mut Canvas, ty: &Type, margin: i32, gap: i32, top: i32, s1: i32) {
-    let apps: [(&str, u32); 6] = [
-        ("Settings", theme::BLUE),
-        ("Messages", theme::GREEN),
-        ("Terminal", theme::PURPLE),
-        ("Dialer", theme::CYAN),
-        ("Camera", theme::YELLOW),
-        ("Files", theme::ORANGE),
+fn launcher_grid(
+    c: &mut Canvas,
+    ty: &Type,
+    margin: i32,
+    gap: i32,
+    top: i32,
+    s1: i32,
+    state: &UiState,
+) {
+    let apps: [(AppId, u32); 6] = [
+        (AppId::Settings, theme::BLUE),
+        (AppId::Messages, theme::GREEN),
+        (AppId::Terminal, theme::PURPLE),
+        (AppId::Dialer, theme::CYAN),
+        (AppId::Camera, theme::YELLOW),
+        (AppId::Files, theme::ORANGE),
     ];
     let tile = (c.width() - 2 * margin - 2 * gap) / 3;
-    for (i, (label, accent)) in apps.into_iter().enumerate() {
+    for (i, (app, accent)) in apps.into_iter().enumerate() {
+        let label = app.label();
         let col = (i % 3) as i32;
         let row = (i / 3) as i32;
         let r = Rect {
@@ -345,8 +407,22 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, margin: i32, gap: i32, top: i32, s1:
             w: tile,
             h: tile,
         };
-        c.fill_rounded(r, 28 * s1, theme::SURFACE);
-        c.stroke_rounded(r, 28 * s1, 2, theme::BORDER);
+        let pressed = state.pressed == Some(Target::App(app));
+        c.fill_rounded(
+            r,
+            28 * s1,
+            if pressed {
+                theme::SURFACE_HI
+            } else {
+                theme::SURFACE
+            },
+        );
+        c.stroke_rounded(
+            r,
+            28 * s1,
+            if pressed { 5 * s1 } else { 2 },
+            if pressed { accent } else { theme::BORDER },
+        );
         let icx = r.x + r.w / 2;
         let icy = r.y + 118 * s1;
         app_icon(c, ty, label, accent, icx, icy, s1);
@@ -473,6 +549,353 @@ fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i3
     }
 }
 
+fn shell_page(c: &mut Canvas, p: &Profile, ty: &Type, clock: &str, state: &UiState, s1: i32) {
+    let bar_h = 72 * s1;
+    status_bar(c, p, ty, clock, bar_h, 40 * s1, state);
+    match state.page {
+        Page::Launcher => {}
+        Page::App(app) => app_page(c, ty, app, state, s1),
+        Page::QuickSettings => quick_settings(c, ty, state, s1),
+        Page::Notifications => notifications(c, ty, state, s1),
+    }
+}
+
+fn page_header(c: &mut Canvas, ty: &Type, title: &str, state: &UiState, s1: i32) {
+    let back = Rect {
+        x: 36 * s1,
+        y: 106 * s1,
+        w: 160 * s1,
+        h: 104 * s1,
+    };
+    if state.pressed == Some(Target::Back) {
+        c.fill_rounded(back, 22 * s1, theme::SURFACE_HI);
+    }
+    ty.text(
+        c,
+        Style::bold((48 * s1) as f32, theme::BLUE),
+        "<",
+        64 * s1,
+        178 * s1,
+    );
+    ty.text(
+        c,
+        Style::bold((54 * s1) as f32, theme::FG),
+        title,
+        150 * s1,
+        178 * s1,
+    );
+    c.fill_rect(
+        Rect {
+            x: 48 * s1,
+            y: 230 * s1,
+            w: c.width() - 96 * s1,
+            h: 2 * s1,
+        },
+        theme::BORDER,
+    );
+}
+
+fn app_page(c: &mut Canvas, ty: &Type, app: AppId, state: &UiState, s1: i32) {
+    page_header(c, ty, app.label(), state, s1);
+    let (accent, eyebrow, title, detail) = match app {
+        AppId::Settings => (
+            theme::BLUE,
+            "DEVICE",
+            "Settings are ready",
+            "Display, sound, connectivity, and privacy controls use mock state in QEMU.",
+        ),
+        AppId::Messages => (
+            theme::GREEN,
+            "INBOX",
+            "No conversations",
+            "New messages will appear here when the messaging service is connected.",
+        ),
+        AppId::Terminal => (
+            theme::PURPLE,
+            "SHELL",
+            "guest@omarchy:~$",
+            "The mandatory serial console remains available in the host terminal.",
+        ),
+        AppId::Dialer => (
+            theme::CYAN,
+            "CALLS",
+            "Mock modem registered",
+            "Calling is unavailable in this generic QEMU target.",
+        ),
+        AppId::Camera => (
+            theme::YELLOW,
+            "CAMERA",
+            "No camera device",
+            "The generic QEMU target does not claim camera hardware support.",
+        ),
+        AppId::Files => (
+            theme::ORANGE,
+            "FILES",
+            "Temporary guest session",
+            "Generated artifacts stay on the host under out/qemu-aarch64.",
+        ),
+    };
+    c.fill_rounded(
+        Rect {
+            x: 72 * s1,
+            y: 360 * s1,
+            w: c.width() - 144 * s1,
+            h: 560 * s1,
+        },
+        34 * s1,
+        theme::SURFACE,
+    );
+    c.stroke_rounded(
+        Rect {
+            x: 72 * s1,
+            y: 360 * s1,
+            w: c.width() - 144 * s1,
+            h: 560 * s1,
+        },
+        34 * s1,
+        3 * s1,
+        accent,
+    );
+    ty.text(
+        c,
+        Style::bold((30 * s1) as f32, accent),
+        eyebrow,
+        120 * s1,
+        450 * s1,
+    );
+    ty.text(
+        c,
+        Style::bold((58 * s1) as f32, theme::FG),
+        title,
+        120 * s1,
+        570 * s1,
+    );
+    wrap_text(
+        c,
+        ty,
+        detail,
+        120 * s1,
+        675 * s1,
+        c.width() - 240 * s1,
+        34 * s1,
+    );
+    ty.text(
+        c,
+        Style::regular((26 * s1) as f32, theme::FG_DIM),
+        "Swipe from the left edge to go back",
+        120 * s1,
+        850 * s1,
+    );
+}
+
+fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState, s1: i32) {
+    page_header(c, ty, "Quick settings", state, s1);
+    toggle(
+        c,
+        ty,
+        Rect {
+            x: 86 * s1,
+            y: 468 * s1,
+            w: 420 * s1,
+            h: 300 * s1,
+        },
+        "Wi-Fi",
+        state.wifi_on,
+        state.pressed == Some(Target::Wifi),
+        theme::CYAN,
+        s1,
+    );
+    toggle(
+        c,
+        ty,
+        Rect {
+            x: 574 * s1,
+            y: 468 * s1,
+            w: 420 * s1,
+            h: 300 * s1,
+        },
+        "Bluetooth",
+        state.bluetooth_on,
+        state.pressed == Some(Target::Bluetooth),
+        theme::BLUE,
+        s1,
+    );
+    ty.text(
+        c,
+        Style::bold((30 * s1) as f32, theme::FG_DIM),
+        "BRIGHTNESS",
+        96 * s1,
+        970 * s1,
+    );
+    let track = Rect {
+        x: 130 * s1,
+        y: 1084 * s1,
+        w: 820 * s1,
+        h: 28 * s1,
+    };
+    c.fill_rounded(track, 14 * s1, theme::SURFACE_HI);
+    let fill = track.w * i32::from(state.brightness) / 100;
+    c.fill_rounded(Rect { w: fill, ..track }, 14 * s1, theme::YELLOW);
+    c.fill_circle(track.x + fill, track.y + track.h / 2, 34 * s1, theme::FG);
+    let value = format!("{}%", state.brightness);
+    ty.text(
+        c,
+        Style::bold((34 * s1) as f32, theme::FG),
+        &value,
+        96 * s1,
+        1210 * s1,
+    );
+    ty.text(
+        c,
+        Style::regular((27 * s1) as f32, theme::FG_DIM),
+        "Drag the rail to adjust the QEMU/mock display value",
+        96 * s1,
+        1280 * s1,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn toggle(
+    c: &mut Canvas,
+    ty: &Type,
+    r: Rect,
+    label: &str,
+    on: bool,
+    pressed: bool,
+    accent: u32,
+    s1: i32,
+) {
+    let color = if on { accent } else { theme::SURFACE };
+    c.fill_rounded(r, 32 * s1, if pressed { theme::SURFACE_HI } else { color });
+    c.stroke_rounded(
+        r,
+        32 * s1,
+        if pressed { 6 * s1 } else { 3 * s1 },
+        if on { accent } else { theme::BORDER },
+    );
+    ty.text(
+        c,
+        Style::bold((44 * s1) as f32, theme::FG),
+        label,
+        r.x + 38 * s1,
+        r.y + 104 * s1,
+    );
+    ty.text(
+        c,
+        Style::regular(
+            (30 * s1) as f32,
+            if on { theme::BG_DARK } else { theme::FG_DIM },
+        ),
+        if on { "On" } else { "Off" },
+        r.x + 38 * s1,
+        r.y + 190 * s1,
+    );
+}
+
+fn notifications(c: &mut Canvas, ty: &Type, state: &UiState, s1: i32) {
+    page_header(c, ty, "Notifications", state, s1);
+    if !state.notification_visible {
+        let title = "You're all caught up";
+        let style = Style::bold((48 * s1) as f32, theme::FG);
+        ty.text(
+            c,
+            style,
+            title,
+            (c.width() - ty.width(style, title)) / 2,
+            780 * s1,
+        );
+        let detail = "Swipe up from the bottom edge to return Home.";
+        let detail_style = Style::regular((28 * s1) as f32, theme::FG_DIM);
+        ty.text(
+            c,
+            detail_style,
+            detail,
+            (c.width() - ty.width(detail_style, detail)) / 2,
+            860 * s1,
+        );
+        return;
+    }
+    let card = Rect {
+        x: 72 * s1,
+        y: 390 * s1,
+        w: c.width() - 144 * s1,
+        h: 390 * s1,
+    };
+    c.fill_rounded(card, 34 * s1, theme::SURFACE);
+    c.stroke_rounded(card, 34 * s1, 2 * s1, theme::BORDER);
+    ty.text(
+        c,
+        Style::bold((30 * s1) as f32, theme::BLUE),
+        "SYSTEM",
+        116 * s1,
+        475 * s1,
+    );
+    ty.text(
+        c,
+        Style::bold((48 * s1) as f32, theme::FG),
+        "QEMU session ready",
+        116 * s1,
+        575 * s1,
+    );
+    wrap_text(
+        c,
+        ty,
+        "Touch input is active. Swipe up from the bottom edge at any time to return Home.",
+        116 * s1,
+        665 * s1,
+        c.width() - 232 * s1,
+        30 * s1,
+    );
+    let clear = Rect {
+        x: 270 * s1,
+        y: 1685 * s1,
+        w: 540 * s1,
+        h: 170 * s1,
+    };
+    c.fill_rounded(
+        clear,
+        30 * s1,
+        if state.pressed == Some(Target::ClearNotifications) {
+            theme::SURFACE_HI
+        } else {
+            theme::SURFACE
+        },
+    );
+    c.stroke_rounded(clear, 30 * s1, 3 * s1, theme::BORDER);
+    let label = "Clear all";
+    let style = Style::bold((38 * s1) as f32, theme::FG);
+    ty.text(
+        c,
+        style,
+        label,
+        (c.width() - ty.width(style, label)) / 2,
+        1790 * s1,
+    );
+}
+
+fn wrap_text(c: &mut Canvas, ty: &Type, text: &str, x: i32, y: i32, max_width: i32, px: i32) {
+    let style = Style::regular(px as f32, theme::FG_DIM);
+    let mut line = String::new();
+    let mut baseline = y;
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if !line.is_empty() && ty.width(style, &candidate) > max_width {
+            ty.text(c, style, &line, x, baseline);
+            line = word.to_owned();
+            baseline += px * 3 / 2;
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        ty.text(c, style, &line, x, baseline);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +909,7 @@ mod tests {
             battery_percent: 75,
             charging: false,
             wifi: "connected".into(),
+            bluetooth_present: true,
             modem: "registered".into(),
             sim: "present".into(),
         }
@@ -495,7 +919,15 @@ mod tests {
     fn composes_non_blank_portrait_surface() {
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
-        let c = compose(&p, 9 * 60 + 41, &ty, p.display_width, p.display_height);
+        let state = UiState::new(true, true);
+        let c = compose(
+            &p,
+            9 * 60 + 41,
+            &ty,
+            p.display_width,
+            p.display_height,
+            &state,
+        );
         assert_eq!((c.width(), c.height()), (1080, 2340));
         // Status bar background and main background are themed.
         assert_eq!(c.get(540, 10), theme::BG_DARK);
@@ -506,5 +938,27 @@ mod tests {
             let v = u32::from_le_bytes([q[0], q[1], q[2], q[3]]) & 0xff_ffff;
             v != theme::BG && v != theme::BG_DARK
         }));
+    }
+
+    #[test]
+    fn every_interactive_page_renders() {
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        for page in [
+            Page::App(AppId::Settings),
+            Page::App(AppId::Messages),
+            Page::App(AppId::Terminal),
+            Page::App(AppId::Dialer),
+            Page::App(AppId::Camera),
+            Page::App(AppId::Files),
+            Page::QuickSettings,
+            Page::Notifications,
+        ] {
+            let mut state = UiState::new(true, true);
+            state.page = page;
+            let c = compose(&p, 600, &ty, 1080, 2340, &state);
+            assert_eq!((c.width(), c.height()), (1080, 2340));
+            assert_ne!(c.get(300, 500), theme::BG);
+        }
     }
 }

@@ -7,6 +7,7 @@ import os
 import socket
 import struct
 import sys
+import time
 import zlib
 
 
@@ -70,6 +71,18 @@ def main():
     tap.add_argument("y", type=int)
     tap.add_argument("--width", type=int, required=True)
     tap.add_argument("--height", type=int, required=True)
+    move = action.add_parser("move")
+    move.add_argument("x", type=int)
+    move.add_argument("y", type=int)
+    move.add_argument("--width", type=int, required=True)
+    move.add_argument("--height", type=int, required=True)
+    swipe = action.add_parser("swipe")
+    swipe.add_argument("x1", type=int)
+    swipe.add_argument("y1", type=int)
+    swipe.add_argument("x2", type=int)
+    swipe.add_argument("y2", type=int)
+    swipe.add_argument("--width", type=int, required=True)
+    swipe.add_argument("--height", type=int, required=True)
     key = action.add_parser("key")
     key.add_argument("key")
     action.add_parser("quit")
@@ -86,18 +99,45 @@ def main():
         }))
         if not nonblank:
             sys.exit(3)
-    elif args.action == "tap":
+    elif args.action in ("tap", "move"):
         if not 0 <= args.x < args.width or not 0 <= args.y < args.height:
-            raise RuntimeError("tap coordinates are outside the configured display")
+            raise RuntimeError("pointer coordinates are outside the configured display")
         x = round(args.x * 32767 / max(args.width - 1, 1))
         y = round(args.y * 32767 / max(args.height - 1, 1))
-        events = [
+        motion = [
             {"type": "abs", "data": {"axis": "x", "value": x}},
             {"type": "abs", "data": {"axis": "y", "value": y}},
-            {"type": "btn", "data": {"button": "left", "down": True}},
-            {"type": "btn", "data": {"button": "left", "down": False}},
         ]
-        request(args.socket, "input-send-event", {"events": events})
+        if args.action == "tap":
+            request(args.socket, "input-send-event", {"events": motion + [
+                {"type": "btn", "data": {"button": "left", "down": True}}
+            ]})
+            time.sleep(0.05)
+            request(args.socket, "input-send-event", {"events": [
+                {"type": "btn", "data": {"button": "left", "down": False}}
+            ]})
+        else:
+            request(args.socket, "input-send-event", {"events": motion})
+    elif args.action == "swipe":
+        points = [(args.x1, args.y1), (args.x2, args.y2)]
+        if any(not 0 <= x < args.width or not 0 <= y < args.height for x, y in points):
+            raise RuntimeError("swipe coordinates are outside the configured display")
+        def absolute(x, y):
+            return [
+                {"type": "abs", "data": {"axis": "x", "value": round(x * 32767 / max(args.width - 1, 1))}},
+                {"type": "abs", "data": {"axis": "y", "value": round(y * 32767 / max(args.height - 1, 1))}},
+            ]
+        request(args.socket, "input-send-event", {"events": absolute(args.x1, args.y1) + [
+            {"type": "btn", "data": {"button": "left", "down": True}}
+        ]})
+        for step in range(1, 7):
+            time.sleep(0.02)
+            x = round(args.x1 + (args.x2 - args.x1) * step / 6)
+            y = round(args.y1 + (args.y2 - args.y1) * step / 6)
+            request(args.socket, "input-send-event", {"events": absolute(x, y)})
+        request(args.socket, "input-send-event", {"events": [
+            {"type": "btn", "data": {"button": "left", "down": False}}
+        ]})
     elif args.action == "key":
         request(args.socket, "send-key", {"keys": [{"type": "qcode", "data": args.key}]})
     else:

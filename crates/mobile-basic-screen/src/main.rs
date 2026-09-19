@@ -9,6 +9,7 @@
 //!   mobile-basic-screen [profile.toml] --preview p.ppm  # any host: render PPM
 
 mod draw;
+mod interaction;
 mod profile;
 mod screen;
 mod theme;
@@ -50,12 +51,15 @@ fn run() -> Result<(), String> {
 
     if let Some(path) = preview {
         let ty = draw::Type::load()?;
+        let state =
+            interaction::UiState::new(profile.wifi == "connected", profile.bluetooth_present);
         let canvas = screen::compose(
             &profile,
             minute,
             &ty,
             profile.display_width,
             profile.display_height,
+            &state,
         );
         std::fs::write(&path, canvas.ppm_bytes()).map_err(|e| e.to_string())?;
         println!(

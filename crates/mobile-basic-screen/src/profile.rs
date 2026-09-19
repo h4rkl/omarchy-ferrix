@@ -11,6 +11,7 @@ pub struct Profile {
     pub battery_percent: u8,
     pub charging: bool,
     pub wifi: String,
+    pub bluetooth_present: bool,
     pub modem: String,
     pub sim: String,
 }
@@ -24,6 +25,7 @@ impl Profile {
         let mut battery_percent = None;
         let mut charging = None;
         let mut wifi = None;
+        let mut bluetooth_present = None;
         let mut modem = None;
         let mut sim = None;
         let mut section = "";
@@ -79,6 +81,13 @@ impl Profile {
                     );
                 }
                 ("connectivity", "wifi") => wifi = Some(value.trim_matches('"').to_owned()),
+                ("connectivity", "bluetooth_present") => {
+                    bluetooth_present = Some(
+                        value
+                            .parse()
+                            .map_err(|_| "bluetooth_present must be true or false".to_owned())?,
+                    );
+                }
                 ("connectivity", "modem") => modem = Some(value.trim_matches('"').to_owned()),
                 ("connectivity", "sim") => sim = Some(value.trim_matches('"').to_owned()),
                 _ => {}
@@ -96,6 +105,7 @@ impl Profile {
             battery_percent: battery_percent.ok_or("missing power battery_percent")?,
             charging: charging.ok_or("missing power charging")?,
             wifi: wifi.unwrap_or_else(|| "unknown".to_owned()),
+            bluetooth_present: bluetooth_present.unwrap_or(false),
             modem: modem.unwrap_or_else(|| "unknown".to_owned()),
             sim: sim.unwrap_or_else(|| "unknown".to_owned()),
         })
@@ -140,6 +150,7 @@ sim = "present"
         assert_eq!(p.battery_percent, 75);
         assert!(!p.charging);
         assert_eq!(p.wifi, "connected");
+        assert!(p.bluetooth_present);
         assert_eq!(p.modem, "registered");
         assert_eq!(p.sim, "present");
     }

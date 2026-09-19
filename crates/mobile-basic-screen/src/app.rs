@@ -7,15 +7,22 @@ use std::io::Write as _;
 use std::num::NonZeroU32;
 
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
-use smithay_client_toolkit::reexports::client::protocol::{wl_output, wl_shm, wl_surface};
+use smithay_client_toolkit::reexports::client::protocol::{
+    wl_output, wl_pointer, wl_seat, wl_shm, wl_surface, wl_touch,
+};
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_output, delegate_registry, delegate_shm, delegate_xdg_shell,
-    delegate_xdg_window,
+    delegate_compositor, delegate_output, delegate_pointer, delegate_registry, delegate_seat,
+    delegate_shm, delegate_touch, delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        touch::TouchHandler,
+    },
     shell::WaylandSurface,
     shell::xdg::XdgShell,
     shell::xdg::window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
@@ -24,12 +31,14 @@ use smithay_client_toolkit::{
 };
 
 use crate::draw::Type;
+use crate::interaction::{Input, UiState};
 use crate::profile::Profile;
 use crate::screen;
 
 struct App {
     registry_state: RegistryState,
     output_state: OutputState,
+    seat_state: SeatState,
     shm: Shm,
     pool: SlotPool,
     window: Window,
@@ -40,6 +49,10 @@ struct App {
     first_frame_reported: bool,
     running: bool,
     error: Option<String>,
+    pointer: Option<wl_pointer::WlPointer>,
+    touch: Option<wl_touch::WlTouch>,
+    input: Input,
+    ui: UiState,
 }
 
 pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
@@ -68,6 +81,7 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
     let mut app = App {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
+        seat_state: SeatState::new(&globals, &qh),
         shm,
         pool,
         window,
@@ -78,6 +92,10 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
         first_frame_reported: false,
         running: true,
         error: None,
+        pointer: None,
+        touch: None,
+        input: Input::default(),
+        ui: UiState::new(profile.wifi == "connected", profile.bluetooth_present),
     };
 
     while app.running {
@@ -107,7 +125,7 @@ impl App {
                     return;
                 }
             };
-        let frame = screen::compose(&self.profile, self.minute, &self.ty, w, h);
+        let frame = screen::compose(&self.profile, self.minute, &self.ty, w, h, &self.ui);
         canvas_bytes.copy_from_slice(&frame.xrgb_bytes());
         self.window
             .wl_surface()
@@ -215,16 +233,208 @@ impl ShmHandler for App {
     }
 }
 
+impl SeatHandler for App {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Pointer if self.pointer.is_none() => {
+                self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+                println!(
+                    "{{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"pointer\",\"status\":\"{}\"}}",
+                    if self.pointer.is_some() {
+                        "ok"
+                    } else {
+                        "failed"
+                    }
+                );
+                let _ = std::io::stdout().flush();
+            }
+            Capability::Touch if self.touch.is_none() => {
+                self.touch = self.seat_state.get_touch(qh, &seat).ok();
+                println!(
+                    "{{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"touch\",\"status\":\"{}\"}}",
+                    if self.touch.is_some() { "ok" } else { "failed" }
+                );
+                let _ = std::io::stdout().flush();
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Pointer => {
+                if let Some(pointer) = self.pointer.take() {
+                    pointer.release();
+                }
+            }
+            Capability::Touch => {
+                if let Some(touch) = self.touch.take() {
+                    touch.release();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for App {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        let mut redraw = false;
+        for event in events {
+            if &event.surface != self.window.wl_surface() {
+                continue;
+            }
+            match event.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    redraw |= self
+                        .input
+                        .motion(0, event.position, &mut self.ui, self.size);
+                }
+                PointerEventKind::Leave { .. } => {
+                    redraw |= self.input.cancel(&mut self.ui);
+                }
+                PointerEventKind::Press { button: 0x110, .. } => {
+                    redraw |= self.input.down(0, event.position, &mut self.ui, self.size);
+                    println!(
+                        "{{\"evidence\":\"QEMU\",\"event\":\"input-press\",\"x\":{},\"y\":{}}}",
+                        event.position.0, event.position.1
+                    );
+                    let _ = std::io::stdout().flush();
+                }
+                PointerEventKind::Release { button: 0x110, .. } => {
+                    redraw |= self
+                        .input
+                        .motion(0, event.position, &mut self.ui, self.size);
+                    redraw |= self.input.up(0, &mut self.ui, self.size);
+                    println!(
+                        "{{\"evidence\":\"QEMU\",\"event\":\"input-release\",\"page\":\"{:?}\"}}",
+                        self.ui.page
+                    );
+                    let _ = std::io::stdout().flush();
+                }
+                _ => {}
+            }
+        }
+        if redraw {
+            self.draw();
+        }
+    }
+}
+
+impl TouchHandler for App {
+    fn down(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        if surface == *self.window.wl_surface()
+            && self.input.down(id, position, &mut self.ui, self.size)
+        {
+            self.draw();
+        }
+    }
+
+    fn up(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        _: u32,
+        id: i32,
+    ) {
+        if self.input.up(id, &mut self.ui, self.size) {
+            self.draw();
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        if self.input.motion(id, position, &mut self.ui, self.size) {
+            self.draw();
+        }
+    }
+
+    fn shape(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+        _: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_touch::WlTouch,
+        _: i32,
+        _: f64,
+    ) {
+    }
+
+    fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {
+        if self.input.cancel(&mut self.ui) {
+            self.draw();
+        }
+    }
+}
+
 impl ProvidesRegistryState for App {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_compositor!(App);
 delegate_output!(App);
+delegate_pointer!(App);
 delegate_shm!(App);
+delegate_seat!(App);
+delegate_touch!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_window!(App);
 delegate_registry!(App);

@@ -97,8 +97,16 @@ For deterministic input, coordinates are portrait framebuffer pixels from
 
 ```sh
 just qemu-tap 540 1170
+just qemu-swipe 540 2250 540 1800
 just qemu-key esc
 ```
+
+The interactive reference surface accepts pointer and Wayland touch input. Tap
+any launcher tile to open its QEMU/mock app view, tap the status bar for quick
+settings, drag the brightness rail, swipe down from the top for notifications,
+swipe right from the left edge for Back, or swipe up from the bottom for Home.
+These interactions demonstrate the guest input path; this client remains a
+reference surface rather than the final product compositor or mobile shell.
 
 Inspect session state with `just qemu-agent-status`, and end it cleanly with
 `just qemu-agent-stop`. Agent artifacts are:
