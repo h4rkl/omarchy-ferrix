@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+runtime=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
+[ -S "$runtime/qmp.sock" ] || { echo "QEMU agent session is not running; run: just qemu-agent-start" >&2; exit 2; }
+[ "$#" -ge 2 ] || { echo "usage: qemu-input.sh tap X Y | key QCODE" >&2; exit 2; }
+if [ "$1" = tap ]; then
+  [ "$#" -eq 3 ] || { echo "usage: qemu-input.sh tap X Y" >&2; exit 2; }
+  profile=${OMARCHY_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
+  width=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
+  height=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
+  [ -n "$width" ] && [ -n "$height" ] || { echo "unable to read display dimensions from $profile" >&2; exit 2; }
+  exec python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" tap "$2" "$3" --width "$width" --height "$height"
+fi
+exec python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" "$@"
