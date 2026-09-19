@@ -48,6 +48,8 @@ For graphical changes, additionally launch the documented graphical command, cap
 
 ## Working practices
 
+- Reuse popular, maintained libraries first; hand-roll only where popularity is low or existing packages are not fit for purpose, and document that reasoning. Example: Wayland client plumbing comes from `smithay-client-toolkit` and CPU 2D rendering from `tiny-skia`, while the strict profile parser stays hand-rolled to keep the schema contract explicit.
+- Check new dependencies for license compatibility (MIT/Apache-2.0 preferred) and prefer crates from ecosystems the plan already commits to (for example Smithay).
 - Preserve user changes and keep edits scoped.
 - Do not install host tools automatically; `just host-check` reports prerequisites and installation commands.
 - Keep commands reproducible through checked-in scripts or `just` recipes rather than machine-specific steps.
