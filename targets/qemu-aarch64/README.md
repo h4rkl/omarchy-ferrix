@@ -51,6 +51,23 @@ OMARCHY_QEMU_GRAPHICS=cocoa just qemu-run
 
 This is the first graphical integration step: Weston runs inside the QEMU guest and the window is QEMU's virtual display. The project Rust shell is the next replacement for this reference compositor.
 
+The host window is sized to fit the desktop. `qemu-run.sh` reads the host's
+visible screen height and backing scale (macOS, via `osascript`), scales the
+profile's portrait panel to that height in physical pixels (aspect ratio
+preserved, never upscaled), and passes the result to the guest as
+`omarchy.display=WxH`. The guest init pins Weston to exactly that mode through a
+generated `/etc/omarchy/weston.ini` (connector `Virtual-1`, idle blanking off),
+because QEMU's Cocoa UI otherwise pushes its own window size into virtio-gpu and
+the guest surface ends up at an arbitrary size. On a 1920x1080-point Retina
+desktop this opens a fixed 415x900-point window showing an 830x1800 guest panel
+at 1:1 host pixels. Set `OMARCHY_QEMU_WINDOW_HEIGHT` (logical points) to
+override the automatic height; QEMU's View menu "Zoom To Fit" makes the window
+resizable. Headless sessions (`-display none`) keep the full profile panel so
+framebuffer evidence stays at the mock geometry, and `just qemu-tap` coordinates
+remain profile pixels in both cases. The guest reports the chosen geometry as a
+`display-geometry` record on serial. The GTK backend path is unverified on this
+macOS host.
+
 The first visible surface is `mobile-basic-screen`, a fullscreen Rust Wayland client (crate `crates/mobile-basic-screen`) that software-renders an Omarchy-styled basic screen — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, launcher grid, and gesture pill — from the emulator profile's battery, network, and display state. It is built on `smithay-client-toolkit`, `tiny-skia`, and `fontdue`, and is intentionally a reference surface, not the final Rust shell or compositor. Preview it on any host without QEMU:
 
 ```sh
@@ -105,6 +122,8 @@ The interactive reference surface accepts pointer and Wayland touch input. Tap
 any launcher tile to open its QEMU/mock app view, tap the status bar for quick
 settings, drag the brightness rail, swipe down from the top for notifications,
 swipe right from the left edge for Back, or swipe up from the bottom for Home.
+Virtual-tablet input displays a transparent blue touch ring with a center dot
+marking the exact hotspot; native Wayland touch contacts do not show a cursor.
 These interactions demonstrate the guest input path; this client remains a
 reference surface rather than the final product compositor or mobile shell.
 

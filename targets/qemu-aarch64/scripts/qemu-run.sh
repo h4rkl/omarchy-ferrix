@@ -16,11 +16,22 @@ cpu=cortex-a57
 case "$accel" in
   hvf|kvm) cpu=host ;;
 esac
-# Windowed host backends scale the guest's portrait panel to a resizable,
-# monitor-sized window; the guest framebuffer keeps the profile resolution.
+# Host window metrics for windowed backends: prints "<visible height in
+# logical points> <backing scale>" or nothing when the host cannot report them
+# (no GUI session, unsupported platform).
+host_window_metrics() {
+  case "$(uname -s)" in
+    Darwin)
+      osascript -l JavaScript -e 'ObjC.import("AppKit"); var s = $.NSScreen.mainScreen; s.isNil() ? "" : Math.floor(s.visibleFrame.size.height) + " " + Math.floor(s.backingScaleFactor)' 2>/dev/null || true
+      ;;
+  esac
+}
 display_for() {
   case "$1" in
-    cocoa) printf 'cocoa,zoom-to-fit=on,zoom-interpolation=on' ;;
+    # The window is fixed at the guest panel size (1 guest pixel = 1 host
+    # pixel); QEMU's View menu can still toggle Zoom To Fit for resizing.
+    cocoa) printf 'cocoa' ;;
+    # Unverified on this host: GTK is only available on Linux hosts.
     gtk) printf 'gtk,zoom-to-fit=on' ;;
     *) printf '%s' "$1" ;;
   esac
@@ -35,26 +46,46 @@ if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   case "$width:$height" in
     *[!0-9:]*|:*|*:) echo "invalid display geometry in $profile" >&2; exit 2 ;;
   esac
-  # On-screen host windows open at the guest resolution, and the profile's
-  # phone panel is taller than most monitors. For windowed backends, scale the
-  # panel to a monitor-friendly height (aspect ratio preserved). Headless
-  # sessions keep the full profile resolution so framebuffer evidence stays
-  # at the mock panel geometry. Taps are normalized, so they are unaffected.
+  # Guest panel geometry. Headless sessions keep the full profile resolution
+  # so framebuffer evidence stays at the mock panel geometry. Windowed
+  # backends open the host window at the guest size, and the profile's phone
+  # panel is taller than a desktop, so the panel is scaled (aspect ratio
+  # preserved, never upscaled) to the host's visible screen height in
+  # physical pixels: logical points times the backing scale (2 on Retina).
+  # The guest pins Weston to exactly this mode via the kernel command line;
+  # otherwise QEMU's Cocoa UI pushes its own window size into virtio-gpu and
+  # the guest surface ends up at an arbitrary size. Tap coordinates are
+  # normalized to the display, so input is unaffected.
   gpu_w=$width
   gpu_h=$height
   case "$graphics" in
     off|none) ;;
     *)
-      max_h=${OMARCHY_QEMU_WINDOW_MAX_HEIGHT:-960}
-      case "$max_h" in *[!0-9]*|'') echo "invalid OMARCHY_QEMU_WINDOW_MAX_HEIGHT: $max_h" >&2; exit 2 ;; esac
-      if [ "$height" -gt "$max_h" ]; then
-        gpu_h=$max_h
-        gpu_w=$(( width * max_h / height ))
+      window_h=${OMARCHY_QEMU_WINDOW_HEIGHT:-}
+      scale=1
+      metrics=$(host_window_metrics)
+      if [ -n "$metrics" ]; then
+        visible_h=${metrics% *}
+        scale=${metrics#* }
+        # Leave room for the title bar and a little breathing space.
+        [ -n "$window_h" ] || window_h=$(( visible_h - 60 ))
+      else
+        [ -n "$window_h" ] || window_h=800
+      fi
+      case "$window_h" in *[!0-9]*|'') echo "invalid OMARCHY_QEMU_WINDOW_HEIGHT: $window_h" >&2; exit 2 ;; esac
+      case "$scale" in *[!0-9]*|''|0) scale=1 ;; esac
+      [ "$window_h" -ge 200 ] || { echo "host window height too small: $window_h points" >&2; exit 2; }
+      target_h=$(( window_h * scale ))
+      if [ "$height" -gt "$target_h" ]; then
+        gpu_h=$(( target_h - target_h % 2 ))
+        gpu_w=$(( width * gpu_h / height ))
         gpu_w=$(( gpu_w - gpu_w % 2 ))
       fi
+      printf 'host window: %sx%s points at %sx backing scale; guest panel %sx%s\n' "$(( gpu_w / scale ))" "$(( gpu_h / scale ))" "$scale" "$gpu_w" "$gpu_h"
       ;;
   esac
   gpu="virtio-gpu-pci,xres=$gpu_w,yres=$gpu_h"
+  graphics_args="omarchy.graphics=on omarchy.display=${gpu_w}x${gpu_h}"
 fi
 if [ "$agent" = 1 ]; then
   runtime="$out/agent"
@@ -63,11 +94,11 @@ if [ "$agent" = 1 ]; then
   [ "$graphics" = off ] && graphics=none
   mkdir -p "$runtime"
   rm -f "$qmp_socket"
-  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode omarchy.graphics=on" -device "$gpu" -device virtio-tablet-pci -display "$(display_for "$graphics")" -serial "file:$serial_log" -qmp "unix:$qmp_socket,server=on,wait=off"
+  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -display "$(display_for "$graphics")" -serial "file:$serial_log" -qmp "unix:$qmp_socket,server=on,wait=off"
 elif [ "$graphics" = off ]; then
   set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode" -nographic
 else
-  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode omarchy.graphics=on" -device "$gpu" -device virtio-tablet-pci -display "$(display_for "$graphics")" -serial mon:stdio
+  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -display "$(display_for "$graphics")" -serial mon:stdio
 fi
 printf 'QEMU command:'; printf ' %s' "$@"; printf '\n'
 exec "$@"

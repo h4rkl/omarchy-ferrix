@@ -48,9 +48,12 @@ def ppm_to_png(source, destination):
         if depth != 255:
             raise RuntimeError("unsupported framebuffer color depth")
         pixels = image.read()
-    if len(pixels) != width * height * 3:
+    # QEMU pads each PPM row to its surface stride (for example 830 px rows
+    # carry two trailing bytes), so accept any stride of at least width * 3.
+    stride, remainder = divmod(len(pixels), height) if height else (0, 1)
+    if remainder or stride < width * 3:
         raise RuntimeError("unexpected QEMU framebuffer size")
-    raw = b"".join(b"\0" + pixels[row * width * 3:(row + 1) * width * 3] for row in range(height))
+    raw = b"".join(b"\0" + pixels[row * stride:row * stride + width * 3] for row in range(height))
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
     encoded = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")

@@ -26,7 +26,7 @@ use smithay_client_toolkit::{
     shell::WaylandSurface,
     shell::xdg::XdgShell,
     shell::xdg::window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
-    shm::slot::SlotPool,
+    shm::slot::{Buffer, SlotPool},
     shm::{Shm, ShmHandler},
 };
 
@@ -37,6 +37,7 @@ use crate::screen;
 
 struct App {
     registry_state: RegistryState,
+    compositor_state: CompositorState,
     output_state: OutputState,
     seat_state: SeatState,
     shm: Shm,
@@ -50,6 +51,8 @@ struct App {
     running: bool,
     error: Option<String>,
     pointer: Option<wl_pointer::WlPointer>,
+    cursor_surface: Option<wl_surface::WlSurface>,
+    cursor_buffer: Option<Buffer>,
     touch: Option<wl_touch::WlTouch>,
     input: Input,
     ui: UiState,
@@ -80,6 +83,7 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
 
     let mut app = App {
         registry_state: RegistryState::new(&globals),
+        compositor_state: compositor,
         output_state: OutputState::new(&globals, &qh),
         seat_state: SeatState::new(&globals, &qh),
         shm,
@@ -93,6 +97,8 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
         running: true,
         error: None,
         pointer: None,
+        cursor_surface: None,
+        cursor_buffer: None,
         touch: None,
         input: Input::default(),
         ui: UiState::new(profile.wifi == "connected", profile.bluetooth_present),
@@ -110,6 +116,56 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
 }
 
 impl App {
+    const CURSOR_SIZE: i32 = 32;
+
+    fn install_touch_cursor(&mut self, qh: &QueueHandle<Self>) -> Result<(), String> {
+        let surface = self.compositor_state.create_surface(qh);
+        let stride = Self::CURSOR_SIZE * 4;
+        let (buffer, pixels) = self
+            .pool
+            .create_buffer(
+                Self::CURSOR_SIZE,
+                Self::CURSOR_SIZE,
+                stride,
+                wl_shm::Format::Argb8888,
+            )
+            .map_err(|error| format!("touch cursor buffer: {error}"))?;
+        pixels.fill(0);
+
+        // Little-endian premultiplied ARGB8888: a transparent center with a
+        // crisp Tokyo Night blue ring, faint outer halo, and exact hotspot dot.
+        let center = (Self::CURSOR_SIZE as f32 - 1.0) / 2.0;
+        for y in 0..Self::CURSOR_SIZE {
+            for x in 0..Self::CURSOR_SIZE {
+                let distance = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
+                let alpha = if distance <= 2.25 {
+                    255_u8
+                } else if (11.0..=13.5).contains(&distance) {
+                    230_u8
+                } else if (10.0..=14.5).contains(&distance) {
+                    72_u8
+                } else {
+                    continue;
+                };
+                let offset = ((y * Self::CURSOR_SIZE + x) * 4) as usize;
+                let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
+                pixels[offset] = premultiply(0xf7);
+                pixels[offset + 1] = premultiply(0xa2);
+                pixels[offset + 2] = premultiply(0x7a);
+                pixels[offset + 3] = alpha;
+            }
+        }
+
+        surface.damage_buffer(0, 0, Self::CURSOR_SIZE, Self::CURSOR_SIZE);
+        buffer
+            .attach_to(&surface)
+            .map_err(|error| format!("touch cursor attach: {error}"))?;
+        surface.commit();
+        self.cursor_surface = Some(surface);
+        self.cursor_buffer = Some(buffer);
+        Ok(())
+    }
+
     fn draw(&mut self) {
         let (w, h) = self.size;
         let stride = w as i32 * 4;
@@ -250,13 +306,10 @@ impl SeatHandler for App {
         match capability {
             Capability::Pointer if self.pointer.is_none() => {
                 self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
+                let cursor_ready = self.pointer.is_some() && self.install_touch_cursor(qh).is_ok();
                 println!(
                     "{{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"pointer\",\"status\":\"{}\"}}",
-                    if self.pointer.is_some() {
-                        "ok"
-                    } else {
-                        "failed"
-                    }
+                    if cursor_ready { "ok" } else { "failed" }
                 );
                 let _ = std::io::stdout().flush();
             }
@@ -284,6 +337,10 @@ impl SeatHandler for App {
                 if let Some(pointer) = self.pointer.take() {
                     pointer.release();
                 }
+                self.cursor_buffer = None;
+                if let Some(surface) = self.cursor_surface.take() {
+                    surface.destroy();
+                }
             }
             Capability::Touch => {
                 if let Some(touch) = self.touch.take() {
@@ -302,7 +359,7 @@ impl PointerHandler for App {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_pointer::WlPointer,
+        pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         let mut redraw = false;
@@ -311,7 +368,21 @@ impl PointerHandler for App {
                 continue;
             }
             match event.kind {
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                PointerEventKind::Enter { serial } => {
+                    if let Some(surface) = self.cursor_surface.as_ref() {
+                        let hotspot = Self::CURSOR_SIZE / 2;
+                        pointer.set_cursor(serial, Some(surface), hotspot, hotspot);
+                        println!(
+                            "{{\"evidence\":\"QEMU\",\"event\":\"cursor-ready\",\"style\":\"transparent-ring\",\"size\":{}}}",
+                            Self::CURSOR_SIZE
+                        );
+                        let _ = std::io::stdout().flush();
+                    }
+                    redraw |= self
+                        .input
+                        .motion(0, event.position, &mut self.ui, self.size);
+                }
+                PointerEventKind::Motion { .. } => {
                     redraw |= self
                         .input
                         .motion(0, event.position, &mut self.ui, self.size);

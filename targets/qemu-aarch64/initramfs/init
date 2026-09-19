@@ -24,9 +24,34 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
   /sbin/udevd --daemon
   /sbin/udevadm trigger --action=add
   /sbin/udevadm settle
+  # Output geometry. The host launcher may request a window-friendly portrait
+  # panel (omarchy.display=WxH); otherwise the profile panel is used. Weston is
+  # pinned to exactly this mode because host UI size hints (QEMU's Cocoa
+  # window pushes its own size into virtio-gpu) must not change the guest
+  # surface. virtio-gpu accepts any mode timing, so a simple modeline suffices.
+  display=$(sed -n 's/.*omarchy\.display=\([0-9][0-9]*x[0-9][0-9]*\).*/\1/p' /proc/cmdline)
+  display_source=cmdline
+  if [ -z "$display" ]; then
+    display_w=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' /etc/omarchy/profile.toml)
+    display_h=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' /etc/omarchy/profile.toml)
+    display="${display_w}x${display_h}"
+    display_source=profile
+  fi
+  display_w=${display%x*}
+  display_h=${display#*x}
+  modeline=$(awk -v w="$display_w" -v h="$display_h" 'BEGIN { ht = w + 160; vt = h + 40; printf "%.3f %d %d %d %d %d %d %d %d -hsync +vsync", ht * vt * 60 / 1000000, w, w + 48, w + 80, ht, h, h + 3, h + 8, vt }')
+  cat > /etc/omarchy/weston.ini <<EOF
+[core]
+idle-time=0
+
+[output]
+name=Virtual-1
+mode=$modeline
+EOF
+  printf '{"evidence":"QEMU","event":"display-geometry","width":%s,"height":%s,"source":"%s","connector":"Virtual-1"}\n' "$display_w" "$display_h" "$display_source"
   seatd -n -g root &
   sleep 1
-  weston --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
+  weston --config=/etc/omarchy/weston.ini --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
   for _ in $(seq 1 50); do
     [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
     sleep 0.1
@@ -47,6 +72,7 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
       cat /run/mobile-basic-screen.log
       tail -n 0 -f /run/mobile-basic-screen.log >/dev/console 2>&1 &
       grep -i 'input\|libinput' /run/weston.log || true
+      grep -E 'video modes|preferred|current' /run/weston.log || true
       printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0","client":"mobile-basic-screen"}'
     else
       if kill -0 "$client_pid" 2>/dev/null; then
