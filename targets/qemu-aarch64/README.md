@@ -102,8 +102,9 @@ product interface or a physical-device control.
 `ferrix-basic-screen` subscribes to the core instead of reading power,
 network, or modem state from the profile itself, redraws on each event, and
 prints a `ui-state` record, so a transition can be proven end to end:
-adapter → core → UI → captured framebuffer (the charging indicator turns
-green with a bolt glyph in both the status bar and the battery card).
+adapter → core → UI → captured framebuffer (the charging indicator switches
+to the `ok` status color with a bolt glyph in both the status bar and the
+battery card).
 Its quick-settings controls send portable product commands through the state
 socket; they do not mutate UI-only state or expose the host mock protocol.
 
@@ -209,13 +210,41 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders a Omarchy Ferrix-styled launcher — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
+The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders the Omarchy Ferrix launcher — the slate/steel/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
 
 ```sh
 cargo run -p ferrix-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
 ```
 
-`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`), and the catalog hash (`apps_sha256`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs.
+### Unified theming (`colors.toml`)
+
+The compositor and every first-party surface load one palette file at process
+start through `ferrix_ui::theme` (format and tokens: `docs/design.md`). Both
+guest routes carry the checked-in `themes/ferrix/colors.toml` as
+`/etc/ferrix/colors.toml`: `qemu-build` stages it next to `profile.toml` and
+the initramfs init copies it into place; the pmOS finalize step installs the
+same product copy into the rootfs. `FERRIX_QEMU_COLORS=<path>` substitutes
+another file at build time. At runtime the lookup order is `FERRIX_COLORS=<path>`,
+then `/etc/ferrix/colors.toml`, then the built-in palette (identical to the
+checked-in file). Each process reports what it loaded; `ferrix-shell`'s record
+reaches serial through its log replay, the surfaces' through the `ferrix-appd`
+log:
+
+```json
+{"evidence":"QEMU","event":"theme-loaded","source":"/etc/ferrix/colors.toml"}
+```
+
+A file that is present but rejected produces `theme-invalid` (with `source`
+and `error`) first and the process continues on the built-in palette
+(`"source":"builtin"`). `ferrix-shell` paints the theme `bg` (`#15181c`) as
+the clear color under every client, so a framebuffer capture taken before a
+client maps shows that color exactly when the product compositor is the one
+scanning out. `just shell-nested` exports `FERRIX_COLORS` pointing at the
+repository file, so the nested `mock` session reports `theme-loaded` with that
+path; set it to another `colors.toml` to preview a different palette on the
+host.
+
+`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`), the catalog hash (`apps_sha256`), and the theme file hash (`colors_sha256`, with its source path as `colors`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs.
 
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. This smoke-test image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the postmarketOS/pmbootstrap guest (below) is the full mobile-image route.
 
@@ -263,8 +292,8 @@ The interactive reference surface accepts pointer and Wayland touch input. Tap
 any launcher tile to open its QEMU/mock app view, tap the status bar for quick
 settings, drag the brightness rail, swipe down from the top for notifications,
 swipe right from the left edge for Back, or swipe up from the bottom for Home.
-Virtual-tablet input displays a transparent blue touch ring with a center dot
-marking the exact hotspot; native Wayland touch contacts do not show a cursor.
+Virtual-tablet input displays a translucent accent-colored touch ring with a
+center dot marking the exact hotspot; native Wayland touch contacts do not show a cursor.
 These interactions demonstrate the guest input path; this client remains a
 reference surface rather than the final product compositor or mobile shell.
 
@@ -459,7 +488,8 @@ configuration (device, kernel flavour, UI, service manager, user, hostname);
 `os-release`; versions of the device, kernel, base, mkinitfs, boot-deploy,
 OpenRC, BusyBox and musl packages as installed; the kernel command line and
 where it came from; partition labels; the readiness marker and product startup
-paths and hashes; hashes of all three product binaries; the
+paths and hashes; hashes of the product binaries and of the installed
+`/etc/ferrix/colors.toml` (`colors_sha256`); the
 project git revision (`-dirty` when the tree has changes) and hashes of
 `pins.env`, `pmbootstrap.cfg` and the marker; and `sha256` plus size of every
 exported artifact. `pmos-check` re-hashes `vmlinuz`, `initramfs` and the disk
@@ -512,7 +542,7 @@ down`; under HVF `pmos-run` reaches the `ferrix login:` prompt in about 15 s.
   the bounded pmOS check so far; framebuffer evidence currently comes from the
   Alpine smoke guest.
 - The rootfs is what pmbootstrap installs from the pinned binary channel. The
-  project binaries, profile, startup script, and readiness marker are injected
+  project binaries, profile, theme file, startup script, and readiness marker are injected
   by mounting the image; native postmarketOS packaging is still future work.
 - `pmbootstrap install` output (`build.log`) is the record of what was
   downloaded; the binary repository behind a stable channel can still change,

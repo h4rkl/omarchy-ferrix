@@ -3,8 +3,11 @@
 //! `alacritty_terminal` (the VT parser, grid, and PTY layer behind Alacritty,
 //! Apache-2.0) runs a real shell and owns the escape-sequence state machine.
 //! This module only spawns it, forwards input, and flattens the visible grid
-//! into a plain [`Snapshot`] in the Omarchy Ferrix palette for the software renderer.
-//! The snapshot keeps rendering and its tests independent of any PTY.
+//! into a plain [`Snapshot`] for the software renderer. Cell colors resolve
+//! through the active [`theme`] (`colors.toml` or the built-in Ferrix palette):
+//! ANSI 0-15 come from `Theme::ansi`, the default foreground and background
+//! from `fg` and `bg`. The snapshot keeps rendering and its tests independent
+//! of any PTY.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use alacritty_terminal::event::EventListener;
@@ -16,12 +19,6 @@ use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use ferrix_ui::theme;
 
-/// Omarchy Ferrix's Tokyo Night ANSI palette (normal 0-7, bright 8-15).
-const ANSI: [u32; 16] = [
-    0x15161e, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xa9b1d6, 0x414868,
-    0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xc0caf5,
-];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
     pub c: char,
@@ -32,12 +29,15 @@ pub struct Cell {
 }
 
 impl Cell {
-    pub const BLANK: Self = Self {
-        c: ' ',
-        fg: theme::FG,
-        bg: None,
-        bold: false,
-    };
+    /// An empty cell in the default foreground on the default background.
+    pub fn blank() -> Self {
+        Self {
+            c: ' ',
+            fg: theme::get().fg,
+            bg: None,
+            bold: false,
+        }
+    }
 }
 
 /// Everything the renderer needs for one frame of the terminal.
@@ -97,7 +97,8 @@ impl Snapshot {
         let content = term.renderable_content();
         let cols = term.columns();
         let rows = term.screen_lines();
-        let mut cells = vec![Cell::BLANK; cols * rows];
+        let default_bg = theme::get().bg;
+        let mut cells = vec![Cell::blank(); cols * rows];
         for indexed in content.display_iter {
             let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
                 continue;
@@ -126,7 +127,7 @@ impl Snapshot {
                     cell.c
                 },
                 fg,
-                bg: (bg != theme::BG).then_some(bg),
+                bg: (bg != default_bg).then_some(bg),
                 bold: flags.contains(Flags::BOLD),
             };
         }
@@ -196,14 +197,17 @@ fn rgb(color: Color, colors: &Colors) -> u32 {
 }
 
 fn named_default(named: NamedColor) -> u32 {
+    let t = theme::get();
     let index = named as usize;
-    if index < ANSI.len() {
-        return ANSI[index];
+    if index < t.ansi.len() {
+        return t.ansi[index];
     }
     match named {
-        NamedColor::Background => theme::BG,
-        NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Cursor => theme::FG,
-        NamedColor::DimForeground => theme::FG_DIM,
+        NamedColor::Background => t.bg,
+        // The block cursor is drawn by the renderer in the accent; the cell
+        // color a program asks for stays plain foreground.
+        NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Cursor => t.fg,
+        NamedColor::DimForeground => t.fg_dim,
         NamedColor::DimBlack
         | NamedColor::DimRed
         | NamedColor::DimGreen
@@ -211,15 +215,16 @@ fn named_default(named: NamedColor) -> u32 {
         | NamedColor::DimBlue
         | NamedColor::DimMagenta
         | NamedColor::DimCyan
-        | NamedColor::DimWhite => mix(ANSI[index - NamedColor::DimBlack as usize], theme::BG, 0.4),
-        _ => theme::FG,
+        | NamedColor::DimWhite => mix(t.ansi[index - NamedColor::DimBlack as usize], t.bg, 0.4),
+        _ => t.fg,
     }
 }
 
-/// xterm 256-color defaults: the palette, the 6x6x6 cube, then grays.
+/// xterm 256-color defaults: the theme's ANSI palette, the 6x6x6 cube, then
+/// grays.
 pub fn indexed_default(index: u8) -> u32 {
     match index {
-        0..=15 => ANSI[usize::from(index)],
+        0..=15 => theme::get().ansi[usize::from(index)],
         16..=231 => {
             let i = u32::from(index - 16);
             let level = |x: u32| if x == 0 { 0 } else { 55 + 40 * x };
@@ -403,7 +408,7 @@ mod session {
                     Event::ColorRequest(index, format) => {
                         let color = u8::try_from(index)
                             .map(indexed_default)
-                            .unwrap_or(theme::FG);
+                            .unwrap_or(theme::get().fg);
                         self.notifier.notify(format(unpack(color)).into_bytes());
                     }
                     _ => {}
@@ -435,12 +440,13 @@ mod tests {
         let s = Snapshot::from_bytes(20, 4, b"hi \x1b[31mred\x1b[0m\r\n\x1b[1;44m B \x1b[0m");
         assert_eq!((s.cols, s.rows), (20, 4));
         assert_eq!(s.line_text(0), "hi red");
-        assert_eq!(s.cell(0, 0).unwrap().fg, theme::FG);
-        assert_eq!(s.cell(3, 0).unwrap().fg, ANSI[1]);
+        let t = theme::get();
+        assert_eq!(s.cell(0, 0).unwrap().fg, t.fg);
+        assert_eq!(s.cell(3, 0).unwrap().fg, t.ansi[1]);
         let b = s.cell(1, 1).unwrap();
         assert_eq!(b.c, 'B');
         assert!(b.bold);
-        assert_eq!(b.bg, Some(ANSI[4]));
+        assert_eq!(b.bg, Some(t.ansi[4]));
         assert_eq!(s.cursor, Some((3, 1)));
         assert_eq!(s.first_text_line().as_deref(), Some("hi red"));
         assert!(!s.app_cursor);
@@ -450,7 +456,7 @@ mod tests {
 
     #[test]
     fn indexed_defaults_cover_cube_and_grays() {
-        assert_eq!(indexed_default(1), ANSI[1]);
+        assert_eq!(indexed_default(1), theme::get().ansi[1]);
         assert_eq!(indexed_default(16), 0x000000);
         assert_eq!(indexed_default(231), 0xffffff);
         assert_eq!(indexed_default(232), 0x080808);

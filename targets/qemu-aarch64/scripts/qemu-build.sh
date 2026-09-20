@@ -64,6 +64,10 @@ for bin in $static_bins; do
 done
 cp "$cache/guest-target/ferrix-shell/release/ferrix-shell" "$stage/usr/bin/ferrix-shell"
 cp "${FERRIX_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$stage/profile.toml"
+# Unified theming: the canonical palette file becomes /etc/ferrix/colors.toml
+# in the guest (init copies it, like profile.toml). FERRIX_QEMU_COLORS swaps
+# in another colors.toml at build time.
+cp "${FERRIX_QEMU_COLORS:-$root/themes/ferrix/colors.toml}" "$stage/colors.toml"
 chmod 0755 "$stage/init" "$stage/usr/bin/ferrix-shell"
 # Application catalog: one JSON descriptor per app (crates/ferrix-app-api schema).
 mkdir -p "$stage/usr/share/ferrix/apps" "$out/product/apps"
@@ -72,6 +76,7 @@ cp "$root"/apps/*.json "$stage/usr/share/ferrix/apps/"
 cp "$root"/apps/*.json "$out/product/apps/"
 cp "$cache/guest-target/ferrix-shell/release/ferrix-shell" "$out/product/ferrix-shell"
 cp "${FERRIX_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$out/product/profile.toml"
+cp "${FERRIX_QEMU_COLORS:-$root/themes/ferrix/colors.toml}" "$out/product/colors.toml"
 (cd "$stage" && find . -print | cpio -o -H newc 2>/dev/null | gzip -9) > "$out/initramfs.cpio.gz"
 image_hash=$(shasum -a 256 "$out/Image" | awk '{print $1}')
 initramfs_hash=$(shasum -a 256 "$out/initramfs.cpio.gz" | awk '{print $1}')
@@ -84,5 +89,7 @@ terminal_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-terminal" | aw
 # Catalog hash: sorted descriptor file names and contents, so a changed or
 # added app changes the manifest.
 apps_hash=$(cd "$root/apps" && for f in $(ls *.json | sort); do printf '%s\n' "$f"; cat "$f"; done | shasum -a 256 | awk '{print $1}')
-printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s","apps_sha256":"%s","profile":"%s"}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$apps_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" > "$out/manifest.json"
+# Theme hash: the exact colors.toml shipped as /etc/ferrix/colors.toml.
+colors_hash=$(shasum -a 256 "$out/product/colors.toml" | awk '{print $1}')
+printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s","apps_sha256":"%s","colors_sha256":"%s","profile":"%s","colors":"%s"}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$apps_hash" "$colors_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
 printf 'built: %s/Image and %s/initramfs.cpio.gz\n' "$out" "$out"

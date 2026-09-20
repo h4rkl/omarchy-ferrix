@@ -364,7 +364,7 @@ pub fn run(
             match compositor.render_frame(
                 &mut renderer,
                 &elements,
-                render::CLEAR_COLOR,
+                render::clear_color(),
                 FrameFlags::empty(),
             ) {
                 Ok(result) => {

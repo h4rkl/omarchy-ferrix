@@ -17,9 +17,15 @@ use smithay::{
 
 use super::{Shell, cursor_hotspot};
 
-/// Tokyo Night background (#1a1b26): visible before any client maps, which is
-/// how a framebuffer capture proves this compositor is the one scanning out.
-pub const CLEAR_COLOR: Color32F = Color32F::new(0.102, 0.106, 0.149, 1.0);
+/// Output clear color: the active theme's `bg` (Ferrix slate `#15181c` from
+/// `themes/ferrix/colors.toml`, or whatever `colors.toml` `theme::init`
+/// loaded). It is visible before any client maps and wherever no surface
+/// covers the output, which is how a framebuffer capture proves this
+/// compositor, painting the theme background, is the one scanning out.
+pub fn clear_color() -> Color32F {
+    let [r, g, b] = crate::color::clear_rgb();
+    Color32F::new(r, g, b, 1.0)
+}
 
 smithay::backend::renderer::element::render_elements! {
     pub ShellRenderElement<R> where R: ImportAll + ImportMem;

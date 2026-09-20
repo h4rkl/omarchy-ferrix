@@ -76,6 +76,7 @@ install -Dm755 /product/ferrix-appd "$mnt/usr/bin/ferrix-appd"
 install -Dm755 /product/ferrix-sandbox "$mnt/usr/bin/ferrix-sandbox"
 install -Dm755 /product/ferrix-terminal "$mnt/usr/bin/ferrix-terminal"
 install -Dm644 /product/profile.toml "$mnt/etc/ferrix/profile.toml"
+install -Dm644 /product/colors.toml "$mnt/etc/ferrix/colors.toml"
 mkdir -p "$mnt/usr/share/ferrix/apps"
 for descriptor in /product/apps/*.json; do
   install -Dm644 "$descriptor" "$mnt/usr/share/ferrix/apps/$(basename "$descriptor")"
@@ -148,6 +149,7 @@ screen_sha=$(sha256sum "$mnt/usr/bin/ferrix-basic-screen" | cut -d' ' -f1)
 appd_sha=$(sha256sum "$mnt/usr/bin/ferrix-appd" | cut -d' ' -f1)
 sandbox_sha=$(sha256sum "$mnt/usr/bin/ferrix-sandbox" | cut -d' ' -f1)
 terminal_sha=$(sha256sum "$mnt/usr/bin/ferrix-terminal" | cut -d' ' -f1)
+colors_sha=$(sha256sum "$mnt/etc/ferrix/colors.toml" | cut -d' ' -f1)
 cat > "$out/image-facts.json" <<JSON
 {
   "os_release": {"pretty_name": "$os_release", "version_id": "$os_version"},
@@ -156,7 +158,7 @@ cat > "$out/image-facts.json" <<JSON
   "kernel_cmdline_source": "$cmdline_source",
   "partitions": [$partitions],
   "readiness_marker": {"path": "$marker_dst", "sha256": "$marker_sha", "service": "openrc local", "local_service_was_enabled": $local_enabled},
-  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "ferrix_core_sha256": "$core_sha", "ferrix_shell_sha256": "$shell_sha", "ferrix_basic_screen_sha256": "$screen_sha", "ferrix_appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrix_terminal_sha256": "$terminal_sha"},
+  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "ferrix_core_sha256": "$core_sha", "ferrix_shell_sha256": "$shell_sha", "ferrix_basic_screen_sha256": "$screen_sha", "ferrix_appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrix_terminal_sha256": "$terminal_sha", "colors_path": "/etc/ferrix/colors.toml", "colors_sha256": "$colors_sha"},
   "exported": [$exported,"qemu-aarch64.img"]
 }
 JSON

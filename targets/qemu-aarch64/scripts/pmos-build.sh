@@ -16,7 +16,7 @@ tag=${FERRIX_GUEST_BUILDER_TAG:-"ferrix-guest-builder:pmbootstrap-$PMBOOTSTRAP_T
 command -v docker >/dev/null || { echo "missing docker; start Docker Desktop (see just host-check)" >&2; exit 2; }
 docker info >/dev/null 2>&1 || { echo "docker daemon is not running; start Docker Desktop" >&2; exit 2; }
 "$root/targets/qemu-aarch64/scripts/qemu-build.sh"
-for file in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal profile.toml apps/org.ferrix.home.json; do
+for file in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal profile.toml colors.toml apps/org.ferrix.home.json; do
   [ -f "$product/$file" ] || { echo "missing product artifact $product/$file" >&2; exit 1; }
 done
 mkdir -p "$out"

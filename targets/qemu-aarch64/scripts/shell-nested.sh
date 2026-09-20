@@ -40,6 +40,11 @@ export FERRIX_CORE_SOCKET="$socket"
 export FERRIX_APPD_SOCKET="$appd_socket"
 export FERRIX_QEMU_PROFILE="$profile"
 export FERRIX_APP_DIR="$root/apps"
+# Unified theming: the compositor and every app ferrix-appd launches read the
+# checked-in palette (the guest reads /etc/ferrix/colors.toml), so this
+# session reports theme-loaded with this path. Set FERRIX_COLORS to try
+# another colors.toml.
+export FERRIX_COLORS="${FERRIX_COLORS:-$root/themes/ferrix/colors.toml}"
 # Only ferrix-appd (and therefore the apps) see the nested socket name; the nested
 # compositor itself is a client of the host session's WAYLAND_DISPLAY.
 WAYLAND_DISPLAY="$wayland_display" "$root/target/debug/ferrix-appd" --nested --socket "$appd_socket" --app-dir "$root/apps" &

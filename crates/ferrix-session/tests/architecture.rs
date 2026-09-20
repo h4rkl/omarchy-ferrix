@@ -197,6 +197,10 @@ fn assert_no_target_conditionals(crate_name: &str) {
     }
 }
 
+/// Modules allowed to parse a TOML schema other than the target profile, as
+/// `(crate, source file)`. `ferrix-ui`'s theme loader reads `colors.toml`.
+const OTHER_TOML_SCHEMA_PARSERS: &[(&str, &str)] = &[("ferrix-ui", "theme.rs")];
+
 #[test]
 fn target_profile_is_the_only_toml_schema_parser() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
@@ -205,19 +209,34 @@ fn target_profile_is_the_only_toml_schema_parser() {
         if *name == "ferrix-target-profile" {
             continue;
         }
+        let allowed_file = |file: &str| {
+            OTHER_TOML_SCHEMA_PARSERS
+                .iter()
+                .any(|(krate, allowed)| krate == name && *allowed == file)
+        };
         let root = crates.join(name);
         let manifest = root.join("Cargo.toml");
-        if std::fs::read_to_string(&manifest).is_ok_and(|text| {
+        let declares_toml = std::fs::read_to_string(&manifest).is_ok_and(|text| {
             text.lines()
                 .any(|line| line.trim_start().starts_with("toml ="))
-        }) {
+        });
+        if declares_toml
+            && !OTHER_TOML_SCHEMA_PARSERS
+                .iter()
+                .any(|(krate, _)| krate == name)
+        {
             offenders.push(manifest.display().to_string());
         }
         let src = root.join("src");
         if let Ok(entries) = std::fs::read_dir(src) {
             for entry in entries.flatten() {
                 let path = entry.path();
+                let file = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("");
                 if path.extension().and_then(|value| value.to_str()) == Some("rs")
+                    && !allowed_file(file)
                     && std::fs::read_to_string(&path).is_ok_and(|text| text.contains("toml::"))
                 {
                     offenders.push(path.display().to_string());

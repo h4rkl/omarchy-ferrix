@@ -623,6 +623,7 @@ dependencies = [
  "ferrix-hardware-api",
  "ferrix-protocol",
  "ferrix-target-profile",
+ "ferrix-ui",
  "serde_json",
  "smithay",
  "tracing",
@@ -653,8 +654,10 @@ name = "ferrix-ui"
 version = "0.1.0"
 dependencies = [
  "fontdue",
+ "serde",
  "smithay-client-toolkit 0.20.0",
  "tiny-skia",
+ "toml",
 ]
 
 [[package]]

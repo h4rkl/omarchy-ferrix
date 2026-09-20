@@ -30,7 +30,7 @@ use crate::interaction::{CrashNotice, Input, SystemAction, UiState};
 use crate::screen;
 
 pub const APP_ID: &str = "org.ferrix.home";
-const TITLE: &str = "Omarchy Ferrix home";
+const TITLE: &str = "ferrix \u{b7} home";
 const APPD_TIMEOUT: Duration = Duration::from_secs(1);
 const APPD_RETRY: Duration = Duration::from_secs(1);
 
@@ -104,6 +104,7 @@ pub fn run(
     ferrix_ui::client::run(config, move |wake| {
         let ty = Type::load()?;
         let core_socket = core.socket().to_owned();
+        let target = core.target.clone();
         let hw = core.state;
         let hw_events = core.spawn(Arc::clone(&wake));
         let (wifi_on, bt_on) = crate::ui_toggles(&hw);
@@ -147,6 +148,7 @@ pub fn run(
         };
         let mut ui = UiState::new(wifi_on, bt_on, tiles);
         ui.brightness = hw.display.brightness_percent;
+        ui.identity = screen::identity_line(&target);
 
         Ok(Home {
             ty,

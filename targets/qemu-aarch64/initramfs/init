@@ -7,6 +7,8 @@ mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
 mkdir -p /run /run/ferrix /etc/ferrix
 cp /profile.toml /etc/ferrix/profile.toml
+# Unified theming: every surface and the compositor read this palette file.
+cp /colors.toml /etc/ferrix/colors.toml
 check_mode=false
 grep -q 'ferrix.mode=check' /proc/cmdline && check_mode=true
 # Machine-readable boot failure. No success record is ever printed on this

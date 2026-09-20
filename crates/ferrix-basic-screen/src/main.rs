@@ -13,11 +13,19 @@
 //! geometry and name. Product code depends on `ferrix-hardware-api`, never on an
 //! adapter.
 //!
+//! Colors come from `ferrix_ui::theme` (`colors.toml` contract), loaded once
+//! here before the first frame in both modes.
+//!
 //! Usage:
 //!   ferrix-basic-screen [profile.toml] [--core /run/ferrix/core.sock]
 //!                       [--ferrix_appd /run/ferrix/ferrix_appd.sock]   # guest: connect to Wayland
-//!   ferrix-basic-screen [profile.toml] --preview p.ppm [--page launcher]
+//!   ferrix-basic-screen [profile.toml] --preview p.ppm [--page PAGE] [--size WxH]
 //!                                                        # any host: render PPM
+//!
+//! `PAGE` is `launcher` (default), `quick-settings`, `notifications`,
+//! `notifications-empty`, or the kind of a non-launchable catalog entry
+//! (`settings`, `camera`, ...) for its reference page. `--size` overrides the
+//! profile's panel size, e.g. `830x1800` for the narrow QEMU display window.
 //!
 //! The profile defaults to the guest copy when present, else the repository
 //! copy, so the manifest's native launch command works in the
@@ -40,6 +48,9 @@ use ferrix_session::{BootstrapOptions, bootstrap};
 use ferrix_target_profile::Profile;
 use ferrix_ui::draw::Type;
 use ferrix_ui::evidence::{emit, json_escape};
+use ferrix_ui::theme;
+
+use crate::interaction::Page;
 
 /// Evidence label for every record this binary emits in a session.
 const EVIDENCE: &str = "QEMU";
@@ -89,6 +100,49 @@ struct Args {
     appd_socket: PathBuf,
     preview: Option<String>,
     page: String,
+    /// Preview-only panel size override (`WxH`).
+    size: Option<(u32, u32)>,
+}
+
+fn parse_size(text: &str) -> Result<(u32, u32), String> {
+    let (w, h) = text
+        .split_once('x')
+        .ok_or_else(|| format!("--size expects WxH, got {text:?}"))?;
+    match (w.parse::<u32>(), h.parse::<u32>()) {
+        (Ok(w), Ok(h)) if w > 0 && h > 0 => Ok((w, h)),
+        _ => Err(format!("--size expects WxH, got {text:?}")),
+    }
+}
+
+/// Resolves a `--page` name against the loaded catalog. Reference pages are
+/// named by the tile's kind so the CLI needs no index arithmetic.
+fn preview_page(name: &str, state: &mut interaction::UiState) -> Result<Page, String> {
+    match name {
+        "launcher" => Ok(Page::Launcher),
+        "quick-settings" => Ok(Page::QuickSettings),
+        "notifications" => Ok(Page::Notifications),
+        "notifications-empty" => {
+            state.notification_visible = false;
+            Ok(Page::Notifications)
+        }
+        kind => state
+            .tiles
+            .iter()
+            .position(|tile| !tile.launchable && tile.kind() == kind)
+            .map(Page::Reference)
+            .ok_or_else(|| {
+                let kinds: Vec<&str> = state
+                    .tiles
+                    .iter()
+                    .filter(|tile| !tile.launchable)
+                    .map(catalog::Tile::kind)
+                    .collect();
+                format!(
+                    "unknown --page {name:?}; use launcher, quick-settings, notifications, notifications-empty, or a reference kind ({})",
+                    kinds.join(", ")
+                )
+            }),
+    }
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -103,6 +157,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             .unwrap_or_else(|| PathBuf::from(ferrix_app_protocol::DEFAULT_SOCKET)),
         preview: None,
         page: "launcher".to_owned(),
+        size: None,
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -110,7 +165,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--preview" => {
                 parsed.preview = Some(it.next().ok_or("--preview requires an output path")?);
             }
-            "--page" => parsed.page = it.next().ok_or("--page requires launcher")?,
+            "--page" => parsed.page = it.next().ok_or("--page requires a page name")?,
+            "--size" => {
+                parsed.size = Some(parse_size(&it.next().ok_or("--size requires WxH")?)?);
+            }
             "--core" => {
                 parsed.core_socket =
                     PathBuf::from(it.next().ok_or("--core requires a socket path")?);
@@ -131,9 +189,8 @@ fn run() -> Result<(), String> {
     let minute = utc_minute_of_day();
 
     if let Some(path) = args.preview {
-        if args.page != "launcher" {
-            return Err(format!("unknown --page {}; use launcher", args.page));
-        }
+        // Host render: the theme is mock evidence like the frame it colors.
+        theme::init("mock", None);
         // No daemons on the host: bootstrap the same session the core would
         // and read the catalog straight from the descriptors.
         let session = bootstrap(BootstrapOptions::from_env().with_profile_path(&args.profile_path))
@@ -145,21 +202,19 @@ fn run() -> Result<(), String> {
         let (app_dir, tiles) = catalog::load_descriptor_tiles()?;
         let mut state = interaction::UiState::new(wifi_on, bt_on, tiles);
         state.brightness = hw.display.brightness_percent;
-        let canvas = screen::compose(
-            &hw,
-            minute,
-            &ty,
-            profile.display.width,
-            profile.display.height,
-            &state,
-        );
+        state.identity = screen::identity_line(&session.target_id);
+        state.page = preview_page(&args.page, &mut state)?;
+        let (width, height) = args
+            .size
+            .unwrap_or((profile.display.width, profile.display.height));
+        let canvas = screen::compose(&hw, minute, &ty, width, height, &state);
         std::fs::write(&path, canvas.ppm_bytes()).map_err(|e| e.to_string())?;
         emit(format!(
             "{{\"evidence\":\"mock\",\"event\":\"basic-screen-preview\",\"page\":\"{}\",\"path\":\"{}\",\"width\":{},\"height\":{},\"charging\":{},\"tiles\":{},\"app_dir\":\"{}\"}}",
             json_escape(&args.page),
             json_escape(&path),
-            profile.display.width,
-            profile.display.height,
+            width,
+            height,
             hw.power.charging,
             state.tiles.len(),
             json_escape(&app_dir.display().to_string())
@@ -167,7 +222,9 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    // Guest: geometry from the profile, state from the core.
+    // Guest: geometry from the profile, state from the core. Theme first so
+    // the first frame is already in the loaded palette.
+    theme::init(EVIDENCE, None);
     let profile = Profile::load(&args.profile_path).map_err(|e| e.to_string())?;
     let core = ferrix_protocol::subscribe(&args.core_socket, Duration::from_secs(10))?;
     emit(format!(
@@ -226,5 +283,45 @@ mod tests {
         assert_eq!(args.appd_socket, PathBuf::from("/tmp/ferrix-appd.sock"));
         assert!(parse_args(["--bogus".to_owned()]).is_err());
         assert!(parse_args(["--preview".to_owned()]).is_err());
+
+        let args =
+            parse_args(["--page", "quick-settings", "--size", "830x1800"].map(str::to_owned))
+                .unwrap();
+        assert_eq!(args.page, "quick-settings");
+        assert_eq!(args.size, Some((830, 1800)));
+        assert!(parse_args(["--size", "830"].map(str::to_owned)).is_err());
+        assert!(parse_args(["--size", "0x10"].map(str::to_owned)).is_err());
+    }
+
+    #[test]
+    fn preview_pages_resolve_by_name_and_reference_kind() {
+        let mut state = interaction::UiState::new(true, true, test_tiles());
+        assert_eq!(preview_page("launcher", &mut state), Ok(Page::Launcher));
+        assert_eq!(
+            preview_page("quick-settings", &mut state),
+            Ok(Page::QuickSettings)
+        );
+        assert_eq!(
+            preview_page("notifications", &mut state),
+            Ok(Page::Notifications)
+        );
+        assert!(state.notification_visible);
+        assert_eq!(
+            preview_page("notifications-empty", &mut state),
+            Ok(Page::Notifications)
+        );
+        assert!(!state.notification_visible);
+        let settings =
+            state.tile_index(&ferrix_app_api::AppId::new("org.ferrix.settings").unwrap());
+        assert_eq!(
+            preview_page("settings", &mut state).ok(),
+            settings.map(Page::Reference)
+        );
+        let error = preview_page("terminal", &mut state).unwrap_err();
+        assert!(
+            error.contains("settings"),
+            "launchable kinds are not pages: {error}"
+        );
+        assert!(preview_page("bogus", &mut state).is_err());
     }
 }

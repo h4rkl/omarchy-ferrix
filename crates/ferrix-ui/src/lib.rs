@@ -2,7 +2,8 @@
 //!
 //! - [`draw`]: a thin `tiny-skia` + `fontdue` canvas with the embedded
 //!   JetBrains Mono faces.
-//! - [`theme`]: the Tokyo Night palette.
+//! - [`theme`]: the Ferrix palette (slate surfaces, steel type, rust accent)
+//!   and the `colors.toml` loader behind [`theme::get`].
 //! - [`osk`] and [`keymap`]: the touch keyboard geometry and the evdev keymap
 //!   shared by hit testing, rendering, and terminal input.
 //! - [`evidence`]: single-line JSON evidence records on stdout.

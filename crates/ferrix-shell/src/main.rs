@@ -20,6 +20,7 @@
 
 mod appd_link;
 mod cli;
+mod color;
 mod config;
 mod evidence;
 mod gesture;
@@ -100,6 +101,11 @@ fn run(args: Vec<String>, evidence: Evidence) -> Result<(), Failure> {
         emit_geometry(evidence, &config, plan);
         return Ok(());
     }
+    // The palette is loaded once, before anything paints: the clear color
+    // under every client comes from the same `colors.toml` the surfaces read
+    // ($FERRIX_COLORS, then /etc/ferrix/colors.toml, then the built-in). This
+    // emits the `theme-loaded` (and, for a bad file, `theme-invalid`) record.
+    ferrix_ui::theme::init(evidence.label(), None);
 
     let core = ferrix_protocol::subscribe(
         std::path::Path::new(&args.core_socket),

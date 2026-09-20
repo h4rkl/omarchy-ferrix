@@ -9,7 +9,7 @@ Build a mobile operating environment with:
 - A reproducible AArch64 emulator target for daily development and CI.
 - A Rust-first userspace for project-owned services and applications.
 - A Rust/Smithay Wayland compositor designed for touch.
-- Omarchy Ferrix's own restrained, cohesive, low-noise visual system and development experience.
+- Omarchy Ferrix's own restrained, cohesive, low-noise visual system (`docs/design.md`) and development experience.
 - A stable hardware abstraction that lets future device targets be added without changing product logic.
 
 The emulator provides phone-shaped display, touch, rotation, battery, charging, connectivity, audio-route, telephony, and suspend mocks. It validates project-owned software and its integration lifecycle only; it does not establish compatibility with any physical device, firmware, radio, secure hardware, or boot chain.
@@ -69,6 +69,7 @@ Create directories only as implementation requires them.
 ├── containers/guest-builder/
 ├── docs/
 │   ├── baseline.md
+│   ├── design.md
 │   ├── status.md
 │   └── targets.md
 └── .github/workflows/

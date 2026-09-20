@@ -70,6 +70,9 @@ pub struct UiState {
     pub bluetooth_on: bool,
     pub brightness: u8,
     pub notification_visible: bool,
+    /// The line under the clock (`ferrix · <target> · mock`); the session
+    /// owner sets the target it actually connected to.
+    pub identity: String,
     pub tiles: Vec<Tile>,
     /// Launch requests for launchable tiles; the session owner drains these
     /// after input and sends them to `ferrix_appd`.
@@ -88,6 +91,7 @@ impl UiState {
             bluetooth_on,
             brightness: 72,
             notification_visible: true,
+            identity: crate::screen::identity_line(ferrix_session::DEFAULT_TARGET_ID),
             tiles,
             pending_launch: Vec::new(),
             pending_system: Vec::new(),

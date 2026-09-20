@@ -43,17 +43,18 @@ impl Tile {
     }
 }
 
-/// Maps a descriptor tone onto the Tokyo Night palette.
+/// Maps a descriptor tone onto the active Ferrix theme (`docs/design.md`):
+/// the "blue" family is steel, the warm family is the rust accent, and the
+/// remaining tones are the status colors.
 pub fn tone_color(tone: IconTone) -> u32 {
+    let t = theme::get();
     match tone {
-        IconTone::Blue => theme::BLUE,
-        IconTone::Green => theme::GREEN,
-        IconTone::Purple => theme::PURPLE,
-        IconTone::Cyan => theme::CYAN,
-        IconTone::Yellow => theme::YELLOW,
-        IconTone::Orange => theme::ORANGE,
-        IconTone::Red => theme::RED,
-        IconTone::Neutral => theme::FG_DIM,
+        IconTone::Blue | IconTone::Cyan => t.steel,
+        IconTone::Purple | IconTone::Orange => t.rust,
+        IconTone::Green => t.ok,
+        IconTone::Yellow => t.warn,
+        IconTone::Red => t.err,
+        IconTone::Neutral => t.fg_dim,
     }
 }
 
@@ -209,8 +210,26 @@ mod tests {
 
     #[test]
     fn tones_map_onto_the_palette() {
-        assert_eq!(tone_color(IconTone::Purple), theme::PURPLE);
-        assert_eq!(tone_color(IconTone::Neutral), theme::FG_DIM);
+        let t = theme::get();
+        assert_eq!(tone_color(IconTone::Purple), t.rust);
+        assert_eq!(tone_color(IconTone::Orange), t.rust);
+        assert_eq!(tone_color(IconTone::Blue), t.steel);
+        assert_eq!(tone_color(IconTone::Cyan), t.steel);
+        assert_eq!(tone_color(IconTone::Green), t.ok);
+        assert_eq!(tone_color(IconTone::Yellow), t.warn);
+        assert_eq!(tone_color(IconTone::Red), t.err);
+        assert_eq!(tone_color(IconTone::Neutral), t.fg_dim);
+    }
+
+    #[test]
+    fn checked_in_descriptors_spend_the_accent_on_the_terminal_only() {
+        let t = theme::get();
+        let rust: Vec<String> = tiles_from_catalog(&repo_apps(), &[])
+            .iter()
+            .filter(|tile| tone_color(tile.icon.tone) == t.rust)
+            .map(|tile| tile.kind().to_owned())
+            .collect();
+        assert_eq!(rust, ["terminal"], "the accent budget is one tile");
     }
 
     #[test]

@@ -1,8 +1,10 @@
-//! Composition of the basic screen. Omarchy Ferrix look and feel (Tokyo Night palette,
-//! monospace type, flat bordered surfaces); GrapheneOS-style status bar,
-//! minimal launcher grid, and bottom gesture pill where mobile UX is needed.
-//! This is a QEMU reference surface rendered from the mock profile, not the
-//! product shell.
+//! Composition of the basic screen in the Omarchy Ferrix visual system
+//! (`docs/design.md`): dark slate surfaces, steel type, one rust accent per
+//! region, hairline borders, tight radii, JetBrains Mono. GrapheneOS-style
+//! status bar, minimal launcher grid, and bottom gesture pill where mobile UX
+//! is needed. Colors come from `ferrix_ui::theme::get()` so a loaded
+//! `colors.toml` restyles every surface. This is a QEMU reference surface
+//! rendered from the mock profile, not the product shell.
 
 use ferrix_hardware_api::{HardwareState, ModemRegistration, WifiState};
 use ferrix_ui::draw::{Canvas, Rect, Style, Type, Weight};
@@ -10,6 +12,10 @@ use ferrix_ui::theme;
 
 use crate::catalog::{Tile, tone_color};
 use crate::interaction::{Page, Target, UiState, tile_rects};
+
+/// Footer caption of the launcher. Says what this surface is, not what it
+/// wants to be.
+const CAPTION: &str = "reference surface · not the product shell";
 
 /// Scale a 1080-wide design length. Multiply first: `width / 1080` truncates
 /// to 0 on the 830-wide QEMU panel and used to jump the status bar.
@@ -23,6 +29,18 @@ fn design_width(c: &Canvas) -> i32 {
     c.width().min(c.height())
 }
 
+/// A 1-2 px hairline that never truncates to nothing on narrow panels.
+fn hairline(basis: i32) -> i32 {
+    scale(2, basis).max(1)
+}
+
+/// The identity line under the clock: product, target, and where the state
+/// comes from. `target` is the hardware target id (`qemu-aarch64`); the state
+/// is always the mock adapter's, in QEMU and on the host alike.
+pub fn identity_line(target: &str) -> String {
+    format!("ferrix \u{b7} {target} \u{b7} mock")
+}
+
 pub fn compose(
     p: &HardwareState,
     minute_of_day: u32,
@@ -31,11 +49,12 @@ pub fn compose(
     height: u32,
     state: &UiState,
 ) -> Canvas {
+    let t = theme::get();
     let w = width as i32;
     let h = height as i32;
     let basis = w.min(h);
     let s = |v: i32| scale(v, basis);
-    let mut c = Canvas::new(w, h, theme::BG);
+    let mut c = Canvas::new(w, h, t.bg);
     let hour = minute_of_day / 60;
     let clock = format!("{:02}:{:02}", hour, minute_of_day % 60);
 
@@ -52,18 +71,13 @@ pub fn compose(
 
     status_bar(&mut c, p, ty, &clock, s(72), s(40), state);
 
-    // Large clock and greeting, GrapheneOS lock-screen style.
-    let clock_style = Style::bold(s(170) as f32, theme::FG);
+    // Large clock and identity line, GrapheneOS lock-screen placement.
+    let clock_style = Style::bold(s(170) as f32, t.fg);
     let cw = ty.width(clock_style, &clock);
     ty.text(&mut c, clock_style, &clock, (w - cw) / 2, s(430));
-    let greeting = match hour {
-        5..=11 => "Good morning",
-        12..=17 => "Good afternoon",
-        _ => "Good evening",
-    };
-    let greet_style = Style::regular(s(42) as f32, theme::FG_DIM);
-    let gw = ty.width(greet_style, greeting);
-    ty.text(&mut c, greet_style, greeting, (w - gw) / 2, s(520));
+    let ident_style = Style::regular(s(34) as f32, t.fg_dim);
+    let iw = ty.width(ident_style, &state.identity);
+    ty.text(&mut c, ident_style, &state.identity, (w - iw) / 2, s(520));
 
     // Battery and network cards from the mock profile.
     let margin = s(48);
@@ -113,30 +127,29 @@ pub fn compose(
     launcher_grid(&mut c, ty, state);
 
     // Honest footer label and GrapheneOS-style gesture pill.
-    let caption = "QEMU reference surface - Rust basic screen";
-    let cap_style = Style::regular(s(26) as f32, theme::FG_DIM);
-    let capw = ty.width(cap_style, caption);
-    ty.text(&mut c, cap_style, caption, (w - capw) / 2, h - s(150));
+    let cap_style = Style::regular(s(26) as f32, t.fg_dim);
+    let capw = ty.width(cap_style, CAPTION);
+    ty.text(&mut c, cap_style, CAPTION, (w - capw) / 2, h - s(150));
     gesture_pill(&mut c, state);
     c
 }
 
 fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: &UiState) {
+    let t = theme::get();
     let basis = design_width(c);
     let s = |v: i32| scale(v, basis);
     status_bar(c, p, ty, clock, s(72), s(40), state);
 
-    let clock_style = Style::bold(s(150) as f32, theme::FG);
+    let clock_style = Style::bold(s(150) as f32, t.fg);
     let clock_width = ty.width(clock_style, clock);
     ty.text(c, clock_style, clock, s(460) - clock_width / 2, s(280));
-    let greeting = "Omarchy Ferrix mobile";
-    let greeting_style = Style::regular(s(38) as f32, theme::FG_DIM);
-    let greeting_width = ty.width(greeting_style, greeting);
+    let ident_style = Style::regular(s(32) as f32, t.fg_dim);
+    let ident_width = ty.width(ident_style, &state.identity);
     ty.text(
         c,
-        greeting_style,
-        greeting,
-        s(460) - greeting_width / 2,
+        ident_style,
+        &state.identity,
+        s(460) - ident_width / 2,
         s(350),
     );
 
@@ -185,7 +198,9 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
     gesture_pill(c, state);
 }
 
+/// The compositor's home indicator: the one pill shape in the system.
 fn gesture_pill(c: &mut Canvas, state: &UiState) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     c.fill_rounded(
@@ -201,9 +216,9 @@ fn gesture_pill(c: &mut Canvas, state: &UiState) {
         },
         s(9),
         if state.pressed == Some(Target::Home) {
-            theme::BLUE
+            t.rust
         } else {
-            theme::FG_DIM
+            t.fg_dim
         },
     );
 }
@@ -217,6 +232,7 @@ fn status_bar(
     pad: i32,
     state: &UiState,
 ) {
+    let t = theme::get();
     let w = c.width();
     c.fill_rect(
         Rect {
@@ -226,9 +242,9 @@ fn status_bar(
             h: bar_h,
         },
         if state.pressed == Some(Target::Status) {
-            theme::SURFACE_HI
+            t.surface_hi
         } else {
-            theme::BG_DARK
+            t.bg_dark
         },
     );
     c.fill_rect(
@@ -238,26 +254,26 @@ fn status_bar(
             w,
             h: 2,
         },
-        theme::BORDER,
+        t.border,
     );
     let px = (bar_h * 5 / 12) as f32;
     let baseline = bar_h * 2 / 3;
     // Clock on the left, GrapheneOS style.
-    ty.text(c, Style::bold(px, theme::FG), clock, pad, baseline);
+    ty.text(c, Style::bold(px, t.fg), clock, pad, baseline);
 
     // Right-aligned: signal bars, wifi arcs, battery percent and gauge.
     let mid = bar_h / 2;
     let pct = format!("{}%", p.power.battery_percent);
     let batt_color = if p.power.charging {
-        theme::GREEN
+        t.ok
     } else if p.power.battery_percent < 20 {
-        theme::RED
+        t.err
     } else {
-        theme::FG
+        t.fg
     };
     let mut x = w - pad;
     x -= battery_icon(c, x, mid, p, batt_color);
-    let pct_style = Style::regular(px, theme::FG);
+    let pct_style = Style::regular(px, t.fg);
     x -= ty.width(pct_style, &pct) + bar_h / 4;
     ty.text(c, pct_style, &pct, x, baseline);
     x -= bar_h / 3;
@@ -281,6 +297,7 @@ fn status_bar(
 /// Draws a battery outline with proportional fill, right edge at `right`.
 /// Returns the consumed width.
 fn battery_icon(c: &mut Canvas, right: i32, mid: i32, p: &HardwareState, color: u32) -> i32 {
+    let t = theme::get();
     let bw = 46;
     let bh = 24;
     let x = right - bw;
@@ -292,9 +309,9 @@ fn battery_icon(c: &mut Canvas, right: i32, mid: i32, p: &HardwareState, color: 
             w: bw - 4,
             h: bh,
         },
-        5,
         3,
-        theme::FG_DIM,
+        3,
+        t.fg_dim,
     );
     c.fill_rounded(
         Rect {
@@ -303,8 +320,8 @@ fn battery_icon(c: &mut Canvas, right: i32, mid: i32, p: &HardwareState, color: 
             w: 4,
             h: 10,
         },
-        2,
-        theme::FG_DIM,
+        1,
+        t.fg_dim,
     );
     let inner = (bw - 12) * i32::from(p.power.battery_percent.min(100)) / 100;
     if inner > 0 {
@@ -315,12 +332,12 @@ fn battery_icon(c: &mut Canvas, right: i32, mid: i32, p: &HardwareState, color: 
                 w: inner,
                 h: bh - 8,
             },
-            2,
+            1,
             color,
         );
     }
     if p.power.charging {
-        bolt(c, x + (bw - 4) / 2, mid, bh - 8, theme::BG_DARK);
+        bolt(c, x + (bw - 4) / 2, mid, bh - 8, t.bg_dark);
     }
     bw
 }
@@ -369,20 +386,18 @@ fn bolt(c: &mut Canvas, cx: i32, cy: i32, h: i32, color: u32) {
     }
 }
 
+/// Network glyphs are steel: the secondary accent, never rust.
 fn wifi_icon(c: &mut Canvas, right: i32, base: i32, size: i32, connected: bool) -> i32 {
+    let t = theme::get();
     let cx = right - size;
-    let color = if connected { theme::FG } else { theme::FG_DIM };
+    let color = if connected { t.steel } else { t.fg_dim };
     for (i, r) in [size / 4, size * 5 / 8, size].into_iter().enumerate() {
         let on = connected || i == 0;
         for dy in -r - 2..=0 {
             for dx in -r - 2..=r + 2 {
                 let d2 = dx * dx + dy * dy;
                 if d2 >= (r - 2) * (r - 2) && d2 <= (r + 2) * (r + 2) && dx.abs() <= -dy {
-                    c.put(
-                        cx + dx,
-                        base + dy,
-                        if on { color } else { theme::SURFACE_HI },
-                    );
+                    c.put(cx + dx, base + dy, if on { color } else { t.surface_hi });
                 }
             }
         }
@@ -392,45 +407,40 @@ fn wifi_icon(c: &mut Canvas, right: i32, base: i32, size: i32, connected: bool) 
 }
 
 fn signal_bars(c: &mut Canvas, right: i32, base: i32, size: i32, registered: bool) {
+    let t = theme::get();
     let bw = size / 4;
     let gap = 4;
     for i in 0..4 {
         let bh = size * (i + 1) / 4 + 4;
         let on = registered || i == 0;
-        c.fill_rounded(
+        c.fill_rect(
             Rect {
                 x: right - (4 - i) * (bw + gap),
                 y: base - bh,
                 w: bw,
                 h: bh,
             },
-            2,
-            if on { theme::FG } else { theme::SURFACE_HI },
+            if on { t.steel } else { t.surface_hi },
         );
     }
 }
 
+/// A card: slate surface, hairline border, tight radius. Pressed raises the
+/// fill and outlines it in rust.
 fn card(c: &mut Canvas, ty: &Type, r: Rect, title: &str, pressed: bool) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
-    c.fill_rounded(
-        r,
-        s(24),
-        if pressed {
-            theme::SURFACE_HI
-        } else {
-            theme::SURFACE
-        },
-    );
+    c.fill_rounded(r, s(10), if pressed { t.surface_hi } else { t.surface });
     c.stroke_rounded(
         r,
-        s(24),
-        if pressed { s(5) } else { 2 },
-        if pressed { theme::BLUE } else { theme::BORDER },
+        s(10),
+        if pressed { s(3) } else { hairline(width) },
+        if pressed { t.rust } else { t.border },
     );
     ty.text(
         c,
-        Style::regular(s(28) as f32, theme::FG_DIM),
+        Style::bold(s(26) as f32, t.fg_dim),
         title,
         r.x + s(32),
         r.y + s(62),
@@ -438,30 +448,27 @@ fn card(c: &mut Canvas, ty: &Type, r: Rect, title: &str, pressed: bool) {
 }
 
 fn battery_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: bool) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     card(c, ty, r, "BATTERY", pressed);
     let color = if p.power.charging {
-        theme::GREEN
+        t.ok
     } else if p.power.battery_percent < 20 {
-        theme::RED
+        t.err
     } else {
-        theme::BLUE
+        t.fg
     };
-    ty.text(
-        c,
-        Style::bold(s(72) as f32, color),
-        &format!("{}%", p.power.battery_percent),
-        r.x + s(32),
-        r.y + s(160),
-    );
+    let pct = format!("{}%", p.power.battery_percent);
+    let pct_style = Style::bold(s(72) as f32, color);
+    ty.text(c, pct_style, &pct, r.x + s(32), r.y + s(160));
     let track = Rect {
         x: r.x + s(32),
         y: r.y + s(190),
         w: r.w - s(64),
         h: s(14),
     };
-    c.fill_rounded(track, s(7), theme::SURFACE_HI);
+    c.fill_rounded(track, s(4), t.surface_hi);
     let fill_w = track.w * i32::from(p.power.battery_percent.min(100)) / 100;
     if fill_w > 0 {
         c.fill_rounded(
@@ -471,15 +478,12 @@ fn battery_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
                 w: fill_w,
                 h: track.h,
             },
-            s(7),
+            s(4),
             color,
         );
     }
     if p.power.charging {
-        let pct_w = ty.width(
-            Style::bold(s(72) as f32, color),
-            &format!("{}%", p.power.battery_percent),
-        );
+        let pct_w = ty.width(pct_style, &pct);
         bolt(
             c,
             r.x + s(32) + pct_w + s(36),
@@ -489,13 +493,13 @@ fn battery_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
         );
     }
     let status = if p.power.charging {
-        "Charging - mock"
+        "charging \u{b7} mock"
     } else {
-        "Discharging - mock"
+        "discharging \u{b7} mock"
     };
     ty.text(
         c,
-        Style::regular(s(26) as f32, theme::FG_DIM),
+        Style::regular(s(26) as f32, t.fg_dim),
         status,
         r.x + s(32),
         r.y + s(258),
@@ -503,38 +507,32 @@ fn battery_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
 }
 
 fn network_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: bool) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     card(c, ty, r, "NETWORK", pressed);
     let connected = p.network.wifi == WifiState::Connected;
     ty.text(
         c,
-        Style::bold(
-            s(48) as f32,
-            if connected {
-                theme::CYAN
-            } else {
-                theme::FG_DIM
-            },
-        ),
+        Style::bold(s(48) as f32, if connected { t.steel } else { t.fg_dim }),
         "Wi-Fi",
         r.x + s(32),
         r.y + s(140),
     );
     let wifi_line = if connected {
-        "Connected"
+        "connected"
     } else {
         p.network.wifi.name()
     };
     ty.text(
         c,
-        Style::regular(s(30) as f32, theme::FG),
+        Style::regular(s(30) as f32, t.fg),
         wifi_line,
         r.x + s(32),
         r.y + s(196),
     );
     let cell = format!(
-        "LTE {} - SIM {}",
+        "LTE {} \u{b7} SIM {}",
         if p.telephony.registration == ModemRegistration::Registered {
             "ok"
         } else {
@@ -544,7 +542,7 @@ fn network_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
     );
     ty.text(
         c,
-        Style::regular(s(26) as f32, theme::FG_DIM),
+        Style::regular(s(26) as f32, t.fg_dim),
         &cell,
         r.x + s(32),
         r.y + s(258),
@@ -552,10 +550,14 @@ fn network_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
 }
 
 /// The launcher grid: three columns, rows growing with the catalog. Tiles
-/// share their rectangles with the hit test. A launched app shows a small
-/// accent dot while it runs and a dimmed "Starting..." label until `ferrix-appd`
-/// reports it in the foreground or background.
+/// share their rectangles with the hit test. The Terminal gets a quiet
+/// `rust_dim` identity rule while its glyph carries the sharp rust signature;
+/// other glyphs take their descriptor tone. The pressed outline and running
+/// dot are rust. A launched app shows the dot while it runs and a
+/// dimmed "starting" label until `ferrix-appd` reports it in the foreground
+/// or background.
 fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     let size = (c.width() as u32, c.height() as u32);
@@ -571,28 +573,47 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
         }
         let accent = tone_color(tile.icon.tone);
         let pressed = state.pressed == Some(Target::App(index));
-        c.fill_rounded(
-            r,
-            s(28),
-            if pressed {
-                theme::SURFACE_HI
-            } else {
-                theme::SURFACE
-            },
-        );
+        // Terminal is Ferrix's terminal-first anchor: its deep rust panel is
+        // visibly warmer than the utility tiles, but `rust_dim` keeps a whole
+        // tile comfortable rather than using an alert-bright orange fill.
+        let terminal = tile.kind() == "terminal";
+        let fill = if terminal {
+            t.rust_dim
+        } else if pressed {
+            t.surface_hi
+        } else {
+            t.surface
+        };
+        c.fill_rounded(r, s(10), fill);
         c.stroke_rounded(
             r,
-            s(28),
-            if pressed { s(5) } else { 2 },
-            if pressed { accent } else { theme::BORDER },
+            s(10),
+            if pressed { s(3) } else { hairline(width) },
+            if pressed { t.rust } else { t.border },
         );
+        // A low-luminance oxidized-orange rule gives the Terminal a durable
+        // place in the launcher without turning the whole grid into a bright
+        // alert surface. It is decorative only; the tile rect stays the hit
+        // target.
+        if tile.kind() == "terminal" {
+            c.fill_rounded(
+                Rect {
+                    x: r.x + s(10),
+                    y: r.y + s(10),
+                    w: r.w - s(20),
+                    h: hairline(width),
+                },
+                hairline(width),
+                t.rust_hi,
+            );
+        }
         let icx = r.x + r.w / 2;
         let icy = r.y + s(if landscape { 105 } else { 118 });
         app_icon(c, ty, tile, accent, icx, icy);
         let (label, color) = if tile.starting {
-            ("Starting...".to_owned(), theme::FG_DIM)
+            ("starting".to_owned(), t.fg_dim)
         } else {
-            (tile.name.clone(), theme::FG)
+            (tile.name.clone(), t.fg)
         };
         let label_style = Style::regular(s(if landscape { 28 } else { 30 }) as f32, color);
         let lw = ty.width(label_style, &label);
@@ -604,7 +625,7 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
             r.y + r.h - s(if landscape { 38 } else { 44 }),
         );
         if tile.running {
-            c.fill_circle(r.x + r.w - s(34), r.y + s(34), s(9), accent);
+            c.fill_circle(r.x + r.w - s(34), r.y + s(34), s(9), t.rust);
         }
     }
 }
@@ -613,6 +634,7 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
 /// app shows its descriptor glyph when the face has it, else the first
 /// letter of its name (never a tofu box).
 fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32) {
+    let t = theme::get();
     let width = design_width(c);
     let u = |v: i32| scale(v, width);
     match tile.kind() {
@@ -627,8 +649,8 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                         w: u(88),
                         h: u(8),
                     },
-                    u(4),
-                    theme::SURFACE_HI,
+                    u(3),
+                    t.surface_hi,
                 );
                 c.fill_circle(cx + knob, y, u(12), accent);
             }
@@ -641,7 +663,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                     w: u(88),
                     h: u(64),
                 },
-                u(16),
+                u(8),
                 accent,
             );
             for i in 0..3 {
@@ -652,8 +674,8 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                         w: u(56) - i * u(14),
                         h: u(6),
                     },
-                    u(3),
-                    theme::BG,
+                    u(2),
+                    t.bg,
                 );
             }
         }
@@ -665,7 +687,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                     w: u(92),
                     h: u(72),
                 },
-                u(12),
+                u(6),
                 u(4),
                 accent,
             );
@@ -697,7 +719,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                     w: u(92),
                     h: u(68),
                 },
-                u(14),
+                u(8),
                 u(4),
                 accent,
             );
@@ -713,7 +735,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                     w: u(40),
                     h: u(14),
                 },
-                u(5),
+                u(3),
                 accent,
             );
             c.fill_rounded(
@@ -723,7 +745,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                     w: u(88),
                     h: u(58),
                 },
-                u(9),
+                u(5),
                 accent,
             );
         }
@@ -753,13 +775,14 @@ pub fn tile_glyph(ty: &Type, tile: &Tile) -> String {
         .unwrap_or_else(|| "?".to_owned())
 }
 
-/// Restrained crash notice: a flat surface with a red accent bar and one
-/// line of text. Dismissed by the next tap or by relaunching the app.
+/// Restrained crash notice: a flat surface with an `err` rule at the left
+/// and one line of text. Dismissed by the next tap or by relaunching the app.
 fn crash_banner(c: &mut Canvas, ty: &Type, r: Rect, name: &str, reason: &str) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
-    c.fill_rounded(r, s(20), theme::SURFACE);
-    c.stroke_rounded(r, s(20), 2, theme::BORDER);
+    c.fill_rounded(r, s(10), t.surface);
+    c.stroke_rounded(r, s(10), hairline(width), t.border);
     c.fill_rounded(
         Rect {
             x: r.x + s(18),
@@ -767,11 +790,11 @@ fn crash_banner(c: &mut Canvas, ty: &Type, r: Rect, name: &str, reason: &str) {
             w: s(8),
             h: r.h - s(44),
         },
-        s(4),
-        theme::RED,
+        s(2),
+        t.err,
     );
-    let text = format!("{name} stopped unexpectedly \u{b7} {reason}");
-    let mut style = Style::regular(s(28) as f32, theme::FG);
+    let text = format!("{name} \u{b7} crashed \u{b7} {reason}");
+    let mut style = Style::regular(s(28) as f32, t.fg);
     let max = r.w - s(72);
     while ty.width(style, &text) > max && style.px > 12.0 {
         style.px -= 2.0;
@@ -792,7 +815,10 @@ fn shell_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: 
     }
 }
 
+/// Back chevron, title, and a warm oxidized-orange rule: section emphasis is
+/// thin and low-luminance, never a filled header.
 fn page_header(c: &mut Canvas, ty: &Type, title: &str, state: &UiState) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     let back = Rect {
@@ -802,125 +828,97 @@ fn page_header(c: &mut Canvas, ty: &Type, title: &str, state: &UiState) {
         h: s(104),
     };
     if state.pressed == Some(Target::Back) {
-        c.fill_rounded(back, s(22), theme::SURFACE_HI);
+        c.fill_rounded(back, s(6), t.surface_hi);
     }
-    ty.text(
-        c,
-        Style::bold(s(48) as f32, theme::BLUE),
-        "<",
-        s(64),
-        s(178),
-    );
-    ty.text(
-        c,
-        Style::bold(s(54) as f32, theme::FG),
-        title,
-        s(150),
-        s(178),
-    );
+    ty.text(c, Style::bold(s(48) as f32, t.fg_dim), "<", s(64), s(178));
+    ty.text(c, Style::bold(s(54) as f32, t.fg), title, s(150), s(178));
     c.fill_rect(
         Rect {
             x: s(48),
             y: s(230),
             w: c.width() - s(96),
-            h: s(2).max(1),
+            h: hairline(width),
         },
-        theme::BORDER,
+        t.rust_dim,
     );
 }
 
 /// Illustrative content of a non-launchable catalog entry, keyed by the id's
-/// last segment. Unknown entries get a generic "not installed" page.
+/// last segment. Unknown entries get a generic "not installed" page. Every
+/// line names the thing, then its state, and says where the state comes from.
 fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiState) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     let name = tile.map_or("Unknown", |t| t.name.as_str());
     page_header(c, ty, name, state);
-    let fallback_title = format!("{name} is not installed");
+    let fallback_title = format!("{name} \u{b7} not installed");
     let (accent, eyebrow, title, detail) = match tile.map_or("", Tile::kind) {
         "settings" => (
-            theme::BLUE,
+            t.steel,
             "DEVICE",
-            "Settings are ready",
-            "Display, sound, connectivity, and privacy controls use mock state in QEMU.",
+            "Mock state \u{b7} QEMU",
+            "Display, sound, connectivity, and privacy read the target profile's mock values.",
         ),
         "messages" => (
-            theme::GREEN,
+            t.steel,
             "INBOX",
             "No conversations",
-            "New messages will appear here when the messaging service is connected.",
+            "No messaging service is connected.",
         ),
         "dialer" => (
-            theme::CYAN,
+            t.steel,
             "CALLS",
-            "Mock modem registered",
-            "Calling is unavailable in this generic QEMU target.",
+            "Modem registered \u{b7} mock",
+            "No voice path on the generic QEMU target.",
         ),
         "camera" => (
-            theme::YELLOW,
+            t.fg_dim,
             "CAMERA",
             "No camera device",
-            "The generic QEMU target does not claim camera hardware support.",
+            "The generic QEMU target claims no camera hardware.",
         ),
         "files" => (
-            theme::ORANGE,
+            t.fg_dim,
             "FILES",
-            "Temporary guest session",
+            "Guest session \u{b7} ephemeral",
             "Generated artifacts stay on the host under out/qemu-aarch64.",
         ),
         _ => (
-            tile.map_or(theme::FG_DIM, |t| tone_color(t.icon.tone)),
+            tile.map_or(t.fg_dim, |t| tone_color(t.icon.tone)),
             "APP",
             fallback_title.as_str(),
-            "No runtime provides this application yet. The catalog entry is a placeholder.",
+            "No runtime provides this application. The catalog entry is a placeholder.",
         ),
     };
-    c.fill_rounded(
-        Rect {
-            x: s(72),
-            y: s(360),
-            w: c.width() - s(144),
-            h: s(560),
-        },
-        s(34),
-        theme::SURFACE,
-    );
-    c.stroke_rounded(
-        Rect {
-            x: s(72),
-            y: s(360),
-            w: c.width() - s(144),
-            h: s(560),
-        },
-        s(34),
-        s(3),
-        accent,
-    );
+    let panel = Rect {
+        x: s(72),
+        y: s(360),
+        w: c.width() - s(144),
+        h: s(560),
+    };
+    c.fill_rounded(panel, s(10), t.surface);
+    c.stroke_rounded(panel, s(10), hairline(width), t.border);
     ty.text(
         c,
-        Style::bold(s(30) as f32, accent),
+        Style::bold(s(28) as f32, accent),
         eyebrow,
         s(120),
         s(450),
     );
-    ty.text(
-        c,
-        Style::bold(s(58) as f32, theme::FG),
-        title,
-        s(120),
-        s(570),
-    );
+    ty.text(c, Style::bold(s(58) as f32, t.fg), title, s(120), s(570));
     wrap_text(c, ty, detail, s(120), s(675), c.width() - s(240), s(34));
     ty.text(
         c,
-        Style::regular(s(26) as f32, theme::FG_DIM),
-        "Swipe from the left edge to go back",
+        Style::regular(s(26) as f32, t.fg_dim),
+        "left edge \u{b7} back",
         s(120),
         s(850),
     );
 }
 
 fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     page_header(c, ty, "Quick settings", state);
@@ -936,7 +934,6 @@ fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
         "Wi-Fi",
         state.wifi_on,
         state.pressed == Some(Target::Wifi),
-        theme::CYAN,
     );
     toggle(
         c,
@@ -950,11 +947,10 @@ fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
         "Bluetooth",
         state.bluetooth_on,
         state.pressed == Some(Target::Bluetooth),
-        theme::BLUE,
     );
     ty.text(
         c,
-        Style::bold(s(30) as f32, theme::FG_DIM),
+        Style::bold(s(28) as f32, t.fg_dim),
         "BRIGHTNESS",
         s(96),
         s(970),
@@ -965,64 +961,59 @@ fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
         w: s(820),
         h: s(28),
     };
-    c.fill_rounded(track, s(14), theme::SURFACE_HI);
+    c.fill_rounded(track, s(4), t.surface_hi);
     let fill = track.w * i32::from(state.brightness) / 100;
-    c.fill_rounded(Rect { w: fill, ..track }, s(14), theme::YELLOW);
-    c.fill_circle(track.x + fill, track.y + track.h / 2, s(34), theme::FG);
+    c.fill_rounded(Rect { w: fill, ..track }, s(4), t.rust);
+    c.fill_circle(track.x + fill, track.y + track.h / 2, s(34), t.fg);
     let value = format!("{}%", state.brightness);
+    ty.text(c, Style::bold(s(34) as f32, t.fg), &value, s(96), s(1210));
     ty.text(
         c,
-        Style::bold(s(34) as f32, theme::FG),
-        &value,
-        s(96),
-        s(1210),
-    );
-    ty.text(
-        c,
-        Style::regular(s(27) as f32, theme::FG_DIM),
-        "Drag the rail to adjust the QEMU/mock display value",
+        Style::regular(s(27) as f32, t.fg_dim),
+        "display brightness \u{b7} mock \u{b7} QEMU",
         s(96),
         s(1280),
     );
 }
 
-fn toggle(c: &mut Canvas, ty: &Type, r: Rect, label: &str, on: bool, pressed: bool, accent: u32) {
+/// A quick-settings toggle. Off is a plain card; on keeps the slate fill and
+/// takes a rust outline and a rust state word, so the accent marks exactly
+/// the thing that is active.
+fn toggle(c: &mut Canvas, ty: &Type, r: Rect, label: &str, on: bool, pressed: bool) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
-    let color = if on { accent } else { theme::SURFACE };
-    c.fill_rounded(r, s(32), if pressed { theme::SURFACE_HI } else { color });
-    c.stroke_rounded(
-        r,
-        s(32),
-        if pressed { s(6) } else { s(3) },
-        if on { accent } else { theme::BORDER },
-    );
+    c.fill_rounded(r, s(10), if pressed { t.surface_hi } else { t.surface });
+    let (thickness, color) = match (on, pressed) {
+        (_, true) => (s(3), t.rust_hi),
+        (true, false) => (s(3), t.rust),
+        (false, false) => (hairline(width), t.border),
+    };
+    c.stroke_rounded(r, s(10), thickness, color);
     ty.text(
         c,
-        Style::bold(s(44) as f32, theme::FG),
+        Style::bold(s(44) as f32, t.fg),
         label,
         r.x + s(38),
         r.y + s(104),
     );
     ty.text(
         c,
-        Style::regular(
-            s(30) as f32,
-            if on { theme::BG_DARK } else { theme::FG_DIM },
-        ),
-        if on { "On" } else { "Off" },
+        Style::bold(s(30) as f32, if on { t.rust } else { t.fg_dim }),
+        if on { "on" } else { "off" },
         r.x + s(38),
         r.y + s(190),
     );
 }
 
 fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
+    let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     page_header(c, ty, "Notifications", state);
     if !state.notification_visible {
-        let title = "You're all caught up";
-        let style = Style::bold(s(48) as f32, theme::FG);
+        let title = "No notifications";
+        let style = Style::bold(s(48) as f32, t.fg);
         ty.text(
             c,
             style,
@@ -1030,8 +1021,8 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
             (c.width() - ty.width(style, title)) / 2,
             s(780),
         );
-        let detail = "Swipe up from the bottom edge to return Home.";
-        let detail_style = Style::regular(s(28) as f32, theme::FG_DIM);
+        let detail = "bottom edge \u{b7} home";
+        let detail_style = Style::regular(s(28) as f32, t.fg_dim);
         ty.text(
             c,
             detail_style,
@@ -1047,26 +1038,37 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
         w: c.width() - s(144),
         h: s(390),
     };
-    c.fill_rounded(card, s(34), theme::SURFACE);
-    c.stroke_rounded(card, s(34), s(2).max(1), theme::BORDER);
+    c.fill_rounded(card, s(10), t.surface);
+    c.stroke_rounded(card, s(10), hairline(width), t.border);
+    // The rust rule at the left is the region's one accent.
+    c.fill_rounded(
+        Rect {
+            x: card.x + s(18),
+            y: card.y + s(28),
+            w: s(8),
+            h: card.h - s(56),
+        },
+        s(2),
+        t.rust,
+    );
     ty.text(
         c,
-        Style::bold(s(30) as f32, theme::BLUE),
+        Style::bold(s(28) as f32, t.fg_dim),
         "SYSTEM",
         s(116),
         s(475),
     );
     ty.text(
         c,
-        Style::bold(s(48) as f32, theme::FG),
-        "QEMU session ready",
+        Style::bold(s(48) as f32, t.fg),
+        "Session ready \u{b7} QEMU",
         s(116),
         s(575),
     );
     wrap_text(
         c,
         ty,
-        "Touch input is active. Swipe up from the bottom edge at any time to return Home.",
+        "Touch input active. Bottom-edge swipe returns home.",
         s(116),
         s(665),
         c.width() - s(232),
@@ -1078,18 +1080,16 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
         w: s(540),
         h: s(170),
     };
-    c.fill_rounded(
+    let pressed = state.pressed == Some(Target::ClearNotifications);
+    c.fill_rounded(clear, s(10), if pressed { t.surface_hi } else { t.surface });
+    c.stroke_rounded(
         clear,
-        s(30),
-        if state.pressed == Some(Target::ClearNotifications) {
-            theme::SURFACE_HI
-        } else {
-            theme::SURFACE
-        },
+        s(10),
+        if pressed { s(3) } else { hairline(width) },
+        if pressed { t.rust } else { t.border },
     );
-    c.stroke_rounded(clear, s(30), s(3), theme::BORDER);
-    let label = "Clear all";
-    let style = Style::bold(s(38) as f32, theme::FG);
+    let label = "Clear";
+    let style = Style::bold(s(38) as f32, t.fg);
     ty.text(
         c,
         style,
@@ -1100,7 +1100,7 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
 }
 
 fn wrap_text(c: &mut Canvas, ty: &Type, text: &str, x: i32, y: i32, max_width: i32, px: i32) {
-    let style = Style::regular(px as f32, theme::FG_DIM);
+    let style = Style::regular(px as f32, theme::get().fg_dim);
     let mut line = String::new();
     let mut baseline = y;
     for word in text.split_whitespace() {
@@ -1139,30 +1139,44 @@ mod tests {
     }
 
     #[test]
+    fn identity_line_names_product_target_and_state_source() {
+        assert_eq!(
+            identity_line("qemu-aarch64"),
+            "ferrix \u{b7} qemu-aarch64 \u{b7} mock"
+        );
+        assert_eq!(state().identity, identity_line("qemu-aarch64"));
+    }
+
+    #[test]
     fn charging_changes_the_battery_indicator() {
+        let t = theme::get();
         let ty = Type::load().expect("embedded fonts load");
         let mut p = profile();
         let state = state();
         let before = compose(&p, 600, &ty, 1080, 2340, &state);
         p.power.charging = true;
         let after = compose(&p, 600, &ty, 1080, 2340, &state);
-        // The status-bar battery fill turns green and gains a bolt; the card
-        // headline turns green too. Compare the card headline region.
+        // The status-bar battery fill turns `ok` and gains a bolt; the card
+        // headline turns `ok` too. Compare the card headline region.
         let card_y = scale(620, 1080) + scale(160, 1080) - scale(40, 1080);
         let card_x = scale(48, 1080) + scale(32, 1080) + scale(30, 1080);
         let mut differs = false;
+        let mut ok_seen = false;
         for dy in 0..scale(60, 1080) {
             for dx in 0..scale(200, 1080) {
-                if before.get(card_x + dx, card_y + dy) != after.get(card_x + dx, card_y + dy) {
+                let px = after.get(card_x + dx, card_y + dy);
+                if before.get(card_x + dx, card_y + dy) != px {
                     differs = true;
                 }
+                ok_seen |= px == t.ok;
             }
         }
         assert!(differs, "charging must be visible on the battery card");
+        assert!(ok_seen, "the charging headline is the `ok` status color");
         let bar_h = scale(72, 1080);
         let bolt_seen = (0..bar_h).any(|dy| {
             (1080 - scale(40, 1080) - 46..1080 - scale(40, 1080))
-                .any(|x| after.get(x, dy) == theme::BG_DARK && before.get(x, dy) != theme::BG_DARK)
+                .any(|x| after.get(x, dy) == t.bg_dark && before.get(x, dy) != t.bg_dark)
         });
         assert!(
             bolt_seen,
@@ -1172,6 +1186,7 @@ mod tests {
 
     #[test]
     fn composes_non_blank_portrait_surface_with_catalog_tiles() {
+        let t = theme::get();
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
         let state = state();
@@ -1186,38 +1201,60 @@ mod tests {
         );
         assert_eq!((c.width(), c.height()), (1080, 2340));
         // Status bar background and main background are themed.
-        assert_eq!(c.get(540, 10), theme::BG_DARK);
-        assert_eq!(c.get(540, 600), theme::BG);
-        // Every tile has its surface drawn.
-        for r in tile_rects((1080, 2340), state.tiles.len()) {
-            assert_eq!(c.get(r.x + r.w / 2, r.y + 12), theme::SURFACE, "{r:?}");
+        assert_eq!(c.get(540, 10), t.bg_dark);
+        assert_eq!(c.get(540, 600), t.bg);
+        // The terminal anchor is deep rust; the remaining utility tiles are
+        // slate. Tile geometry remains shared with the hit test.
+        for (tile, r) in state
+            .tiles
+            .iter()
+            .zip(tile_rects((1080, 2340), state.tiles.len()))
+        {
+            let expected = if tile.kind() == "terminal" {
+                t.rust_dim
+            } else {
+                t.surface
+            };
+            assert_eq!(c.get(r.x + r.w / 2, r.y + 12), expected, "{r:?}");
         }
         // The rendered frame is not blank: some pixel differs from the ground.
         let bytes = c.xrgb_bytes();
         assert!(bytes.chunks(4).any(|q| {
             let v = u32::from_le_bytes([q[0], q[1], q[2], q[3]]) & 0xff_ffff;
-            v != theme::BG && v != theme::BG_DARK
+            v != t.bg && v != t.bg_dark
         }));
     }
 
     #[test]
     fn landscape_launcher_uses_the_full_logical_surface() {
+        let t = theme::get();
         let ty = Type::load().expect("embedded fonts load");
         let canvas = compose(&profile(), 9 * 60 + 41, &ty, 2340, 1080, &state());
         assert_eq!((canvas.width(), canvas.height()), (2340, 1080));
-        assert_eq!(canvas.get(1170, 10), theme::BG_DARK);
+        assert_eq!(canvas.get(1170, 10), t.bg_dark);
         assert_ne!(
             canvas.get(1150, 180),
-            theme::BG,
+            t.bg,
             "right-side app grid must be visible"
         );
-        for r in tile_rects((2340, 1080), state().tiles.len()) {
-            assert_eq!(canvas.get(r.x + r.w / 2, r.y + 8), theme::SURFACE, "{r:?}");
+        let state = state();
+        for (tile, r) in state
+            .tiles
+            .iter()
+            .zip(tile_rects((2340, 1080), state.tiles.len()))
+        {
+            let expected = if tile.kind() == "terminal" {
+                t.rust_dim
+            } else {
+                t.surface
+            };
+            assert_eq!(canvas.get(r.x + r.w / 2, r.y + 8), expected, "{r:?}");
         }
     }
 
     #[test]
     fn every_interactive_page_renders() {
+        let t = theme::get();
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
         let base = state();
@@ -1229,31 +1266,57 @@ mod tests {
             state.page = page;
             let c = compose(&p, 600, &ty, 1080, 2340, &state);
             assert_eq!((c.width(), c.height()), (1080, 2340));
-            assert_ne!(c.get(300, 500), theme::BG, "{page:?}");
+            assert_ne!(c.get(300, 500), t.bg, "{page:?}");
+            // The page header's section rule is quiet oxidized orange, not a
+            // filled header.
+            assert_eq!(c.get(540, scale(230, 1080)), t.rust_dim, "{page:?}");
         }
         // An unknown or out-of-range reference index renders the generic page.
         let mut state = base.clone();
         state.page = Page::Reference(99);
         let c = compose(&p, 600, &ty, 1080, 2340, &state);
-        assert_ne!(c.get(300, 500), theme::BG);
+        assert_ne!(c.get(300, 500), t.bg);
+    }
+
+    #[test]
+    fn active_toggles_and_the_brightness_fill_are_rust() {
+        let t = theme::get();
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        let mut state = state();
+        state.page = Page::QuickSettings;
+        state.brightness = 50;
+        let on = compose(&p, 600, &ty, 1080, 2340, &state);
+        // Wi-Fi toggle outline: the top edge row of its rect, mid-width (the
+        // stroke is centred on the edge, so the edge row is solid).
+        let outline = (scale(86 + 210, 1080), scale(468, 1080));
+        assert_eq!(on.get(outline.0, outline.1), t.rust, "active toggle");
+        state.wifi_on = false;
+        let off = compose(&p, 600, &ty, 1080, 2340, &state);
+        assert_eq!(off.get(outline.0, outline.1), t.border, "inactive toggle");
+        // Brightness rail: rust to the left of the knob, track to the right.
+        let rail_y = scale(1084, 1080) + scale(14, 1080);
+        assert_eq!(off.get(scale(130 + 100, 1080), rail_y), t.rust);
+        assert_eq!(off.get(scale(130 + 720, 1080), rail_y), t.surface_hi);
     }
 
     #[test]
     fn running_starting_and_crashed_states_are_visible() {
+        let t = theme::get();
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
         let mut state = state();
         let plain = compose(&p, 600, &ty, 1080, 2340, &state);
         let r = tile_rects((1080, 2340), 7)[0];
         let dot = (r.x + r.w - scale(34, 1080), r.y + scale(34, 1080));
-        assert_eq!(plain.get(dot.0, dot.1), theme::SURFACE);
+        assert_eq!(plain.get(dot.0, dot.1), t.rust_dim);
 
         state.tiles[0].running = true;
         let running = compose(&p, 600, &ty, 1080, 2340, &state);
         assert_eq!(
             running.get(dot.0, dot.1),
-            tone_color(state.tiles[0].icon.tone),
-            "running dot in the tile's accent"
+            t.rust,
+            "running dot is the rust accent"
         );
 
         state.tiles[0].starting = true;
@@ -1270,17 +1333,31 @@ mod tests {
         });
         let crashed = compose(&p, 600, &ty, 1080, 2340, &state);
         let banner_y = scale(944, 1080) + scale(56, 1080);
-        assert_eq!(crashed.get(540, banner_y - scale(40, 1080)), theme::SURFACE);
+        assert_eq!(crashed.get(540, banner_y - scale(40, 1080)), t.surface);
         assert_eq!(
             crashed.get(scale(48, 1080) + scale(22, 1080), banner_y),
-            theme::RED,
-            "red accent bar"
+            t.err,
+            "err accent bar"
         );
-        assert_eq!(
-            plain.get(540, banner_y),
-            theme::BG,
-            "no banner without a crash"
-        );
+        assert_eq!(plain.get(540, banner_y), t.bg, "no banner without a crash");
+    }
+
+    #[test]
+    fn pressed_tile_outline_is_rust_whatever_its_tone() {
+        let t = theme::get();
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        let mut state = state();
+        let steel_tile = state
+            .tiles
+            .iter()
+            .position(|tile| tone_color(tile.icon.tone) == t.steel)
+            .expect("a steel-toned tile");
+        state.pressed = Some(Target::App(steel_tile));
+        let c = compose(&p, 600, &ty, 1080, 2340, &state);
+        let r = tile_rects((1080, 2340), state.tiles.len())[steel_tile];
+        assert_eq!(c.get(r.x + r.w / 2, r.y), t.rust, "pressed outline");
+        assert_eq!(c.get(r.x + r.w / 2, r.y + r.h / 2 + 40), t.surface_hi);
     }
 
     #[test]
@@ -1298,6 +1375,7 @@ mod tests {
 
     #[test]
     fn status_bar_height_stays_put_when_the_shade_opens() {
+        let t = theme::get();
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
         // Include the Cocoa QEMU panel (830) where the old unit scale truncated to 1
@@ -1315,9 +1393,9 @@ mod tests {
             let bar_h = scale(72, width as i32);
             let x = width as i32 / 2;
             for frame in [&launcher, &shade, &quick] {
-                assert_eq!(frame.get(x, 0), theme::BG_DARK, "width={width}");
-                assert_eq!(frame.get(x, bar_h - 1), theme::BG_DARK, "width={width}");
-                assert_eq!(frame.get(x, bar_h), theme::BORDER, "width={width}");
+                assert_eq!(frame.get(x, 0), t.bg_dark, "width={width}");
+                assert_eq!(frame.get(x, bar_h - 1), t.bg_dark, "width={width}");
+                assert_eq!(frame.get(x, bar_h), t.border, "width={width}");
             }
         }
     }

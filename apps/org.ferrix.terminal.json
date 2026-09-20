@@ -5,7 +5,7 @@
   "name": "Terminal",
   "icon": {
     "glyph": ">_",
-    "tone": "purple"
+    "tone": "orange"
   },
   "launchable": true,
   "capabilities": [

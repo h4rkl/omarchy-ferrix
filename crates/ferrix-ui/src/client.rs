@@ -45,6 +45,7 @@ use smithay_client_toolkit::{
 use crate::draw::Canvas;
 use crate::evidence::{emit, json_escape};
 use crate::keymap::Modifiers;
+use crate::theme;
 
 /// Thread-safe handle that wakes the client loop; the handler's
 /// [`ClientHandler::wake`] runs on the UI thread afterwards.
@@ -205,7 +206,11 @@ impl Client {
         pixels.fill(0);
 
         // Little-endian premultiplied ARGB8888: a transparent center with a
-        // crisp Tokyo Night blue ring, faint outer halo, and exact hotspot dot.
+        // crisp ring in the theme's bright rust, faint outer halo, and exact
+        // hotspot dot. The color is read at install time so a loaded
+        // `colors.toml` recolors the cursor too.
+        let ring = theme::get().rust_hi;
+        let [_, red, green, blue] = ring.to_be_bytes();
         let center = (Self::CURSOR_SIZE as f32 - 1.0) / 2.0;
         for y in 0..Self::CURSOR_SIZE {
             for x in 0..Self::CURSOR_SIZE {
@@ -221,9 +226,9 @@ impl Client {
                 };
                 let offset = ((y * Self::CURSOR_SIZE + x) * 4) as usize;
                 let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
-                pixels[offset] = premultiply(0xf7);
-                pixels[offset + 1] = premultiply(0xa2);
-                pixels[offset + 2] = premultiply(0x7a);
+                pixels[offset] = premultiply(blue);
+                pixels[offset + 1] = premultiply(green);
+                pixels[offset + 2] = premultiply(red);
                 pixels[offset + 3] = alpha;
             }
         }

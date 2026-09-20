@@ -26,7 +26,8 @@ and service identifiers therefore use `ferrix`. The current emulator remains
 the generic `qemu-aarch64` target.
 
 Read `AGENTS.md` before contributing. `docs/baseline.md` is the implementation
-authority and `docs/plan.md` the long-term direction.
+authority, `docs/plan.md` the long-term direction, `docs/design.md` the visual
+system and theming contract, and `docs/status.md` the evidence log.
 
 ## Current status
 
@@ -86,7 +87,7 @@ apps / shell ──▶ ferrix-protocol ──▶ ferrix-core ──▶ ferrix-ha
 | `crates/ferrix-app-protocol` | Schema-versioned line-delimited JSON protocol and client for `ferrix-appd`: role-gated requests, no-reply compositor reports, and pushed notifications. |
 | `crates/ferrix-appd` | Application service. Loads the catalog, enforces one instance per app, launches through `Runtime` adapters, records crashes, restarts the home surface with backoff, associates compositor surfaces with instances by kernel-reported pid, and publishes lifecycle events. |
 | `crates/ferrix-runtime-native` | The native runtime adapter and the `ferrix-sandbox` binary: safe Rust (rustix, signal-hook) that starts an application inside its own PID, mount, IPC, and UTS namespaces (user namespace when unprivileged) with a private `/proc` and `/tmp`, `no_new_privs`, and a PID 1 that forwards signals and reports the exact exit reason. |
-| `crates/ferrix-ui` | Shared software-rendering toolkit (tiny-skia, fontdue, Tokyo Night theme, on-screen keyboard layout, keymap) and the fullscreen Wayland client runner used by first-party surfaces. A library, not an ABI. |
+| `crates/ferrix-ui` | Shared software-rendering toolkit (tiny-skia, fontdue, the Ferrix slate/steel/rust palette loaded from `themes/ferrix/colors.toml` or `/etc/ferrix/colors.toml`, on-screen keyboard layout, keymap) and the fullscreen Wayland client runner used by first-party surfaces. See `docs/design.md`. A library, not an ABI. |
 | `crates/ferrix-basic-screen` | The home surface: catalog-driven launcher grid, status bar, connected quick settings, notifications, crash notices, portrait/landscape layouts. Launchable tiles go through `ferrix-appd`; reference entries keep illustrative in-process pages. |
 | `crates/ferrix-terminal` | The Terminal application as an independent Wayland client (alacritty VT layer on a PTY, touch-first on-screen keyboard), launched and isolated by `ferrix-appd`. |
 

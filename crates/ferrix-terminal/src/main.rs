@@ -26,17 +26,28 @@ use std::process::ExitCode;
 
 use ferrix_ui::draw::Type;
 use ferrix_ui::evidence::{emit, json_escape, json_opt_str};
+use ferrix_ui::theme;
 
 /// Evidence label for every record this binary emits.
 const EVIDENCE: &str = "QEMU";
 /// Default preview geometry: the checked-in portrait mock panel.
 const PREVIEW_SIZE: (u32, u32) = (1080, 2340);
 
-/// Canned shell transcript for the host preview; no PTY is involved.
-const PREVIEW_TRANSCRIPT: &[u8] = b"root@ferrix:~# uname -a\r\n\
-Linux ferrix 6.12.0-virt #1 SMP aarch64 Linux\r\n\
+/// Canned shell transcript for the host preview; no PTY is involved and the
+/// first line says so. The `uname` line has the shape of a QEMU `virt` guest
+/// with a placeholder release (the real guest kernel differs), the `ls` line exercises bold ANSI blue, and two swatch lines show
+/// all sixteen ANSI colors (normal beside bright) as text and as backgrounds
+/// so a preview doubles as a palette legibility check on `bg_dark`.
+const PREVIEW_TRANSCRIPT: &[u8] = b"root@ferrix:~# # canned transcript \xc2\xb7 mock \xc2\xb7 no pty\r\n\
+root@ferrix:~# uname -a\r\n\
+Linux ferrix canned-virt #1 SMP aarch64 Linux\r\n\
+root@ferrix:~# echo $TERM\r\n\
+xterm-256color\r\n\
 root@ferrix:~# ls --color=always /\r\n\
 \x1b[1;34mbin\x1b[0m   \x1b[1;34mdev\x1b[0m   \x1b[1;34metc\x1b[0m   \x1b[1;34mproc\x1b[0m  \x1b[1;34mroot\x1b[0m  \x1b[1;34mrun\x1b[0m   \x1b[1;34msys\x1b[0m   \x1b[1;34musr\x1b[0m\r\n\
+root@ferrix:~# # ansi fg 0-7 with 8-15, then bg\r\n\
+\x1b[30m0 \x1b[90m0 \x1b[0m\x1b[31m1 \x1b[91m1 \x1b[0m\x1b[32m2 \x1b[92m2 \x1b[0m\x1b[33m3 \x1b[93m3 \x1b[0m\x1b[34m4 \x1b[94m4 \x1b[0m\x1b[35m5 \x1b[95m5 \x1b[0m\x1b[36m6 \x1b[96m6 \x1b[0m\x1b[37m7 \x1b[97m7 \x1b[0m\r\n\
+\x1b[40m  \x1b[100m  \x1b[0m\x1b[41m  \x1b[101m  \x1b[0m\x1b[42m  \x1b[102m  \x1b[0m\x1b[43m  \x1b[103m  \x1b[0m\x1b[44m  \x1b[104m  \x1b[0m\x1b[45m  \x1b[105m  \x1b[0m\x1b[46m  \x1b[106m  \x1b[0m\x1b[47m  \x1b[107m  \x1b[0m\r\n\
 root@ferrix:~# printf '\\033[32mok\\033[0m\\n'\r\n\
 \x1b[32mok\x1b[0m\r\n\
 root@ferrix:~# ";
@@ -117,6 +128,8 @@ fn run() -> Result<(), String> {
     emit(context.record());
 
     if let Some(path) = preview {
+        // Host render: the theme is mock evidence like the frame it colors.
+        theme::init("mock", None);
         let ty = Type::load()?;
         let state = interaction::UiState::new();
         let m = screen::terminal_metrics(&ty, size.0, size.1);
@@ -140,6 +153,10 @@ fn run() -> Result<(), String> {
         ));
         return Ok(());
     }
+
+    // Guest: load `colors.toml` (or the built-in Ferrix palette) once, before
+    // any frame is composed.
+    theme::init(EVIDENCE, None);
 
     #[cfg(target_os = "linux")]
     {
@@ -200,8 +217,23 @@ mod tests {
         let snap = terminal::Snapshot::from_bytes(m.cols, m.rows, PREVIEW_TRANSCRIPT);
         assert_eq!(
             snap.first_text_line().as_deref(),
-            Some("root@ferrix:~# uname -a")
+            Some("root@ferrix:~# # canned transcript \u{b7} mock \u{b7} no pty")
+        );
+        assert_eq!(
+            snap.line_text(2),
+            "Linux ferrix canned-virt #1 SMP aarch64 Linux"
         );
         assert!(snap.cursor.is_some());
+        // The swatch lines put every ANSI color on the grid.
+        let t = theme::get();
+        let swatch_row = (0..m.rows)
+            .find(|&row| snap.line_text(row).starts_with("0 0 1 1"))
+            .expect("foreground swatch line");
+        let fgs: Vec<u32> = (0..32)
+            .step_by(2)
+            .map(|col| snap.cell(col, swatch_row).unwrap().fg)
+            .collect();
+        let expected: Vec<u32> = (0..8).flat_map(|i| [t.ansi[i], t.ansi[i + 8]]).collect();
+        assert_eq!(fgs, expected);
     }
 }

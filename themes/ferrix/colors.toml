@@ -1,0 +1,59 @@
+# Ferrix palette: the canonical colors.toml for Omarchy Ferrix surfaces.
+#
+# Slate surfaces, steel type, one sharp rust accent. Values are "#rrggbb".
+#
+# Key set: the flat top-level keys are those of Omarchy desktop theme files
+# (themes/<name>/colors.toml in the omarchy repository), so a desktop theme
+# loads on Ferrix unchanged. `[ferrix]` adds the accents the desktop format has
+# no key for; when it is absent each entry falls back to a desktop key
+# (steel <- blue, ok <- green, rust_hi <- accent, rust_dim <- brown or accent,
+# bright_black <- muted). `schema_version` is Ferrix-only and optional; only 1
+# is accepted. Desktop keys Ferrix does not use (mode, orange,
+# darker_background, ...) are accepted and ignored.
+#
+# Mapping onto ferrix_ui::theme::Theme:
+#   background -> bg           dark_background -> bg_dark
+#   lighter_background -> surface   selection -> surface_hi   muted -> border
+#   foreground -> fg           dark_foreground -> fg_dim
+#   accent -> rust             red -> err        yellow -> warn
+#   ANSI 0..7:  background red green yellow blue magenta cyan light_foreground
+#   ANSI 8..15: ferrix.bright_black bright_red bright_green bright_yellow
+#               bright_blue bright_magenta bright_cyan bright_foreground
+
+schema_version = 1
+mode = "dark"
+
+accent = "#d8642a"
+selection = "#262c33"
+muted = "#353d46"
+
+background = "#15181c"
+dark_background = "#0f1114"
+lighter_background = "#1c2126"
+
+foreground = "#d7dde3"
+dark_foreground = "#7d8a96"
+light_foreground = "#c5ccd3"
+bright_foreground = "#e6ebef"
+
+red = "#cf5b4c"
+yellow = "#d9a441"
+orange = "#d8642a"
+green = "#7fa86a"
+cyan = "#7fb2b0"
+blue = "#7595b3"
+magenta = "#b08aa0"
+
+bright_red = "#e0705f"
+bright_yellow = "#e8b95a"
+bright_green = "#97c07f"
+bright_cyan = "#98cbc9"
+bright_blue = "#8fb0cf"
+bright_magenta = "#c7a1ba"
+
+[ferrix]
+steel = "#8fa3b3"
+ok = "#6fa287"
+rust_hi = "#f0803f"
+rust_dim = "#8a3f1a"
+bright_black = "#4a5560"

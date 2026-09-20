@@ -136,7 +136,7 @@ pub fn run(
                     &mut framebuffer,
                     age,
                     &elements,
-                    render::CLEAR_COLOR,
+                    render::clear_color(),
                 )
                 .map_err(|e| ("render", format!("render_output: {e}")))?;
             let damage = result.damage.cloned();

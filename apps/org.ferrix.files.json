@@ -5,7 +5,7 @@
   "name": "Files",
   "icon": {
     "glyph": "▤",
-    "tone": "orange"
+    "tone": "neutral"
   },
   "launchable": false
 }

@@ -32,6 +32,9 @@ ferrix-app-protocol = { path = "../ferrix-app-protocol" }
 ferrix-hardware-api = { path = "../ferrix-hardware-api" }
 ferrix-protocol = { path = "../ferrix-protocol" }
 ferrix-target-profile = { path = "../ferrix-target-profile" }
+# Shared toolkit: only `ferrix_ui::theme` is used here, so the compositor's
+# clear color follows the same `colors.toml` the surfaces read.
+ferrix-ui = { path = "../ferrix-ui" }
 
 [dev-dependencies]
 # Only the fake-ferrix-appd test speaks the wire format directly.

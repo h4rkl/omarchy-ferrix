@@ -5,7 +5,7 @@
   "name": "Camera",
   "icon": {
     "glyph": "◉",
-    "tone": "yellow"
+    "tone": "neutral"
   },
   "launchable": false
 }
