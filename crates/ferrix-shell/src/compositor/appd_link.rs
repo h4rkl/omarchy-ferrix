@@ -148,6 +148,10 @@ impl Shell {
     /// compositor raises the oldest mapped window (the first client to map,
     /// which is the home surface in every supported boot).
     pub fn go_home(&mut self, kind: HomeGestureKind, source: &str) {
+        if kind == HomeGestureKind::Close {
+            self.close_foreground(source);
+            return;
+        }
         let linked = self.appd_connected()
             && self
                 .ferrix_appd
@@ -165,5 +169,25 @@ impl Shell {
             source,
             linked,
         ));
+    }
+
+    /// A deliberate long bottom-edge swipe dismisses the foreground app.
+    /// `ferrix_appd` owns normal termination; without that link, ask the
+    /// focused xdg toplevel to close itself. Home is protected by appd and is
+    /// the oldest mapped fallback surface, so the offline fallback only closes
+    /// when another window is in front of it.
+    fn close_foreground(&mut self, source: &str) {
+        let linked = self.appd_connected()
+            && self
+                .ferrix_appd
+                .as_mut()
+                .is_some_and(|link| link.report(&Report::CloseGesture));
+        if !linked
+            && self.windows.mapped_count() > 1
+            && let Some(toplevel) = self.windows.focused().and_then(|w| w.toplevel())
+        {
+            toplevel.send_close();
+        }
+        evidence::emit(&evidence::close_gesture(self.evidence, source, linked));
     }
 }

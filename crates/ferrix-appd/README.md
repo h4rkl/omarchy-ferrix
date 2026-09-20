@@ -36,7 +36,7 @@ message. After that the table in `server::allowed` applies:
 | `Home` | `compositor`, `home`, `application`, `tool` |
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
-| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture` | `compositor` |
+| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
 
 A refused request gets `Reply::ProtocolError`; a refused report is dropped

@@ -1,5 +1,13 @@
 # Status
 
+## 2026-09-21 (mobile navigation and app dismissal gestures)
+
+- **Gestures:** A normal bottom-edge tap or upward swipe minimizes the foreground application to Home and keeps its supervised instance alive. An upward swipe longer than 55% of the panel's shorter side sends the new compositor-only `CloseGesture`; `ferrix-appd` terminates the foreground application and explicitly protects Home. Inward swipes from either side edge perform application Back, covering Android's two-sided convention and the iOS left-edge convention; at an application root, Back yields to Home instead of killing the process.
+- **Input fix:** Focus changes no longer synthesize pointer focus before a newly mapped client has bound `wl_pointer`. The first real motion now delivers the required enter event, fixing taps being silently dropped after opening an application.
+- **Graphical evidence (QEMU/mock, TCG, 1080x2340):** Messages accepted a tap after launch (`input-press`/`input-release`, page `conversations`). A normal bottom swipe raised Home while Messages remained supervised; relaunching resumed that instance. A long bottom swipe recorded `close-gesture`, `app-terminating`, `client-gone`, and exit signal 15 before revealing Home. A right-edge inward swipe from a relaunched Messages instance recorded `messages-back` with status `yielded` and raised Home. The resulting Home framebuffers were inspected. This is QEMU/mock evidence only.
+- **Validation:** `cargo fmt --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo test --workspace`; a fresh `just qemu-build`; `just qemu-check` (TCG, required services, deterministic unplugged-to-charging transition, clean power-off); and the graphical gesture sequence above.
+- **Limitation:** App dismissal is a direct, one-stage adaptation of swiping away a recent-app card. A recent-app thumbnail overview and interactive hold/drag animation remain future product-shell work.
+
 ## 2026-09-21 (mobile connectivity: telephony, networking, contacts, apps, authorization, Android runtime)
 
 - **Authority:** `docs/baseline.md`/`docs/plan.md` had been moved by the owner to `plans/baseline.md`/`plans/plan.md` (byte-identical, commits `19d43fe`/`99ce57a`); references were repointed and the resolution recorded in `docs/audit-2026-09-21.md`. Architecture decisions for this programme are `docs/adr/001..006`, subordinate to the baseline.

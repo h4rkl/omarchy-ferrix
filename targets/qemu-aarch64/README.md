@@ -534,7 +534,8 @@ just qemu-key esc
 The interactive reference surface accepts pointer and Wayland touch input. Tap
 any launcher tile to open its QEMU/mock app view, tap the status bar for quick
 settings, drag the brightness rail, swipe down from the top for notifications,
-swipe right from the left edge for Back, or swipe up from the bottom for Home.
+swipe inward from either side edge for Back/yield, swipe up from the bottom
+for Home/minimise, or make a long bottom-to-top swipe to close the foreground app.
 Virtual-tablet input displays a translucent accent-colored touch ring with a
 center dot marking the exact hotspot; native Wayland touch contacts do not show a cursor.
 These interactions demonstrate the guest input path; this client remains a
@@ -557,7 +558,7 @@ keyboard QEMU attaches as `virtio-keyboard-pci`, so typing in the Cocoa
 window works as well. Dragging inside the grid scrolls history. The session
 keeps running while you go Home (compositor bottom-edge gesture) and come
 back (tap the tile again: `ferrix-appd` activates the running instance instead of
-starting a second one); the header arrow yields the foreground to the home
+starting a second one); the header arrow or an inward side-edge swipe yields the foreground to the home
 surface. When the shell exits, tapping Enter restarts it. Serial evidence
 records are `app-context`, `terminal-frame`, `terminal-spawned`,
 `terminal-ready` (first line the shell wrote), `keyboard-input`, and

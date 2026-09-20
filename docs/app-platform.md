@@ -33,7 +33,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
         |  Launch/Subscribe        |  YieldForeground
         +-------------+------------+-----------------------------+
                       |  ferrix-app-protocol (line-delimited JSON, schema v1)
-                    ferrix-appd  <--- SurfaceMapped / FocusChanged / HomeGesture --- ferrix-shell
+                    ferrix-appd  <--- SurfaceMapped / FocusChanged / gestures ----- ferrix-shell
                       |   --- Activate{pid} ------------------------------->  (compositor)
             ferrix_app_runtime_api::Runtime (internal trait)
                       |
@@ -47,7 +47,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 | `ferrix-app-runtime-api` | internal `Runtime`/`RunningApp` traits, launch context (with the effective grants), and opaque runtime configuration boundary | internal contract |
 | `ferrix-appd` | catalog, grants policy, single-instance policy, lifecycle state machine, crash records, home restart policy, surface association, pid → identity resolution, role gating | system |
 | `ferrix-runtime-native` | native launch configuration and isolation types (namespaces, private `/tmp`, socket-directory view); the native `Runtime` that spawns `ferrix-sandbox`, classifies exits, and terminates | internal adapter |
-| `ferrix-shell` | toplevels keyed by client pid, focus, `Activate` handling, bottom-edge home gesture, crash refocus | system |
+| `ferrix-shell` | toplevels keyed by client pid, focus, `Activate` handling, trusted navigation/dismiss gestures, crash refocus | system |
 | `ferrix-basic-screen` | catalog-driven launcher, in-process quick settings/notifications, illustrative reference pages, crash notice | privileged first-party |
 | `ferrix-terminal` | the Terminal as an independent Wayland client | untrusted application |
 | `ferrix-ui` | software-rendering toolkit and the shared fullscreen Wayland client runner; a convenience library, not part of any ABI | library |
@@ -245,11 +245,19 @@ observes directly.
 
 ## Trusted gestures
 
-The bottom 8% of the output is the compositor's home zone. A contact that
-starts there is never delivered to clients; a tap or an upward swipe reports
-`HomeGesture` to `ferrix-appd` (or raises the oldest mapped window when `ferrix-appd` is not
-connected). Back remains application-owned for now: the Terminal's header
-arrow and left-edge swipe send `YieldForeground`. Moving the on-screen
+The bottom 8% of the output is compositor-owned and never delivered to
+clients. A tap or ordinary upward swipe reports `HomeGesture` to
+`ferrix-appd`, backgrounds the foreground app, and raises Home. A deliberate
+long upward swipe (more than 55% of the panel's shorter side) reports the
+compositor-only `CloseGesture`; `ferrix-appd` terminates the foreground app
+but refuses to dismiss Home. This is the product's one-stage software-rendered
+adaptation of swiping a recent-app card away; a thumbnail overview remains
+future shell work. Without the appd link, Home raises the oldest mapped
+surface and Close asks a non-Home focused xdg toplevel to close itself.
+
+Back remains application-owned for now. An inward swipe from either side
+edge follows the familiar Android/iOS Back convention: it navigates out of a
+sub-page and sends `YieldForeground` at the app root. Moving the on-screen
 keyboard and navigation into compositor-owned chrome is phase 3 work.
 
 ## Protocol roles
@@ -267,7 +275,7 @@ then gates by the verified role:
 | `Home` | `compositor`, `home`, `application`, `tool` |
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
-| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture` | `compositor` |
+| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
 
 A `service` resolves identities and observes lifecycle events; it never

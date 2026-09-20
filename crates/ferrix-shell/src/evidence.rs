@@ -220,6 +220,15 @@ pub fn home_gesture(evidence: Evidence, kind: &str, source: &str, linked: bool) 
     )
 }
 
+/// The compositor recognised a deliberate long-swipe dismiss gesture.
+pub fn close_gesture(evidence: Evidence, source: &str, linked: bool) -> String {
+    record(
+        evidence,
+        "close-gesture",
+        &[("source", source.into()), ("linked", linked.into())],
+    )
+}
+
 /// Link status towards `ferrix_appd`: `connected`, `lost`, or `retrying` (once per
 /// outage, with the reason).
 pub fn appd_link(evidence: Evidence, socket: &str, status: &str, reason: Option<&str>) -> String {
@@ -287,6 +296,10 @@ mod tests {
         assert_eq!(
             home_gesture(Evidence::Mock, "swipe", "touch", false),
             "{\"evidence\":\"mock\",\"event\":\"home-gesture\",\"compositor\":\"ferrix-shell\",\"kind\":\"swipe\",\"source\":\"touch\",\"linked\":false}"
+        );
+        assert_eq!(
+            close_gesture(Evidence::Mock, "touch", true),
+            "{\"evidence\":\"mock\",\"event\":\"close-gesture\",\"compositor\":\"ferrix-shell\",\"source\":\"touch\",\"linked\":true}"
         );
         assert_eq!(
             appd_link(

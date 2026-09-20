@@ -1,5 +1,5 @@
 //! Touch/pointer gesture tracking shared by the reference surfaces: a single
-//! tracked contact, press feedback with tap slop, the left-edge back swipe,
+//! tracked contact, press feedback with tap slop, either-edge back swipe,
 //! and vertical drags. Pure state: no Wayland. Each surface supplies its own
 //! `hit_test` and interprets the resulting [`Gesture`].
 
@@ -7,7 +7,7 @@
 pub const TAP_SLOP: f64 = 0.035;
 /// Fraction of the shorter panel side a swipe must travel.
 pub const SWIPE: f64 = 0.12;
-/// Fraction of the panel width that counts as the left edge.
+/// Fraction of the panel width that counts as either navigation edge.
 pub const LEFT_EDGE: f64 = 0.08;
 /// Fraction of the panel height at the bottom that is the compositor's.
 pub const HOME_ZONE: f64 = 0.92;
@@ -17,7 +17,7 @@ pub const HOME_ZONE: f64 = 0.92;
 pub enum Gesture<T> {
     /// A tap that started and ended on the same target.
     Tap(T),
-    /// A rightward swipe that started at the left edge.
+    /// An inward swipe that started at either side edge.
     BackSwipe,
     /// A downward swipe that started at the top edge.
     PullDown,
@@ -134,7 +134,9 @@ impl<T: Copy + PartialEq> Tracker<T> {
         let dx = contact.current.0 - contact.start.0;
         let dy = contact.current.1 - contact.start.1;
         let swipe = w.min(h) * SWIPE;
-        if contact.start.0 <= w * LEFT_EDGE && dx > swipe && dx.abs() > dy.abs() {
+        let from_left = contact.start.0 <= w * LEFT_EDGE && dx > swipe;
+        let from_right = contact.start.0 >= w * (1.0 - LEFT_EDGE) && -dx > swipe;
+        if (from_left || from_right) && dx.abs() > dy.abs() {
             return Some(Gesture::BackSwipe);
         }
         if contact.start.1 <= h * LEFT_EDGE && dy > swipe && dy.abs() > dx.abs() {
@@ -184,6 +186,10 @@ mod tests {
 
         t.down(0, (20.0, 900.0), None);
         t.motion(0, (300.0, 910.0), SIZE, None, None);
+        assert_eq!(t.up(0, SIZE, None), Some(Gesture::BackSwipe));
+
+        t.down(0, (1060.0, 900.0), None);
+        t.motion(0, (780.0, 910.0), SIZE, None, None);
         assert_eq!(t.up(0, SIZE, None), Some(Gesture::BackSwipe));
 
         t.down(0, (500.0, 20.0), None);

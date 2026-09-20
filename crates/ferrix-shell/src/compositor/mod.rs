@@ -509,8 +509,8 @@ impl Shell {
         layer_hit(&[Layer::Bottom, Layer::Background])
     }
 
-    /// Point keyboard focus (and the pointer's surface) at the focused
-    /// toplevel, activate it, and tell `ferrix_appd` when the focused pid changed.
+    /// Point keyboard focus at the focused toplevel, activate it, and tell
+    /// `ferrix_appd` when the focused pid changed.
     /// Safe to call when the previously focused client is already gone: the
     /// stack no longer contains it, so focus moves to the next mapped window.
     fn refocus(&mut self) {
@@ -528,7 +528,10 @@ impl Shell {
         if let Some(keyboard) = self.seat.get_keyboard() {
             keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
         }
-        self.sync_pointer_focus();
+        // Pointer focus follows the next physical motion. Assigning it here
+        // races a newly mapped client binding `wl_pointer`: Smithay then sees
+        // later motion over the same surface as no focus change, so the client
+        // never receives an enter or any subsequent taps.
         self.report_focus();
         self.full_redraw_requested = true;
         self.request_redraw();

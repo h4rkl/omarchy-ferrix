@@ -64,6 +64,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
         Inbound::Report(Report::SurfaceUnmapped { .. }) => "surface-unmapped",
         Inbound::Report(Report::FocusChanged { .. }) => "focus-changed",
         Inbound::Report(Report::HomeGesture) => "home-gesture",
+        Inbound::Report(Report::CloseGesture) => "close-gesture",
         Inbound::Report(Report::YieldForeground) => "yield-foreground",
     }
 }
@@ -97,7 +98,8 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
             Report::SurfaceMapped { .. }
             | Report::SurfaceUnmapped { .. }
             | Report::FocusChanged { .. }
-            | Report::HomeGesture,
+            | Report::HomeGesture
+            | Report::CloseGesture,
         ) => role == Compositor,
         Inbound::Report(Report::YieldForeground) => matches!(role, Application | Home),
     }
@@ -244,6 +246,9 @@ fn handle_report(service: &Arc<Service>, report: Report) {
             // Activation is best effort: a failure here (no home in the
             // catalog) is already visible through launch records.
             let _ = service.home();
+        }
+        Report::CloseGesture => {
+            let _ = service.terminate_foreground();
         }
     }
 }
@@ -814,6 +819,14 @@ mod tests {
         assert!(!allowed(
             ClientRole::Service,
             &Inbound::Report(Report::HomeGesture)
+        ));
+        assert!(allowed(
+            ClientRole::Compositor,
+            &Inbound::Report(Report::CloseGesture)
+        ));
+        assert!(!allowed(
+            ClientRole::Application,
+            &Inbound::Report(Report::CloseGesture)
         ));
         assert!(allowed(
             ClientRole::Service,

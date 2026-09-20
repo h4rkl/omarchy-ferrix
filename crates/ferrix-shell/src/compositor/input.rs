@@ -12,8 +12,6 @@
 //! can leak, and one touch slot can be grabbed while other fingers keep
 //! interacting normally. Touch frames are still delivered.
 
-use std::time::Duration;
-
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Device, DeviceCapability, Event,
@@ -115,45 +113,6 @@ impl Shell {
         self.pointer_location = location;
         self.gesture.update((location.x, location.y));
         self.request_redraw();
-    }
-
-    /// Re-point the pointer at whatever is now under it, but only when it was
-    /// already over a client surface. This matters for crash recovery: when
-    /// the focused window dies while the pointer sits on it, the pointer is
-    /// moved to the surface that replaced it (usually home) so the next click
-    /// lands correctly. It must NOT run before the pointer has ever engaged a
-    /// client, because setting focus to a surface whose client has not yet
-    /// bound `wl_pointer` leaves Smithay's focus stuck there: the client never
-    /// receives the enter, and a later real motion sees no focus change and so
-    /// sends none either. On a touch-first device the natural motion that
-    /// begins every tap re-points the pointer, so no pre-focusing is needed.
-    /// No-op without a pointer capability or while the home gesture owns it.
-    pub(super) fn sync_pointer_focus(&mut self) {
-        let Some(pointer) = self.seat.get_pointer() else {
-            return;
-        };
-        if self.gesture_source == Some(GestureSource::Pointer) {
-            // While grabbed the pointer is deliberately out of client reach.
-            return;
-        }
-        if pointer.current_focus().is_none() {
-            // The pointer is not over any client yet; let the next real motion
-            // deliver the enter rather than pinning focus prematurely.
-            return;
-        }
-        let location = self.pointer_location;
-        let under = self.surface_under(location);
-        let time = Duration::from(self.clock.now()).as_millis() as u32;
-        pointer.motion(
-            self,
-            under,
-            &MotionEvent {
-                location,
-                serial: SERIAL_COUNTER.next_serial(),
-                time,
-            },
-        );
-        pointer.frame(self);
     }
 
     pub fn process_input_event<B: InputBackend>(&mut self, event: InputEvent<B>) {

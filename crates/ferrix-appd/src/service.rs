@@ -329,6 +329,17 @@ impl Service {
         self.launch(&home)
     }
 
+    /// Terminates the foreground application after a trusted compositor
+    /// dismiss gesture. Home is never dismissible and an empty foreground is
+    /// a harmless no-op.
+    pub fn terminate_foreground(self: &Arc<Self>) -> Result<Option<AppInstance>, AppError> {
+        let foreground = self.lock_state().foreground.clone();
+        let Some(id) = foreground.filter(|id| !self.is_home(id)) else {
+            return Ok(None);
+        };
+        self.terminate(&id).map(Some)
+    }
+
     /// Starts the home surface, then every other `autostart` app. Failures
     /// are recorded (`app-launch-failed`) and returned, never fatal.
     pub fn autostart(self: &Arc<Self>) -> Vec<(AppId, Result<LaunchOutcome, AppError>)> {
@@ -1257,6 +1268,34 @@ mod tests {
         assert!(events.contains(&"app-terminating".to_owned()));
         assert!(events.contains(&"app-exited".to_owned()));
         assert!(!events.contains(&"app-crashed".to_owned()));
+    }
+
+    #[test]
+    fn dismiss_terminates_the_foreground_app_but_never_home() {
+        let h = harness();
+        let home = id("org.ferrix.home");
+        let terminal = id("org.ferrix.terminal");
+
+        let home_pid = h.service.launch(&home).unwrap().instance.pid.unwrap();
+        h.service
+            .surface_mapped(home_pid, Some(home.as_str()), None);
+        h.service.focus_changed(Some(home_pid));
+        assert_eq!(h.service.terminate_foreground().unwrap(), None);
+        assert!(!h.runtime.last_terminated(&home));
+
+        let terminal_pid = h.service.launch(&terminal).unwrap().instance.pid.unwrap();
+        h.service
+            .surface_mapped(terminal_pid, Some(terminal.as_str()), None);
+        h.service.focus_changed(Some(terminal_pid));
+        let closed = h
+            .service
+            .terminate_foreground()
+            .unwrap()
+            .expect("foreground app is dismissible");
+        assert_eq!(closed.app, terminal);
+        assert_eq!(closed.state, LifecycleState::Terminated);
+        assert!(h.runtime.last_terminated(&closed.app));
+        assert!(!h.runtime.last_terminated(&home));
     }
 
     #[test]

@@ -102,6 +102,8 @@ pub enum Report {
     },
     /// The compositor recognised the global home gesture.
     HomeGesture,
+    /// The compositor recognised a deliberate dismiss/close gesture.
+    CloseGesture,
     /// An application asks to leave the foreground (its own Back control).
     YieldForeground,
 }
@@ -409,6 +411,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Inbound>(r#"{"report":"focus-changed"}"#).unwrap(),
             Inbound::Report(Report::FocusChanged { pid: None })
+        );
+        assert_eq!(
+            serde_json::to_string(&Report::CloseGesture).unwrap(),
+            r#"{"report":"close-gesture"}"#
         );
         assert!(serde_json::from_str::<Inbound>(r#"{"bogus":1}"#).is_err());
     }

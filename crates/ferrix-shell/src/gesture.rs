@@ -3,7 +3,9 @@
 //! The compositor owns this gesture so no application can swallow it: a
 //! contact (touch slot or pointer left button) that begins in the bottom edge
 //! zone of the output is grabbed and never forwarded to clients. When it
-//! lifts, a short upward swipe or a tap in the zone means "go home".
+//! lifts, a tap or ordinary upward swipe means "go home"; a long upward
+//! swipe dismisses the foreground app. This mirrors the mobile distinction
+//! between Home/minimise and swiping an app away.
 //!
 //! This module is pure geometry in output logical coordinates; it knows
 //! nothing about Wayland, Smithay, or which backend produced the contact, so
@@ -19,6 +21,9 @@ pub const START_ZONE: f64 = 0.92;
 /// Upward travel, as a fraction of `min(width, height)`, beyond which the
 /// contact is a swipe (and it must be more vertical than horizontal).
 pub const SWIPE_FRACTION: f64 = 0.12;
+/// A deliberate long upward swipe closes the foreground app rather than
+/// merely sending it Home.
+pub const CLOSE_FRACTION: f64 = 0.55;
 /// Total travel, as a fraction of `min(width, height)`, below which the
 /// contact is a tap.
 pub const TAP_FRACTION: f64 = 0.035;
@@ -30,6 +35,8 @@ pub enum HomeGestureKind {
     Tap,
     /// An upward swipe out of the edge zone.
     Swipe,
+    /// A long upward swipe that dismisses the foreground app.
+    Close,
 }
 
 impl HomeGestureKind {
@@ -37,6 +44,7 @@ impl HomeGestureKind {
         match self {
             HomeGestureKind::Tap => "tap",
             HomeGestureKind::Swipe => "swipe",
+            HomeGestureKind::Close => "close",
         }
     }
 }
@@ -114,7 +122,11 @@ impl EdgeGesture {
         let dy = contact.last.1 - contact.start.1;
         let up = -dy;
         let travelled = (dx * dx + dy * dy).sqrt();
-        if up > SWIPE_FRACTION * contact.reference && dy.abs() > dx.abs() {
+        if up > CLOSE_FRACTION * contact.reference && dy.abs() > dx.abs() {
+            Some(HomeGesture {
+                kind: HomeGestureKind::Close,
+            })
+        } else if up > SWIPE_FRACTION * contact.reference && dy.abs() > dx.abs() {
             Some(HomeGesture {
                 kind: HomeGestureKind::Swipe,
             })
@@ -213,6 +225,18 @@ mod tests {
             kind(swipe(PORTRAIT, (540.0, 2300.0), (540.0, 2300.0 - 129.0))),
             None,
             "just under the swipe threshold and far beyond the tap threshold"
+        );
+    }
+
+    #[test]
+    fn long_upward_swipe_requests_close() {
+        assert_eq!(
+            kind(swipe(PORTRAIT, (540.0, 2300.0), (540.0, 1600.0))),
+            Some(HomeGestureKind::Close)
+        );
+        assert_eq!(
+            kind(swipe(SMALL, (415.0, 1780.0), (415.0, 1250.0))),
+            Some(HomeGestureKind::Close)
         );
     }
 

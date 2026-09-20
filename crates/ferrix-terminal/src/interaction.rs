@@ -161,7 +161,9 @@ impl Input {
         let dy = contact.current.1 - contact.start.1;
         let swipe = w.min(h) * 0.12;
 
-        if contact.start.0 <= w * 0.08 && dx > swipe && dx.abs() > dy.abs() {
+        let from_left = contact.start.0 <= w * 0.08 && dx > swipe;
+        let from_right = contact.start.0 >= w * 0.92 && -dx > swipe;
+        if (from_left || from_right) && dx.abs() > dy.abs() {
             state.back();
         } else if distance(contact.start, contact.current) < tap_slop(size)
             && let Some(target) = contact.target
@@ -270,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn back_header_and_left_edge_swipe_request_yield() {
+    fn back_header_and_side_edge_swipes_request_yield() {
         let mut state = UiState::new();
         let mut input = Input::default();
         assert_eq!(hit_test(&state, (80.0, 160.0), SIZE), Some(Target::Back));
@@ -283,6 +285,11 @@ mod tests {
         input.motion(0, (300.0, 900.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
         assert_eq!(state.pending_back, 2);
+
+        input.down(0, (1060.0, 900.0), &mut state, SIZE);
+        input.motion(0, (780.0, 900.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.pending_back, 3);
         assert!(state.pending.is_empty(), "a swipe types nothing");
     }
 

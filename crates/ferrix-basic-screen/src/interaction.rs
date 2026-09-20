@@ -294,7 +294,10 @@ impl Input {
         }
         if contact.start.1 <= h * 0.08 && dy > swipe && dy.abs() > dx.abs() {
             state.page = Page::Notifications;
-        } else if contact.start.0 <= w * 0.08 && dx > swipe && dx.abs() > dy.abs() {
+        } else if ((contact.start.0 <= w * 0.08 && dx > swipe)
+            || (contact.start.0 >= w * 0.92 && -dx > swipe))
+            && dx.abs() > dy.abs()
+        {
             state.back();
         } else if tap
             && let Some(target) = contact.target
@@ -542,12 +545,18 @@ mod tests {
     }
 
     #[test]
-    fn left_edge_swipe_navigates_back() {
+    fn either_edge_swipe_navigates_back() {
         let mut state = state();
         state.page = Page::Reference(3);
         let mut input = Input::default();
         input.down(0, (20.0, 900.0), &mut state, SIZE);
         input.motion(0, (300.0, 900.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.page, Page::Launcher);
+
+        state.page = Page::Reference(3);
+        input.down(0, (1060.0, 900.0), &mut state, SIZE);
+        input.motion(0, (780.0, 900.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
         assert_eq!(state.page, Page::Launcher);
     }
