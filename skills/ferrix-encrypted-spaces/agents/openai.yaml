@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ferrix Encrypted Spaces"
+  short_description: "Build trusted lock and encrypted space isolation"
+  default_prompt: "Use $ferrix-encrypted-spaces to design or implement Ferrix encrypted spaces against the repository architecture."
