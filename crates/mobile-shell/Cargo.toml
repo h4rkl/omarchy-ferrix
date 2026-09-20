@@ -1,0 +1,40 @@
+[package]
+name = "mobile-shell"
+description = "Omarchy mobile product compositor: Smithay-based, software-rendered, portrait, fullscreen-only Wayland shell for the QEMU guest (DRM/libinput) and nested host development (winit)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["udev", "nested"]
+# DRM/KMS + libinput + libseat guest backend with the pixman software renderer
+# (DRM dumb buffers). This is the QEMU virtio-gpu route; no GL is required.
+udev = [
+    "smithay/backend_drm",
+    "smithay/backend_gbm",
+    "smithay/backend_libinput",
+    "smithay/backend_udev",
+    "smithay/backend_session_libseat",
+    "smithay/renderer_pixman",
+    "dep:drm-ffi",
+]
+# Nested development backend: a winit window on a Linux host session. Smithay's
+# winit backend only exists on top of EGL/GLES, so acceleration is used here
+# (host development only, never required for guest correctness).
+nested = ["smithay/backend_winit", "smithay/renderer_gl"]
+
+[dependencies]
+hardware-api = { path = "../hardware-api" }
+mobile-protocol = { path = "../mobile-protocol" }
+target-profile = { path = "../target-profile" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay = { version = "0.7", default-features = false, features = ["desktop", "wayland_frontend"] }
+# Only for synthesising a DRM mode (`drm_mode_modeinfo`) when the pinned
+# geometry is not in the connector's mode list; same crate Smithay uses.
+drm-ffi = { version = "0.9", optional = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

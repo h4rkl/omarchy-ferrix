@@ -40,6 +40,19 @@ display_for() {
 [ -f "$out/Image" ] && [ -f "$out/initramfs.cpio.gz" ] || { echo "missing guest artifacts; run: just qemu-build" >&2; exit 2; }
 [ -f "$profile" ] || { echo "missing QEMU profile: $profile" >&2; exit 2; }
 set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m 1024 -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz"
+# Mock-control channel: a virtio-serial port named omarchy.control, exposed on
+# the host as a local Unix socket. mobile-core reads line-delimited JSON
+# commands from it (see scripts/mock_control.py / `just qemu-mock`). Agent
+# sessions keep it beside their other runtime files.
+if [ "$agent" = 1 ]; then
+  control_socket=${OMARCHY_QEMU_CONTROL_SOCKET:-"$out/agent/control.sock"}
+else
+  control_socket=${OMARCHY_QEMU_CONTROL_SOCKET:-"$out/control.sock"}
+fi
+mkdir -p "$(dirname "$control_socket")"
+rm -f "$control_socket"
+set -- "$@" -device virtio-serial-pci -chardev "socket,id=omctl,path=$control_socket,server=on,wait=off" -device virtserialport,chardev=omctl,name=omarchy.control
+printf 'mock-control socket: %s\n' "$control_socket"
 if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   width=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
   height=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
@@ -86,6 +99,13 @@ if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   esac
   gpu="virtio-gpu-pci,xres=$gpu_w,yres=$gpu_h"
   graphics_args="omarchy.graphics=on omarchy.display=${gpu_w}x${gpu_h}"
+  # Guest compositor: mobile-shell (Rust product compositor) or weston
+  # (reference). Unset leaves the guest init's default in charge.
+  case "${OMARCHY_QEMU_SHELL:-}" in
+    '') ;;
+    mobile-shell|weston) graphics_args="$graphics_args omarchy.shell=$OMARCHY_QEMU_SHELL" ;;
+    *) echo "invalid OMARCHY_QEMU_SHELL: $OMARCHY_QEMU_SHELL (mobile-shell|weston)" >&2; exit 2 ;;
+  esac
 fi
 if [ "$agent" = 1 ]; then
   runtime="$out/agent"

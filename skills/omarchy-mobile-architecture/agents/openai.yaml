@@ -1,0 +1,4 @@
+interface:
+  display_name: "Omarchy Mobile Architecture"
+  short_description: "Guide Rust-first multi-runtime mobile architecture"
+  default_prompt: "Use $omarchy-mobile-architecture to design this Omarchy mobile OS change against the agreed Rust-first architecture."

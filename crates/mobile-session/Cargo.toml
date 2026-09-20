@@ -1,0 +1,14 @@
+[package]
+name = "mobile-session"
+description = "Session/bootstrap layer: loads the target profile and selects the hardware adapter set; the only product-side crate that may name hardware-emulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hardware-api = { path = "../hardware-api" }
+hardware-emulator = { path = "../hardware-emulator" }
+target-profile = { path = "../target-profile" }
+
+[lints]
+workspace = true

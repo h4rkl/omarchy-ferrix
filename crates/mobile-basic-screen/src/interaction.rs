@@ -70,6 +70,16 @@ pub enum TermAction {
     Scroll(i32),
 }
 
+/// Product hardware changes requested by the UI. The app sends these through
+/// mobile-core; the authoritative state still comes back through its event
+/// subscription.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SystemAction {
+    WifiEnabled(bool),
+    BluetoothEnabled(bool),
+    Brightness(u8),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiState {
     pub page: Page,
@@ -81,6 +91,8 @@ pub struct UiState {
     pub osk: OskState,
     /// Queued terminal actions; the session owner drains these after input.
     pub pending: Vec<TermAction>,
+    /// Queued hardware requests; the session owner drains these after input.
+    pub pending_system: Vec<SystemAction>,
     /// Mirror of the terminal's DECCKM mode so arrows encode correctly.
     pub term_app_cursor: bool,
 }
@@ -96,6 +108,7 @@ impl UiState {
             notification_visible: true,
             osk: OskState::default(),
             pending: Vec::new(),
+            pending_system: Vec::new(),
             term_app_cursor: false,
         }
     }
@@ -118,8 +131,16 @@ impl UiState {
             Target::App(app) => self.page = Page::App(app),
             Target::Back => self.back(),
             Target::Home => self.home(),
-            Target::Wifi => self.wifi_on = !self.wifi_on,
-            Target::Bluetooth => self.bluetooth_on = !self.bluetooth_on,
+            Target::Wifi => {
+                self.wifi_on = !self.wifi_on;
+                self.pending_system
+                    .push(SystemAction::WifiEnabled(self.wifi_on));
+            }
+            Target::Bluetooth => {
+                self.bluetooth_on = !self.bluetooth_on;
+                self.pending_system
+                    .push(SystemAction::BluetoothEnabled(self.bluetooth_on));
+            }
             Target::Brightness => {}
             Target::ClearNotifications => self.notification_visible = false,
             Target::Key(key) => {
@@ -226,6 +247,15 @@ impl Input {
         let dy = contact.current.1 - contact.start.1;
         let swipe = w.min(h) * 0.12;
 
+        if contact.target == Some(Target::Brightness) {
+            state.brightness = brightness_at(contact.current.0, size.0);
+            state
+                .pending_system
+                .push(SystemAction::Brightness(state.brightness));
+            state.pressed = None;
+            return true;
+        }
+
         if contact.start.1 <= h * 0.08 && dy > swipe && dy.abs() > dx.abs() {
             state.page = Page::Notifications;
         } else if contact.start.1 >= h * 0.90 && -dy > swipe && dy.abs() > dx.abs() {
@@ -236,9 +266,6 @@ impl Input {
             && let Some(target) = contact.target
             && hit_test(state, contact.current, size) == Some(target)
         {
-            if target == Target::Brightness {
-                state.brightness = brightness_at(contact.current.0, size.0);
-            }
             state.activate(target);
         }
         state.pressed = None;
@@ -287,6 +314,32 @@ pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Opti
         Page::Launcher => {
             if y <= h * 0.08 {
                 return Some(Target::Status);
+            }
+            if w > h {
+                let s = h / 1080.0;
+                if y >= 430.0 * s && y <= 690.0 * s {
+                    if x >= 40.0 * s && x <= 440.0 * s {
+                        return Some(Target::Battery);
+                    }
+                    if x >= 460.0 * s && x <= 860.0 * s {
+                        return Some(Target::Network);
+                    }
+                }
+                let gap = 24.0 * s;
+                let left = 940.0 * s;
+                let top = 120.0 * s;
+                let tile =
+                    ((w - left - 40.0 * s - 2.0 * gap) / 3.0).min((h - top - 90.0 * s - gap) / 2.0);
+                for (index, app) in AppId::ALL.into_iter().enumerate() {
+                    let col = (index % 3) as f64;
+                    let row = (index / 3) as f64;
+                    let tile_x = left + col * (tile + gap);
+                    let tile_y = top + row * (tile + gap);
+                    if x >= tile_x && x <= tile_x + tile && y >= tile_y && y <= tile_y + tile {
+                        return Some(Target::App(app));
+                    }
+                }
+                return None;
             }
             if y >= w * 620.0 / 1080.0 && y <= w * 920.0 / 1080.0 {
                 if x >= w * 48.0 / 1080.0 && x <= w * 528.0 / 1080.0 {
@@ -369,10 +422,16 @@ mod tests {
         input.down(0, (250.0, 600.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
         assert!(!state.wifi_on);
+        assert_eq!(state.pending_system, vec![SystemAction::WifiEnabled(false)]);
+        state.pending_system.clear();
         input.down(0, (540.0, 1130.0), &mut state, SIZE);
         input.motion(0, (900.0, 1130.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
         assert!(state.brightness > 90);
+        assert_eq!(
+            state.pending_system,
+            vec![SystemAction::Brightness(state.brightness)]
+        );
     }
 
     #[test]
@@ -456,5 +515,15 @@ mod tests {
         input.up(0, &mut state, SIZE);
         assert_eq!(state.page, Page::Notifications);
         assert!(!state.notification_visible);
+    }
+
+    #[test]
+    fn landscape_launcher_tiles_remain_interactive() {
+        let mut state = UiState::new(true, true);
+        let mut input = Input::default();
+        let landscape = (2340, 1080);
+        input.down(0, (1150.0, 300.0), &mut state, landscape);
+        input.up(0, &mut state, landscape);
+        assert_eq!(state.page, Page::App(AppId::Settings));
     }
 }

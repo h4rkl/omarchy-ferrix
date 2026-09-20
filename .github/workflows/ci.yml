@@ -1,0 +1,178 @@
+# Linux CI for the emulator-first project (see AGENTS.md and docs/baseline.md).
+#
+# Two jobs:
+#   rust        - host toolchain checks (fmt, clippy, test) on ubuntu-latest.
+#   qemu-check  - the SAME headless contract used locally: `just qemu-build`
+#                 followed by `just qemu-check`, run under TCG with no display,
+#                 no KVM, no physical device. Evidence label: QEMU.
+#
+# Runner choice for qemu-check: GitHub's arm64 hosted runner
+# (`ubuntu-24.04-arm`, free for public repositories). qemu-build.sh runs
+# `--platform linux/arm64` Docker containers to cross-build the guest Rust
+# binaries and assemble the initramfs; on an arm64 runner those containers run
+# natively. On an x86 runner they would run under qemu-user emulation, and
+# compiling Rust under emulation is far too slow for a CI gate.
+#
+# Fallback if arm64 runners are unavailable (private repo without a larger
+# runner, capacity issues): dispatch this workflow manually and pick
+# `ubuntu-latest` as `qemu_runner`. The job then registers arm64 binfmt
+# handlers via docker/setup-qemu-action so the linux/arm64 containers run under
+# qemu-user; expect the build phase to take much longer (the job timeout is
+# raised accordingly). qemu-system-aarch64 itself uses TCG on every runner, so
+# the contract test is identical on both architectures.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      qemu_runner:
+        description: Runner label for the qemu-check job
+        type: choice
+        default: ubuntu-24.04-arm
+        options:
+          - ubuntu-24.04-arm
+          - ubuntu-latest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # rust-toolchain.toml is the single source of truth for the channel,
+      # components (rustfmt, clippy) and targets. With no argument, rustup
+      # installs exactly what that file declares.
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - name: Install compositor development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libseat-dev libinput-dev libudev-dev libdrm-dev \
+            libpixman-1-dev libxkbcommon-dev libgbm-dev libegl1-mesa-dev
+
+      - name: Cache cargo registry and target directory
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  qemu-check:
+    name: QEMU headless contract (TCG)
+    # Empty on push/pull_request (no inputs), so the arm64 runner is the default.
+    runs-on: ${{ inputs.qemu_runner || 'ubuntu-24.04-arm' }}
+    # The x86 fallback cross-builds Rust under qemu-user emulation and needs
+    # a much larger ceiling than the native arm64 run.
+    timeout-minutes: ${{ inputs.qemu_runner == 'ubuntu-latest' && 180 || 60 }}
+    env:
+      # Always portable TCG: no KVM/HVF required for correctness.
+      OMARCHY_QEMU_ACCEL: tcg
+      # Bounded wait for the guest smoke check, in seconds. The local default
+      # (45 s) is tuned for an Apple Silicon host; TCG on a hosted runner is
+      # slower, so give the guest more headroom. This is only a ceiling: the
+      # check still ends as soon as the guest powers off.
+      OMARCHY_QEMU_CHECK_TIMEOUT: "300"
+      # Cargo registry + guest target directory used by the build containers.
+      OMARCHY_CACHE_DIR: ${{ github.workspace }}/.cache/omarchy
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # x86 fallback only: register binfmt handlers so Docker can run the
+      # pinned linux/arm64 builder images under qemu-user. Skipped on arm64,
+      # where the containers run natively.
+      - name: Register arm64 binfmt handlers (x86 fallback only)
+        if: runner.arch != 'ARM64'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: linux/arm64
+
+      # qemu-run.sh needs qemu-system-aarch64 (Ubuntu ships it in
+      # qemu-system-arm); qemu-build.sh needs cpio (gzip, tar, awk, shasum
+      # via perl, python3 and Docker are already on the runner image).
+      # --no-install-recommends keeps the GUI/firmware extras out: the check
+      # is headless (-nographic / -display none) and boots the kernel directly.
+      - name: Install host prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm cpio
+
+      - name: Install just
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: just@1.58.0
+
+      - name: Report host prerequisites
+        run: |
+          for tool in docker qemu-system-aarch64 cpio gzip shasum python3 just; do
+            command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 2; }
+          done
+          docker version --format 'docker {{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})'
+          qemu-system-aarch64 --version | head -1
+          just --version
+          python3 --version
+
+      # Cargo registry and the guest target directory. Restored before the
+      # build and saved even when the QEMU check fails, so a red run still
+      # warms the cache for the next attempt.
+      - name: Restore guest build cache
+        id: guest-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/omarchy
+          key: omarchy-guest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'targets/qemu-aarch64/scripts/qemu-build.sh') }}
+          restore-keys: |
+            omarchy-guest-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: just qemu-build
+        run: just qemu-build
+
+      - name: just qemu-check
+        run: just qemu-check
+
+      - name: Save guest build cache
+        if: always() && steps.guest-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/omarchy
+          key: ${{ steps.guest-cache.outputs.cache-primary-key }}
+
+      # Preserve the serial log and the pinned-input manifest on success and
+      # failure alike; the serial log is the machine-readable evidence.
+      - name: Upload QEMU evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qemu-aarch64-evidence-${{ runner.arch }}
+          path: |
+            out/qemu-aarch64/serial.log
+            out/qemu-aarch64/manifest.json
+          if-no-files-found: warn
+          retention-days: 14

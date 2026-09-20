@@ -5,15 +5,48 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
-mkdir -p /run /etc/omarchy
+mkdir -p /run /run/omarchy /etc/omarchy
 cp /profile.toml /etc/omarchy/profile.toml
-if [ -x /usr/bin/mobile-core ]; then
-  /usr/bin/mobile-core /etc/omarchy/profile.toml
-else
-  printf '%s\n' '{"evidence":"mock","event":"boot-health","status":"ok","profile":"emulator-dev","battery_percent":75,"charging":false}'
+check_mode=false
+grep -q 'omarchy.mode=check' /proc/cmdline && check_mode=true
+# Machine-readable boot failure. No success record is ever printed on this
+# path; in check mode the guest powers off so the host check fails fast.
+boot_failed() {
+  printf '{"evidence":"QEMU","event":"boot-failed","reason":"%s"}\n' "$1"
+  if [ "$check_mode" = true ]; then
+    poweroff -f
+  fi
+  exec /bin/sh
+}
+# The persistent Rust mobile core: it owns hardware state (mock adapter for
+# this target), serves it on /run/omarchy/core.sock, and takes test commands
+# from the host over the virtio-serial port omarchy.control (built into the
+# Alpine linux-virt kernel; modprobe is a no-op there).
+modprobe virtio_console 2>/dev/null || true
+[ -x /usr/bin/mobile-core ] || boot_failed core-missing
+# The core writes its JSON records straight to the serial console (no log
+# relay, so records are never delayed). It binds the state socket immediately
+# before printing boot-health, so a live process plus the socket is readiness.
+/usr/bin/mobile-core /etc/omarchy/profile.toml --socket /run/omarchy/core.sock --control auto --shutdown-marker /run/omarchy/shutdown &
+core_pid=$!
+core_ready=false
+for _ in $(seq 1 200); do
+  if [ -S /run/omarchy/core.sock ] && kill -0 "$core_pid" 2>/dev/null; then
+    core_ready=true
+    break
+  fi
+  kill -0 "$core_pid" 2>/dev/null || break
+  sleep 0.1
+done
+if [ "$core_ready" != true ]; then
+  if kill -0 "$core_pid" 2>/dev/null; then
+    boot_failed core-not-ready
+  else
+    boot_failed core-exited
+  fi
 fi
-printf '%s\n' '{"evidence":"mock","event":"power-changed","battery_percent":75,"charging":true}'
-printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok"}'
+# Only now is the guest healthy: the core actually reported.
+printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok","core":"mobile-core","socket":"/run/omarchy/core.sock"}'
 if grep -q 'omarchy.graphics=on' /proc/cmdline; then
   export XDG_RUNTIME_DIR=/run/user/0
   mkdir -p "$XDG_RUNTIME_DIR"
@@ -24,6 +57,15 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
   /sbin/udevd --daemon
   /sbin/udevadm trigger --action=add
   /sbin/udevadm settle
+  # Compositor selection. omarchy.shell=mobile-shell starts the Rust product
+  # compositor (crates/mobile-shell: Smithay, pixman software rendering into
+  # DRM dumb buffers, libinput); omarchy.shell=weston keeps the reference
+  # compositor. Default mobile-shell; the host overrides it with OMARCHY_QEMU_SHELL.
+  shell=$(sed -n 's/.*omarchy\.shell=\([a-z-]*\).*/\1/p' /proc/cmdline)
+  case "$shell" in
+    mobile-shell|weston) ;;
+    *) shell=mobile-shell ;;
+  esac
   # Output geometry. The host launcher may request a window-friendly portrait
   # panel (omarchy.display=WxH); otherwise the profile panel is used. Weston is
   # pinned to exactly this mode because host UI size hints (QEMU's Cocoa
@@ -51,19 +93,39 @@ EOF
   printf '{"evidence":"QEMU","event":"display-geometry","width":%s,"height":%s,"source":"%s","connector":"Virtual-1"}\n' "$display_w" "$display_h" "$display_source"
   seatd -n -g root &
   sleep 1
-  weston --config=/etc/omarchy/weston.ini --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
-  for _ in $(seq 1 50); do
-    [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
-    sleep 0.1
-  done
-  if [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
+  comp_pid=
+  if [ "$shell" = mobile-shell ]; then
+    comp_log=/run/mobile-shell.log
+    # mobile-shell reads omarchy.display= itself and pins the DRM mode. Its
+    # JSON records (display-geometry, drm-output, input-device,
+    # compositor-ready, client-mapped) go to the log and are replayed to the
+    # console once the client has drawn; readiness is the socket plus the
+    # compositor-ready record, never the process start alone.
+    /usr/bin/mobile-shell /etc/omarchy/profile.toml >"$comp_log" 2>&1 &
+    comp_pid=$!
+    for _ in $(seq 1 150); do
+      if [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && grep -q '"event":"compositor-ready"' "$comp_log" 2>/dev/null; then
+        break
+      fi
+      kill -0 "$comp_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+  else
+    comp_log=/run/weston.log
+    weston --config=/etc/omarchy/weston.ini --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
+    for _ in $(seq 1 50); do
+      [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
+      sleep 0.1
+    done
+  fi
+  if [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && { [ "$shell" = weston ] || grep -q '"event":"compositor-ready"' "$comp_log" 2>/dev/null; }; then
     # Shell environment for the Terminal app's PTY session (BusyBox sh). The
     # kernel starts init with an empty environment, so the client would
     # otherwise have no HOME/USER/SHELL to hand to the spawned shell.
     mkdir -p /root
     hostname omarchy 2>/dev/null || true
     export HOME=/root USER=root SHELL=/bin/sh
-    WAYLAND_DISPLAY=wayland-0 /usr/bin/mobile-basic-screen /etc/omarchy/profile.toml >/run/mobile-basic-screen.log 2>&1 &
+    WAYLAND_DISPLAY=wayland-0 /usr/bin/mobile-basic-screen /etc/omarchy/profile.toml --core /run/omarchy/core.sock >/run/mobile-basic-screen.log 2>&1 &
     client_pid=$!
     client_ready=false
     for _ in $(seq 1 100); do
@@ -77,24 +139,49 @@ EOF
     if [ "$client_ready" = true ] && kill -0 "$client_pid" 2>/dev/null; then
       cat /run/mobile-basic-screen.log
       tail -n 0 -f /run/mobile-basic-screen.log >/dev/console 2>&1 &
-      grep -i 'input\|libinput' /run/weston.log || true
-      grep -E 'video modes|preferred|current' /run/weston.log || true
-      printf '%s\n' '{"evidence":"QEMU","event":"wayland-ready","compositor":"weston","socket":"wayland-0","client":"mobile-basic-screen"}'
+      if [ "$shell" = mobile-shell ]; then
+        # Replay the compositor's JSON evidence records and follow new ones
+        # (one reader from the start of the log, so nothing is skipped; the
+        # tracing lines stay in the log file only).
+        tail -n +1 -f "$comp_log" 2>/dev/null | while read -r line; do
+          case "$line" in '{'*) printf '%s\n' "$line" ;; esac
+        done >/dev/console 2>&1 &
+      else
+        grep -i 'input\|libinput' /run/weston.log || true
+        grep -E 'video modes|preferred|current' /run/weston.log || true
+      fi
+      printf '{"evidence":"QEMU","event":"wayland-ready","compositor":"%s","socket":"wayland-0","client":"mobile-basic-screen"}\n' "$shell"
     else
       if kill -0 "$client_pid" 2>/dev/null; then
-        printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"client-connect"}'
+        printf '{"evidence":"QEMU","event":"wayland-failed","compositor":"%s","reason":"client-connect"}\n' "$shell"
       else
-        printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"client-exited"}'
+        printf '{"evidence":"QEMU","event":"wayland-failed","compositor":"%s","reason":"client-exited"}\n' "$shell"
       fi
       cat /run/mobile-basic-screen.log
-      cat /run/weston.log
+      cat "$comp_log"
     fi
   else
-    printf '%s\n' '{"evidence":"QEMU","event":"wayland-failed","compositor":"weston","reason":"socket"}'
-    cat /run/weston.log
+    reason=socket
+    if [ -n "$comp_pid" ] && ! kill -0 "$comp_pid" 2>/dev/null; then
+      reason=compositor-exited
+    elif [ "$shell" = mobile-shell ]; then
+      reason=compositor-not-ready
+    fi
+    printf '{"evidence":"QEMU","event":"wayland-failed","compositor":"%s","reason":"%s"}\n' "$shell" "$reason"
+    cat "$comp_log"
   fi
 fi
-if grep -q 'omarchy.mode=check' /proc/cmdline; then
+if [ "$check_mode" = true ]; then
+  # The host drives the check over the mock-control channel and ends it with
+  # {"cmd":"shutdown"}; mobile-core leaves this marker. Bounded so a lost host
+  # never leaves the guest running forever.
+  for _ in $(seq 1 1800); do
+    [ -e /run/omarchy/shutdown ] && break
+    sleep 0.1
+  done
+  [ -e /run/omarchy/shutdown ] || printf '%s\n' '{"evidence":"QEMU","event":"check-timeout","reason":"no-shutdown-command"}'
+  # Let the core's ack and last records reach the host before power-off.
+  sleep 1
   poweroff -f
 fi
 exec /bin/sh

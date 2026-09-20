@@ -11,6 +11,10 @@ workspace = true
 [dependencies]
 alacritty_terminal = { version = "0.26", default-features = false }
 fontdue = "0.9"
+hardware-api = { path = "../hardware-api" }
+mobile-protocol = { path = "../mobile-protocol" }
+mobile-session = { path = "../mobile-session" }
+target-profile = { path = "../target-profile" }
 tiny-skia = "0.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]

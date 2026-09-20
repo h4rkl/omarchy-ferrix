@@ -52,7 +52,28 @@ qemu-clean:
     @test "{{out}}" != "/" && rm -rf "{{out}}"
 
 shell-nested:
-    @cargo run -p mobile-core -- targets/qemu-aarch64/profile.toml
+    @"{{root}}/targets/qemu-aarch64/scripts/shell-nested.sh"
+
+# Product compositor (mobile-shell) nested in a host window; Linux host session only.
+shell-compositor-nested:
+    @"{{root}}/targets/qemu-aarch64/scripts/shell-nested.sh"
+
+# Positional args ("$@") keep raw JSON commands intact through the shell.
+[positional-arguments]
+qemu-mock +args:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-mock.sh" "$@"
+
+arch-check:
+    @cargo test -p mobile-session --test architecture
 
 test:
     @cargo test --workspace
+
+pmos-build:
+    @"{{root}}/targets/qemu-aarch64/scripts/pmos-build.sh"
+
+pmos-run:
+    @"{{root}}/targets/qemu-aarch64/scripts/pmos-run.sh"
+
+pmos-check:
+    @"{{root}}/targets/qemu-aarch64/scripts/pmos-check.sh"

@@ -1,12 +1,16 @@
 [package]
 name = "mobile-core"
+description = "Persistent Rust mobile core: owns hardware state via hardware-api, serves it to shells over a Unix socket, and accepts typed mock-control commands"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 hardware-api = { path = "../hardware-api" }
-hardware-emulator = { path = "../hardware-emulator" }
+mobile-session = { path = "../mobile-session" }
+mobile-protocol = { path = "../mobile-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [lints]
 workspace = true

@@ -10,7 +10,9 @@
 
 use std::io::Write as _;
 use std::num::NonZeroU32;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use smithay_client_toolkit::reexports::calloop::EventLoop;
 use smithay_client_toolkit::reexports::calloop::ping::make_ping;
@@ -39,10 +41,13 @@ use smithay_client_toolkit::{
     shm::{Shm, ShmHandler},
 };
 
+use hardware_api::{HardwareCommand, HardwareEvent, HardwareState, WifiState};
+use mobile_protocol::Subscription;
+use target_profile::Profile;
+
 use crate::draw::Type;
-use crate::interaction::{AppId, Input, Page, TermAction, UiState};
+use crate::interaction::{AppId, Input, Page, SystemAction, TermAction, UiState};
 use crate::keymap;
-use crate::profile::Profile;
 use crate::screen;
 use crate::terminal::{Geometry, Session, Snapshot};
 
@@ -59,6 +64,11 @@ struct App {
     pool: SlotPool,
     window: Window,
     profile: Profile,
+    /// Live hardware state as reported by mobile-core (adapter -> core -> UI).
+    hw: HardwareState,
+    hw_events: Receiver<HardwareEvent>,
+    core_socket: PathBuf,
+    core_lost_reported: bool,
     ty: Type,
     minute: u32,
     size: (u32, u32),
@@ -99,7 +109,7 @@ fn json_escape(text: &str) -> String {
     out
 }
 
-pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
+pub fn run(profile: &Profile, core: Subscription, minute: u32) -> Result<(), String> {
     let ty = Type::load()?;
     let conn = Connection::connect_to_env().map_err(|e| format!("wayland connect: {e}"))?;
     let (globals, event_queue) =
@@ -118,7 +128,7 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
     window.set_fullscreen(None);
     window.commit();
 
-    let initial = (profile.display_width, profile.display_height);
+    let initial = (profile.display.width, profile.display.height);
     let pool = SlotPool::new((initial.0 * initial.1 * 4) as usize, &shm)
         .map_err(|e| format!("shm pool: {e}"))?;
 
@@ -132,6 +142,16 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
     handle
         .insert_source(ping_source, |_, _, app: &mut App| app.terminal_wake())
         .map_err(|e| format!("terminal wake source: {e}"))?;
+    let (hw_ping, hw_ping_source) = make_ping().map_err(|e| format!("core wake: {e}"))?;
+    handle
+        .insert_source(hw_ping_source, |_, _, app: &mut App| app.hardware_wake())
+        .map_err(|e| format!("core wake source: {e}"))?;
+    let core_socket = core.socket().to_owned();
+    let hw = core.state.clone();
+    let hw_events = core.spawn(Arc::new(move || hw_ping.ping()));
+    let (wifi_on, bt_on) = crate::ui_toggles(&hw);
+    let mut ui = UiState::new(wifi_on, bt_on);
+    ui.brightness = hw.display.brightness_percent;
 
     let mut app = App {
         registry_state: RegistryState::new(&globals),
@@ -142,6 +162,10 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
         pool,
         window,
         profile: profile.clone(),
+        hw,
+        hw_events,
+        core_socket,
+        core_lost_reported: false,
         ty,
         minute,
         size: initial,
@@ -156,7 +180,7 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
         mods: keymap::Modifiers::default(),
         keyboard_reported: false,
         input: Input::default(),
-        ui: UiState::new(profile.wifi == "connected", profile.bluetooth_present),
+        ui,
         session: None,
         session_error: None,
         wake: Arc::new(move || ping.ping()),
@@ -299,6 +323,78 @@ impl App {
                 }
             }
         }
+        for action in std::mem::take(&mut self.ui.pending_system) {
+            let command = match action {
+                SystemAction::WifiEnabled(enabled) => HardwareCommand::SetWifiEnabled { enabled },
+                SystemAction::BluetoothEnabled(enabled) => {
+                    HardwareCommand::SetBluetoothEnabled { enabled }
+                }
+                SystemAction::Brightness(percent) => HardwareCommand::SetBrightness { percent },
+            };
+            match mobile_protocol::command(
+                &self.core_socket,
+                command,
+                std::time::Duration::from_secs(2),
+            ) {
+                Ok(state) => {
+                    self.hw = state;
+                    self.sync_controls();
+                }
+                Err(error) => {
+                    self.sync_controls();
+                    emit(format!(
+                        "{{\"evidence\":\"QEMU\",\"event\":\"ui-command-failed\",\"error\":\"{}\"}}",
+                        json_escape(&error)
+                    ));
+                }
+            }
+        }
+    }
+
+    fn sync_controls(&mut self) {
+        self.ui.wifi_on = self.hw.network.wifi != WifiState::Disabled;
+        self.ui.bluetooth_on = self.hw.bluetooth.enabled;
+        self.ui.brightness = self.hw.display.brightness_percent;
+    }
+
+    /// Ping handler: mobile-core delivered hardware events (or went away).
+    /// Every event is folded into the live state, reported, and redrawn.
+    fn hardware_wake(&mut self) {
+        let mut changed = false;
+        loop {
+            match self.hw_events.try_recv() {
+                Ok(event) => {
+                    event.apply_to(&mut self.hw);
+                    self.sync_controls();
+                    changed = true;
+                    emit(format!(
+                        "{{\"evidence\":\"QEMU\",\"event\":\"ui-state\",\"source\":\"{}\",\"battery_percent\":{},\"charging\":{},\"wifi\":\"{}\",\"modem\":\"{}\",\"sim\":\"{}\",\"orientation\":\"{}\",\"brightness_percent\":{}}}",
+                        event.name(),
+                        self.hw.power.battery_percent,
+                        self.hw.power.charging,
+                        self.hw.network.wifi.name(),
+                        self.hw.telephony.registration.name(),
+                        self.hw.telephony.sim.name(),
+                        self.hw.display.orientation.name(),
+                        self.hw.display.brightness_percent,
+                    ));
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if !self.core_lost_reported {
+                        self.core_lost_reported = true;
+                        emit(
+                            "{\"evidence\":\"QEMU\",\"event\":\"core-disconnected\",\"status\":\"stale-state\"}"
+                                .to_owned(),
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+        if changed {
+            self.draw();
+        }
     }
 
     /// Ping handler: the PTY reader produced output or the shell exited.
@@ -378,7 +474,7 @@ impl App {
                 }
             };
         let frame = screen::compose(
-            &self.profile,
+            &self.hw,
             self.minute,
             &self.ty,
             w,

@@ -1,8 +1,15 @@
 [package]
 name = "hardware-api"
+description = "Stable, target-neutral hardware contracts for the Rust mobile core and applications"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true

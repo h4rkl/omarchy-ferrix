@@ -20,3 +20,6 @@ wifi = "connected"
 bluetooth_present = true
 modem = "registered"
 sim = "present"
+
+[audio]
+route = "speaker"

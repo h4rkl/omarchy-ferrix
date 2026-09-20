@@ -4,6 +4,10 @@ members = [
     "crates/hardware-emulator",
     "crates/mobile-basic-screen",
     "crates/mobile-core",
+    "crates/mobile-protocol",
+    "crates/mobile-session",
+    "crates/mobile-shell",
+    "crates/target-profile",
 ]
 resolver = "2"
 
