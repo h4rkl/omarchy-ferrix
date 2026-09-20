@@ -1,31 +1,31 @@
-//! `appd` binary: composes the native runtime with the service and serves
+//! `ferrix_appd` binary: composes the native runtime with the service and serves
 //! the socket.
 //!
 //! 1. loads the catalog from every `--app-dir` (default
 //!    `/usr/share/ferrix/apps` if it exists, else `apps`);
 //! 2. binds the socket (`--socket`, `FERRIX_APPD_SOCKET`, default
-//!    `/run/ferrix/appd.sock`) and only then prints `appd-ready`;
+//!    `/run/ferrix/ferrix_appd.sock`) and only then prints `ferrix_appd-ready`;
 //! 3. autostarts the home surface and every `autostart` app;
 //! 4. serves connections forever.
 //!
-//! Any startup failure prints `appd-failed` and exits non-zero. This is the
+//! Any startup failure prints `ferrix_appd-failed` and exits non-zero. This is the
 //! only place that names a runtime implementation.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use app_api::{DEFAULT_APPD_SOCKET, GUEST_APP_DIR, REPO_APP_DIR};
-use app_runtime_api::Runtime;
-use appd::process_tree::ProcTree;
-use appd::records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder};
-use appd::{Catalog, Server, Service, ServiceOptions};
-use runtime_native::{NativeRuntime, NativeRuntimeOptions};
+use ferrix_app_api::{DEFAULT_APPD_SOCKET, GUEST_APP_DIR, REPO_APP_DIR};
+use ferrix_app_runtime_api::Runtime;
+use ferrix_appd::process_tree::ProcTree;
+use ferrix_appd::records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder};
+use ferrix_appd::{Catalog, Server, Service, ServiceOptions};
+use ferrix_runtime_native::{NativeRuntime, NativeRuntimeOptions};
 
 const USAGE: &str =
-    "usage: appd [--socket PATH] [--app-dir DIR]... [--nested] [--no-autostart] [--sandbox PATH]
+    "usage: ferrix-appd [--socket PATH] [--app-dir DIR]... [--nested] [--no-autostart] [--sandbox PATH]
 
-  --socket PATH    socket to serve (env FERRIX_APPD_SOCKET, default /run/ferrix/appd.sock)
+  --socket PATH    socket to serve (env FERRIX_APPD_SOCKET, default /run/ferrix/ferrix_appd.sock)
   --app-dir DIR    descriptor directory, repeatable (env FERRIX_APP_DIR;
                    default /usr/share/ferrix/apps if present, else apps)
   --nested         nested host run: records carry evidence \"mock\" instead of \"QEMU\"

@@ -1,7 +1,7 @@
 //! Unix-socket front end: one thread per connection, line-delimited JSON,
-//! `app_protocol::Inbound` parsing, role gating, and subscription hand-off.
+//! `ferrix_app_protocol::Inbound` parsing, role gating, and subscription hand-off.
 //!
-//! Mirrors `mobile-core`'s server. The dispatch step is a pure function over
+//! Mirrors `ferrix-core`'s server. The dispatch step is a pure function over
 //! a [`Connection`] so gating is unit-tested without sockets.
 
 use std::io::{BufRead, BufReader, Write};
@@ -10,8 +10,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
-use app_api::SCHEMA_VERSION;
-use app_protocol::{ClientRole, Inbound, Reply, Report, Request};
+use ferrix_app_api::SCHEMA_VERSION;
+use ferrix_app_protocol::{ClientRole, Inbound, Reply, Report, Request};
 
 use crate::service::Service;
 
@@ -86,7 +86,7 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
 
 /// Applies one parsed line. Hello must come first; every other message is
 /// gated by [`allowed`]. Rejected requests get a `ProtocolError`; rejected
-/// reports are dropped with an `appd-request-rejected` record.
+/// reports are dropped with an `ferrix_appd-request-rejected` record.
 pub fn dispatch(service: &Arc<Service>, connection: &mut Connection, inbound: Inbound) -> Outcome {
     let name = message_name(&inbound);
     if let Inbound::Request(Request::Hello { role }) = inbound {
@@ -253,7 +253,7 @@ impl Server {
                 Ok(stream) => {
                     let server = Arc::clone(&self);
                     let spawned = thread::Builder::new()
-                        .name("appd-conn".to_owned())
+                        .name("ferrix-appd-conn".to_owned())
                         .spawn(move || server.handle(stream));
                     if let Err(error) = spawned {
                         self.service
@@ -335,7 +335,7 @@ mod tests {
     use crate::records::{Recorder, captured_events};
     use crate::service::ServiceOptions;
     use crate::testing::{FakeProcessTree, FakeRuntime};
-    use app_api::{AppId, LifecycleState};
+    use ferrix_app_api::{AppId, LifecycleState};
 
     fn service() -> (Arc<Service>, FakeRuntime, crate::records::Captured) {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
@@ -434,7 +434,7 @@ mod tests {
         let instance = service.instance(&terminal()).unwrap();
         assert!(!instance.surface_mapped);
         assert_eq!(instance.state, LifecycleState::Starting);
-        assert!(captured_events(&records).contains(&"appd-request-rejected".to_owned()));
+        assert!(captured_events(&records).contains(&"ferrix-appd-request-rejected".to_owned()));
         assert!(!captured_events(&records).contains(&"app-surface".to_owned()));
     }
 
@@ -554,7 +554,7 @@ mod tests {
             ),
             Outcome::Reply(Reply::Hello { .. })
         ));
-        assert!(captured_events(&records).contains(&"appd-request-rejected".to_owned()));
+        assert!(captured_events(&records).contains(&"ferrix-appd-request-rejected".to_owned()));
     }
 
     #[test]

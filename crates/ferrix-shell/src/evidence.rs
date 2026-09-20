@@ -97,12 +97,12 @@ pub fn escape(input: &str) -> String {
     out
 }
 
-/// Build one JSON record line: `{"evidence":..,"event":..,"compositor":"mobile-shell",...}`.
+/// Build one JSON record line: `{"evidence":..,"event":..,"compositor":"ferrix-shell",...}`.
 pub fn record(evidence: Evidence, event: &str, fields: &[(&str, Value)]) -> String {
     let mut out = String::new();
     let _ = write!(
         out,
-        "{{\"evidence\":\"{}\",\"event\":\"{}\",\"compositor\":\"mobile-shell\"",
+        "{{\"evidence\":\"{}\",\"event\":\"{}\",\"compositor\":\"ferrix-shell\"",
         evidence.label(),
         escape(event)
     );
@@ -191,7 +191,7 @@ pub fn client_gone(evidence: Evidence, pid: Option<u32>, app_id: &str, toplevels
     )
 }
 
-/// `appd` asked to raise a client's toplevel; `raised` is false when that pid
+/// `ferrix_appd` asked to raise a client's toplevel; `raised` is false when that pid
 /// has no mapped toplevel yet.
 pub fn client_activated(evidence: Evidence, pid: u32, app_id: &str, raised: bool) -> String {
     record(
@@ -206,7 +206,7 @@ pub fn client_activated(evidence: Evidence, pid: u32, app_id: &str, raised: bool
 }
 
 /// The compositor recognised the bottom-edge home gesture. `source` is
-/// `touch` or `pointer`; `linked` says whether `appd` received it (otherwise
+/// `touch` or `pointer`; `linked` says whether `ferrix_appd` received it (otherwise
 /// the compositor raised the oldest mapped window itself).
 pub fn home_gesture(evidence: Evidence, kind: &str, source: &str, linked: bool) -> String {
     record(
@@ -220,14 +220,14 @@ pub fn home_gesture(evidence: Evidence, kind: &str, source: &str, linked: bool) 
     )
 }
 
-/// Link status towards `appd`: `connected`, `lost`, or `retrying` (once per
+/// Link status towards `ferrix_appd`: `connected`, `lost`, or `retrying` (once per
 /// outage, with the reason).
 pub fn appd_link(evidence: Evidence, socket: &str, status: &str, reason: Option<&str>) -> String {
     let mut fields: Vec<(&str, Value)> = vec![("socket", socket.into()), ("status", status.into())];
     if let Some(reason) = reason {
         fields.push(("reason", reason.into()));
     }
-    record(evidence, "appd-link", &fields)
+    record(evidence, "ferrix-appd-link", &fields)
 }
 
 #[cfg(test)]
@@ -239,7 +239,7 @@ mod tests {
         let line = compositor_ready(Evidence::Qemu, "wayland-0", 1080, 2340);
         assert_eq!(
             line,
-            "{\"evidence\":\"QEMU\",\"event\":\"compositor-ready\",\"compositor\":\"mobile-shell\",\"socket\":\"wayland-0\",\"width\":1080,\"height\":2340}"
+            "{\"evidence\":\"QEMU\",\"event\":\"compositor-ready\",\"compositor\":\"ferrix-shell\",\"socket\":\"wayland-0\",\"width\":1080,\"height\":2340}"
         );
     }
 
@@ -261,14 +261,14 @@ mod tests {
         let line = client_mapped(
             Evidence::Qemu,
             Some(321),
-            "mobile-basic-screen",
+            "ferrix-basic-screen",
             "",
             1080,
             2340,
             1,
         );
         assert!(line.contains("\"event\":\"client-mapped\""));
-        assert!(line.contains("\"pid\":321,\"app_id\":\"mobile-basic-screen\""));
+        assert!(line.contains("\"pid\":321,\"app_id\":\"ferrix-basic-screen\""));
         assert!(line.contains("\"width\":1080,\"height\":2340,\"toplevels\":1}"));
         let line = client_mapped(Evidence::Qemu, None, "", "", 1, 1, 1);
         assert!(line.contains("\"pid\":null"), "{line}");
@@ -278,19 +278,24 @@ mod tests {
     fn app_platform_records_match_contract() {
         assert_eq!(
             client_gone(Evidence::Qemu, Some(42), "org.ferrix.terminal", 1),
-            "{\"evidence\":\"QEMU\",\"event\":\"client-gone\",\"compositor\":\"mobile-shell\",\"pid\":42,\"app_id\":\"org.ferrix.terminal\",\"toplevels\":1}"
+            "{\"evidence\":\"QEMU\",\"event\":\"client-gone\",\"compositor\":\"ferrix-shell\",\"pid\":42,\"app_id\":\"org.ferrix.terminal\",\"toplevels\":1}"
         );
         assert_eq!(
             client_activated(Evidence::Qemu, 7, "org.ferrix.home", true),
-            "{\"evidence\":\"QEMU\",\"event\":\"client-activated\",\"compositor\":\"mobile-shell\",\"pid\":7,\"app_id\":\"org.ferrix.home\",\"raised\":true}"
+            "{\"evidence\":\"QEMU\",\"event\":\"client-activated\",\"compositor\":\"ferrix-shell\",\"pid\":7,\"app_id\":\"org.ferrix.home\",\"raised\":true}"
         );
         assert_eq!(
             home_gesture(Evidence::Mock, "swipe", "touch", false),
-            "{\"evidence\":\"mock\",\"event\":\"home-gesture\",\"compositor\":\"mobile-shell\",\"kind\":\"swipe\",\"source\":\"touch\",\"linked\":false}"
+            "{\"evidence\":\"mock\",\"event\":\"home-gesture\",\"compositor\":\"ferrix-shell\",\"kind\":\"swipe\",\"source\":\"touch\",\"linked\":false}"
         );
         assert_eq!(
-            appd_link(Evidence::Qemu, "/run/ferrix/appd.sock", "connected", None),
-            "{\"evidence\":\"QEMU\",\"event\":\"appd-link\",\"compositor\":\"mobile-shell\",\"socket\":\"/run/ferrix/appd.sock\",\"status\":\"connected\"}"
+            appd_link(
+                Evidence::Qemu,
+                "/run/ferrix/ferrix-appd.sock",
+                "connected",
+                None
+            ),
+            "{\"evidence\":\"QEMU\",\"event\":\"ferrix-appd-link\",\"compositor\":\"ferrix-shell\",\"socket\":\"/run/ferrix/ferrix-appd.sock\",\"status\":\"connected\"}"
         );
         let line = appd_link(
             Evidence::Qemu,

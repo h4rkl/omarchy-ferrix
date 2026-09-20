@@ -1,4 +1,4 @@
-# Ferrum: Emulator-First Rust Mobile Linux
+# Omarchy Ferrix: Emulator-First Rust Mobile Linux
 
 This document is the execution plan and source of truth for an emulator-first, Rust-first mobile Linux environment. The generic AArch64 QEMU virtual phone is the only initial target. No physical device is implied, required, or supported by this plan.
 
@@ -9,12 +9,12 @@ Build a mobile operating environment with:
 - A reproducible AArch64 emulator target for daily development and CI.
 - A Rust-first userspace for project-owned services and applications.
 - A Rust/Smithay Wayland compositor designed for touch.
-- Ferrum's own restrained, cohesive, low-noise visual system and development experience.
+- Omarchy Ferrix's own restrained, cohesive, low-noise visual system and development experience.
 - A stable hardware abstraction that lets future device targets be added without changing product logic.
 
 The emulator provides phone-shaped display, touch, rotation, battery, charging, connectivity, audio-route, telephony, and suspend mocks. It validates project-owned software and its integration lifecycle only; it does not establish compatibility with any physical device, firmware, radio, secure hardware, or boot chain.
 
-Ferrum is the product and ship name. Ferrix names its kernel/userspace runtime
+Omarchy Ferrix is the product and ship name. `ferrix` names its kernel/userspace runtime
 surface, including configuration and boot interfaces. Gossan is reserved for a
 future device image and does not rename the generic AArch64 QEMU target.
 
@@ -32,7 +32,7 @@ Initial work is limited to local development, containers, CI, and QEMU. Do not c
                          |
           project-owned, versioned APIs
                          |
-                   hardware-api
+                   ferrix-hardware-api
                     /           \
      emulator adapters       target adapters
           |                       |
@@ -41,7 +41,7 @@ Initial work is limited to local development, containers, CI, and QEMU. Do not c
  generic AArch64 QEMU     future physical device
 ```
 
-Product code depends only on `hardware-api`; it must not depend on QEMU details, a kernel driver, a vendor interface, or a board package. The emulator implements the same traits and emits the same API events expected of later targets. It is the contract-test target for portable behavior.
+Product code depends only on `ferrix-hardware-api`; it must not depend on QEMU details, a kernel driver, a vendor interface, or a board package. The emulator implements the same traits and emits the same API events expected of later targets. It is the contract-test target for portable behavior.
 
 ## Repository layout
 
@@ -55,12 +55,12 @@ Create directories only as implementation requires them.
 ├── rust-toolchain.toml
 ├── justfile
 ├── crates/
-│   ├── mobile-core/          # domain state and orchestration
-│   ├── hardware-api/         # stable traits and shared types
-│   ├── hardware-emulator/    # QEMU and host-test implementations
+│   ├── ferrix-core/          # domain state and orchestration
+│   ├── ferrix-hardware-api/         # stable traits and shared types
+│   ├── ferrix-hardware-emulator/    # QEMU and host-test implementations
 │   ├── hardware-linux/       # reusable standard-Linux adapters
-│   ├── mobile-session/       # startup and lifecycle
-│   ├── mobile-shell/         # Smithay compositor and shell
+│   ├── ferrix-session/       # startup and lifecycle
+│   ├── ferrix-shell/         # Smithay compositor and shell
 │   └── image-tool/           # emulator-image metadata tooling
 ├── apps/
 ├── targets/
@@ -76,14 +76,14 @@ Create directories only as implementation requires them.
 
 ## Target model and future extension boundary
 
-Every supported execution target has a versioned target manifest. The initial manifest is `targets/qemu-aarch64/profile.toml`. A later physical target is added as an isolated package under `targets/boards/<target-id>/`, never by embedding target conditionals in `mobile-core`, apps, or `hardware-api`.
+Every supported execution target has a versioned target manifest. The initial manifest is `targets/qemu-aarch64/profile.toml`. A later physical target is added as an isolated package under `targets/boards/<target-id>/`, never by embedding target conditionals in `ferrix-core`, apps, or `ferrix-hardware-api`.
 
-A board-support package may contain only target-specific configuration and adapter wiring: kernel/config fragments, rootfs overlays, packaging metadata, firmware-discovery rules, and implementations that translate target interfaces into `hardware-api`. Reusable Linux functionality belongs in `hardware-linux` only after it has a demonstrated second consumer.
+A board-support package may contain only target-specific configuration and adapter wiring: kernel/config fragments, rootfs overlays, packaging metadata, firmware-discovery rules, and implementations that translate target interfaces into `ferrix-hardware-api`. Reusable Linux functionality belongs in `hardware-linux` only after it has a demonstrated second consumer.
 
 Before a new target is accepted, it must provide:
 
 1. A stable `<target-id>` and versioned manifest.
-2. An explicit capability matrix mapping every `hardware-api` capability to `supported`, `unsupported`, or `mocked`.
+2. An explicit capability matrix mapping every `ferrix-hardware-api` capability to `supported`, `unsupported`, or `mocked`.
 3. Evidence for every claimed capability and a documented recovery path for any hardware action.
 4. Contract-test results proving that product behavior is unchanged when using the emulator adapter.
 5. No target-specific imports or feature flags in product applications.
@@ -92,7 +92,7 @@ Target selection belongs in the session/bootstrap layer. Runtime capability disc
 
 ## Rust-first policy
 
-Write new project-owned services, tools, and first-party applications in Rust unless a documented constraint makes that impractical. Existing Linux infrastructure is acceptable behind `hardware-api` and project-owned versioned interfaces. UI code must not call adapter implementations directly.
+Write new project-owned services, tools, and first-party applications in Rust unless a documented constraint makes that impractical. Existing Linux infrastructure is acceptable behind `ferrix-hardware-api` and project-owned versioned interfaces. UI code must not call adapter implementations directly.
 
 Start with synchronous traits for simple state reads and commands; use asynchronous methods only where the operation or event stream requires it. Shared capability types should be small, explicit, serializable where needed, and backward-compatible within a schema version.
 
@@ -117,7 +117,7 @@ Required workflows:
 
 ### Phase 0 — workspace and contract
 
-Create the Rust workspace, lint/test configuration, `hardware-api`, `hardware-emulator`, a strict schema-versioned profile parser, and a battery/charger state example. Add `.gitignore`, `.env.example`, `just host-check`, and the QEMU target skeleton.
+Create the Rust workspace, lint/test configuration, `ferrix-hardware-api`, `ferrix-hardware-emulator`, a strict schema-versioned profile parser, and a battery/charger state example. Add `.gitignore`, `.env.example`, `just host-check`, and the QEMU target skeleton.
 
 ### Phase 1 — serial-first guest
 
@@ -125,7 +125,7 @@ Build a pinned guest-builder container and minimal arm64 kernel/initramfs. Start
 
 ### Phase 2 — portable product behavior
 
-Define versioned power, display, input, network, audio, telephony, and lifecycle capabilities in `hardware-api`. Add deterministic adapter integration tests and run them in CI. Keep a nested shell route for fast UI iteration.
+Define versioned power, display, input, network, audio, telephony, and lifecycle capabilities in `ferrix-hardware-api`. Add deterministic adapter integration tests and run them in CI. Keep a nested shell route for fast UI iteration.
 
 ### Phase 3 — mobile shell
 
@@ -141,7 +141,7 @@ Document the target-package contract, capability matrix format, evidence convent
 - A host test observes a deterministic emulator hardware-state transition.
 - `just qemu-check` boots the virtual target to a serial health report and exits deterministically.
 - CI runs the QEMU check headlessly under TCG.
-- Product crates compile and test against `hardware-api` without importing the emulator implementation.
+- Product crates compile and test against `ferrix-hardware-api` without importing the emulator implementation.
 - `docs/status.md` labels all virtual-target evidence as `mock` or `QEMU`.
 - No physical-device support is claimed or attempted.
 

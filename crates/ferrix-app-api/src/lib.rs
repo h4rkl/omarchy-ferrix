@@ -4,13 +4,13 @@
 //! runtime (Rust-native today; TypeScript/web and Android compatibility are
 //! reserved kinds) is described, launched, and tracked through the same
 //! identities, descriptors, lifecycle states, and typed errors. The
-//! application service (`appd`), the compositor, the home surface, and
+//! application service (`ferrix_appd`), the compositor, the home surface, and
 //! applications all depend on this crate; none of them depend on a runtime
 //! implementation or its private launch configuration.
 //!
 //! Nothing here knows about QEMU, kernels, boards, or a particular container
-//! or web engine. The internal adapter contract lives in `app-runtime-api` and
-//! is composed only in `appd`'s bootstrap code.
+//! or web engine. The internal adapter contract lives in `ferrix-app-runtime-api` and
+//! is composed only in `ferrix_appd`'s bootstrap code.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -19,7 +19,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 /// Current schema version of every serialized type in this crate and of the
-/// `appd` wire protocol built on it.
+/// `ferrix_appd` wire protocol built on it.
 pub const SCHEMA_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
@@ -30,10 +30,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const APP_ID_ENV: &str = "FERRIX_APP_ID";
 /// Environment variable carrying the launched instance number.
 pub const APP_INSTANCE_ENV: &str = "FERRIX_APP_INSTANCE";
-/// Environment variable carrying the path of the `appd` socket.
+/// Environment variable carrying the path of the `ferrix_appd` socket.
 pub const APPD_SOCKET_ENV: &str = "FERRIX_APPD_SOCKET";
-/// Default `appd` socket path inside the guest.
-pub const DEFAULT_APPD_SOCKET: &str = "/run/ferrix/appd.sock";
+/// Default `ferrix_appd` socket path inside the guest.
+pub const DEFAULT_APPD_SOCKET: &str = "/run/ferrix/ferrix-appd.sock";
 /// Directory of application descriptors inside the guest.
 pub const GUEST_APP_DIR: &str = "/usr/share/ferrix/apps";
 /// Directory of application descriptors when run from the repository root.
@@ -242,7 +242,7 @@ pub struct AppDescriptor {
     /// have an illustrative in-process page are not launchable.
     #[serde(default = "default_true")]
     pub launchable: bool,
-    /// Start when `appd` starts (the home surface is always auto-started).
+    /// Start when `ferrix_appd` starts (the home surface is always auto-started).
     #[serde(default)]
     pub autostart: bool,
     #[serde(default)]
@@ -458,7 +458,7 @@ pub struct AppInstance {
     pub surface_mapped: bool,
 }
 
-/// Events published by `appd` to subscribers.
+/// Events published by `ferrix_appd` to subscribers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
 pub enum AppEvent {

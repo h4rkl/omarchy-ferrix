@@ -69,12 +69,12 @@ boot_mounted=1
 # Readiness marker (OpenRC local.d, default runlevel).
 install -Dm755 "$marker_src" "$mnt$marker_dst"
 install -Dm755 "$product_src" "$mnt$product_dst"
-install -Dm755 /product/mobile-core "$mnt/usr/bin/mobile-core"
-install -Dm755 /product/mobile-shell "$mnt/usr/bin/mobile-shell"
-install -Dm755 /product/mobile-basic-screen "$mnt/usr/bin/mobile-basic-screen"
-install -Dm755 /product/appd "$mnt/usr/bin/appd"
+install -Dm755 /product/ferrix-core "$mnt/usr/bin/ferrix-core"
+install -Dm755 /product/ferrix-shell "$mnt/usr/bin/ferrix-shell"
+install -Dm755 /product/ferrix-basic-screen "$mnt/usr/bin/ferrix-basic-screen"
+install -Dm755 /product/ferrix-appd "$mnt/usr/bin/ferrix-appd"
 install -Dm755 /product/ferrix-sandbox "$mnt/usr/bin/ferrix-sandbox"
-install -Dm755 /product/ferrum-terminal "$mnt/usr/bin/ferrum-terminal"
+install -Dm755 /product/ferrix-terminal "$mnt/usr/bin/ferrix-terminal"
 install -Dm644 /product/profile.toml "$mnt/etc/ferrix/profile.toml"
 mkdir -p "$mnt/usr/share/ferrix/apps"
 for descriptor in /product/apps/*.json; do
@@ -142,12 +142,12 @@ packages=$(awk -v want=" device-qemu-aarch64 device-qemu-aarch64-kernel-stable l
 ' "$mnt/lib/apk/db/installed")
 marker_sha=$(sha256sum "$mnt$marker_dst" | cut -d' ' -f1)
 product_marker_sha=$(sha256sum "$mnt$product_dst" | cut -d' ' -f1)
-core_sha=$(sha256sum "$mnt/usr/bin/mobile-core" | cut -d' ' -f1)
-shell_sha=$(sha256sum "$mnt/usr/bin/mobile-shell" | cut -d' ' -f1)
-screen_sha=$(sha256sum "$mnt/usr/bin/mobile-basic-screen" | cut -d' ' -f1)
-appd_sha=$(sha256sum "$mnt/usr/bin/appd" | cut -d' ' -f1)
+core_sha=$(sha256sum "$mnt/usr/bin/ferrix-core" | cut -d' ' -f1)
+shell_sha=$(sha256sum "$mnt/usr/bin/ferrix-shell" | cut -d' ' -f1)
+screen_sha=$(sha256sum "$mnt/usr/bin/ferrix-basic-screen" | cut -d' ' -f1)
+appd_sha=$(sha256sum "$mnt/usr/bin/ferrix-appd" | cut -d' ' -f1)
 sandbox_sha=$(sha256sum "$mnt/usr/bin/ferrix-sandbox" | cut -d' ' -f1)
-terminal_sha=$(sha256sum "$mnt/usr/bin/ferrum-terminal" | cut -d' ' -f1)
+terminal_sha=$(sha256sum "$mnt/usr/bin/ferrix-terminal" | cut -d' ' -f1)
 cat > "$out/image-facts.json" <<JSON
 {
   "os_release": {"pretty_name": "$os_release", "version_id": "$os_version"},
@@ -156,7 +156,7 @@ cat > "$out/image-facts.json" <<JSON
   "kernel_cmdline_source": "$cmdline_source",
   "partitions": [$partitions],
   "readiness_marker": {"path": "$marker_dst", "sha256": "$marker_sha", "service": "openrc local", "local_service_was_enabled": $local_enabled},
-  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "mobile_core_sha256": "$core_sha", "mobile_shell_sha256": "$shell_sha", "mobile_basic_screen_sha256": "$screen_sha", "appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrum_terminal_sha256": "$terminal_sha"},
+  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "ferrix_core_sha256": "$core_sha", "ferrix_shell_sha256": "$shell_sha", "ferrix_basic_screen_sha256": "$screen_sha", "ferrix_appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrix_terminal_sha256": "$terminal_sha"},
   "exported": [$exported,"qemu-aarch64.img"]
 }
 JSON

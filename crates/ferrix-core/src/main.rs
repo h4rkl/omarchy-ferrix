@@ -1,6 +1,6 @@
-//! `mobile-core`: the persistent Rust mobile core.
+//! `ferrix-core`: the persistent Rust mobile core.
 //!
-//! Bootstraps hardware access through `mobile-session` (never through an
+//! Bootstraps hardware access through `ferrix-session` (never through an
 //! adapter directly), then:
 //!
 //! 1. binds the state socket (`--socket`, `FERRIX_CORE_SOCKET`, default
@@ -24,7 +24,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::thread;
 
-use mobile_session::{BootstrapOptions, Session, bootstrap};
+use ferrix_session::{BootstrapOptions, Session, bootstrap};
 use serde_json::{Value, json};
 
 use crate::protocol::{Ack, ControlCommand};
@@ -73,7 +73,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: mobile-core [profile.toml] [--socket PATH] [--control auto|none|PATH] [--shutdown-marker PATH]"
+                    "usage: ferrix-core [profile.toml] [--socket PATH] [--control auto|none|PATH] [--shutdown-marker PATH]"
                         .to_owned(),
                 );
             }
@@ -199,7 +199,7 @@ fn run() -> Result<(), String> {
         "status": "ok",
         "target": session.target_id,
         "profile": session.profile.name,
-        "schema_version": hardware_api::SCHEMA_VERSION,
+        "schema_version": ferrix_hardware_api::SCHEMA_VERSION,
         "battery_percent": state.power.battery_percent,
         "charging": state.power.charging,
         "socket": args.socket.display().to_string(),

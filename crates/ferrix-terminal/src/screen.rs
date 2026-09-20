@@ -1,12 +1,12 @@
 //! Composition of the Terminal surface: a real shell's grid above the touch
-//! keyboard, in Ferrum's Tokyo Night look with the purple accent of the
+//! keyboard, in Omarchy Ferrix's Tokyo Night look with the purple accent of the
 //! launcher tile. The status indicators (battery, radio) belong to the home
 //! surface; the terminal draws only the clock strip so the header geometry
 //! matches the rest of the reference surfaces.
 
-use ferrum_ui::draw::{Canvas, Rect, Style, Type};
-use ferrum_ui::osk::{self, Key};
-use ferrum_ui::theme;
+use ferrix_ui::draw::{Canvas, Rect, Style, Type};
+use ferrix_ui::osk::{self, Key};
+use ferrix_ui::theme;
 
 use crate::interaction::{Target, UiState};
 use crate::terminal::Snapshot;

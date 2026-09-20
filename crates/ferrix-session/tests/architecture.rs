@@ -1,48 +1,48 @@
-//! Architecture guard: product code depends on `hardware-api` (and this
+//! Architecture guard: product code depends on `ferrix-hardware-api` (and this
 //! session layer), never on a target adapter; applications and shells depend
-//! on `app-api`/`app-protocol`, never on an application runtime
+//! on `ferrix-app-api`/`ferrix-app-protocol`, never on an application runtime
 //! implementation. `just arch-check` runs this.
 
 use std::path::Path;
 
-const FORBIDDEN: &str = "hardware-emulator";
-const FORBIDDEN_RUNTIME: &str = "runtime-native";
-const INTERNAL_RUNTIME_API: &str = "app-runtime-api";
+const FORBIDDEN: &str = "ferrix-hardware-emulator";
+const FORBIDDEN_RUNTIME: &str = "ferrix-runtime-native";
+const INTERNAL_RUNTIME_API: &str = "ferrix-app-runtime-api";
 
 /// Crates that must not name an adapter implementation.
 const PRODUCT_CRATES: &[&str] = &[
-    "hardware-api",
-    "target-profile",
-    "app-api",
-    "app-protocol",
-    "appd",
-    "ferrum-ui",
-    "ferrum-terminal",
-    "mobile-core",
-    "mobile-basic-screen",
-    "mobile-shell",
+    "ferrix-hardware-api",
+    "ferrix-target-profile",
+    "ferrix-app-api",
+    "ferrix-app-protocol",
+    "ferrix-appd",
+    "ferrix-ui",
+    "ferrix-terminal",
+    "ferrix-core",
+    "ferrix-basic-screen",
+    "ferrix-shell",
 ];
 
 /// Crates that must not depend on an application runtime implementation:
-/// applications, shells, and the core. Only `appd`'s binary composes runtimes.
+/// applications, shells, and the core. Only `ferrix_appd`'s binary composes runtimes.
 const RUNTIME_FREE_CRATES: &[&str] = &[
-    "app-api",
-    "app-protocol",
-    "ferrum-ui",
-    "ferrum-terminal",
-    "mobile-core",
-    "mobile-basic-screen",
-    "mobile-shell",
+    "ferrix-app-api",
+    "ferrix-app-protocol",
+    "ferrix-ui",
+    "ferrix-terminal",
+    "ferrix-core",
+    "ferrix-basic-screen",
+    "ferrix-shell",
 ];
 
-/// Applications and the compositor talk to `appd` over its protocol; they
+/// Applications and the compositor talk to `ferrix_appd` over its protocol; they
 /// never link the service itself.
 const APPD_FREE_CRATES: &[&str] = &[
-    "ferrum-ui",
-    "ferrum-terminal",
-    "mobile-basic-screen",
-    "mobile-shell",
-    "mobile-core",
+    "ferrix-ui",
+    "ferrix-terminal",
+    "ferrix-basic-screen",
+    "ferrix-shell",
+    "ferrix-core",
 ];
 
 fn manifest_names_dependency(manifest: &Path, needle: &str) -> bool {
@@ -74,7 +74,7 @@ fn product_crates_do_not_depend_on_the_emulator() {
     }
     assert!(
         offenders.is_empty(),
-        "product crates must depend on hardware-api, not {FORBIDDEN}: {offenders:?}"
+        "product crates must depend on ferrix-hardware-api, not {FORBIDDEN}: {offenders:?}"
     );
 }
 
@@ -92,14 +92,14 @@ fn product_crates_do_not_depend_on_an_application_runtime() {
         .collect();
     assert!(
         offenders.is_empty(),
-        "applications, shells, and the core must depend on app-api/app-protocol, not runtime adapter crates: {offenders:?}"
+        "applications, shells, and the core must depend on ferrix-app-api/ferrix-app-protocol, not runtime adapter crates: {offenders:?}"
     );
 }
 
 #[test]
 fn appd_names_the_runtime_only_in_its_binary() {
-    let appd = Path::new(env!("CARGO_MANIFEST_DIR")).join("../appd/src");
-    let Ok(entries) = std::fs::read_dir(&appd) else {
+    let ferrix_appd = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrix-appd/src");
+    let Ok(entries) = std::fs::read_dir(&ferrix_appd) else {
         return; // crate does not exist (yet)
     };
     let mut offenders = Vec::new();
@@ -109,14 +109,15 @@ fn appd_names_the_runtime_only_in_its_binary() {
             continue;
         }
         if path.extension().and_then(|e| e.to_str()) == Some("rs")
-            && std::fs::read_to_string(&path).is_ok_and(|text| text.contains("runtime_native"))
+            && std::fs::read_to_string(&path)
+                .is_ok_and(|text| text.contains("ferrix_runtime_native"))
         {
             offenders.push(path.display().to_string());
         }
     }
     assert!(
         offenders.is_empty(),
-        "appd's library must work with any app_runtime_api::Runtime; only main.rs composes runtime-native: {offenders:?}"
+        "ferrix-appd's library must work with any ferrix_app_runtime_api::Runtime; only main.rs composes ferrix-runtime-native: {offenders:?}"
     );
 }
 
@@ -127,27 +128,27 @@ fn applications_and_shells_do_not_link_appd() {
         .iter()
         .map(|name| crates.join(name).join("Cargo.toml"))
         .filter(|manifest| {
-            manifest_names_dependency(manifest, "\"appd\"")
-                || manifest_names_dependency(manifest, "appd =")
+            manifest_names_dependency(manifest, "\"ferrix-appd\"")
+                || manifest_names_dependency(manifest, "ferrix-appd =")
         })
         .map(|manifest| manifest.display().to_string())
         .collect();
     assert!(
         offenders.is_empty(),
-        "applications and shells use app-protocol, never the appd crate: {offenders:?}"
+        "applications and shells use ferrix-app-protocol, never the ferrix-appd crate: {offenders:?}"
     );
 }
 
 #[test]
 fn hardware_api_has_no_target_conditionals() {
-    assert_no_target_conditionals("hardware-api");
+    assert_no_target_conditionals("ferrix-hardware-api");
 }
 
 #[test]
 fn app_api_has_no_target_or_runtime_conditionals() {
-    assert_no_target_conditionals("app-api");
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../app-api/src");
-    for entry in std::fs::read_dir(&src).expect("app-api/src") {
+    assert_no_target_conditionals("ferrix-app-api");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ferrix-app-api/src");
+    for entry in std::fs::read_dir(&src).expect("ferrix-app-api/src") {
         let path = entry.unwrap().path();
         let code = code_without_comments(&path);
         for needle in [
@@ -201,7 +202,7 @@ fn target_profile_is_the_only_toml_schema_parser() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut offenders = Vec::new();
     for name in PRODUCT_CRATES {
-        if *name == "target-profile" {
+        if *name == "ferrix-target-profile" {
             continue;
         }
         let root = crates.join(name);
@@ -226,6 +227,6 @@ fn target_profile_is_the_only_toml_schema_parser() {
     }
     assert!(
         offenders.is_empty(),
-        "profile TOML must be parsed only by target-profile: {offenders:?}"
+        "profile TOML must be parsed only by ferrix-target-profile: {offenders:?}"
     );
 }

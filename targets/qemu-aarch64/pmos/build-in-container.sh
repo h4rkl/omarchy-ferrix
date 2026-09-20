@@ -113,8 +113,8 @@ manifest = {
     "schema_version": 1,
     "evidence": "QEMU",
     "identity": {
-        "ship": "Ferrum",
-        "runtime_codename": "Ferrix",
+        "ship": "Omarchy Ferrix",
+        "runtime_namespace": "ferrix",
     },
     "route": "postmarketos-pmbootstrap",
     "target": "qemu-aarch64",

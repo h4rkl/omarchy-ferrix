@@ -1,6 +1,6 @@
 [package]
-name = "mobile-basic-screen"
-description = "Ferrum-styled QEMU reference home surface: a software-rendered Wayland launcher driven by the appd catalog, not the product shell"
+name = "ferrix-basic-screen"
+description = "Omarchy Ferrix-styled QEMU reference home surface: a software-rendered Wayland launcher driven by the ferrix-appd catalog, not the product shell"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,10 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-app-api = { path = "../app-api" }
-app-protocol = { path = "../app-protocol" }
-ferrum-ui = { path = "../ferrum-ui" }
-hardware-api = { path = "../hardware-api" }
-mobile-protocol = { path = "../mobile-protocol" }
-mobile-session = { path = "../mobile-session" }
-target-profile = { path = "../target-profile" }
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-protocol = { path = "../ferrix-app-protocol" }
+ferrix-ui = { path = "../ferrix-ui" }
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+ferrix-protocol = { path = "../ferrix-protocol" }
+ferrix-session = { path = "../ferrix-session" }
+ferrix-target-profile = { path = "../ferrix-target-profile" }

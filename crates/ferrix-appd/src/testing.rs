@@ -10,8 +10,8 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
-use app_runtime_api::{LaunchContext, RunningApp, Runtime};
+use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
+use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 
 use crate::process_tree::ProcessTree;
 

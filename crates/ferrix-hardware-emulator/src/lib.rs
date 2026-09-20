@@ -3,20 +3,20 @@
 //!
 //! Every capability is `Mocked`: initial state comes from the versioned
 //! target profile, and tests drive transitions through the typed mutation
-//! methods (or [`hardware_api::MockControl`]). Each mutation emits exactly one
+//! methods (or [`ferrix_hardware_api::MockControl`]). Each mutation emits exactly one
 //! [`HardwareEvent`] to every subscriber. Nothing here reads real hardware.
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use hardware_api::{
+use ferrix_hardware_api::{
     Audio, AudioState, Bluetooth, BluetoothState, Capability, CapabilityMatrix, CapabilityStatus,
     Display, DisplayState, EventSource, HardwareError, HardwareEvent, HardwareState, Input,
     InputState, Lifecycle, LifecycleState, MockCommand, MockControl, ModemRegistration, Network,
     NetworkState, Orientation, Power, PowerState, SimState, SuspendOutcome, Telephony,
     TelephonyState, WifiState,
 };
-use target_profile::Profile;
+use ferrix_target_profile::Profile;
 
 /// Target id of the generic QEMU virtual phone this adapter mocks.
 pub const TARGET_ID: &str = "qemu-aarch64";
@@ -253,7 +253,7 @@ impl Audio for Emulator {
 
     fn set_audio_route(
         &self,
-        route: hardware_api::AudioRoute,
+        route: ferrix_hardware_api::AudioRoute,
     ) -> Result<AudioState, HardwareError> {
         let mut inner = self.lock();
         let audio = AudioState { route };
@@ -469,9 +469,12 @@ route = "speaker"
     #[test]
     fn audio_route_transitions() {
         let (e, rx) = emulator();
-        e.set_audio_route(hardware_api::AudioRoute::Headphones)
+        e.set_audio_route(ferrix_hardware_api::AudioRoute::Headphones)
             .unwrap();
-        assert_eq!(e.audio_state().route, hardware_api::AudioRoute::Headphones);
+        assert_eq!(
+            e.audio_state().route,
+            ferrix_hardware_api::AudioRoute::Headphones
+        );
         assert!(matches!(rx.try_recv(), Ok(HardwareEvent::AudioChanged(_))));
     }
 

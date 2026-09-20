@@ -7,9 +7,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use hardware_api::{HardwareEvent, SCHEMA_VERSION};
-use mobile_protocol::{Reply, Request};
-use mobile_session::Session;
+use ferrix_hardware_api::{HardwareEvent, SCHEMA_VERSION};
+use ferrix_protocol::{Reply, Request};
+use ferrix_session::Session;
 use serde_json::json;
 
 /// Streams that asked for events. Guarded so that a subscription snapshot and

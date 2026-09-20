@@ -1,6 +1,6 @@
 [package]
-name = "ferrum-ui"
-description = "Ferrum software-rendering toolkit shared by the reference surfaces: canvas, type, theme, touch keyboard, keymap, and the fullscreen Wayland client runner"
+name = "ferrix-ui"
+description = "Omarchy Ferrix software-rendering toolkit shared by the reference surfaces: canvas, type, theme, touch keyboard, keymap, and the fullscreen Wayland client runner"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

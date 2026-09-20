@@ -1,12 +1,12 @@
-//! Composition of the basic screen. Ferrum look and feel (Tokyo Night palette,
+//! Composition of the basic screen. Omarchy Ferrix look and feel (Tokyo Night palette,
 //! monospace type, flat bordered surfaces); GrapheneOS-style status bar,
 //! minimal launcher grid, and bottom gesture pill where mobile UX is needed.
 //! This is a QEMU reference surface rendered from the mock profile, not the
 //! product shell.
 
-use ferrum_ui::draw::{Canvas, Rect, Style, Type, Weight};
-use ferrum_ui::theme;
-use hardware_api::{HardwareState, ModemRegistration, WifiState};
+use ferrix_hardware_api::{HardwareState, ModemRegistration, WifiState};
+use ferrix_ui::draw::{Canvas, Rect, Style, Type, Weight};
+use ferrix_ui::theme;
 
 use crate::catalog::{Tile, tone_color};
 use crate::interaction::{Page, Target, UiState, tile_rects};
@@ -129,7 +129,7 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
     let clock_style = Style::bold(s(150) as f32, theme::FG);
     let clock_width = ty.width(clock_style, clock);
     ty.text(c, clock_style, clock, s(460) - clock_width / 2, s(280));
-    let greeting = "Ferrum mobile";
+    let greeting = "Omarchy Ferrix mobile";
     let greeting_style = Style::regular(s(38) as f32, theme::FG_DIM);
     let greeting_width = ty.width(greeting_style, greeting);
     ty.text(
@@ -553,7 +553,7 @@ fn network_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
 
 /// The launcher grid: three columns, rows growing with the catalog. Tiles
 /// share their rectangles with the hit test. A launched app shows a small
-/// accent dot while it runs and a dimmed "Starting..." label until `appd`
+/// accent dot while it runs and a dimmed "Starting..." label until `ferrix-appd`
 /// reports it in the foreground or background.
 fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
     let width = design_width(c);

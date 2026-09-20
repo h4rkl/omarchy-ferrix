@@ -21,7 +21,7 @@
 
 use std::process::ExitCode;
 
-use runtime_native::{SandboxArgs, SandboxMode, USAGE_STATUS, emit, record};
+use ferrix_runtime_native::{SandboxArgs, SandboxMode, USAGE_STATUS, emit, record};
 use serde_json::json;
 
 fn exit_code(status: i32) -> ExitCode {
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
             "sandbox-failed",
             json!({ "app": args.app_id, "reason": "not linux" }),
         ));
-        exit_code(runtime_native::ISOLATION_UNAVAILABLE_STATUS)
+        exit_code(ferrix_runtime_native::ISOLATION_UNAVAILABLE_STATUS)
     }
 }
 
@@ -76,9 +76,9 @@ mod linux {
     use std::thread;
     use std::time::Duration;
 
-    use app_api::ExitReason;
-    use runtime_native::channel::{ReportListener, WaitOutcome, send_line};
-    use runtime_native::{
+    use ferrix_app_api::ExitReason;
+    use ferrix_runtime_native::channel::{ReportListener, WaitOutcome, send_line};
+    use ferrix_runtime_native::{
         EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport, IsolationMode,
         IsolationPolicy, NamespaceSet, ProbeReport, SANDBOX_INTERNAL_STATUS, SandboxArgs,
         SandboxReady, UserNamespace, emit, record, select_namespaces, shell_status_of,

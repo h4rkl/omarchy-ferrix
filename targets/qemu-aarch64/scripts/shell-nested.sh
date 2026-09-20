@@ -8,14 +8,14 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
 profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
 socket=${FERRIX_CORE_SOCKET:-"$out/core.sock"}
-appd_socket=${FERRIX_APPD_SOCKET:-"$out/appd.sock"}
-# Nested compositor socket name; apps launched by appd inherit it.
+appd_socket=${FERRIX_APPD_SOCKET:-"$out/ferrix-appd.sock"}
+# Nested compositor socket name; apps launched by ferrix-appd inherit it.
 wayland_display=${FERRIX_NESTED_WAYLAND_DISPLAY:-ferrix-nested-0}
 mkdir -p "$out"
 
 cargo build --manifest-path "$root/Cargo.toml" \
-  -p mobile-core -p mobile-shell -p appd -p runtime-native -p mobile-basic-screen -p ferrum-terminal
-FERRIX_CORE_SOCKET="$socket" "$root/target/debug/mobile-core" "$profile" --control none &
+  -p ferrix-core -p ferrix-shell -p ferrix-appd -p ferrix-runtime-native -p ferrix-basic-screen -p ferrix-terminal
+FERRIX_CORE_SOCKET="$socket" "$root/target/debug/ferrix-core" "$profile" --control none &
 core_pid=$!
 appd_pid=
 cleanup() {
@@ -31,18 +31,18 @@ while [ ! -S "$socket" ] && [ "$remaining" -gt 0 ]; do
   sleep 0.05
   remaining=$((remaining - 1))
 done
-[ -S "$socket" ] || { echo "mobile-core did not create $socket" >&2; exit 1; }
+[ -S "$socket" ] || { echo "ferrix-core did not create $socket" >&2; exit 1; }
 
-# The compositor connects to appd lazily and retries, so appd may start after
+# The compositor connects to ferrix-appd lazily and retries, so ferrix-appd may start after
 # it. Apps resolve their binaries through PATH: put the debug build first.
 export PATH="$root/target/debug:$PATH"
 export FERRIX_CORE_SOCKET="$socket"
 export FERRIX_APPD_SOCKET="$appd_socket"
 export FERRIX_QEMU_PROFILE="$profile"
 export FERRIX_APP_DIR="$root/apps"
-# Only appd (and therefore the apps) see the nested socket name; the nested
+# Only ferrix-appd (and therefore the apps) see the nested socket name; the nested
 # compositor itself is a client of the host session's WAYLAND_DISPLAY.
-WAYLAND_DISPLAY="$wayland_display" "$root/target/debug/appd" --nested --socket "$appd_socket" --app-dir "$root/apps" &
+WAYLAND_DISPLAY="$wayland_display" "$root/target/debug/ferrix-appd" --nested --socket "$appd_socket" --app-dir "$root/apps" &
 appd_pid=$!
 
-"$root/target/debug/mobile-shell" --nested --core "$socket" --appd "$appd_socket" --socket "$wayland_display" "$profile"
+"$root/target/debug/ferrix-shell" --nested --core "$socket" --ferrix-appd "$appd_socket" --socket "$wayland_display" "$profile"

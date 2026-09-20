@@ -86,44 +86,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 
 [[package]]
-name = "app-api"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "app-protocol"
-version = "0.1.0"
-dependencies = [
- "app-api",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "app-runtime-api"
-version = "0.1.0"
-dependencies = [
- "app-api",
- "serde_json",
-]
-
-[[package]]
-name = "appd"
-version = "0.1.0"
-dependencies = [
- "app-api",
- "app-protocol",
- "app-runtime-api",
- "runtime-native",
- "rustix 1.1.5",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "appendlist"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -544,17 +506,150 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrum-terminal"
+name = "ferrix-app-api"
 version = "0.1.0"
 dependencies = [
- "alacritty_terminal",
- "app-api",
- "app-protocol",
- "ferrum-ui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
-name = "ferrum-ui"
+name = "ferrix-app-protocol"
+version = "0.1.0"
+dependencies = [
+ "ferrix-app-api",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrix-app-runtime-api"
+version = "0.1.0"
+dependencies = [
+ "ferrix-app-api",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrix-appd"
+version = "0.1.0"
+dependencies = [
+ "ferrix-app-api",
+ "ferrix-app-protocol",
+ "ferrix-app-runtime-api",
+ "ferrix-runtime-native",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrix-basic-screen"
+version = "0.1.0"
+dependencies = [
+ "ferrix-app-api",
+ "ferrix-app-protocol",
+ "ferrix-hardware-api",
+ "ferrix-protocol",
+ "ferrix-session",
+ "ferrix-target-profile",
+ "ferrix-ui",
+]
+
+[[package]]
+name = "ferrix-core"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+ "ferrix-protocol",
+ "ferrix-session",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrix-hardware-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrix-hardware-emulator"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+ "ferrix-target-profile",
+]
+
+[[package]]
+name = "ferrix-protocol"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ferrix-runtime-native"
+version = "0.1.0"
+dependencies = [
+ "ferrix-app-api",
+ "ferrix-app-runtime-api",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "signal-hook",
+]
+
+[[package]]
+name = "ferrix-session"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+ "ferrix-hardware-emulator",
+ "ferrix-target-profile",
+]
+
+[[package]]
+name = "ferrix-shell"
+version = "0.1.0"
+dependencies = [
+ "drm-ffi",
+ "ferrix-app-api",
+ "ferrix-app-protocol",
+ "ferrix-hardware-api",
+ "ferrix-protocol",
+ "ferrix-target-profile",
+ "serde_json",
+ "smithay",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ferrix-target-profile"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "ferrix-terminal"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "ferrix-app-api",
+ "ferrix-app-protocol",
+ "ferrix-ui",
+]
+
+[[package]]
+name = "ferrix-ui"
 version = "0.1.0"
 dependencies = [
  "fontdue",
@@ -726,22 +821,6 @@ dependencies = [
  "khronos_api",
  "log",
  "xml-rs",
-]
-
-[[package]]
-name = "hardware-api"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "hardware-emulator"
-version = "0.1.0"
-dependencies = [
- "hardware-api",
- "target-profile",
 ]
 
 [[package]]
@@ -1066,64 +1145,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mobile-basic-screen"
-version = "0.1.0"
-dependencies = [
- "app-api",
- "app-protocol",
- "ferrum-ui",
- "hardware-api",
- "mobile-protocol",
- "mobile-session",
- "target-profile",
-]
-
-[[package]]
-name = "mobile-core"
-version = "0.1.0"
-dependencies = [
- "hardware-api",
- "mobile-protocol",
- "mobile-session",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mobile-protocol"
-version = "0.1.0"
-dependencies = [
- "hardware-api",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mobile-session"
-version = "0.1.0"
-dependencies = [
- "hardware-api",
- "hardware-emulator",
- "target-profile",
-]
-
-[[package]]
-name = "mobile-shell"
-version = "0.1.0"
-dependencies = [
- "app-api",
- "app-protocol",
- "drm-ffi",
- "hardware-api",
- "mobile-protocol",
- "serde_json",
- "smithay",
- "target-profile",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1700,18 +1721,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "runtime-native"
-version = "0.1.0"
-dependencies = [
- "app-api",
- "app-runtime-api",
- "rustix 1.1.5",
- "serde",
- "serde_json",
- "signal-hook",
-]
-
-[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2057,15 +2066,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "target-profile"
-version = "0.1.0"
-dependencies = [
- "hardware-api",
- "serde",
- "toml",
 ]
 
 [[package]]

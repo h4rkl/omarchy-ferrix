@@ -23,11 +23,11 @@ boot_failed() {
 # from the host over the virtio-serial port ferrix.control (built into the
 # Alpine linux-virt kernel; modprobe is a no-op there).
 modprobe virtio_console 2>/dev/null || true
-[ -x /usr/bin/mobile-core ] || boot_failed core-missing
+[ -x /usr/bin/ferrix-core ] || boot_failed core-missing
 # The core writes its JSON records straight to the serial console (no log
 # relay, so records are never delayed). It binds the state socket immediately
 # before printing boot-health, so a live process plus the socket is readiness.
-/usr/bin/mobile-core /etc/ferrix/profile.toml --socket /run/ferrix/core.sock --control auto --shutdown-marker /run/ferrix/shutdown &
+/usr/bin/ferrix-core /etc/ferrix/profile.toml --socket /run/ferrix/core.sock --control auto --shutdown-marker /run/ferrix/shutdown &
 core_pid=$!
 core_ready=false
 for _ in $(seq 1 200); do
@@ -46,7 +46,7 @@ if [ "$core_ready" != true ]; then
   fi
 fi
 # Only now is the guest healthy: the core actually reported.
-printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok","core":"mobile-core","socket":"/run/ferrix/core.sock"}'
+printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok","core":"ferrix-core","socket":"/run/ferrix/core.sock"}'
 if grep -q 'ferrix.graphics=on' /proc/cmdline; then
   export XDG_RUNTIME_DIR=/run/user/0
   mkdir -p "$XDG_RUNTIME_DIR"
@@ -57,14 +57,14 @@ if grep -q 'ferrix.graphics=on' /proc/cmdline; then
   /sbin/udevd --daemon
   /sbin/udevadm trigger --action=add
   /sbin/udevadm settle
-  # Compositor selection. ferrix.shell=mobile-shell starts the Rust product
-  # compositor (crates/mobile-shell: Smithay, pixman software rendering into
+  # Compositor selection. ferrix.shell=ferrix-shell starts the Rust product
+  # compositor (crates/ferrix-shell: Smithay, pixman software rendering into
   # DRM dumb buffers, libinput); ferrix.shell=weston keeps the reference
-  # compositor. Default mobile-shell; the host overrides it with FERRIX_QEMU_SHELL.
+  # compositor. Default ferrix-shell; the host overrides it with FERRIX_QEMU_SHELL.
   shell=$(sed -n 's/.*ferrix\.shell=\([a-z-]*\).*/\1/p' /proc/cmdline)
   case "$shell" in
-    mobile-shell|weston) ;;
-    *) shell=mobile-shell ;;
+    ferrix-shell|weston) ;;
+    *) shell=ferrix-shell ;;
   esac
   # Output geometry. The host launcher may request a window-friendly portrait
   # panel (ferrix.display=WxH); otherwise the profile panel is used. Weston is
@@ -94,14 +94,14 @@ EOF
   seatd -n -g root &
   sleep 1
   comp_pid=
-  if [ "$shell" = mobile-shell ]; then
-    comp_log=/run/mobile-shell.log
-    # mobile-shell reads ferrix.display= itself and pins the DRM mode. Its
+  if [ "$shell" = ferrix-shell ]; then
+    comp_log=/run/ferrix-shell.log
+    # ferrix-shell reads ferrix.display= itself and pins the DRM mode. Its
     # JSON records (display-geometry, drm-output, input-device,
     # compositor-ready, client-mapped) go to the log and are replayed to the
     # console once the client has drawn; readiness is the socket plus the
     # compositor-ready record, never the process start alone.
-    /usr/bin/mobile-shell /etc/ferrix/profile.toml >"$comp_log" 2>&1 &
+    /usr/bin/ferrix-shell /etc/ferrix/profile.toml >"$comp_log" 2>&1 &
     comp_pid=$!
     for _ in $(seq 1 150); do
       if [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && grep -q '"event":"compositor-ready"' "$comp_log" 2>/dev/null; then
@@ -119,12 +119,12 @@ EOF
     done
   fi
   if [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && { [ "$shell" = weston ] || grep -q '"event":"compositor-ready"' "$comp_log" 2>/dev/null; }; then
-    # Application platform. appd (crates/appd) owns the application catalog
+    # Application platform. ferrix-appd (crates/ferrix-appd) owns the application catalog
     # (/usr/share/ferrix/apps/*.json), launches every application as its own
     # supervised process inside Linux namespaces through ferrix-sandbox
-    # (crates/runtime-native), and auto-starts the home surface
-    # (mobile-basic-screen). Applications inherit this environment: the
-    # Wayland socket, the core socket, the appd socket, and the shell
+    # (crates/ferrix-runtime-native), and auto-starts the home surface
+    # (ferrix-basic-screen). Applications inherit this environment: the
+    # Wayland socket, the core socket, the ferrix-appd socket, and the shell
     # variables the Terminal app hands to its PTY session. The kernel starts
     # init with an empty environment, so everything is exported here.
     mkdir -p /root /usr/share/ferrix/apps
@@ -132,19 +132,19 @@ EOF
     export HOME=/root USER=root SHELL=/bin/sh
     export WAYLAND_DISPLAY=wayland-0
     export FERRIX_CORE_SOCKET=/run/ferrix/core.sock
-    export FERRIX_APPD_SOCKET=/run/ferrix/appd.sock
-    appd_log=/run/appd.log
+    export FERRIX_APPD_SOCKET=/run/ferrix/ferrix-appd.sock
+    appd_log=/run/ferrix-appd.log
     appd_pid=
     appd_ready=false
-    if [ -x /usr/bin/appd ]; then
-      # Records from appd and from every application it launches (children
-      # inherit its stdout) land in one log; readiness is appd's own
-      # appd-ready record (socket bound, catalog loaded) followed by the home
+    if [ -x /usr/bin/ferrix-appd ]; then
+      # Records from ferrix-appd and from every application it launches (children
+      # inherit its stdout) land in one log; readiness is ferrix-appd's own
+      # ferrix-appd-ready record (socket bound, catalog loaded) followed by the home
       # surface's committed first frame, never a process start.
-      /usr/bin/appd --socket "$FERRIX_APPD_SOCKET" --app-dir /usr/share/ferrix/apps >"$appd_log" 2>&1 &
+      /usr/bin/ferrix-appd --socket "$FERRIX_APPD_SOCKET" --app-dir /usr/share/ferrix/apps >"$appd_log" 2>&1 &
       appd_pid=$!
       for _ in $(seq 1 100); do
-        if [ -S "$FERRIX_APPD_SOCKET" ] && grep -q '"event":"appd-ready"' "$appd_log" 2>/dev/null; then
+        if [ -S "$FERRIX_APPD_SOCKET" ] && grep -q '"event":"ferrix-appd-ready"' "$appd_log" 2>/dev/null; then
           appd_ready=true
           break
         fi
@@ -167,7 +167,7 @@ EOF
       # One reader from the start of the log so no record between the
       # readiness check and the follow is skipped.
       tail -n +1 -f "$appd_log" >/dev/console 2>&1 &
-      if [ "$shell" = mobile-shell ]; then
+      if [ "$shell" = ferrix-shell ]; then
         # Replay the compositor's JSON evidence records and follow new ones
         # (one reader from the start of the log, so nothing is skipped; the
         # tracing lines stay in the log file only).
@@ -178,14 +178,14 @@ EOF
         grep -i 'input\|libinput' /run/weston.log || true
         grep -E 'video modes|preferred|current' /run/weston.log || true
       fi
-      printf '{"evidence":"QEMU","event":"wayland-ready","compositor":"%s","socket":"wayland-0","client":"mobile-basic-screen","appd":"%s"}\n' "$shell" "$FERRIX_APPD_SOCKET"
+      printf '{"evidence":"QEMU","event":"wayland-ready","compositor":"%s","socket":"wayland-0","client":"ferrix-basic-screen","ferrix-appd":"%s"}\n' "$shell" "$FERRIX_APPD_SOCKET"
     else
       if [ -z "$appd_pid" ]; then
-        reason=appd-missing
+        reason=ferrix-appd-missing
       elif ! kill -0 "$appd_pid" 2>/dev/null; then
-        reason=appd-exited
+        reason=ferrix-appd-exited
       elif [ "$appd_ready" != true ]; then
-        reason=appd-not-ready
+        reason=ferrix-appd-not-ready
       else
         reason=home-not-ready
       fi
@@ -197,7 +197,7 @@ EOF
     reason=socket
     if [ -n "$comp_pid" ] && ! kill -0 "$comp_pid" 2>/dev/null; then
       reason=compositor-exited
-    elif [ "$shell" = mobile-shell ]; then
+    elif [ "$shell" = ferrix-shell ]; then
       reason=compositor-not-ready
     fi
     printf '{"evidence":"QEMU","event":"wayland-failed","compositor":"%s","reason":"%s"}\n' "$shell" "$reason"
@@ -206,7 +206,7 @@ EOF
 fi
 if [ "$check_mode" = true ]; then
   # The host drives the check over the mock-control channel and ends it with
-  # {"cmd":"shutdown"}; mobile-core leaves this marker. Bounded so a lost host
+  # {"cmd":"shutdown"}; ferrix-core leaves this marker. Bounded so a lost host
   # never leaves the guest running forever.
   for _ in $(seq 1 1800); do
     [ -e /run/ferrix/shutdown ] && break

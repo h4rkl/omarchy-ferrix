@@ -1,12 +1,12 @@
 //! Fullscreen Wayland client runner built on smithay-client-toolkit.
 //!
-//! Owns everything a Ferrum reference surface needs from Wayland: registry,
+//! Owns everything a Omarchy Ferrix reference surface needs from Wayland: registry,
 //! compositor, xdg-shell, shm, seat (pointer, touch, raw keyboard), the
 //! fullscreen toplevel, the software-rendered `wl_shm` buffers, the
 //! transparent-ring touch cursor, and the calloop loop with one ping source
 //! for background wakes. A surface implements [`ClientHandler`] and gets a
 //! [`Wake`] handle at construction so PTY readers, core subscriptions, or
-//! `appd` notification threads can request a wake from any thread.
+//! `ferrix_appd` notification threads can request a wake from any thread.
 //!
 //! Evidence records are emitted only after the first frame is actually
 //! attached and committed. Keyboard input arrives as raw `wl_keyboard` evdev

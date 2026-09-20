@@ -1,15 +1,15 @@
-# appd
+# ferrix-appd
 
 The application service. Every application is an independent, supervised
-process started through an `app_runtime_api::Runtime`; `appd` owns the catalog, the
+process started through an `ferrix_app_runtime_api::Runtime`; `ferrix-appd` owns the catalog, the
 single instance per app, surface association, foreground tracking, the home
-surface's restart budget, and the `app_protocol` Unix socket. A crashing app
+surface's restart budget, and the `ferrix_app_protocol` Unix socket. A crashing app
 is observed, recorded, and published; it never takes the compositor, the
-core, `appd`, or the home surface with it.
+core, `ferrix-appd`, or the home surface with it.
 
-The library depends only on `app-api` and `app-protocol`. `runtime-native`
+The library depends only on `ferrix-app-api` and `ferrix-app-protocol`. `ferrix-runtime-native`
 is named in `src/main.rs` alone (composition); everything else works with
-any `Box<dyn app_runtime_api::Runtime>`, so the whole service is tested on the host
+any `Box<dyn ferrix_app_runtime_api::Runtime>`, so the whole service is tested on the host
 with a channel-driven fake runtime and a fake process tree.
 
 ## Layout
@@ -37,7 +37,7 @@ message. After that the table in `server::allowed` applies:
 | `YieldForeground` | `application`, `home` |
 
 A refused request gets `Reply::ProtocolError`; a refused report is dropped
-(reports are never replied to) and an `appd-request-rejected` record is
+(reports are never replied to) and an `ferrix-appd-request-rejected` record is
 emitted. Malformed lines get `ProtocolError` and the connection stays open.
 Roles are declared, not authenticated: the gating is a structural safeguard
 that keeps an application from steering the compositor or launching other
@@ -48,7 +48,7 @@ path is the actual boundary.
 
 The compositor reports the client pid it obtained from the kernel
 (`SO_PEERCRED`) with each `SurfaceMapped`/`FocusChanged`. Sandboxed apps are
-grandchildren of `appd` (`appd -> ferrix-sandbox -> init -> app`), so the
+grandchildren of `ferrix-appd` (`ferrix-appd -> ferrix-sandbox -> init -> app`), so the
 service resolves a pid by checking the launched pids first and then walking
 `PPid:` from `/proc/<pid>/status` upward (at most 16 hops) until it meets a
 pid it launched. Resolved pids are cached until the instance exits, when
@@ -96,29 +96,29 @@ are never auto-restarted.
 One JSON line per record on stdout, `evidence` first (`QEMU` in the guest,
 `mock` with `--nested`):
 
-`appd-ready{socket,apps,home}`, `appd-failed{reason}`,
+`ferrix-appd-ready{socket,apps,home}`, `ferrix-appd-failed{reason}`,
 `app-launching{app,instance}`, `app-started{app,instance,pid,isolation}`,
 `app-launch-failed{app,error,reason}`, `app-surface{app,pid,app_id,title}`,
 `app-surface-unknown{pid,app_id}`, `app-id-mismatch{app,pid,reported}`,
 `app-foreground{app}`, `app-background{app}`, `app-terminating{app,instance}`,
 `app-exited{app,instance,code}`, `app-crashed{app,instance,signal|code}`,
 `app-wait-failed{app,instance,reason}`, `home-restarting{attempt,delay_ms}`,
-`home-restart-abandoned{exits,window_ms}`, `appd-request-rejected{role,message,reason}`,
-`appd-socket-error{error}`.
+`home-restart-abandoned{exits,window_ms}`, `ferrix-appd-request-rejected{role,message,reason}`,
+`ferrix-appd-socket-error{error}`.
 
 ## Running
 
 ```text
-appd [--socket PATH] [--app-dir DIR]... [--nested] [--no-autostart] [--sandbox PATH]
+ferrix-appd [--socket PATH] [--app-dir DIR]... [--nested] [--no-autostart] [--sandbox PATH]
 ```
 
 Environment: `FERRIX_APPD_SOCKET`, `FERRIX_APP_DIR`, `FERRIX_SANDBOX_BIN`.
 The default descriptor directory is `/usr/share/ferrix/apps` when it exists,
-else `apps`. The socket is bound before `appd-ready` is printed; then the
+else `apps`. The socket is bound before `ferrix-appd-ready` is printed; then the
 home surface and every `autostart: true` descriptor are launched (unless
 `--no-autostart`), and the socket is served until the process is stopped.
-Launched apps inherit `appd`'s environment plus `FERRIX_APP_ID`,
+Launched apps inherit `ferrix-appd`'s environment plus `FERRIX_APP_ID`,
 `FERRIX_APP_INSTANCE`, and `FERRIX_APPD_SOCKET`.
 
-Tests: `cargo test -p appd` runs on macOS and Linux; `tests/socket.rs` drives
-a real Unix socket with `app_protocol::Client` and the fake runtime.
+Tests: `cargo test -p ferrix-appd` runs on macOS and Linux; `tests/socket.rs` drives
+a real Unix socket with `ferrix_app_protocol::Client` and the fake runtime.

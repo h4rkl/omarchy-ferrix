@@ -1,11 +1,11 @@
-//! Wire contract and Unix-socket client for `appd`.
+//! Wire contract and Unix-socket client for `ferrix_appd`.
 //!
-//! Line-delimited JSON, schema-versioned through [`app_api::SCHEMA_VERSION`].
+//! Line-delimited JSON, schema-versioned through [`ferrix_app_api::SCHEMA_VERSION`].
 //! Two inbound message shapes exist:
 //!
 //! - a [`Request`] (`{"request": ...}`) always receives exactly one [`Reply`];
 //! - a [`Report`] (`{"report": ...}`) never receives a reply. Reports are how
-//!   the compositor tells `appd` about surfaces and focus on a stream that is
+//!   the compositor tells `ferrix_appd` about surfaces and focus on a stream that is
 //!   also subscribed to pushed [`Notification`]s, so replies and pushes never
 //!   interleave ambiguously.
 //!
@@ -21,12 +21,12 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use app_api::{AppDescriptor, AppError, AppEvent, AppId, AppInstance, SCHEMA_VERSION};
+use ferrix_app_api::{AppDescriptor, AppError, AppEvent, AppId, AppInstance, SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 
-pub use app_api::DEFAULT_APPD_SOCKET as DEFAULT_SOCKET;
+pub use ferrix_app_api::DEFAULT_APPD_SOCKET as DEFAULT_SOCKET;
 
-/// Who is on the other end of a connection. Roles gate what `appd` accepts:
+/// Who is on the other end of a connection. Roles gate what `ferrix_appd` accepts:
 /// only a compositor may send surface reports; only the home surface and
 /// tools may launch arbitrary apps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,7 +151,7 @@ fn connect_stream(path: &Path, timeout: Duration) -> Result<UnixStream, String> 
             Ok(stream) => return Ok(stream),
             Err(error) if Instant::now() >= deadline => {
                 return Err(format!(
-                    "appd socket {} unavailable: {error}",
+                    "ferrix-appd socket {} unavailable: {error}",
                     path.display()
                 ));
             }
@@ -166,18 +166,18 @@ pub fn write_line(stream: &mut UnixStream, value: &impl Serialize) -> Result<(),
     stream
         .write_all(text.as_bytes())
         .and_then(|()| stream.flush())
-        .map_err(|e| format!("write appd message: {e}"))
+        .map_err(|e| format!("write ferrix-appd message: {e}"))
 }
 
 fn read_reply(reader: &mut BufReader<UnixStream>) -> Result<Reply, String> {
     let mut line = String::new();
     let bytes = reader
         .read_line(&mut line)
-        .map_err(|e| format!("read appd reply: {e}"))?;
+        .map_err(|e| format!("read ferrix-appd reply: {e}"))?;
     if bytes == 0 {
-        return Err("appd closed before replying".to_owned());
+        return Err("ferrix-appd closed before replying".to_owned());
     }
-    serde_json::from_str(line.trim()).map_err(|e| format!("decode appd reply: {e}"))
+    serde_json::from_str(line.trim()).map_err(|e| format!("decode ferrix-appd reply: {e}"))
 }
 
 /// A request/reply connection. Not subscribed; every request gets a reply.
@@ -193,10 +193,10 @@ impl Client {
         let stream = connect_stream(path, timeout)?;
         stream
             .set_read_timeout(Some(timeout))
-            .map_err(|e| format!("set appd timeout: {e}"))?;
+            .map_err(|e| format!("set ferrix-appd timeout: {e}"))?;
         let writer = stream
             .try_clone()
-            .map_err(|e| format!("appd socket clone: {e}"))?;
+            .map_err(|e| format!("ferrix-appd socket clone: {e}"))?;
         let mut client = Self {
             writer,
             reader: BufReader::new(stream),
@@ -205,9 +205,9 @@ impl Client {
         match client.request(&Request::Hello { role })? {
             Reply::Hello { schema_version, .. } if schema_version == SCHEMA_VERSION => Ok(client),
             Reply::Hello { schema_version, .. } => Err(format!(
-                "appd schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
+                "ferrix-appd schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
             )),
-            other => Err(format!("unexpected appd hello reply: {other:?}")),
+            other => Err(format!("unexpected ferrix-appd hello reply: {other:?}")),
         }
     }
 
@@ -229,7 +229,7 @@ impl Client {
         match self.request(&Request::Catalog)? {
             Reply::Catalog { apps, .. } => Ok(apps),
             Reply::Error { error } => Err(error.to_string()),
-            other => Err(format!("unexpected appd catalog reply: {other:?}")),
+            other => Err(format!("unexpected ferrix-appd catalog reply: {other:?}")),
         }
     }
 
@@ -237,7 +237,7 @@ impl Client {
         match self.request(&Request::Instances)? {
             Reply::Instances { instances, .. } => Ok(instances),
             Reply::Error { error } => Err(error.to_string()),
-            other => Err(format!("unexpected appd instances reply: {other:?}")),
+            other => Err(format!("unexpected ferrix-appd instances reply: {other:?}")),
         }
     }
 
@@ -253,7 +253,9 @@ impl Client {
                 ..
             } => Ok((instance, activated_existing)),
             Reply::Error { error } => Err(Ok(error)),
-            other => Err(Err(format!("unexpected appd launch reply: {other:?}"))),
+            other => Err(Err(format!(
+                "unexpected ferrix-appd launch reply: {other:?}"
+            ))),
         }
     }
 
@@ -266,12 +268,12 @@ impl Client {
         match self.request(&Request::Subscribe)? {
             Reply::Ok => {}
             Reply::Error { error } => return Err(error.to_string()),
-            other => return Err(format!("unexpected appd subscribe reply: {other:?}")),
+            other => return Err(format!("unexpected ferrix-appd subscribe reply: {other:?}")),
         }
         self.reader
             .get_ref()
             .set_read_timeout(None)
-            .map_err(|e| format!("clear appd timeout: {e}"))?;
+            .map_err(|e| format!("clear ferrix-appd timeout: {e}"))?;
         Ok(Subscription {
             apps,
             instances,
@@ -312,13 +314,13 @@ impl Subscription {
         &self.socket
     }
 
-    /// Starts the notification reader. The channel closes when `appd`
+    /// Starts the notification reader. The channel closes when `ferrix_appd`
     /// disconnects. Returns the receiver and a reporter for the write half.
     pub fn spawn(self, wake: Arc<dyn Fn() + Send + Sync>) -> (Receiver<Notification>, Reporter) {
         let (tx, rx) = mpsc::channel();
         let mut lines = self.reader.lines();
         thread::Builder::new()
-            .name("appd-notifications".to_owned())
+            .name("ferrix-appd-notifications".to_owned())
             .spawn(move || {
                 while let Some(Ok(line)) = lines.next() {
                     let text = line.trim();
@@ -335,7 +337,7 @@ impl Subscription {
                 drop(tx);
                 wake();
             })
-            .expect("spawn appd notification reader");
+            .expect("spawn ferrix-appd notification reader");
         (
             rx,
             Reporter {

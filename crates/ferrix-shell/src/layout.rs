@@ -9,7 +9,7 @@
 // (and its tests) build everywhere.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use hardware_api::Orientation;
+use ferrix_hardware_api::Orientation;
 
 /// Output rotation applied between the panel scan-out and client logical space.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -98,7 +98,7 @@ impl OutputLayout {
 /// Every entry carries the owning client's process id (from the kernel via
 /// `SO_PEERCRED`, so it cannot be spoofed) and the last xdg `app_id` the
 /// client claimed (untrusted, evidence only). The pid is what links a window
-/// to an `appd` application instance.
+/// to an `ferrix_appd` application instance.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WindowStack<T: PartialEq + Clone> {
     entries: Vec<Entry<T>>,

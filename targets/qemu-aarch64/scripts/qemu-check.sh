@@ -2,11 +2,11 @@
 # Bounded, headless, TCG-only smoke check: the CI contract.
 #
 #   1. boot the generic AArch64 virt guest with serial captured to a file;
-#   2. wait for the persistent mobile-core's `boot-health` record and the
+#   2. wait for the persistent ferrix-core's `boot-health` record and the
 #      init-emitted QEMU `boot-health` that follows it (no fallbacks exist);
 #   3. assert the mock is still *unplugged*, then send the unplugged->charging
 #      command over the REAL host->guest mock-control channel;
-#   4. wait for the `power-changed` record mobile-core emits;
+#   4. wait for the `power-changed` record ferrix-core emits;
 #   5. ask the guest to shut down over the same channel and wait for QEMU to
 #      exit cleanly.
 #
@@ -58,7 +58,7 @@ FERRIX_QEMU_ACCEL=tcg FERRIX_QEMU_GRAPHICS=off FERRIX_QEMU_MODE=check FERRIX_QEM
   "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$log" 2>&1 &
 qemu_pid=$!
 
-# Both records are required: mobile-core's own (evidence mock) and init's
+# Both records are required: ferrix-core's own (evidence mock) and init's
 # QEMU-labelled one, which init may only emit after the core reported.
 wait_for '"evidence":"mock","event":"boot-health","status":"ok"' core-boot-health
 wait_for '"evidence":"QEMU","event":"boot-health","status":"ok"' guest-boot-health

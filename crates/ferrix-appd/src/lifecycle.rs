@@ -1,5 +1,5 @@
 //! Lifecycle policy that is pure and clock-driven: the home surface restart
-//! budget. State transitions themselves live in `app_api::LifecycleState`.
+//! budget. State transitions themselves live in `ferrix_app_api::LifecycleState`.
 //!
 //! Only the home surface is restarted; other applications are never
 //! auto-restarted. Delays grow per unrequested exit inside a sliding window

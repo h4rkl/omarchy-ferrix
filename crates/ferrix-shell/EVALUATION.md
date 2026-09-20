@@ -3,7 +3,7 @@
 Scope: AGENTS.md requires evaluating Catacomb reuse / contribution / fork before
 writing a new compositor, and documenting the gaps before choosing Smithay
 directly. This is that record. Evidence labels: everything here is desk review
-of upstream sources plus `QEMU`/`mock` runs of the resulting `mobile-shell`;
+of upstream sources plus `QEMU`/`mock` runs of the resulting `ferrix-shell`;
 nothing is physical-device validation.
 
 Sources inspected (2026-09-20): `https://github.com/catacombing/catacomb` at
@@ -33,15 +33,15 @@ tagged 2025-06-24) and its `anvil`/`smallvil` examples.
 | MIT/Apache-2.0-compatible dependencies; workspace is `MIT OR Apache-2.0` | GPL-3.0-only | **Blocking for reuse-as-library or fork inside this workspace.** Linking or vendoring Catacomb code would relicense the shell under GPL-3.0. Running it as a separate process would be allowed, but see the next rows. |
 | Minimal portrait touch-first shell, focused fullscreen flows, no desktop window management | Tiling (primary/secondary split), overview grid, cycle gestures, drag-and-drop | Opposite product model. Removing tiling/overview means deleting most of `windows/`, `overview.rs`, `input.rs` gesture logic and the IPC surface: little would remain to reuse. |
 | Software rendering by default; acceleration optional; correctness must not need GL | GLES/GBM only | **Blocking.** Under QEMU `virtio-gpu-pci` with TCG the guest has no virgl, so Catacomb would depend on Mesa's llvmpipe/kms_swrast through GBM: heavy, slow and outside the "correctness without GL" rule. |
-| Host Rust clients via xdg-shell (mobile-basic-screen, future apps) | Yes | None. |
+| Host Rust clients via xdg-shell (ferrix-basic-screen, future apps) | Yes | None. |
 | Status/launcher surfaces (layer-shell) | Yes (`delegate_layer_shell`, exclusive zones via IPC) | None for the protocol; the chrome policy would still be ours. |
 | Gestures | Yes, but bound to its own handle/overview model | Would need replacement to match GrapheneOS-derived conventions. |
 | On-screen keyboard | Protocol support only | Same as any Smithay compositor; the product OSK is a project client either way. |
-| Rotation | iio-sensor-proxy / udev accelerometer | Overkill for QEMU (no IIO device); would need a mock adapter through `hardware-api` anyway. |
+| Rotation | iio-sensor-proxy / udev accelerometer | Overkill for QEMU (no IIO device); would need a mock adapter through `ferrix-hardware-api` anyway. |
 | Brightness, notifications, crash recovery | Not compositor features in Catacomb (brightness via `initrc` scripts; no notification daemon; no client supervision) | Project work regardless. |
 | Runnable nested on a Linux host for development | **No** nested/winit backend | Would have to be written and upstreamed or carried as a patch. |
 | Runnable under QEMU virtio-gpu with TCG | Only through GLES/GBM (Mesa software) | See rendering row. |
-| Rust-first, `hardware-api` boundary | Rust; talks to udev/D-Bus directly | Its D-Bus/udev sensor code would violate the adapter boundary if reused as-is. |
+| Rust-first, `ferrix-hardware-api` boundary | Rust; talks to udev/D-Bus directly | Its D-Bus/udev sensor code would violate the adapter boundary if reused as-is. |
 
 ## Options
 
@@ -52,18 +52,18 @@ tagged 2025-06-24) and its `anvil`/`smallvil` examples.
 
 ## Decision
 
-**Build `mobile-shell` on Smithay 0.7 (MIT) directly.** Catacomb is retained as
+**Build `ferrix-shell` on Smithay 0.7 (MIT) directly.** Catacomb is retained as
 a design reference for touch gesture handling (handle/sector model), the
 protocol set a phone compositor needs, and its orientation-source adapters; no
 code is copied from it (GPL-3.0). Departures from Catacomb are intentional:
 fullscreen-only flows instead of tiling/overview, software rendering by
 default, a nested winit route for host development, and rotation/brightness
-sourced through `hardware-api` adapters instead of D-Bus in the compositor.
+sourced through `ferrix-hardware-api` adapters instead of D-Bus in the compositor.
 
 ### Smithay caveats recorded
 
 - Smithay's crates.io cadence is slow (0.7.0 in June 2025; Catacomb and other
-  downstreams pin git revisions). `mobile-shell` pins `0.7.0` through
+  downstreams pin git revisions). `ferrix-shell` pins `0.7.0` through
   `Cargo.lock`; moving to a git rev is a one-line change if a needed fix lands
   only on `master`.
 - `DrmCompositor` is gated on Smithay's `backend_gbm` feature, so the guest
@@ -80,7 +80,7 @@ sourced through `hardware-api` adapters instead of D-Bus in the compositor.
 
 ### Requirement coverage in this implementation (Phase 3 baseline)
 
-| Requirement | State in `mobile-shell` |
+| Requirement | State in `ferrix-shell` |
 | --- | --- |
 | Portrait, fullscreen-only xdg toplevels | Implemented (`layout::WindowStack`, `XdgShellHandler`: newest mapped toplevel fills the output; only the Fullscreen wm capability is advertised). |
 | Software rendering by default | Implemented on the `udev` backend (`PixmanRenderer` + `DumbAllocator` + `DrmCompositor`, overlay/cursor planes disabled). |
@@ -88,9 +88,9 @@ sourced through `hardware-api` adapters instead of D-Bus in the compositor.
 | Output pinned to `ferrix.display=WxH` / profile | Implemented (`config::ShellConfig::resolve`; connector mode match, else synthesised 60 Hz mode). |
 | wlr-layer-shell reserved for status/launcher | Implemented (`WlrLayerShellHandler`, Smithay `LayerMap`; rendered above/below the toplevel by layer). |
 | Nested winit backend from the mock profile | Implemented (`--nested targets/qemu-aarch64/profile.toml`, Linux host only; `mock` evidence). |
-| Machine-readable readiness | Implemented (`compositor-ready`, `client-mapped` (with client pid), `client-unmapped`, `client-gone`, `client-activated`, `home-gesture`, `appd-link`, `compositor-frame`, `compositor-failed`, `input-device`, `drm-output`, `display-geometry`). |
-| Rotation | Output transform plumbing and re-configure on plan change implemented; triggered by `mobile-core` display events (`hardware-api`) and the F9 debug key. No rotation gesture. |
-| Home gesture | Implemented, compositor-owned (`gesture::EdgeGesture`, wired in `compositor::input`): a touch slot or pointer left button that starts in the bottom 8% of the output is grabbed and never forwarded; an upward swipe (> 12% of `min(w,h)`, more vertical than horizontal) or a tap (< 3.5% of `min(w,h)`) reports `home-gesture` to `appd`, or raises the oldest mapped window when `appd` is not linked. Recogniser is pure and unit-tested at 1080x2340, 2340x1080 and 830x1800 (`mock`, host). |
-| Application service link | Implemented (`appd_link`): each toplevel carries its client's kernel pid (`SO_PEERCRED`); the compositor reports `surface-mapped`/`surface-unmapped`/`focus-changed` to `appd` and obeys `activate` directives (`raise_pid`). The link retries every 500 ms and reconnects on loss, so `appd` may start later or restart. `--no-appd` disables it. |
-| Crash recovery of clients | The compositor survives any client going away: `toplevel_destroyed` drops the window, refocuses the next mapped toplevel (home) and re-points keyboard/pointer focus, recording `client-gone`. Restarting the application is `appd`'s job. |
+| Machine-readable readiness | Implemented (`compositor-ready`, `client-mapped` (with client pid), `client-unmapped`, `client-gone`, `client-activated`, `home-gesture`, `ferrix-appd-link`, `compositor-frame`, `compositor-failed`, `input-device`, `drm-output`, `display-geometry`). |
+| Rotation | Output transform plumbing and re-configure on plan change implemented; triggered by `ferrix-core` display events (`ferrix-hardware-api`) and the F9 debug key. No rotation gesture. |
+| Home gesture | Implemented, compositor-owned (`gesture::EdgeGesture`, wired in `compositor::input`): a touch slot or pointer left button that starts in the bottom 8% of the output is grabbed and never forwarded; an upward swipe (> 12% of `min(w,h)`, more vertical than horizontal) or a tap (< 3.5% of `min(w,h)`) reports `home-gesture` to `ferrix-appd`, or raises the oldest mapped window when `ferrix-appd` is not linked. Recogniser is pure and unit-tested at 1080x2340, 2340x1080 and 830x1800 (`mock`, host). |
+| Application service link | Implemented (`appd_link`): each toplevel carries its client's kernel pid (`SO_PEERCRED`); the compositor reports `surface-mapped`/`surface-unmapped`/`focus-changed` to `ferrix-appd` and obeys `activate` directives (`raise_pid`). The link retries every 500 ms and reconnects on loss, so `ferrix-appd` may start later or restart. `--no-ferrix-appd` disables it. |
+| Crash recovery of clients | The compositor survives any client going away: `toplevel_destroyed` drops the window, refocuses the next mapped toplevel (home) and re-points keyboard/pointer focus, recording `client-gone`. Restarting the application is `ferrix-appd`'s job. |
 | OSK, brightness, quick settings, notifications | Not yet in the compositor; layer-shell and the seat model are the hooks. |

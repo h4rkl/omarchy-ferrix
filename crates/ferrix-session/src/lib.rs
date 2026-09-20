@@ -2,12 +2,12 @@
 //!
 //! This crate owns target selection: it loads the versioned target profile,
 //! picks the adapter set for the selected target id, and hands product code a
-//! [`HardwareServices`] bundle of `hardware-api` trait objects plus the
-//! target's capability matrix. Product crates (`mobile-core`, shells, apps)
-//! depend on this crate and `hardware-api` only; they never name an adapter.
+//! [`HardwareServices`] bundle of `ferrix-hardware-api` trait objects plus the
+//! target's capability matrix. Product crates (`ferrix-core`, shells, apps)
+//! depend on this crate and `ferrix-hardware-api` only; they never name an adapter.
 //!
 //! Today the only target is the generic QEMU virtual phone
-//! (`qemu-aarch64`), served by `hardware-emulator`. A future target package
+//! (`qemu-aarch64`), served by `ferrix-hardware-emulator`. A future target package
 //! adds a new arm to [`select_adapters`], nowhere else.
 
 use std::fmt;
@@ -15,11 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
-use hardware_api::{
+use ferrix_hardware_api::{
     Audio, Bluetooth, CapabilityMatrix, Display, EventSource, HardwareEvent, HardwareState, Input,
     Lifecycle, MockControl, Network, Power, Telephony,
 };
-use target_profile::{Profile, ProfileError};
+use ferrix_target_profile::{Profile, ProfileError};
 
 /// Profile path inside the guest image.
 pub const GUEST_PROFILE_PATH: &str = "/etc/ferrix/profile.toml";
@@ -30,7 +30,7 @@ pub const PROFILE_ENV: &str = "FERRIX_QEMU_PROFILE";
 /// Environment override for the target id.
 pub const TARGET_ENV: &str = "FERRIX_TARGET";
 /// The default and only supported target.
-pub const DEFAULT_TARGET_ID: &str = hardware_emulator::TARGET_ID;
+pub const DEFAULT_TARGET_ID: &str = ferrix_hardware_emulator::TARGET_ID;
 
 #[derive(Clone, Debug, Default)]
 pub struct BootstrapOptions {
@@ -169,8 +169,8 @@ fn select_adapters(
     profile: &Profile,
 ) -> Result<(CapabilityMatrix, HardwareServices), SessionError> {
     match target_id {
-        hardware_emulator::TARGET_ID => {
-            let emulator = Arc::new(hardware_emulator::Emulator::from_profile(profile));
+        ferrix_hardware_emulator::TARGET_ID => {
+            let emulator = Arc::new(ferrix_hardware_emulator::Emulator::from_profile(profile));
             let services = HardwareServices {
                 power: emulator.clone(),
                 display: emulator.clone(),
@@ -183,7 +183,10 @@ fn select_adapters(
                 events: emulator.clone(),
                 mock_control: Some(emulator),
             };
-            Ok((hardware_emulator::Emulator::capability_matrix(), services))
+            Ok((
+                ferrix_hardware_emulator::Emulator::capability_matrix(),
+                services,
+            ))
         }
         other => Err(SessionError::UnknownTarget(other.to_owned())),
     }
@@ -192,7 +195,7 @@ fn select_adapters(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hardware_api::{Capability, CapabilityStatus, MockCommand};
+    use ferrix_hardware_api::{Capability, CapabilityStatus, MockCommand};
 
     fn repo_profile() -> PathBuf {
         PathBuf::from(concat!(

@@ -1,14 +1,14 @@
 [package]
-name = "mobile-core"
-description = "Persistent Rust mobile core: owns hardware state via hardware-api, serves it to shells over a Unix socket, and accepts typed mock-control commands"
+name = "ferrix-core"
+description = "Persistent Rust mobile core: owns hardware state via ferrix-hardware-api, serves it to shells over a Unix socket, and accepts typed mock-control commands"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-hardware-api = { path = "../hardware-api" }
-mobile-session = { path = "../mobile-session" }
-mobile-protocol = { path = "../mobile-protocol" }
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+ferrix-session = { path = "../ferrix-session" }
+ferrix-protocol = { path = "../ferrix-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 

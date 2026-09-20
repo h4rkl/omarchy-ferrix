@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This is the initial, implementation-ready baseline for Ferrum's generic AArch64 QEMU virtual phone. It is the primary development and CI target for a Rust-first mobile shell and its project-owned services.
+This is the initial, implementation-ready baseline for Omarchy Ferrix's generic AArch64 QEMU virtual phone. It is the primary development and CI target for a Rust-first mobile shell and its project-owned services.
 
-Ferrum is the ship and product name. Ferrix is the kernel/userspace codename and runtime namespace. Gossan is reserved for a future device image; it does not rename the generic QEMU target or imply that a physical target exists. The project is not a new Linux distribution. It composes an existing mobile-Linux substrate with a deliberately small project layer: the Ferrum visual system, Rust mobile services, and (where justified) a Rust Wayland shell. postmarketOS and its tooling provide the initial guest-image, packaging, and QEMU route. Existing Linux system services remain authoritative for real hardware integration.
+Omarchy Ferrix is the ship and product name. `ferrix` is its kernel/userspace runtime namespace. Gossan is reserved for a future device image; it does not rename the generic QEMU target or imply that a physical target exists. The project is not a new Linux distribution. It composes an existing mobile-Linux substrate with a deliberately small project layer: the Omarchy Ferrix visual system, Rust mobile services, and (where justified) a Rust Wayland shell. postmarketOS and its tooling provide the initial guest-image, packaging, and QEMU route. Existing Linux system services remain authoritative for real hardware integration.
 
 The Solana Seeker is the intended eventual device target, subject to a separate, explicitly approved board-support proposal. Nothing in this baseline asserts Seeker compatibility, examines a Seeker, or authorizes device work. The generic emulator is the portability contract until that proposal supplies a recovery plan, capability evidence, and a Seeker-specific adapter package.
 
@@ -21,10 +21,10 @@ This is a generic virtual-phone environment. It must never claim to emulate or v
 | Initial guest boot | Generic arm64 Linux kernel, initramfs, serial console | Smallest observable boot path; no boot-image tooling or physical device required. |
 | Root filesystem | Build a postmarketOS rootfs with `pmbootstrap`; permit a stripped serial-only CI image or initramfs overlay | Reuses the distribution's package and image pipeline while preserving a small, observable boot check. |
 | UI development | Nested Smithay shell on the host first; QEMU integration second | Fast UI feedback while QEMU validates guest lifecycle and AArch64 artifacts. |
-| Hardware behavior | Versioned `hardware-emulator` profile | Deterministic state changes for local tests and CI. |
+| Hardware behavior | Versioned `ferrix-hardware-emulator` profile | Deterministic state changes for local tests and CI. |
 | CI | Linux runner, TCG-compatible bounded smoke test | No dependency on Apple hardware, display server, or physical phone. |
 | Guest substrate | postmarketOS via `pmbootstrap` | Provides established mobile-Linux packaging, image construction, and a QEMU workflow rather than recreating a distribution build system. |
-| Project product layer | Ferrum Rust services and mobile shell | Keeps the work differentiated while reusing mature Linux hardware services and distribution infrastructure. |
+| Project product layer | Omarchy Ferrix Rust services and mobile shell | Keeps the work differentiated while reusing mature Linux hardware services and distribution infrastructure. |
 
 ## Existing-project options and chosen boundary
 
@@ -128,9 +128,9 @@ Never put credentials, personal identifiers, or personal backups in `.env`, `out
 
 `targets/qemu-aarch64/` is the initial and only supported target. It defines the portable behavior contract for the rest of the project and is built from the selected postmarketOS/pmbootstrap guest substrate where practical.
 
-The first prospective additional target is `targets/boards/solana-seeker/`, but this directory must remain absent until hardware work is separately approved. Keep target selection and adapter wiring in the session/bootstrap layer. Product crates, applications, and `hardware-api` must not import a target package or contain target-specific conditionals.
+The first prospective additional target is `targets/boards/solana-seeker/`, but this directory must remain absent until hardware work is separately approved. Keep target selection and adapter wiring in the session/bootstrap layer. Product crates, applications, and `ferrix-hardware-api` must not import a target package or contain target-specific conditionals.
 
-Each target package must include a versioned manifest, a capability matrix for every `hardware-api` capability (`supported`, `unsupported`, or `mocked`), evidence for each claimed capability, and an explicit recovery procedure for hardware actions. A future Solana Seeker proposal must additionally establish its supported boot route, kernel and driver sources, partition/recovery procedure, modem and audio integration, and a no-device-data collection policy before any device action. Translate target behavior through a dedicated adapter; promote code into `hardware-linux` only after a demonstrated second consumer.
+Each target package must include a versioned manifest, a capability matrix for every `ferrix-hardware-api` capability (`supported`, `unsupported`, or `mocked`), evidence for each claimed capability, and an explicit recovery procedure for hardware actions. A future Solana Seeker proposal must additionally establish its supported boot route, kernel and driver sources, partition/recovery procedure, modem and audio integration, and a no-device-data collection policy before any device action. Translate target behavior through a dedicated adapter; promote code into `hardware-linux` only after a demonstrated second consumer.
 
 ## First virtual-phone profile
 
@@ -171,7 +171,7 @@ The first implementation should produce the following generated artifacts under 
 Image                         # generic arm64 Linux kernel
 initramfs.cpio.gz             # minimal root filesystem and /init
 qemu-virt.dtb                 # only if the selected kernel flow needs an explicit DTB
-mobile-core                   # AArch64 project service
+ferrix-core                   # AArch64 project service
 manifest.json                 # input revisions, hashes, profile, and command metadata
 serial.log                    # launch output; scrub before attaching externally
 ```
@@ -208,7 +208,7 @@ Implement the following `justfile` recipes. Each must print the resolved paths a
 
 1. Inspect the current workspace and preserve all user changes.
 2. Establish a reproducible postmarketOS/pmbootstrap generic AArch64 QEMU guest route; retain a minimal serial-first path for bounded CI checks.
-3. Add the Rust workspace, `hardware-api`, `hardware-emulator`, and a small emulator battery/charger state example.
+3. Add the Rust workspace, `ferrix-hardware-api`, `ferrix-hardware-emulator`, and a small emulator battery/charger state example.
 4. Add `.gitignore`, `.env.example`, and the `targets/qemu-aarch64/` skeleton. Keep the profile parser strict and schema-versioned.
 5. Add `just host-check`; do not install tools automatically. Report missing prerequisites and their documented commands.
 6. Add `just qemu-build`, `qemu-run`, and bounded headless `qemu-check` around the selected guest route.

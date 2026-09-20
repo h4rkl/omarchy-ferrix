@@ -3,7 +3,7 @@
 //! `alacritty_terminal` (the VT parser, grid, and PTY layer behind Alacritty,
 //! Apache-2.0) runs a real shell and owns the escape-sequence state machine.
 //! This module only spawns it, forwards input, and flattens the visible grid
-//! into a plain [`Snapshot`] in the Ferrum palette for the software renderer.
+//! into a plain [`Snapshot`] in the Omarchy Ferrix palette for the software renderer.
 //! The snapshot keeps rendering and its tests independent of any PTY.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
@@ -14,9 +14,9 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Term, TermMode, point_to_viewport, test::TermSize};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
-use ferrum_ui::theme;
+use ferrix_ui::theme;
 
-/// Ferrum's Tokyo Night ANSI palette (normal 0-7, bright 8-15).
+/// Omarchy Ferrix's Tokyo Night ANSI palette (normal 0-7, bright 8-15).
 const ANSI: [u32; 16] = [
     0x15161e, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xa9b1d6, 0x414868,
     0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xc0caf5,
@@ -251,7 +251,7 @@ mod session {
     use alacritty_terminal::tty;
 
     use super::{Snapshot, indexed_default, unpack};
-    use ferrum_ui::theme;
+    use ferrix_ui::theme;
 
     /// Grid size in cells plus the cell size in pixels (reported to the PTY
     /// as the window size).

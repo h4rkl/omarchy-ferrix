@@ -1,5 +1,5 @@
 //! Machine-readable records: one JSON line per record on stdout, `evidence`
-//! first, mirroring `mobile-core` and `mobile-shell`.
+//! first, mirroring `ferrix-core` and `ferrix-shell`.
 //!
 //! The evidence label is `QEMU` inside the guest and `mock` for nested host
 //! runs; neither is a physical-device claim. A [`Recorder`] carries the label
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use app_api::{AppError, AppId, ExitReason};
+use ferrix_app_api::{AppError, AppId, ExitReason};
 use serde_json::{Map, Value};
 
 /// Evidence label for the QEMU guest.
@@ -89,7 +89,7 @@ impl Recorder {
 
     pub fn appd_ready(&self, socket: &Path, apps: usize, home: Option<&AppId>) {
         self.emit(
-            "appd-ready",
+            "ferrix-appd-ready",
             [
                 ("socket", Value::from(socket.display().to_string())),
                 ("apps", Value::from(apps)),
@@ -100,7 +100,7 @@ impl Recorder {
 
     pub fn appd_failed(&self, reason: &str) {
         self.emit(
-            "appd-failed",
+            "ferrix-appd-failed",
             [
                 ("status", Value::from("failed")),
                 ("reason", Value::from(reason)),
@@ -109,13 +109,13 @@ impl Recorder {
     }
 
     pub fn appd_socket_error(&self, error: &str) {
-        self.emit("appd-socket-error", [("error", Value::from(error))]);
+        self.emit("ferrix-appd-socket-error", [("error", Value::from(error))]);
     }
 
     /// A message refused by role gating or ordering rules.
     pub fn request_rejected(&self, role: Option<&str>, message: &str, reason: &str) {
         self.emit(
-            "appd-request-rejected",
+            "ferrix-appd-request-rejected",
             [
                 ("role", opt_str(role)),
                 ("message", Value::from(message)),

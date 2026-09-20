@@ -10,7 +10,7 @@
 use std::fmt;
 use std::path::Path;
 
-use hardware_api::{AudioRoute, ModemRegistration, Orientation, SimState, WifiState};
+use ferrix_hardware_api::{AudioRoute, ModemRegistration, Orientation, SimState, WifiState};
 use serde::{Deserialize, Serialize};
 
 /// The only schema version this crate accepts.

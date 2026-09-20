@@ -1,17 +1,17 @@
-//! Resilient link to the application service (`appd`).
+//! Resilient link to the application service (`ferrix_appd`).
 //!
-//! The compositor is a `ClientRole::Compositor` subscriber: it tells `appd`
+//! The compositor is a `ClientRole::Compositor` subscriber: it tells `ferrix_appd`
 //! which client pid mapped a surface, which pid holds focus, and when the
-//! home gesture fired; `appd` answers with `Notification::Activate` directives
-//! that raise a client's toplevel. `appd` may start after the compositor or
+//! home gesture fired; `ferrix_appd` answers with `Notification::Activate` directives
+//! that raise a client's toplevel. `ferrix_appd` may start after the compositor or
 //! crash and restart, so a background thread connects with retries and
 //! reconnects on loss, forever. Nothing here blocks the compositor loop: the
 //! thread hands events over an `mpsc` channel and wakes the loop through the
-//! caller's `wake` callback (a calloop ping), the same pattern the mobile-core
+//! caller's `wake` callback (a calloop ping), the same pattern the ferrix-core
 //! subscription uses.
 //!
-//! This module is plain std + `app-protocol`, so the connection logic is unit
-//! tested on every host against a fake `appd`; the Smithay side lives in
+//! This module is plain std + `ferrix-app-protocol`, so the connection logic is unit
+//! tested on every host against a fake `ferrix_appd`; the Smithay side lives in
 //! `compositor::appd_link`.
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -22,7 +22,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
-use app_protocol::{Client, ClientRole, Notification, Report, Reporter};
+use ferrix_app_protocol::{Client, ClientRole, Notification, Report, Reporter};
 
 /// How long one connection attempt waits for the socket before pausing.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -36,14 +36,14 @@ pub enum LinkEvent {
     Connected,
     /// The connection could not be (re)established; sent once per outage.
     Retrying { reason: String },
-    /// The subscription ended (`appd` closed the stream).
+    /// The subscription ended (`ferrix_appd` closed the stream).
     Lost,
     /// A pushed directive or lifecycle event.
     Notification(Notification),
 }
 
 impl LinkEvent {
-    /// Value of the `status` field in `appd-link` records, when this event
+    /// Value of the `status` field in `ferrix_appd-link` records, when this event
     /// changes the link status.
     pub fn status(&self) -> Option<&'static str> {
         match self {
@@ -71,9 +71,9 @@ impl AppdLink {
         let (tx, rx) = mpsc::channel();
         let path = socket.to_path_buf();
         thread::Builder::new()
-            .name("appd-link".to_owned())
+            .name("ferrix-appd-link".to_owned())
             .spawn(move || link_thread(&path, tx, wake))
-            .expect("spawn appd link thread");
+            .expect("spawn ferrix-appd link thread");
         Self {
             socket: socket.to_path_buf(),
             events: rx,
@@ -86,7 +86,7 @@ impl AppdLink {
         &self.socket
     }
 
-    /// Whether reports currently reach `appd`.
+    /// Whether reports currently reach `ferrix_appd`.
     pub fn connected(&self) -> bool {
         self.reporter.is_some()
     }
@@ -100,7 +100,7 @@ impl AppdLink {
                     match &event {
                         LinkEvent::Connected => {
                             self.reporter = reporter;
-                            // A fresh appd knows nothing; the next focus report
+                            // A fresh ferrix_appd knows nothing; the next focus report
                             // must go out even if it repeats the last one.
                             self.last_focus = None;
                         }
@@ -187,7 +187,7 @@ fn link_thread(
         if !send(LinkEvent::Connected, Some(reporter)) {
             return;
         }
-        // Blocks until appd closes the stream (the reader thread drops its
+        // Blocks until ferrix_appd closes the stream (the reader thread drops its
         // sender); the reader already woke the loop for each notification.
         for notification in notifications {
             if tx
@@ -211,8 +211,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 
-    use app_api::{AppId, SCHEMA_VERSION};
-    use app_protocol::{Inbound, Reply, Request};
+    use ferrix_app_api::{AppId, SCHEMA_VERSION};
+    use ferrix_app_protocol::{Inbound, Reply, Request};
 
     struct FakeAppd {
         writer: UnixStream,
@@ -280,11 +280,11 @@ mod tests {
     }
 
     fn socket_path(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("mobile-shell-appd-{}-{tag}", std::process::id()));
+        // Keep the socket path below the Unix-domain `sun_path` limit.
+        let dir = std::env::temp_dir().join(format!("fsad-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        dir.join("appd.sock")
+        dir.join("ferrix-appd.sock")
     }
 
     /// Wait (bounded) until `link.drain()` yields something matching `pred`.
@@ -322,8 +322,8 @@ mod tests {
         assert!(!link.connected());
         assert!(!link.report(&Report::HomeGesture), "no stream yet");
 
-        let mut appd = FakeAppd::accept(&listener);
-        appd.handshake();
+        let mut ferrix_appd = FakeAppd::accept(&listener);
+        ferrix_appd.handshake();
         let event = wait_for(&mut link, &wakes, |e| matches!(e, LinkEvent::Connected));
         assert_eq!(event.status(), Some("connected"));
         assert!(link.connected());
@@ -332,7 +332,7 @@ mod tests {
             "connect woke the loop"
         );
 
-        // Compositor -> appd reports, with focus de-duplication.
+        // Compositor -> ferrix_appd reports, with focus de-duplication.
         assert!(link.report(&Report::SurfaceMapped {
             pid: 42,
             app_id: Some("org.ferrix.terminal".to_owned()),
@@ -346,7 +346,7 @@ mod tests {
         assert!(link.report_focus(None));
         assert!(link.report(&Report::HomeGesture));
         assert_eq!(
-            appd.read(),
+            ferrix_appd.read(),
             Inbound::Report(Report::SurfaceMapped {
                 pid: 42,
                 app_id: Some("org.ferrix.terminal".to_owned()),
@@ -354,21 +354,21 @@ mod tests {
             })
         );
         assert_eq!(
-            appd.read(),
+            ferrix_appd.read(),
             Inbound::Report(Report::FocusChanged { pid: Some(42) })
         );
         assert_eq!(
-            appd.read(),
+            ferrix_appd.read(),
             Inbound::Report(Report::FocusChanged { pid: None })
         );
-        assert_eq!(appd.read(), Inbound::Report(Report::HomeGesture));
+        assert_eq!(ferrix_appd.read(), Inbound::Report(Report::HomeGesture));
 
-        // appd -> compositor directive.
+        // ferrix_appd -> compositor directive.
         let activate = Notification::Activate {
             pid: 7,
             app_id: AppId::new("org.ferrix.home").unwrap(),
         };
-        appd.push(&activate);
+        ferrix_appd.push(&activate);
         let event = wait_for(&mut link, &wakes, |e| {
             matches!(e, LinkEvent::Notification(_))
         });
@@ -377,8 +377,8 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
 
-        // appd goes away: Lost, then exactly one Retrying while it is down.
-        drop(appd);
+        // ferrix_appd goes away: Lost, then exactly one Retrying while it is down.
+        drop(ferrix_appd);
         let event = wait_for(&mut link, &wakes, |e| matches!(e, LinkEvent::Lost));
         assert_eq!(event.status(), Some("lost"));
         assert!(!link.connected());
@@ -391,11 +391,11 @@ mod tests {
         });
         assert_eq!(event.status(), Some("retrying"));
 
-        // Bring appd back; the link reconnects, re-handshakes, and focus
-        // de-duplication is reset so a fresh appd learns the current focus.
+        // Bring ferrix_appd back; the link reconnects, re-handshakes, and focus
+        // de-duplication is reset so a fresh ferrix_appd learns the current focus.
         let listener = UnixListener::bind(&path).unwrap();
-        let mut appd = FakeAppd::accept(&listener);
-        appd.handshake();
+        let mut ferrix_appd = FakeAppd::accept(&listener);
+        ferrix_appd.handshake();
         let events_before = wait_for(&mut link, &wakes, |e| matches!(e, LinkEvent::Connected));
         assert_eq!(events_before.status(), Some("connected"));
         let extra_retrying = link
@@ -406,12 +406,12 @@ mod tests {
         assert_eq!(extra_retrying, 0, "retrying is recorded once per outage");
         assert!(link.report_focus(None), "focus repeats after a reconnect");
         assert_eq!(
-            appd.read(),
+            ferrix_appd.read(),
             Inbound::Report(Report::FocusChanged { pid: None })
         );
 
         drop(link);
-        drop(appd);
+        drop(ferrix_appd);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

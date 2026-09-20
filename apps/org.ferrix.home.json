@@ -18,7 +18,7 @@
   ],
   "launch": {
     "exec": [
-      "mobile-basic-screen"
+      "ferrix-basic-screen"
     ]
   }
 }

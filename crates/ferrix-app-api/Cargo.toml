@@ -1,6 +1,6 @@
 [package]
-name = "app-api"
-description = "Stable application contract: app identities, runtime kinds, descriptors, lifecycle states, isolation policy, and typed errors shared by appd, shells, and applications"
+name = "ferrix-app-api"
+description = "Stable application contract: app identities, runtime kinds, descriptors, lifecycle states, isolation policy, and typed errors shared by ferrix-appd, shells, and applications"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

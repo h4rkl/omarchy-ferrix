@@ -1,4 +1,4 @@
-//! Shared wire contract and Unix-socket client for `mobile-core`.
+//! Shared wire contract and Unix-socket client for `ferrix-core`.
 //!
 //! Product commands are intentionally distinct from the host-only mock
 //! control protocol. Shells and applications can request user-facing hardware
@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hardware_api::{
+use ferrix_hardware_api::{
     CapabilityMatrix, HardwareCommand, HardwareError, HardwareEvent, HardwareState, SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,7 @@ fn connect_stream(path: &Path, timeout: Duration) -> Result<UnixStream, String> 
             Ok(stream) => return Ok(stream),
             Err(error) if Instant::now() >= deadline => {
                 return Err(format!(
-                    "mobile-core socket {} unavailable: {error}",
+                    "ferrix-core socket {} unavailable: {error}",
                     path.display()
                 ));
             }
@@ -88,7 +88,7 @@ fn read_reply(reader: &mut BufReader<UnixStream>) -> Result<Reply, String> {
         .read_line(&mut line)
         .map_err(|e| format!("read core reply: {e}"))?;
     if bytes == 0 {
-        return Err("mobile-core closed before replying".to_owned());
+        return Err("ferrix-core closed before replying".to_owned());
     }
     serde_json::from_str(line.trim()).map_err(|e| format!("decode core reply: {e}"))
 }
@@ -116,7 +116,7 @@ pub fn subscribe(path: &Path, timeout: Duration) -> Result<Subscription, String>
             socket: path.to_path_buf(),
         }),
         Reply::State { schema_version, .. } => Err(format!(
-            "mobile-core schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
+            "ferrix-core schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
         )),
         other => Err(format!("unexpected core reply: {other:?}")),
     }
@@ -168,7 +168,7 @@ pub fn command(
             state,
         } if schema_version == SCHEMA_VERSION => Ok(state),
         Reply::Command { schema_version, .. } => Err(format!(
-            "mobile-core schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
+            "ferrix-core schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
         )),
         Reply::Error { error } => Err(error.to_string()),
         Reply::ProtocolError { reason } => Err(reason),

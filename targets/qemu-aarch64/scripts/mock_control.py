@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send one mock-control command to the guest mobile-core over the QEMU
+"""Send one mock-control command to the guest ferrix-core over the QEMU
 virtio-serial control socket and print the JSON ack.
 
 Usage:
@@ -67,7 +67,7 @@ def send(path, command, timeout, connect_wait):
                 raise SystemExit("control channel closed before an ack arrived")
             buffer += chunk
     except socket.timeout:
-        raise SystemExit(f"no ack within {timeout}s (is mobile-core running in the guest?)")
+        raise SystemExit(f"no ack within {timeout}s (is ferrix-core running in the guest?)")
     finally:
         client.close()
     return json.loads(buffer.decode())

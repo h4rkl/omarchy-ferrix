@@ -1,4 +1,4 @@
-//! The application catalog: every descriptor `appd` knows about.
+//! The application catalog: every descriptor `ferrix_appd` knows about.
 //!
 //! Descriptors are `*.json` files in one or more directories
 //! (`/usr/share/ferrix/apps` in the guest, `apps/` in the repository). The
@@ -8,12 +8,12 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use app_api::{AppDescriptor, AppError, AppId, AppRole};
+use ferrix_app_api::{AppDescriptor, AppError, AppId, AppRole};
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Daemon-private manifest entry. Only `descriptor` crosses app-protocol;
-/// `launch` is opaque to appd and consumed by the selected runtime adapter.
+/// Daemon-private manifest entry. Only `descriptor` crosses ferrix-app-protocol;
+/// `launch` is opaque to ferrix_appd and consumed by the selected runtime adapter.
 #[derive(Clone, Debug, Deserialize)]
 struct Manifest {
     #[serde(flatten)]
@@ -176,7 +176,7 @@ impl Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app_api::{IconRef, RuntimeKind, SCHEMA_VERSION, TrustLevel};
+    use ferrix_app_api::{IconRef, RuntimeKind, SCHEMA_VERSION, TrustLevel};
 
     pub(crate) fn descriptor(id: &str, role: AppRole, launchable: bool) -> AppDescriptor {
         AppDescriptor {
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn directory_errors_are_typed_and_name_the_file() {
         let dir = std::env::temp_dir().join(format!(
-            "appd-catalog-{}-{}",
+            "ferrix-appd-catalog-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

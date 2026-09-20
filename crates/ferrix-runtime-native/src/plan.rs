@@ -5,7 +5,7 @@
 
 use std::process::ExitStatus;
 
-use app_api::{AppId, ExitReason};
+use ferrix_app_api::{AppId, ExitReason};
 use serde::{Deserialize, Serialize};
 
 use crate::{AppliedIsolation, IsolationPolicy, UserNamespace};
@@ -17,7 +17,7 @@ pub const SANDBOX_BIN_ENV: &str = "FERRIX_SANDBOX_BIN";
 
 /// Exit status of `ferrix-sandbox` when a `Required` policy cannot be met:
 /// the namespaces could not be created. The runtime maps it to
-/// [`app_api::AppError::IsolationUnavailable`].
+/// [`ferrix_app_api::AppError::IsolationUnavailable`].
 pub const ISOLATION_UNAVAILABLE_STATUS: i32 = 126;
 /// Exit status when the application program itself could not be executed
 /// (shell convention for "command not found").
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn plan_places_policy_id_evidence_then_exec_after_separator() {
         let policy = IsolationPolicy::default();
-        let exec = vec!["ferrum-terminal".to_owned(), "--flag".to_owned()];
+        let exec = vec!["ferrix-terminal".to_owned(), "--flag".to_owned()];
         let plan = sandbox_plan(&policy, &id(), "QEMU", &exec);
         assert_eq!(
             plan,
@@ -271,7 +271,7 @@ mod tests {
                 "--evidence",
                 "QEMU",
                 "--",
-                "ferrum-terminal",
+                "ferrix-terminal",
                 "--flag",
             ]
         );

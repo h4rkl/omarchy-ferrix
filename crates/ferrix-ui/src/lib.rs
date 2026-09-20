@@ -1,4 +1,4 @@
-//! Ferrum's shared software-rendering toolkit for the reference surfaces.
+//! Omarchy Ferrix's shared software-rendering toolkit for the reference surfaces.
 //!
 //! - [`draw`]: a thin `tiny-skia` + `fontdue` canvas with the embedded
 //!   JetBrains Mono faces.

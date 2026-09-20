@@ -1,22 +1,22 @@
-//! Ferrum home surface (QEMU reference launcher).
+//! Omarchy Ferrix home surface (QEMU reference launcher).
 //!
 //! A small software-rendered Wayland client (xdg app_id `org.ferrix.home`)
 //! that draws the status bar, the launcher grid from the application catalog,
 //! quick settings, and notifications. Applications are independent processes
-//! launched and tracked by `appd`; this surface only requests launches and
+//! launched and tracked by `ferrix_appd`; this surface only requests launches and
 //! shows their lifecycle (running dot, starting state, crash notice). It is
 //! QEMU/mock evidence for the graphics path, not the product shell and not a
 //! physical-device claim.
 //!
 //! Hardware state (battery, network, modem) comes from the persistent
-//! `mobile-core` over its state socket; the profile supplies only the panel
-//! geometry and name. Product code depends on `hardware-api`, never on an
+//! `ferrix-core` over its state socket; the profile supplies only the panel
+//! geometry and name. Product code depends on `ferrix-hardware-api`, never on an
 //! adapter.
 //!
 //! Usage:
-//!   mobile-basic-screen [profile.toml] [--core /run/ferrix/core.sock]
-//!                       [--appd /run/ferrix/appd.sock]   # guest: connect to Wayland
-//!   mobile-basic-screen [profile.toml] --preview p.ppm [--page launcher]
+//!   ferrix-basic-screen [profile.toml] [--core /run/ferrix/core.sock]
+//!                       [--ferrix_appd /run/ferrix/ferrix_appd.sock]   # guest: connect to Wayland
+//!   ferrix-basic-screen [profile.toml] --preview p.ppm [--page launcher]
 //!                                                        # any host: render PPM
 //!
 //! The profile defaults to the guest copy when present, else the repository
@@ -35,11 +35,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use ferrum_ui::draw::Type;
-use ferrum_ui::evidence::{emit, json_escape};
-use hardware_api::{HardwareState, WifiState};
-use mobile_session::{BootstrapOptions, bootstrap};
-use target_profile::Profile;
+use ferrix_hardware_api::{HardwareState, WifiState};
+use ferrix_session::{BootstrapOptions, bootstrap};
+use ferrix_target_profile::Profile;
+use ferrix_ui::draw::Type;
+use ferrix_ui::evidence::{emit, json_escape};
 
 /// Evidence label for every record this binary emits in a session.
 const EVIDENCE: &str = "QEMU";
@@ -94,13 +94,13 @@ struct Args {
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let env_path = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
     let mut parsed = Args {
-        profile_path: mobile_session::default_profile_path(),
+        profile_path: ferrix_session::default_profile_path(),
         core_socket: env_path("FERRIX_CORE_SOCKET")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(mobile_protocol::DEFAULT_SOCKET)),
-        appd_socket: env_path(app_api::APPD_SOCKET_ENV)
+            .unwrap_or_else(|| PathBuf::from(ferrix_protocol::DEFAULT_SOCKET)),
+        appd_socket: env_path(ferrix_app_api::APPD_SOCKET_ENV)
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(app_protocol::DEFAULT_SOCKET)),
+            .unwrap_or_else(|| PathBuf::from(ferrix_app_protocol::DEFAULT_SOCKET)),
         preview: None,
         page: "launcher".to_owned(),
     };
@@ -115,9 +115,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 parsed.core_socket =
                     PathBuf::from(it.next().ok_or("--core requires a socket path")?);
             }
-            "--appd" => {
+            "--ferrix-appd" => {
                 parsed.appd_socket =
-                    PathBuf::from(it.next().ok_or("--appd requires a socket path")?);
+                    PathBuf::from(it.next().ok_or("--ferrix-appd requires a socket path")?);
             }
             other if other.starts_with("--") => return Err(format!("unknown argument {other:?}")),
             _ => parsed.profile_path = PathBuf::from(arg),
@@ -169,7 +169,7 @@ fn run() -> Result<(), String> {
 
     // Guest: geometry from the profile, state from the core.
     let profile = Profile::load(&args.profile_path).map_err(|e| e.to_string())?;
-    let core = mobile_protocol::subscribe(&args.core_socket, Duration::from_secs(10))?;
+    let core = ferrix_protocol::subscribe(&args.core_socket, Duration::from_secs(10))?;
     emit(format!(
         "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"core-connected\",\"socket\":\"{}\",\"target\":\"{}\",\"charging\":{}}}",
         json_escape(&args.core_socket.display().to_string()),
@@ -214,8 +214,8 @@ mod tests {
                 "out.ppm",
                 "--core",
                 "/tmp/core.sock",
-                "--appd",
-                "/tmp/appd.sock",
+                "--ferrix-appd",
+                "/tmp/ferrix-appd.sock",
             ]
             .map(str::to_owned),
         )
@@ -223,7 +223,7 @@ mod tests {
         assert_eq!(args.profile_path, PathBuf::from("custom.toml"));
         assert_eq!(args.preview.as_deref(), Some("out.ppm"));
         assert_eq!(args.core_socket, PathBuf::from("/tmp/core.sock"));
-        assert_eq!(args.appd_socket, PathBuf::from("/tmp/appd.sock"));
+        assert_eq!(args.appd_socket, PathBuf::from("/tmp/ferrix-appd.sock"));
         assert!(parse_args(["--bogus".to_owned()]).is_err());
         assert!(parse_args(["--preview".to_owned()]).is_err());
     }

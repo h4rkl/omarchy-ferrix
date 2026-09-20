@@ -1,6 +1,6 @@
 //! Linux-only end-to-end tests: the built `ferrix-sandbox` through
 //! `NativeRuntime`. Run from the repository root with
-//! `just linux-check test -p runtime-native` (privileged container). When the
+//! `just linux-check test -p ferrix-runtime-native` (privileged container). When the
 //! default policy cannot be met (EPERM in a locked-down container) each test
 //! prints a `sandbox-test-skipped` record and passes vacuously.
 #![cfg(target_os = "linux")]
@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use app_api::{
+use ferrix_app_api::{
     AppDescriptor, AppId, AppRole, ExitReason, IconRef, RuntimeKind, SCHEMA_VERSION, TrustLevel,
 };
-use app_runtime_api::{LaunchContext, RunningApp, Runtime};
-use runtime_native::{
+use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
+use ferrix_runtime_native::{
     IsolationPolicy, NativeLaunch, NativeRuntime, NativeRuntimeOptions, SandboxReady,
     UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan, skipped_record,
 };
@@ -159,7 +159,7 @@ fn readiness_report_confirms_the_default_policy() {
         return;
     }
     let mut running = launch(&["sh", "-c", "exit 0"], IsolationPolicy::default());
-    let report: runtime_native::IsolationReport =
+    let report: ferrix_runtime_native::IsolationReport =
         serde_json::from_value(running.diagnostics()).unwrap();
     assert!(!report.degraded, "{report:?}");
     assert!(report.applied.pid_namespace && report.applied.mount_namespace);
@@ -226,7 +226,7 @@ fn user_namespace_when_always() {
         ],
         policy,
     );
-    let report: runtime_native::IsolationReport =
+    let report: ferrix_runtime_native::IsolationReport =
         serde_json::from_value(running.diagnostics()).unwrap();
     assert!(report.applied.user_namespace);
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });

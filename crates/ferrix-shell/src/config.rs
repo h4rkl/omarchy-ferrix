@@ -7,8 +7,8 @@
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use hardware_api::Orientation;
-use target_profile::Profile;
+use ferrix_hardware_api::Orientation;
+use ferrix_target_profile::Profile;
 
 /// Panel size in physical pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,7 +73,7 @@ pub struct ShellConfig {
     pub scale: f64,
     pub touch: bool,
     pub socket_name: String,
-    /// `appd` socket the compositor links to (with retries); `None` disables
+    /// `ferrix_appd` socket the compositor links to (with retries); `None` disables
     /// the link and the home gesture falls back to the oldest mapped window.
     pub appd_socket: Option<String>,
 }
@@ -110,13 +110,13 @@ impl ShellConfig {
         }
     }
 
-    /// Set the `appd` socket to link to (`None` disables the link).
+    /// Set the `ferrix_appd` socket to link to (`None` disables the link).
     pub fn with_appd(mut self, appd_socket: Option<String>) -> Self {
         self.appd_socket = appd_socket;
         self
     }
 
-    /// Value of the `appd` field in the `display-geometry` record.
+    /// Value of the `ferrix_appd` field in the `display-geometry` record.
     pub fn appd_label(&self) -> &str {
         self.appd_socket.as_deref().unwrap_or("disabled")
     }
@@ -184,8 +184,8 @@ route = "speaker"
         assert_eq!(config.socket_name, "wayland-0");
         assert_eq!(config.appd_socket, None);
         assert_eq!(config.appd_label(), "disabled");
-        let config = config.with_appd(Some("/run/ferrix/appd.sock".to_owned()));
-        assert_eq!(config.appd_label(), "/run/ferrix/appd.sock");
+        let config = config.with_appd(Some("/run/ferrix/ferrix-appd.sock".to_owned()));
+        assert_eq!(config.appd_label(), "/run/ferrix/ferrix-appd.sock");
     }
 
     #[test]
@@ -217,7 +217,7 @@ route = "speaker"
 
     #[test]
     fn cmdline_geometry_is_extracted() {
-        let cmdline = "console=ttyAMA0 panic=-1 ferrix.mode=agent ferrix.graphics=on ferrix.display=830x1800 ferrix.shell=mobile-shell";
+        let cmdline = "console=ttyAMA0 panic=-1 ferrix.mode=agent ferrix.graphics=on ferrix.display=830x1800 ferrix.shell=ferrix-shell";
         assert_eq!(
             display_from_cmdline(cmdline),
             Some(DisplayGeometry {

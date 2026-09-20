@@ -1,12 +1,12 @@
 [package]
-name = "app-runtime-api"
-description = "Internal replaceable contract between appd and application runtime adapters"
+name = "ferrix-app-runtime-api"
+description = "Internal replaceable contract between ferrix-appd and application runtime adapters"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-app-api = { path = "../app-api" }
+ferrix-app-api = { path = "../ferrix-app-api" }
 serde_json = "1"
 
 [lints]

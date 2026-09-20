@@ -1,8 +1,8 @@
 //! Target-independent interaction model shared by pointer and touch input.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use app_api::AppId;
-use ferrum_ui::draw::Rect;
+use ferrix_app_api::AppId;
+use ferrix_ui::draw::Rect;
 
 use crate::catalog::Tile;
 
@@ -45,7 +45,7 @@ pub enum Target {
 }
 
 /// Product hardware changes requested by the UI. The app sends these through
-/// mobile-core; the authoritative state still comes back through its event
+/// ferrix-core; the authoritative state still comes back through its event
 /// subscription.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemAction {
@@ -72,7 +72,7 @@ pub struct UiState {
     pub notification_visible: bool,
     pub tiles: Vec<Tile>,
     /// Launch requests for launchable tiles; the session owner drains these
-    /// after input and sends them to `appd`.
+    /// after input and sends them to `ferrix_appd`.
     pub pending_launch: Vec<AppId>,
     /// Queued hardware requests; the session owner drains these after input.
     pub pending_system: Vec<SystemAction>,

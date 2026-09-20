@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use mobile_protocol::Subscription;
+use ferrix_protocol::Subscription;
 
 use smithay::{
     backend::{

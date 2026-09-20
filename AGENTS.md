@@ -7,14 +7,14 @@ These rules apply repository-wide. Load only task-relevant detail: `docs/status.
 - This is an emulator-first, Rust-first mobile Linux environment, not a distribution. Generic AArch64 QEMU `virt` is the only supported target; label evidence `mock` or `QEMU`, never physical-device validation.
 - Do not inspect or operate phones, add board targets or Android boot tooling, or claim Solana Seeker support without a separately approved board-support proposal.
 - postmarketOS/pmbootstrap is the intended full guest substrate. Alpine/initramfs is only the explicitly labelled smoke-test route.
-- Product code depends on `hardware-api`, not QEMU, kernel, vendor, or board details. Put target selection/adapters in session/bootstrap code; keep target conditionals out of apps, `mobile-core`, and `hardware-api`.
+- Product code depends on `ferrix-hardware-api`, not QEMU, kernel, vendor, or board details. Put target selection/adapters in session/bootstrap code; keep target conditionals out of apps, `ferrix-core`, and `ferrix-hardware-api`.
 - Put Linux services (NetworkManager, UPower, PipeWire, ModemManager, sensors) behind typed project-owned adapters; do not reimplement their protocols. New project-owned code is Rust unless a documented constraint prevents it.
 
 ## Product shell
 
 - Evaluate Catacomb reuse/contribution/fork before a new compositor; document gaps before choosing Smithay directly. Develop nested on the host with the versioned mock profile, then integrate into QEMU.
-- Weston and `mobile-basic-screen` are diagnostic/reference surfaces, not the product UI. Applications are independent processes launched only by `appd` (see `docs/app-platform.md`); apps, shells, and the core depend on `app-api`/`app-protocol`, never on `appd` or a runtime implementation. The product shell is minimal, portrait, touch-first, software-rendered by default, and uses focused fullscreen flows rather than desktop window management. Acceleration must not be required for correctness.
-- Resolve UX choices in this order: explicit requirements, Ferrum's restrained, cohesive, low-noise mobile visual system, then GrapheneOS interaction conventions adapted to that system. Do not copy external branding; document intentional departures.
+- Weston and `ferrix-basic-screen` are diagnostic/reference surfaces, not the product UI. Applications are independent processes launched only by `ferrix-appd` (see `docs/app-platform.md`); apps, shells, and the core depend on `ferrix-app-api`/`ferrix-app-protocol`, never on `ferrix-appd` or a runtime implementation. The product shell is minimal, portrait, touch-first, software-rendered by default, and uses focused fullscreen flows rather than desktop window management. Acceleration must not be required for correctness.
+- Resolve UX choices in this order: explicit requirements, Omarchy Ferrix's restrained, cohesive, low-noise mobile visual system, then GrapheneOS interaction conventions adapted to that system. Do not copy external branding; document intentional departures.
 - Phase 3 includes launcher/status surfaces, gestures, on-screen keyboard, rotation, brightness, quick settings, notifications, and crash recovery.
 
 ## QEMU and evidence

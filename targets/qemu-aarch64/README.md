@@ -1,7 +1,7 @@
 # Generic AArch64 QEMU virtual phone
 
 This is a **QEMU/mock** target, never a physical-device claim. It uses QEMU `virt`, a serial console, and the versioned mock profile in `profile.toml`.
-It runs Ferrum's Ferrix-codenamed kernel/userspace surface. The emulator and its
+It runs Omarchy Ferrix's `ferrix` kernel/userspace runtime surface. The emulator and its
 artifacts retain the technical `qemu-aarch64` identity; Gossan is reserved for
 a future device image.
 
@@ -46,7 +46,7 @@ just qemu-check
 
 `qemu-check` uses portable TCG and is the CI contract (`.github/workflows/ci.yml`
 runs it unchanged on a Linux arm64 runner). It waits for the persistent
-`mobile-core` daemon's `boot-health` record and init's `QEMU`-labelled
+`ferrix-core` daemon's `boot-health` record and init's `QEMU`-labelled
 `boot-health` that may only follow it, asserts the mock is still unplugged,
 sends `set-power charging=true` over the real host-to-guest mock-control
 channel, waits for the `power-changed` event the core emits, then sends
@@ -57,12 +57,12 @@ captured serial output at `out/qemu-aarch64/serial.log`.
 
 ### Guest services and the mock-control channel
 
-The guest init starts `mobile-core` (crate `crates/mobile-core`) as a
+The guest init starts `ferrix-core` (crate `crates/ferrix-core`) as a
 persistent daemon before anything else. It bootstraps through
-`mobile-session`, which parses `profile.toml` with the shared strict
-`target-profile` parser and selects the `hardware-emulator` adapter set for
-target id `qemu-aarch64`; product code (`mobile-core`, `mobile-basic-screen`,
-`mobile-shell`) depends only on `hardware-api`, and `just arch-check` fails
+`ferrix-session`, which parses `profile.toml` with the shared strict
+`ferrix-target-profile` parser and selects the `ferrix-hardware-emulator` adapter set for
+target id `qemu-aarch64`; product code (`ferrix-core`, `ferrix-basic-screen`,
+`ferrix-shell`) depends only on `ferrix-hardware-api`, and `just arch-check` fails
 if that boundary is crossed. The daemon serves typed state and an event
 stream on `/run/ferrix/core.sock` (line-delimited JSON: `{"request":"state"}`,
 `{"request":"subscribe"}`, and typed product `{"request":"command",...}`
@@ -74,7 +74,7 @@ check mode, powers off.
 Every QEMU session also attaches a `virtio-serial` port named
 `ferrix.control`, exposed on the host as a Unix socket
 (`out/qemu-aarch64/control.sock`, or `agent/control.sock` for agent sessions;
-`FERRIX_QEMU_CONTROL_SOCKET` overrides). `mobile-core` reads line-delimited
+`FERRIX_QEMU_CONTROL_SOCKET` overrides). `ferrix-core` reads line-delimited
 JSON commands from the guest side (`/dev/vport1p1`, auto-detected via sysfs),
 applies them through the emulator adapter, publishes the resulting
 `HardwareEvent` to serial and to subscribed UI clients, and replies with an
@@ -99,7 +99,7 @@ succeed silently. The client is `scripts/mock_control.py` (python3 standard
 library only). This drives *mock* state in the virtual phone and is never a
 product interface or a physical-device control.
 
-`mobile-basic-screen` subscribes to the core instead of reading power,
+`ferrix-basic-screen` subscribes to the core instead of reading power,
 network, or modem state from the profile itself, redraws on each event, and
 prints a `ui-state` record, so a transition can be proven end to end:
 adapter → core → UI → captured framebuffer (the charging indicator turns
@@ -113,7 +113,7 @@ To open the experimental QEMU Cocoa window and start the guest Wayland composito
 FERRIX_QEMU_GRAPHICS=cocoa just qemu-run
 ```
 
-The guest compositor is `mobile-shell` (crate `crates/mobile-shell`), the Rust
+The guest compositor is `ferrix-shell` (crate `crates/ferrix-shell`), the Rust
 product compositor built on Smithay 0.7: portrait, fullscreen-only xdg-shell
 toplevels, one `wl_seat` (keyboard + pointer + touch from libinput), wlr-layer-shell
 reserved for status/launcher chrome, and software rendering by default (pixman
@@ -123,45 +123,45 @@ compositor:
 
 ```sh
 FERRIX_QEMU_SHELL=weston FERRIX_QEMU_GRAPHICS=cocoa just qemu-run
-FERRIX_QEMU_SHELL=mobile-shell just qemu-agent-start   # the default
+FERRIX_QEMU_SHELL=ferrix-shell just qemu-agent-start   # the default
 ```
 
 The selection travels to the guest as `ferrix.shell=` on the kernel command
-line; the guest init defaults to `mobile-shell`. Readiness stays observable:
-`mobile-shell` prints `compositor-ready` only once the Wayland socket is
+line; the guest init defaults to `ferrix-shell`. Readiness stays observable:
+`ferrix-shell` prints `compositor-ready` only once the Wayland socket is
 listening and the DRM output is configured, `client-mapped` when a toplevel
 commits its first buffer, and `compositor-failed` (non-zero exit) on errors;
-init then starts the application service `appd` and prints `wayland-ready`
-only after `appd-ready` (socket bound, catalog loaded) and the home surface's
-committed `basic-screen-frame` both appeared in `/run/appd.log`, otherwise
-`wayland-failed` with a reason (`appd-missing`, `appd-exited`,
-`appd-not-ready`, `home-not-ready`, ...) and the logs. The Catacomb evaluation
-that led to the Smithay decision is `crates/mobile-shell/EVALUATION.md`.
+init then starts the application service `ferrix-appd` and prints `wayland-ready`
+only after `ferrix-appd-ready` (socket bound, catalog loaded) and the home surface's
+committed `basic-screen-frame` both appeared in `/run/ferrix-appd.log`, otherwise
+`wayland-failed` with a reason (`ferrix-appd-missing`, `ferrix-appd-exited`,
+`ferrix-appd-not-ready`, `home-not-ready`, ...) and the logs. The Catacomb evaluation
+that led to the Smithay decision is `crates/ferrix-shell/EVALUATION.md`.
 
 ### Application service, namespaces, and crash isolation
 
-`appd` (crate `crates/appd`) is the only process that starts applications. It
+`ferrix-appd` (crate `crates/ferrix-appd`) is the only process that starts applications. It
 loads one JSON descriptor per app from `/usr/share/ferrix/apps/` (checked in
-under `apps/`, schema in `crates/app-api`), auto-starts the home surface
-(`org.ferrix.home`, `mobile-basic-screen`), and serves a schema-versioned
-line-delimited JSON protocol on `/run/ferrix/appd.sock` (`crates/app-protocol`).
+under `apps/`, schema in `crates/ferrix-app-api`), auto-starts the home surface
+(`org.ferrix.home`, `ferrix-basic-screen`), and serves a schema-versioned
+line-delimited JSON protocol on `/run/ferrix/ferrix-appd.sock` (`crates/ferrix-app-protocol`).
 The home surface asks it to launch (`{"request":"launch","id":"org.ferrix.terminal"}`);
 the compositor reports surfaces and focus to it by kernel-reported client pid
 and obeys its `activate` notifications; applications may only yield the
 foreground. Roles are declared at `hello` and gate what each connection may do.
 
-Every native application runs as `appd -> ferrix-sandbox -> init -> app`. The
-sandbox (crate `crates/runtime-native`, safe Rust on `rustix`/`signal-hook`)
+Every native application runs as `ferrix-appd -> ferrix-sandbox -> init -> app`. The
+sandbox (crate `crates/ferrix-runtime-native`, safe Rust on `rustix`/`signal-hook`)
 unshares PID, mount, IPC, and UTS namespaces (plus a user namespace when it is
 not root), gives the app a private `/proc` and tmpfs `/tmp`, sets the UTS
 hostname to the app id, sets `no_new_privs`, and runs a tiny PID 1 that
 forwards signals, reaps zombies, and exits with the app's exact status. A crash
-therefore kills one process tree only: `mobile-shell` refocuses the home
-surface and records `client-gone`, `appd` records `app-crashed` and publishes
+therefore kills one process tree only: `ferrix-shell` refocuses the home
+surface and records `client-gone`, `ferrix-appd` records `app-crashed` and publishes
 the lifecycle event, and the home surface shows a crash notice. If the home
-surface itself crashes, `appd` restarts it with backoff (`home-restarting`).
+surface itself crashes, `ferrix-appd` restarts it with backoff (`home-restarting`).
 
-Records to look for on serial: `appd-ready`, `app-launching`, `app-started`
+Records to look for on serial: `ferrix-appd-ready`, `app-launching`, `app-started`
 (with the isolation report), `sandbox-ready` (per-namespace proof from
 `/proc/self/ns`), `app-surface`, `app-foreground`/`app-background`,
 `app-exited`/`app-crashed`, `home-gesture`, `client-activated`, `client-gone`,
@@ -170,7 +170,7 @@ Records to look for on serial: `appd-ready`, `app-launching`, `app-started`
 Deterministic crash demonstration from the host (agent session):
 
 ```sh
-just qemu-tap 180 1236                 # Terminal tile: appd launches ferrum-terminal
+just qemu-tap 180 1236                 # Terminal tile: ferrix-appd launches ferrix-terminal
 just qemu-frame                        # Terminal surface, prompt root@org.ferrix.terminal
 just qemu-type 'kill -SEGV $PPID'      # the shell's parent is the Terminal app
 just qemu-key ret                      # app dies with SIGSEGV inside its namespaces
@@ -183,19 +183,19 @@ Signals sent to PID 1 of a namespace from inside it are ignored unless a
 handler exists, which is why the demo signals the Terminal (PID 2 in its
 namespace, child of the sandbox init) rather than the init.
 
-`mobile-shell` runs nested on a Linux host session from the same mock profile
+`ferrix-shell` runs nested on a Linux host session from the same mock profile
 (`just shell-nested`, with `just shell-compositor-nested` retained as an alias;
-both start `mobile-core` plus the compositor, `mock` evidence, GLES through winit); the
+both start `ferrix-core` plus the compositor, `mock` evidence, GLES through winit); the
 crate's policy modules (geometry, rotation, focus stack, evidence records) have
 unit tests that run on every host, and `--print-config` resolves the geometry
-without a display. Live orientation comes from `mobile-core` and reconfigures
+without a display. Live orientation comes from `ferrix-core` and reconfigures
 the output and connected clients; `F9` remains a compositor-only debug hook.
 
 The host window is sized to fit the desktop. `qemu-run.sh` reads the host's
 visible screen height and backing scale (macOS, via `osascript`), scales the
 profile's portrait panel to that height in physical pixels (aspect ratio
 preserved, never upscaled), and passes the result to the guest as
-`ferrix.display=WxH`. `mobile-shell` reads that value and pins its DRM mode to
+`ferrix.display=WxH`. `ferrix-shell` reads that value and pins its DRM mode to
 it; for the Weston fallback the guest init generates `/etc/ferrix/weston.ini`
 (connector `Virtual-1`, idle blanking off) with the same mode. Pinning matters
 because QEMU's Cocoa UI otherwise pushes its own window size into virtio-gpu and
@@ -209,13 +209,13 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `mobile-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/mobile-basic-screen`, built on the shared `crates/ferrum-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders a Ferrum-styled launcher — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, a grid of tiles from the `appd` catalog, and the gesture pill — with battery, network, and display state from `mobile-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `appd` is reachable):
+The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders a Omarchy Ferrix-styled launcher — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
 
 ```sh
-cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
+cargo run -p ferrix-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
 ```
 
-`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`mobile_basic_screen_sha256`, `mobile_core_sha256`, `mobile_shell_sha256`, `appd_sha256`, `ferrix_sandbox_sha256`, `ferrum_terminal_sha256`), and the catalog hash (`apps_sha256`) are recorded in `out/qemu-aarch64/manifest.json`. `mobile-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs.
+`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`), and the catalog hash (`apps_sha256`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs.
 
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. This smoke-test image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the postmarketOS/pmbootstrap guest (below) is the full mobile-image route.
 
@@ -270,11 +270,11 @@ reference surface rather than the final product compositor or mobile shell.
 
 ### Terminal app
 
-The Terminal tile asks `appd` to launch `ferrum-terminal` (crate
-`crates/ferrum-terminal`, app id `org.ferrix.terminal`), an independent
+The Terminal tile asks `ferrix-appd` to launch `ferrix-terminal` (crate
+`crates/ferrix-terminal`, app id `org.ferrix.terminal`), an independent
 Wayland client in its own Linux namespaces: it spawns BusyBox `/bin/sh` on a
 PTY and renders it through `alacritty_terminal` (Alacritty's VT parser and
-grid, Apache-2.0) with the shared `ferrum-ui` software renderer. Because the
+grid, Apache-2.0) with the shared `ferrix-ui` software renderer. Because the
 sandbox sets the UTS hostname, the prompt reads `root@org.ferrix.terminal`,
 and `cat /proc/1/comm` shows `ferrix-sandbox`: the app sees only its own
 process tree. Input comes from the
@@ -284,7 +284,7 @@ accessory row; shift and ctrl are sticky for one key) or from the virtual
 keyboard QEMU attaches as `virtio-keyboard-pci`, so typing in the Cocoa
 window works as well. Dragging inside the grid scrolls history. The session
 keeps running while you go Home (compositor bottom-edge gesture) and come
-back (tap the tile again: `appd` activates the running instance instead of
+back (tap the tile again: `ferrix-appd` activates the running instance instead of
 starting a second one); the header arrow yields the foreground to the home
 surface. When the shell exits, tapping Enter restarts it. Serial evidence
 records are `app-context`, `terminal-frame`, `terminal-spawned`,
@@ -301,11 +301,11 @@ just qemu-frame                   # inspect out/qemu-aarch64/agent/frame.png
 ```
 
 Touch-keyboard taps use the same coordinates the client hit-tests; the unit
-tests in `crates/ferrum-ui/src/osk.rs` pin the layout. Preview the app on any
+tests in `crates/ferrix-ui/src/osk.rs` pin the layout. Preview the app on any
 host without QEMU (canned transcript, no PTY):
 
 ```sh
-cargo run -p ferrum-terminal -- --preview out/terminal.ppm
+cargo run -p ferrix-terminal -- --preview out/terminal.ppm
 ```
 
 The physical-keyboard path is a small hand-rolled US evdev table because the
@@ -472,8 +472,8 @@ recorded command line plus `panic=-1 ferrix.mode=<run|check>`, the disk as
 `virtio-blk`, user-mode networking (`FERRIX_PMOS_SSH_PORT=2222` adds an SSH
 host forward) and `-nographic` by default, so the serial console is always
 present. Set `FERRIX_QEMU_GRAPHICS=cocoa` (or another QEMU display backend)
-to attach virtio GPU/input devices and start `mobile-shell` plus
-`mobile-basic-screen`. The
+to attach virtio GPU/input devices and start `ferrix-shell` plus
+`ferrix-basic-screen`. The
 pristine image is never written: QEMU boots a qcow2 overlay
 (`out/qemu-aarch64/pmos/run/disk.qcow2`, kept between runs unless
 `FERRIX_PMOS_FRESH=1`). Press `Ctrl-a`, then `x` to quit. `FERRIX_PMOS_MEMORY`
@@ -506,7 +506,7 @@ down`; under HVF `pmos-run` reaches the `ferrix login:` prompt in about 15 s.
 - postmarketOS ships `quiet splash` on that command line, so the serial log
   carries OpenRC service output and the project records but few kernel
   messages; the kernel version is recorded in `manifest.json`, not on serial.
-- The pmbootstrap UI selection remains `console`; Ferrum supplies its own
+- The pmbootstrap UI selection remains `console`; Omarchy Ferrix supplies its own
   compositor/client rather than a postmarketOS desktop package. The product
   graphical startup path is present, but only the core has been exercised by
   the bounded pmOS check so far; framebuffer evidence currently comes from the

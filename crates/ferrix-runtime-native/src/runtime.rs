@@ -1,11 +1,11 @@
-//! [`NativeRuntime`]: the [`app_runtime_api::Runtime`] for native applications.
+//! [`NativeRuntime`]: the [`ferrix_app_runtime_api::Runtime`] for native applications.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
-use app_runtime_api::{LaunchContext, RunningApp, Runtime};
+use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
+use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 
 #[cfg(not(target_os = "linux"))]
 use crate::IsolationMode;
@@ -409,7 +409,7 @@ impl RunningApp for NativeApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app_api::{AppRole, IconRef, SCHEMA_VERSION, TrustLevel};
+    use ferrix_app_api::{AppRole, IconRef, SCHEMA_VERSION, TrustLevel};
 
     fn descriptor() -> AppDescriptor {
         AppDescriptor {

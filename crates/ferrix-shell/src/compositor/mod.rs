@@ -7,7 +7,7 @@
 //! input event is routed through one `wl_seat` (keyboard + pointer + touch).
 //!
 //! Each toplevel is tagged with its client's kernel-reported pid so the
-//! application service (`appd`, see `appd_link`) can associate surfaces with
+//! application service (`ferrix_appd`, see `appd_link`) can associate surfaces with
 //! the processes it supervises; the bottom-edge home gesture (`gesture`) is
 //! recognised before input reaches any client.
 
@@ -28,8 +28,8 @@ use std::{
     time::Duration,
 };
 
-use hardware_api::{HardwareEvent, HardwareState};
-use mobile_protocol::Subscription;
+use ferrix_hardware_api::{HardwareEvent, HardwareState};
+use ferrix_protocol::Subscription;
 
 use smithay::{
     backend::{
@@ -128,7 +128,7 @@ pub fn run_udev(
         let _ = (config, plan, evidence, core);
         Err((
             "feature",
-            "mobile-shell was built without the `udev` feature".to_owned(),
+            "ferrix-shell was built without the `udev` feature".to_owned(),
         ))
     }
 }
@@ -148,7 +148,7 @@ pub fn run_nested(
         let _ = (config, plan, evidence, core);
         Err((
             "feature",
-            "mobile-shell was built without the `nested` feature".to_owned(),
+            "ferrix-shell was built without the `nested` feature".to_owned(),
         ))
     }
 }
@@ -196,8 +196,8 @@ pub struct Shell {
     hardware: HardwareState,
     hardware_events: Receiver<HardwareEvent>,
     core_lost_reported: bool,
-    /// Link to the application service; `None` with `--no-appd`.
-    appd: Option<AppdLink>,
+    /// Link to the application service; `None` with `--no-ferrix_appd`.
+    ferrix_appd: Option<AppdLink>,
     /// Bottom-edge home gesture recogniser and the contact that owns it.
     pub gesture: EdgeGesture,
     pub gesture_source: Option<GestureSource>,
@@ -293,14 +293,15 @@ impl Shell {
             .map_err(|e| ("core", format!("event source: {e}")))?;
         let hardware_events = core.spawn(Arc::new(move || core_ping.ping()));
 
-        // appd may start later or restart; the link retries in the background
+        // ferrix_appd may start later or restart; the link retries in the background
         // and wakes the loop through its own ping. Nothing here waits for it.
-        let appd = match &config.appd_socket {
+        let ferrix_appd = match &config.appd_socket {
             Some(path) => {
-                let (appd_ping, appd_source) = make_ping().map_err(|e| ("appd", e.to_string()))?;
+                let (appd_ping, appd_source) =
+                    make_ping().map_err(|e| ("ferrix-appd", e.to_string()))?;
                 loop_handle
                     .insert_source(appd_source, |_, _, shell| shell.appd_wake())
-                    .map_err(|e| ("appd", format!("event source: {e}")))?;
+                    .map_err(|e| ("ferrix-appd", format!("event source: {e}")))?;
                 Some(AppdLink::start(
                     Path::new(path),
                     Arc::new(move || appd_ping.ping()),
@@ -322,7 +323,7 @@ impl Shell {
             hardware,
             hardware_events,
             core_lost_reported: false,
-            appd,
+            ferrix_appd,
             gesture: EdgeGesture::new(),
             gesture_source: None,
             windows: WindowStack::new(),
@@ -418,7 +419,7 @@ impl Shell {
                         self.emit(
                             "output-rotated",
                             &[
-                                ("source", "mobile-core".into()),
+                                ("source", "ferrix-core".into()),
                                 ("orientation", self.config.orientation.name().into()),
                                 ("rotation", self.plan.rotation.label().into()),
                                 ("logical_width", width.into()),
@@ -440,7 +441,7 @@ impl Shell {
     }
 
     /// Rotate the logical output a quarter turn clockwise (debug hook: F9;
-    /// the product gesture/sensor trigger arrives through `hardware-api`).
+    /// the product gesture/sensor trigger arrives through `ferrix-hardware-api`).
     pub fn rotate_clockwise(&mut self) {
         let plan = self.plan.with_rotation(self.plan.rotation.next_clockwise());
         self.apply_plan(plan);
@@ -499,7 +500,7 @@ impl Shell {
     }
 
     /// Point keyboard focus (and the pointer's surface) at the focused
-    /// toplevel, activate it, and tell `appd` when the focused pid changed.
+    /// toplevel, activate it, and tell `ferrix_appd` when the focused pid changed.
     /// Safe to call when the previously focused client is already gone: the
     /// stack no longer contains it, so focus moves to the next mapped window.
     fn refocus(&mut self) {

@@ -1,10 +1,10 @@
-//! Guest-side home surface: the [`ClientHandler`] that folds mobile-core
-//! hardware events and `appd` lifecycle notifications into the launcher,
+//! Guest-side home surface: the [`ClientHandler`] that folds ferrix-core
+//! hardware events and `ferrix_appd` lifecycle notifications into the launcher,
 //! sends hardware commands and launch requests, and shows crash notices.
 //!
-//! Both background sources (the core event reader and the `appd`
+//! Both background sources (the core event reader and the `ferrix_appd`
 //! notification reader) wake the UI through the runner's single [`Wake`]
-//! handle; `wake` drains whichever channel has data. When `appd` is not
+//! handle; `wake` drains whichever channel has data. When `ferrix_appd` is not
 //! reachable the catalog comes from the descriptor directory and a thread
 //! keeps retrying every second, so the launcher is never blank and starts
 //! launching as soon as the service appears.
@@ -15,14 +15,14 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
-use app_api::{AppEvent, AppId, LifecycleState};
-use app_protocol::{Client, ClientRole, Notification, Subscription};
-use ferrum_ui::client::{ClientConfig, ClientHandler, Wake};
-use ferrum_ui::draw::{Canvas, Type};
-use ferrum_ui::evidence::{emit, json_escape};
-use ferrum_ui::keymap::Modifiers;
-use hardware_api::{HardwareCommand, HardwareEvent, HardwareState, WifiState};
-use target_profile::Profile;
+use ferrix_app_api::{AppEvent, AppId, LifecycleState};
+use ferrix_app_protocol::{Client, ClientRole, Notification, Subscription};
+use ferrix_hardware_api::{HardwareCommand, HardwareEvent, HardwareState, WifiState};
+use ferrix_target_profile::Profile;
+use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrix_ui::draw::{Canvas, Type};
+use ferrix_ui::evidence::{emit, json_escape};
+use ferrix_ui::keymap::Modifiers;
 
 use crate::EVIDENCE;
 use crate::catalog::{self, tiles_from_catalog};
@@ -30,11 +30,11 @@ use crate::interaction::{CrashNotice, Input, SystemAction, UiState};
 use crate::screen;
 
 pub const APP_ID: &str = "org.ferrix.home";
-const TITLE: &str = "Ferrum home";
+const TITLE: &str = "Omarchy Ferrix home";
 const APPD_TIMEOUT: Duration = Duration::from_secs(1);
 const APPD_RETRY: Duration = Duration::from_secs(1);
 
-/// State of the link to `appd`.
+/// State of the link to `ferrix_appd`.
 enum AppdLink {
     /// A background thread is retrying; it delivers the subscription here.
     Connecting(Receiver<Subscription>),
@@ -53,7 +53,7 @@ struct Home {
     input: Input,
     wake: Wake,
     appd_socket: PathBuf,
-    appd: AppdLink,
+    ferrix_appd: AppdLink,
     appd_unavailable_reported: bool,
     /// Request/reply connection for launches (Home role), opened lazily.
     launcher: Option<Client>,
@@ -68,7 +68,7 @@ fn connect_subscription(socket: &Path) -> Result<Subscription, String> {
 fn start_connecting(socket: PathBuf, wake: Wake) -> Receiver<Subscription> {
     let (tx, rx) = mpsc::channel();
     thread::Builder::new()
-        .name("appd-connect".to_owned())
+        .name("ferrix-appd-connect".to_owned())
         .spawn(move || {
             loop {
                 match connect_subscription(&socket) {
@@ -82,13 +82,13 @@ fn start_connecting(socket: PathBuf, wake: Wake) -> Receiver<Subscription> {
                 }
             }
         })
-        .expect("spawn appd connect thread");
+        .expect("spawn ferrix-appd connect thread");
     rx
 }
 
 pub fn run(
     profile: &Profile,
-    core: mobile_protocol::Subscription,
+    core: ferrix_protocol::Subscription,
     appd_socket: &Path,
     minute: u32,
 ) -> Result<(), String> {
@@ -101,16 +101,16 @@ pub fn run(
         first_frame_extra: vec![("profile".to_owned(), profile.name.clone())],
     };
     let appd_socket = appd_socket.to_path_buf();
-    ferrum_ui::client::run(config, move |wake| {
+    ferrix_ui::client::run(config, move |wake| {
         let ty = Type::load()?;
         let core_socket = core.socket().to_owned();
         let hw = core.state;
         let hw_events = core.spawn(Arc::clone(&wake));
         let (wifi_on, bt_on) = crate::ui_toggles(&hw);
 
-        // Catalog: appd when reachable, else descriptors plus a retry loop.
+        // Catalog: ferrix_appd when reachable, else descriptors plus a retry loop.
         let mut appd_unavailable_reported = false;
-        let (tiles, appd) = match connect_subscription(&appd_socket) {
+        let (tiles, ferrix_appd) = match connect_subscription(&appd_socket) {
             Ok(subscription) => {
                 let tiles = tiles_from_catalog(&subscription.apps, &subscription.instances);
                 emit(appd_connected_record(&appd_socket, tiles.len()));
@@ -120,7 +120,7 @@ pub fn run(
             Err(error) => {
                 appd_unavailable_reported = true;
                 emit(format!(
-                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-unavailable\",\"socket\":\"{}\",\"reason\":\"{}\",\"fallback\":\"descriptors\"}}",
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ferrix-appd-unavailable\",\"socket\":\"{}\",\"reason\":\"{}\",\"fallback\":\"descriptors\"}}",
                     json_escape(&appd_socket.display().to_string()),
                     json_escape(&error)
                 ));
@@ -159,7 +159,7 @@ pub fn run(
             input: Input::default(),
             wake,
             appd_socket,
-            appd,
+            ferrix_appd,
             appd_unavailable_reported,
             launcher: None,
         })
@@ -168,7 +168,7 @@ pub fn run(
 
 fn appd_connected_record(socket: &Path, apps: usize) -> String {
     format!(
-        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-connected\",\"socket\":\"{}\",\"apps\":{apps}}}",
+        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ferrix-appd-connected\",\"socket\":\"{}\",\"apps\":{apps}}}",
         json_escape(&socket.display().to_string())
     )
 }
@@ -181,7 +181,7 @@ impl Home {
     }
 
     /// Runs after every UI change: forwards queued hardware requests to the
-    /// core and launch requests to `appd`.
+    /// core and launch requests to `ferrix_appd`.
     fn after_input(&mut self) {
         for action in std::mem::take(&mut self.ui.pending_system) {
             let command = match action {
@@ -191,7 +191,7 @@ impl Home {
                 }
                 SystemAction::Brightness(percent) => HardwareCommand::SetBrightness { percent },
             };
-            match mobile_protocol::command(&self.core_socket, command, Duration::from_secs(2)) {
+            match ferrix_protocol::command(&self.core_socket, command, Duration::from_secs(2)) {
                 Ok(state) => {
                     self.hw = state;
                     self.sync_controls();
@@ -229,7 +229,7 @@ impl Home {
         }
         self.appd_unavailable_reported = true;
         emit(format!(
-            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-unavailable\",\"socket\":\"{}\",\"reason\":\"{}\"}}",
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ferrix-appd-unavailable\",\"socket\":\"{}\",\"reason\":\"{}\"}}",
             json_escape(&self.appd_socket.display().to_string()),
             json_escape(reason)
         ));
@@ -246,7 +246,7 @@ impl Home {
     fn launch(&mut self, id: &AppId) {
         let outcome = match self.launcher() {
             Some(client) => client.launch(id),
-            None => Err(Err("appd unavailable".to_owned())),
+            None => Err(Err("ferrix-appd unavailable".to_owned())),
         };
         match outcome {
             Ok((instance, activated_existing)) => {
@@ -272,7 +272,7 @@ impl Home {
                 // The connection is gone; the next launch reconnects.
                 self.launcher = None;
                 emit(format!(
-                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-launch\",\"app\":\"{id}\",\"status\":\"appd-unavailable\",\"activated_existing\":false,\"error\":\"{}\"}}",
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-launch\",\"app\":\"{id}\",\"status\":\"ferrix-appd-unavailable\",\"activated_existing\":false,\"error\":\"{}\"}}",
                     json_escape(&transport)
                 ));
                 self.set_starting(id, false);
@@ -280,7 +280,7 @@ impl Home {
         }
     }
 
-    /// Folds one `appd` notification into the tiles. Returns whether the
+    /// Folds one `ferrix_appd` notification into the tiles. Returns whether the
     /// launcher changed.
     fn apply_notification(&mut self, notification: Notification) -> bool {
         let Notification::App {
@@ -326,7 +326,7 @@ impl Home {
         true
     }
 
-    /// Drains the `appd` link: a fresh subscription from the retry thread,
+    /// Drains the `ferrix_appd` link: a fresh subscription from the retry thread,
     /// or notifications (and the loss of the stream). The channel is read
     /// first and the launcher mutated afterwards.
     fn appd_wake(&mut self) -> bool {
@@ -336,7 +336,7 @@ impl Home {
             RetryThreadGone,
             Notifications(Vec<Notification>, bool),
         }
-        let step = match &self.appd {
+        let step = match &self.ferrix_appd {
             AppdLink::Connecting(incoming) => match incoming.try_recv() {
                 Ok(subscription) => Step::Subscribed(subscription),
                 Err(TryRecvError::Empty) => Step::Idle,
@@ -365,7 +365,7 @@ impl Home {
                 emit(appd_connected_record(&self.appd_socket, tiles.len()));
                 self.ui.set_tiles(tiles);
                 let (notifications, _reporter) = subscription.spawn(Arc::clone(&self.wake));
-                self.appd = AppdLink::Connected(notifications);
+                self.ferrix_appd = AppdLink::Connected(notifications);
                 self.appd_unavailable_reported = false;
                 true
             }
@@ -373,7 +373,7 @@ impl Home {
                 // The retry thread cannot end without delivering; restart it
                 // defensively.
                 let rx = start_connecting(self.appd_socket.clone(), Arc::clone(&self.wake));
-                self.appd = AppdLink::Connecting(rx);
+                self.ferrix_appd = AppdLink::Connecting(rx);
                 false
             }
             Step::Notifications(batch, lost) => {
@@ -383,7 +383,7 @@ impl Home {
                 }
                 if lost {
                     emit(format!(
-                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-disconnected\",\"status\":\"stale-catalog\"}}"
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ferrix-appd-disconnected\",\"status\":\"stale-catalog\"}}"
                     ));
                     self.launcher = None;
                     for tile in &mut self.ui.tiles {
@@ -391,7 +391,7 @@ impl Home {
                         tile.starting = false;
                     }
                     let rx = start_connecting(self.appd_socket.clone(), Arc::clone(&self.wake));
-                    self.appd = AppdLink::Connecting(rx);
+                    self.ferrix_appd = AppdLink::Connecting(rx);
                     changed = true;
                 }
                 changed
@@ -399,7 +399,7 @@ impl Home {
         }
     }
 
-    /// Drains mobile-core hardware events (or notices it went away). Every
+    /// Drains ferrix-core hardware events (or notices it went away). Every
     /// event is folded into the live state and reported.
     fn hardware_wake(&mut self) -> bool {
         let mut changed = false;
@@ -506,8 +506,8 @@ impl ClientHandler for Home {
 
     fn wake(&mut self) -> bool {
         let hardware = self.hardware_wake();
-        let appd = self.appd_wake();
-        hardware || appd
+        let ferrix_appd = self.appd_wake();
+        hardware || ferrix_appd
     }
 
     fn page_name(&self) -> String {

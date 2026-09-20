@@ -1,17 +1,29 @@
-# Ferrum
+```console
+omarchy@ferrix:~$ ./boot
 
-An emulator-first, Rust-first mobile Linux environment. The only supported
-target is a generic AArch64 QEMU `virt` virtual phone; every result in this
-repository is labelled `QEMU` or `mock` and none of it is a physical-device
-claim. This is not a Linux distribution: postmarketOS (via pmbootstrap) is the
-guest substrate, and the project adds a small Rust layer on top.
+ ██████╗ ███╗   ███╗ █████╗ ██████╗  ██████╗██╗  ██╗██╗   ██╗
+██╔═══██╗████╗ ████║██╔══██╗██╔══██╗██╔════╝██║  ██║╚██╗ ██╔╝
+██║   ██║██╔████╔██║███████║██████╔╝██║     ███████║ ╚████╔╝
+██║   ██║██║╚██╔╝██║██╔══██║██╔══██╗██║     ██╔══██║  ╚██╔╝
+╚██████╔╝██║ ╚═╝ ██║██║  ██║██║  ██║╚██████╗██║  ██║   ██║
+ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝   ╚═╝
 
-The naming model is deliberate: **Ferrum** is the product and ship name,
-**Ferrix** is the kernel/userspace codename and runtime namespace, and
-**Gossan** is reserved for a future device image. Three names, one metal.
-Runtime paths, environment variables, kernel parameters, hostnames, and service
-identifiers therefore use `ferrix`. The current emulator remains the generic
-`qemu-aarch64` target and does not use the Gossan name.
+                             F E R R I X
+```
+
+# Omarchy Ferrix
+
+The hardened, Rust-first mobile companion to Omarchy. This emulator-first Linux
+environment supports a generic AArch64 QEMU `virt` virtual phone; every result
+in this repository is labelled `QEMU` or `mock` and none of it is a
+physical-device claim. This is not a Linux distribution: postmarketOS (via
+pmbootstrap) is the guest substrate, and the project adds a small Rust layer on
+top.
+
+**Omarchy Ferrix** is the product name; `ferrix` is its kernel/userspace runtime
+namespace. Runtime paths, environment variables, kernel parameters, hostnames,
+and service identifiers therefore use `ferrix`. The current emulator remains
+the generic `qemu-aarch64` target.
 
 Read `AGENTS.md` before contributing. `docs/baseline.md` is the implementation
 authority and `docs/plan.md` the long-term direction.
@@ -21,17 +33,17 @@ authority and `docs/plan.md` the long-term direction.
 This repository now has a working emulator foundation rather than a disconnected
 UI prototype:
 
-- `mobile-core` owns persistent hardware state and portable product commands.
-- `mobile-shell` is the default QEMU Wayland compositor, using Smithay, DRM,
+- `ferrix-core` owns persistent hardware state and portable product commands.
+- `ferrix-shell` is the default QEMU Wayland compositor, using Smithay, DRM,
   libinput, and pixman software rendering.
-- `appd` is the application service: it owns the catalog (`apps/*.json`),
+- `ferrix-appd` is the application service: it owns the catalog (`apps/*.json`),
   launches every application as its own supervised process inside Linux
   namespaces through `ferrix-sandbox`, tracks lifecycle and crashes, and
   associates compositor surfaces with instances. See `docs/app-platform.md`.
-- `mobile-basic-screen` is the home surface: a catalog-driven launcher that
-  asks `appd` to start apps, plus connected quick settings whose Wi-Fi,
-  Bluetooth, and brightness controls operate through `mobile-core`.
-- `ferrum-terminal` is the first independent application: a separate Wayland
+- `ferrix-basic-screen` is the home surface: a catalog-driven launcher that
+  asks `ferrix-appd` to start apps, plus connected quick settings whose Wi-Fi,
+  Bluetooth, and brightness controls operate through `ferrix-core`.
+- `ferrix-terminal` is the first independent application: a separate Wayland
   client in its own PID/mount/IPC/UTS namespaces. Crashing it leaves the
   compositor, core, service, and home surface running.
 - Orientation events travel from the hardware adapter through the core to both
@@ -48,35 +60,35 @@ not a finished mobile OS or a physical-device port.
 ## Architecture
 
 ```
-home surface / apps ──▶ app-protocol ──▶ appd ──▶ app-runtime-api::Runtime ──▶ runtime-native ──▶ ferrix-sandbox ──▶ app
+home surface / apps ──▶ ferrix-app-protocol ──▶ ferrix-appd ──▶ ferrix-app-runtime-api::Runtime ──▶ ferrix-runtime-native ──▶ ferrix-sandbox ──▶ app
         ▲                                 ▲
-  mobile-shell ── surfaces/focus/gesture ─┘
+  ferrix-shell ── surfaces/focus/gesture ─┘
 
-apps / shell ──▶ mobile-protocol ──▶ mobile-core ──▶ hardware-api
+apps / shell ──▶ ferrix-protocol ──▶ ferrix-core ──▶ ferrix-hardware-api
                                                ▲              ▲
-                                      mobile-session ──────────┘
+                                      ferrix-session ──────────┘
                                                │
-                                      hardware-emulator
+                                      ferrix-hardware-emulator
                                       (QEMU mock adapter)
 ```
 
 | Crate | Role |
 | --- | --- |
-| `crates/hardware-api` | Stable, target-neutral capability traits and serde types: `Power`, `Display`, `Input`, `Network`, `Bluetooth`, `Audio`, `Telephony`, and `Lifecycle`; typed state, errors, events, product commands, and the separate host-only `MockControl` surface. No target conditionals. |
-| `crates/target-profile` | The one strict, schema-versioned parser for `targets/qemu-aarch64/profile.toml` (`toml` + `serde`, unknown keys rejected, ranges validated). |
-| `crates/hardware-emulator` | Deterministic implementation of every capability from the profile, with mutation methods that emit events. Every capability reports `mocked`. |
-| `crates/mobile-session` | Bootstrap layer. Loads the profile, selects adapters by target id (`FERRIX_TARGET`, only `qemu-aarch64`), and hands product code a `HardwareServices` bundle. It is the only crate allowed to depend on `hardware-emulator`; `tests/architecture.rs` enforces that (`just arch-check`). |
-| `crates/mobile-protocol` | Shared, schema-versioned Unix-socket contract and client for state snapshots, subscriptions, and portable product commands. It deliberately excludes host mock mutations. |
-| `crates/mobile-core` | Persistent daemon. Serves the shared protocol on `/run/ferrix/core.sock`, routes product commands through portable capability traits, applies mock-control commands only on the test channel, and prints machine-readable JSON records to serial. |
-| `crates/mobile-shell` | Default product compositor, built on Smithay 0.7: portrait-first, rotation-aware, fullscreen-only xdg-shell, one seat (keyboard, pointer, touch via libinput), and pixman software rendering into DRM dumb buffers on `virtio-gpu`. GL is optional and used only by nested host development. The Catacomb evaluation is in `crates/mobile-shell/EVALUATION.md`. |
-| `crates/app-api` | Stable public application contract: validated `AppId`s, `RuntimeKind` (`native`; `web` and `android` reserved), public JSON `AppDescriptor`s, lifecycle state, and typed errors. No target or implementation conditionals (enforced). |
-| `crates/app-runtime-api` | Internal, replaceable daemon-to-runtime traits and opaque launch-configuration boundary; never linked by applications or shells. |
-| `crates/app-protocol` | Schema-versioned line-delimited JSON protocol and client for `appd`: role-gated requests, no-reply compositor reports, and pushed notifications. |
-| `crates/appd` | Application service. Loads the catalog, enforces one instance per app, launches through `Runtime` adapters, records crashes, restarts the home surface with backoff, associates compositor surfaces with instances by kernel-reported pid, and publishes lifecycle events. |
-| `crates/runtime-native` | The native runtime adapter and the `ferrix-sandbox` binary: safe Rust (rustix, signal-hook) that starts an application inside its own PID, mount, IPC, and UTS namespaces (user namespace when unprivileged) with a private `/proc` and `/tmp`, `no_new_privs`, and a PID 1 that forwards signals and reports the exact exit reason. |
-| `crates/ferrum-ui` | Shared software-rendering toolkit (tiny-skia, fontdue, Tokyo Night theme, on-screen keyboard layout, keymap) and the fullscreen Wayland client runner used by first-party surfaces. A library, not an ABI. |
-| `crates/mobile-basic-screen` | The home surface: catalog-driven launcher grid, status bar, connected quick settings, notifications, crash notices, portrait/landscape layouts. Launchable tiles go through `appd`; reference entries keep illustrative in-process pages. |
-| `crates/ferrum-terminal` | The Terminal application as an independent Wayland client (alacritty VT layer on a PTY, touch-first on-screen keyboard), launched and isolated by `appd`. |
+| `crates/ferrix-hardware-api` | Stable, target-neutral capability traits and serde types: `Power`, `Display`, `Input`, `Network`, `Bluetooth`, `Audio`, `Telephony`, and `Lifecycle`; typed state, errors, events, product commands, and the separate host-only `MockControl` surface. No target conditionals. |
+| `crates/ferrix-target-profile` | The one strict, schema-versioned parser for `targets/qemu-aarch64/profile.toml` (`toml` + `serde`, unknown keys rejected, ranges validated). |
+| `crates/ferrix-hardware-emulator` | Deterministic implementation of every capability from the profile, with mutation methods that emit events. Every capability reports `mocked`. |
+| `crates/ferrix-session` | Bootstrap layer. Loads the profile, selects adapters by target id (`FERRIX_TARGET`, only `qemu-aarch64`), and hands product code a `HardwareServices` bundle. It is the only crate allowed to depend on `ferrix-hardware-emulator`; `tests/architecture.rs` enforces that (`just arch-check`). |
+| `crates/ferrix-protocol` | Shared, schema-versioned Unix-socket contract and client for state snapshots, subscriptions, and portable product commands. It deliberately excludes host mock mutations. |
+| `crates/ferrix-core` | Persistent daemon. Serves the shared protocol on `/run/ferrix/core.sock`, routes product commands through portable capability traits, applies mock-control commands only on the test channel, and prints machine-readable JSON records to serial. |
+| `crates/ferrix-shell` | Default product compositor, built on Smithay 0.7: portrait-first, rotation-aware, fullscreen-only xdg-shell, one seat (keyboard, pointer, touch via libinput), and pixman software rendering into DRM dumb buffers on `virtio-gpu`. GL is optional and used only by nested host development. The Catacomb evaluation is in `crates/ferrix-shell/EVALUATION.md`. |
+| `crates/ferrix-app-api` | Stable public application contract: validated `AppId`s, `RuntimeKind` (`native`; `web` and `android` reserved), public JSON `AppDescriptor`s, lifecycle state, and typed errors. No target or implementation conditionals (enforced). |
+| `crates/ferrix-app-runtime-api` | Internal, replaceable daemon-to-runtime traits and opaque launch-configuration boundary; never linked by applications or shells. |
+| `crates/ferrix-app-protocol` | Schema-versioned line-delimited JSON protocol and client for `ferrix-appd`: role-gated requests, no-reply compositor reports, and pushed notifications. |
+| `crates/ferrix-appd` | Application service. Loads the catalog, enforces one instance per app, launches through `Runtime` adapters, records crashes, restarts the home surface with backoff, associates compositor surfaces with instances by kernel-reported pid, and publishes lifecycle events. |
+| `crates/ferrix-runtime-native` | The native runtime adapter and the `ferrix-sandbox` binary: safe Rust (rustix, signal-hook) that starts an application inside its own PID, mount, IPC, and UTS namespaces (user namespace when unprivileged) with a private `/proc` and `/tmp`, `no_new_privs`, and a PID 1 that forwards signals and reports the exact exit reason. |
+| `crates/ferrix-ui` | Shared software-rendering toolkit (tiny-skia, fontdue, Tokyo Night theme, on-screen keyboard layout, keymap) and the fullscreen Wayland client runner used by first-party surfaces. A library, not an ABI. |
+| `crates/ferrix-basic-screen` | The home surface: catalog-driven launcher grid, status bar, connected quick settings, notifications, crash notices, portrait/landscape layouts. Launchable tiles go through `ferrix-appd`; reference entries keep illustrative in-process pages. |
+| `crates/ferrix-terminal` | The Terminal application as an independent Wayland client (alacritty VT layer on a PTY, touch-first on-screen keyboard), launched and isolated by `ferrix-appd`. |
 
 Targets and tooling live under `targets/qemu-aarch64/` (see its README for
 every command and its limitations) and `containers/guest-builder/` (the
@@ -95,7 +107,7 @@ just qemu-agent-stop
 ```
 
 Interactive sessions: `just qemu-run` (serial), `FERRIX_QEMU_GRAPHICS=cocoa
-just qemu-run` (window, `mobile-shell` compositor by default,
+just qemu-run` (window, `ferrix-shell` compositor by default,
 `FERRIX_QEMU_SHELL=weston` for the reference compositor).
 
 postmarketOS route:
@@ -108,12 +120,12 @@ FERRIX_QEMU_GRAPHICS=cocoa just pmos-run  # graphical route (not yet validated h
 ```
 
 Host-side development without QEMU: `just shell-nested` builds and launches
-`mobile-core`, `appd` (which starts the home surface and launches apps), and
+`ferrix-core`, `ferrix-appd` (which starts the home surface and launches apps), and
 the compositor together against the same mock profile in a Linux host
 session. `just shell-compositor-nested` is retained as an alias.
-`cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml
+`cargo run -p ferrix-basic-screen -- targets/qemu-aarch64/profile.toml
 --preview out/preview.ppm` renders the home surface to a file on any host;
-`cargo run -p ferrum-terminal -- --preview out/terminal.ppm` does the same for
+`cargo run -p ferrix-terminal -- --preview out/terminal.ppm` does the same for
 the Terminal. `just linux-check [cargo args]` runs cargo inside the pinned
 arm64 Linux builder so Linux-only code (Smithay backends, the sandbox) can be
 compiled and unit-tested from macOS.
@@ -124,7 +136,7 @@ compiled and unit-tested from macOS.
 `.github/workflows/ci.yml` (arm64 hosted runner, TCG, no display). It passes
 only when the serial log shows, in order:
 
-1. `mobile-core`'s own `boot-health` record (evidence `mock`) after it bound
+1. `ferrix-core`'s own `boot-health` record (evidence `mock`) after it bound
    its socket;
 2. init's `boot-health` (evidence `QEMU`), which init may only print after the
    core reported;
@@ -138,7 +150,7 @@ A missing core, a core that exits, or a core that never binds produces a
 `boot-failed` record and a failing check. There is no fallback that prints
 success.
 
-Graphical readiness is equally observable: `mobile-shell` prints
+Graphical readiness is equally observable: `ferrix-shell` prints
 `compositor-ready` only once the Wayland socket listens and the DRM output is
 configured, and init prints `wayland-ready` only after the client committed a
 frame. A graphical claim also requires inspecting the captured framebuffer,
@@ -168,17 +180,17 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
 - No phones are inspected or operated. No board targets, Android boot tooling,
   or Solana Seeker support exist or are claimed without a separately approved
   board-support proposal.
-- Product code depends on `hardware-api`, never on QEMU, kernel, vendor, or
-  board details. Target selection lives in `mobile-session`.
+- Product code depends on `ferrix-hardware-api`, never on QEMU, kernel, vendor, or
+  board details. Target selection lives in `ferrix-session`.
 - Linux services (NetworkManager, UPower, PipeWire, ModemManager, sensors) go
   behind typed project-owned adapters when they are integrated; their
   protocols are not reimplemented.
-- Weston is a diagnostic fallback and `mobile-basic-screen` is a reference
-  home surface. The product compositor is `mobile-shell`: minimal,
+- Weston is a diagnostic fallback and `ferrix-basic-screen` is a reference
+  home surface. The product compositor is `ferrix-shell`: minimal,
   portrait-first, touch-first, rotation-aware, and software-rendered by default.
-- Applications, shells, and the core depend on `app-api`/`app-protocol`, never
-  on `appd` itself or on a runtime implementation; only `appd`'s binary
-  composes `runtime-native`. `just arch-check` enforces this.
+- Applications, shells, and the core depend on `ferrix-app-api`/`ferrix-app-protocol`, never
+  on `ferrix-appd` itself or on a runtime implementation; only `ferrix-appd`'s binary
+  composes `ferrix-runtime-native`. `just arch-check` enforces this.
 
 ## Known gaps
 
@@ -193,7 +205,7 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
 - Production adapters for NetworkManager, UPower, PipeWire, ModemManager, and
   sensors are not implemented yet; QEMU uses deterministic mock adapters.
 - Crash recovery covers applications (a crashed app returns focus to the home
-  surface, which `appd` restarts if it crashes itself); supervision of the
+  surface, which `ferrix-appd` restarts if it crashes itself); supervision of the
   core and compositor, and native postmarketOS packaging, remain future work.
 
 License: MIT OR Apache-2.0.

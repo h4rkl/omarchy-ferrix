@@ -1,9 +1,9 @@
 //! Guest-side Terminal client: the [`ClientHandler`] that owns the shell
-//! session, forwards keyboard and touch input, and reports to `appd`.
+//! session, forwards keyboard and touch input, and reports to `ferrix_appd`.
 //!
 //! The PTY reader thread wakes the UI through the runner's [`Wake`] handle;
 //! `wake` then pumps emulator events and redraws. The Back control reports
-//! `YieldForeground` to `appd` over an application-role connection when
+//! `YieldForeground` to `ferrix_appd` over an application-role connection when
 //! `FERRIX_APPD_SOCKET` is set; otherwise it is recorded and skipped, and the
 //! shell keeps running either way.
 
@@ -11,11 +11,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use app_protocol::{Client, ClientRole, Report};
-use ferrum_ui::client::{ClientConfig, ClientHandler, Wake};
-use ferrum_ui::draw::{Canvas, Type};
-use ferrum_ui::evidence::{emit, json_escape};
-use ferrum_ui::keymap::{self, Modifiers};
+use ferrix_app_protocol::{Client, ClientRole, Report};
+use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrix_ui::draw::{Canvas, Type};
+use ferrix_ui::evidence::{emit, json_escape};
+use ferrix_ui::keymap::{self, Modifiers};
 
 use crate::EVIDENCE;
 use crate::interaction::{Input, TermAction, UiState};
@@ -40,7 +40,7 @@ struct Terminal {
     terminal_exit_reported: bool,
     keyboard_reported: bool,
     appd_socket: Option<PathBuf>,
-    appd: Option<Client>,
+    ferrix_appd: Option<Client>,
     appd_unavailable_reported: bool,
 }
 
@@ -53,7 +53,7 @@ pub fn run(initial_size: (u32, u32), minute: u32, shell: String) -> Result<(), S
         first_frame_event: "terminal-frame".to_owned(),
         first_frame_extra: vec![("shell".to_owned(), shell.clone())],
     };
-    ferrum_ui::client::run(config, move |wake| {
+    ferrix_ui::client::run(config, move |wake| {
         Ok(Terminal {
             ty: Type::load()?,
             minute,
@@ -67,10 +67,10 @@ pub fn run(initial_size: (u32, u32), minute: u32, shell: String) -> Result<(), S
             terminal_ready_reported: false,
             terminal_exit_reported: false,
             keyboard_reported: false,
-            appd_socket: std::env::var_os(app_api::APPD_SOCKET_ENV)
+            appd_socket: std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
-            appd: None,
+            ferrix_appd: None,
             appd_unavailable_reported: false,
         })
     })
@@ -152,20 +152,20 @@ impl Terminal {
     }
 
     fn appd_client(&mut self) -> Option<&mut Client> {
-        if self.appd.is_none() {
+        if self.ferrix_appd.is_none() {
             let Some(socket) = self.appd_socket.clone() else {
                 self.report_appd_unavailable("FERRIX_APPD_SOCKET is not set");
                 return None;
             };
             match Client::connect(&socket, ClientRole::Application, APPD_TIMEOUT) {
-                Ok(client) => self.appd = Some(client),
+                Ok(client) => self.ferrix_appd = Some(client),
                 Err(error) => {
                     self.report_appd_unavailable(&error);
                     return None;
                 }
             }
         }
-        self.appd.as_mut()
+        self.ferrix_appd.as_mut()
     }
 
     fn report_appd_unavailable(&mut self, reason: &str) {
@@ -174,13 +174,13 @@ impl Terminal {
         }
         self.appd_unavailable_reported = true;
         emit(format!(
-            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-unavailable\",\"socket\":{},\"reason\":\"{}\"}}",
-            ferrum_ui::evidence::json_opt_str(self.appd_socket.as_deref().and_then(|p| p.to_str())),
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ferrix-appd-unavailable\",\"socket\":{},\"reason\":\"{}\"}}",
+            ferrix_ui::evidence::json_opt_str(self.appd_socket.as_deref().and_then(|p| p.to_str())),
             json_escape(reason)
         ));
     }
 
-    /// Back: ask appd to bring the home surface forward. The shell keeps
+    /// Back: ask ferrix_appd to bring the home surface forward. The shell keeps
     /// running; a lost connection is dropped so the next Back reconnects.
     fn yield_foreground(&mut self) {
         let result = self
@@ -189,14 +189,14 @@ impl Terminal {
         let status = match result {
             Some(Ok(())) => "yielded",
             Some(Err(error)) => {
-                self.appd = None;
+                self.ferrix_appd = None;
                 emit(format!(
-                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-report-failed\",\"error\":\"{}\"}}",
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ferrix-appd-report-failed\",\"error\":\"{}\"}}",
                     json_escape(&error)
                 ));
                 "failed"
             }
-            None => "appd-unavailable",
+            None => "ferrix-appd-unavailable",
         };
         emit(format!(
             "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"terminal-back\",\"status\":\"{status}\"}}"

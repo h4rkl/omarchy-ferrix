@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use mobile_protocol::Subscription;
+use ferrix_protocol::Subscription;
 
 use smithay::{
     backend::{
@@ -42,7 +42,7 @@ pub fn run(
     let attributes = WinitWindow::default_attributes()
         .with_inner_size(PhysicalSize::new(plan.panel_width, plan.panel_height))
         .with_title(format!(
-            "mobile-shell nested ({} {}x{}, mock profile)",
+            "ferrix-shell nested ({} {}x{}, mock profile)",
             config.profile_name, plan.panel_width, plan.panel_height
         ))
         .with_visible(true);
@@ -60,7 +60,7 @@ pub fn run(
         PhysicalProperties {
             size: (0, 0).into(),
             subpixel: Subpixel::Unknown,
-            make: "mobile-shell".into(),
+            make: "ferrix-shell".into(),
             model: "nested".into(),
         },
     );

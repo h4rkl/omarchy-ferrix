@@ -1,18 +1,18 @@
-//! Ferrum Terminal: an independent Wayland client running a real shell.
+//! Omarchy Ferrix Terminal: an independent Wayland client running a real shell.
 //!
-//! One supervised process per application: this binary is launched by `appd`
+//! One supervised process per application: this binary is launched by `ferrix_appd`
 //! (xdg app_id `org.ferrix.terminal`), renders its own fullscreen surface
-//! through `ferrum_ui::client`, and drives `/bin/sh` (or `$SHELL`) on a PTY
-//! through `alacritty_terminal`. Its Back control asks `appd` to return to the
+//! through `ferrix_ui::client`, and drives `/bin/sh` (or `$SHELL`) on a PTY
+//! through `alacritty_terminal`. Its Back control asks `ferrix_appd` to return to the
 //! home surface; the shell keeps running in the background. The bottom edge
 //! belongs to the compositor's home gesture.
 //!
 //! Usage:
-//!   ferrum-terminal                       # guest/nested: connect to Wayland
-//!   ferrum-terminal --preview out.ppm [--size WxH]
+//!   ferrix-terminal                       # guest/nested: connect to Wayland
+//!   ferrix-terminal --preview out.ppm [--size WxH]
 //!                                         # any host: render a canned transcript
 //!
-//! Environment (set by `appd` for launched apps): `FERRIX_APP_ID`,
+//! Environment (set by `ferrix_appd` for launched apps): `FERRIX_APP_ID`,
 //! `FERRIX_APP_INSTANCE`, `FERRIX_APPD_SOCKET`, plus `SHELL`.
 
 mod interaction;
@@ -24,8 +24,8 @@ mod app;
 
 use std::process::ExitCode;
 
-use ferrum_ui::draw::Type;
-use ferrum_ui::evidence::{emit, json_escape, json_opt_str};
+use ferrix_ui::draw::Type;
+use ferrix_ui::evidence::{emit, json_escape, json_opt_str};
 
 /// Evidence label for every record this binary emits.
 const EVIDENCE: &str = "QEMU";
@@ -41,7 +41,7 @@ root@ferrix:~# printf '\\033[32mok\\033[0m\\n'\r\n\
 \x1b[32mok\x1b[0m\r\n\
 root@ferrix:~# ";
 
-/// Launch context handed down by `appd`, or nulls when started by hand.
+/// Launch context handed down by `ferrix_appd`, or nulls when started by hand.
 struct AppContext {
     app_id: Option<String>,
     instance: Option<u32>,
@@ -50,10 +50,10 @@ struct AppContext {
 impl AppContext {
     fn from_env() -> Self {
         Self {
-            app_id: std::env::var(app_api::APP_ID_ENV)
+            app_id: std::env::var(ferrix_app_api::APP_ID_ENV)
                 .ok()
                 .filter(|v| !v.is_empty()),
-            instance: std::env::var(app_api::APP_INSTANCE_ENV)
+            instance: std::env::var(ferrix_app_api::APP_INSTANCE_ENV)
                 .ok()
                 .and_then(|v| v.parse().ok()),
         }

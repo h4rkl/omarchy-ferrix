@@ -1,5 +1,5 @@
 #!/bin/sh
-# Send a mock-control command to the running guest's mobile-core.
+# Send a mock-control command to the running guest's ferrix-core.
 #   just qemu-mock set-power charging=true
 #   just qemu-mock '{"cmd":"set-wifi","state":"disconnected"}'
 # Targets the agent session's socket when it exists, otherwise the plain

@@ -1,5 +1,5 @@
 [package]
-name = "hardware-api"
+name = "ferrix-hardware-api"
 description = "Stable, target-neutral hardware contracts for the Rust mobile core and applications"
 version.workspace = true
 edition.workspace = true

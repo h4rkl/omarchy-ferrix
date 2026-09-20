@@ -2,7 +2,7 @@
 //! and touch input. Pure geometry and state: no Wayland, no PTY.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use ferrum_ui::osk::{self, Key, OskState};
+use ferrix_ui::osk::{self, Key, OskState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -32,7 +32,7 @@ pub struct UiState {
     pub osk: OskState,
     /// Queued terminal actions; the session owner drains these after input.
     pub pending: Vec<TermAction>,
-    /// Number of Back requests not yet delivered to `appd`.
+    /// Number of Back requests not yet delivered to `ferrix_appd`.
     pub pending_back: u32,
     /// Mirror of the terminal's DECCKM mode so arrows encode correctly.
     pub term_app_cursor: bool,
@@ -211,7 +211,7 @@ mod tests {
 
     const SIZE: (u32, u32) = (1080, 2340);
 
-    fn center(keys: &[(ferrum_ui::draw::Rect, Key)], wanted: Key) -> (f64, f64) {
+    fn center(keys: &[(ferrix_ui::draw::Rect, Key)], wanted: Key) -> (f64, f64) {
         let (r, _) = keys
             .iter()
             .find(|(_, k)| *k == wanted)

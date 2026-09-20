@@ -54,7 +54,7 @@ qemu-clean:
 shell-nested:
     @"{{root}}/targets/qemu-aarch64/scripts/shell-nested.sh"
 
-# Product compositor (mobile-shell) nested in a host window; Linux host session only.
+# Product compositor (ferrix-shell) nested in a host window; Linux host session only.
 shell-compositor-nested:
     @"{{root}}/targets/qemu-aarch64/scripts/shell-nested.sh"
 
@@ -64,7 +64,7 @@ qemu-mock +args:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-mock.sh" "$@"
 
 arch-check:
-    @cargo test -p mobile-session --test architecture
+    @cargo test -p ferrix-session --test architecture
 
 # Cargo for the Linux guest architecture inside the pinned arm64 Rust builder
 # (host convenience for Linux-only crates; defaults to `test --workspace`).

@@ -1,13 +1,13 @@
 //! Line-delimited JSON wire types.
 //!
-//! * The **state socket** (`core.sock`) uses the shared `mobile-protocol`
+//! * The **state socket** (`core.sock`) uses the shared `ferrix-protocol`
 //!   request/reply types for shells and applications.
 //! * The **control channel** (a host-facing serial port on mocked targets) is
 //!   for tests: [`ControlCommand`] in, [`Ack`] out.
 //!
-//! Both are versioned by [`hardware_api::SCHEMA_VERSION`].
+//! Both are versioned by [`ferrix_hardware_api::SCHEMA_VERSION`].
 
-use hardware_api::{
+use ferrix_hardware_api::{
     AudioRoute, HardwareState, ModemRegistration, Orientation, SimState, SuspendOutcome, WifiState,
 };
 use serde::{Deserialize, Serialize};

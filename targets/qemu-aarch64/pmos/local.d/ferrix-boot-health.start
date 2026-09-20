@@ -8,7 +8,7 @@ case " $(cat /proc/cmdline 2>/dev/null) " in
   *" ferrix.mode=check "*) mode=check ;;
 esac
 [ -S /run/ferrix/core.sock ] || {
-  printf '%s\n' '{"evidence":"QEMU","event":"pmos-boot-health","status":"failed","reason":"mobile-core-not-ready"}' > /dev/console
+  printf '%s\n' '{"evidence":"QEMU","event":"pmos-boot-health","status":"failed","reason":"ferrix-core-not-ready"}' > /dev/console
   exit 1
 }
 record="{\"evidence\":\"QEMU\",\"event\":\"pmos-boot-health\",\"status\":\"ok\",\"substrate\":\"postmarketos\",\"init\":\"openrc\",\"runlevel\":\"default\",\"mode\":\"$mode\"}"

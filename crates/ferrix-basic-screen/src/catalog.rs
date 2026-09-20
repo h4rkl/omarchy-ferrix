@@ -1,13 +1,13 @@
 //! Launcher tiles from the application catalog.
 //!
-//! The home surface never hard-codes the app list: tiles come from `appd`'s
+//! The home surface never hard-codes the app list: tiles come from `ferrix_appd`'s
 //! catalog when it is reachable, otherwise from the descriptor directory
 //! (`FERRIX_APP_DIR`, the guest install dir, or the repository `apps/`).
 
 use std::path::{Path, PathBuf};
 
-use app_api::{AppDescriptor, AppId, AppInstance, AppRole, IconRef, IconTone};
-use ferrum_ui::theme;
+use ferrix_app_api::{AppDescriptor, AppId, AppInstance, AppRole, IconRef, IconTone};
+use ferrix_ui::theme;
 
 /// One launcher entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,7 +15,7 @@ pub struct Tile {
     pub id: AppId,
     pub name: String,
     pub icon: IconRef,
-    /// Whether tapping launches a process through `appd`; otherwise the tile
+    /// Whether tapping launches a process through `ferrix_appd`; otherwise the tile
     /// opens an illustrative in-process reference page.
     pub launchable: bool,
     /// A process exists for the app (starting, foreground, or background).
@@ -74,7 +74,7 @@ pub fn tiles_from_catalog(apps: &[AppDescriptor], instances: &[AppInstance]) -> 
     for tile in &mut tiles {
         if let Some(instance) = instances.iter().find(|i| i.app == tile.id) {
             tile.running = instance.state.is_running();
-            tile.starting = instance.state == app_api::LifecycleState::Starting;
+            tile.starting = instance.state == ferrix_app_api::LifecycleState::Starting;
         }
     }
     tiles
@@ -121,11 +121,11 @@ pub fn descriptor_dirs() -> Vec<PathBuf> {
     if let Some(dir) = std::env::var_os("FERRIX_APP_DIR").filter(|v| !v.is_empty()) {
         dirs.push(PathBuf::from(dir));
     }
-    let guest = Path::new(app_api::GUEST_APP_DIR);
+    let guest = Path::new(ferrix_app_api::GUEST_APP_DIR);
     if guest.is_dir() {
         dirs.push(guest.to_path_buf());
     }
-    dirs.push(PathBuf::from(app_api::REPO_APP_DIR));
+    dirs.push(PathBuf::from(ferrix_app_api::REPO_APP_DIR));
     dirs.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps"));
     dirs
 }
@@ -149,7 +149,7 @@ pub fn load_descriptor_tiles() -> Result<(PathBuf, Vec<Tile>), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use app_api::{ExitReason, LifecycleState, RuntimeKind};
+    use ferrix_app_api::{ExitReason, LifecycleState, RuntimeKind};
 
     fn repo_apps() -> Vec<AppDescriptor> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");

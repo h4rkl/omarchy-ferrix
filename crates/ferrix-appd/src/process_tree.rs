@@ -2,8 +2,8 @@
 //!
 //! The compositor reports the pid of the client that mapped a surface
 //! (kernel-provided `SO_PEERCRED`). Sandboxed applications are grandchildren
-//! of `appd` (`appd -> ferrix-sandbox -> init -> app`), so the reported pid
-//! rarely equals the pid `appd` spawned. The service walks parents upward
+//! of `ferrix_appd` (`ferrix_appd -> ferrix-sandbox -> init -> app`), so the reported pid
+//! rarely equals the pid `ferrix_appd` spawned. The service walks parents upward
 //! until it meets a pid it launched. The walk is behind a trait so tests use
 //! a fake tree.
 
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn proc_tree_reads_synthetic_status_files() {
-        let root = std::env::temp_dir().join(format!("appd-proc-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ferrix-appd-proc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("51")).unwrap();
         std::fs::write(root.join("51/status"), "Pid:\t51\nPPid:\t49\n").unwrap();

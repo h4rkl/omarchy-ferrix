@@ -1,12 +1,12 @@
 //! Command handling: applies a [`ControlCommand`] through the session's
-//! `hardware-api` handles and reports the events it produced. No adapter type
+//! `ferrix-hardware-api` handles and reports the events it produced. No adapter type
 //! is named here; mocked mutations go through the optional `MockControl`
 //! capability the session exposes.
 
-use hardware_api::{
+use ferrix_hardware_api::{
     Capability, HardwareCommand, HardwareError, HardwareEvent, MockCommand, SuspendOutcome,
 };
-use mobile_session::HardwareServices;
+use ferrix_session::HardwareServices;
 
 use crate::protocol::{Ack, ControlCommand};
 
@@ -165,8 +165,8 @@ pub fn apply_product(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hardware_api::{AudioRoute, Orientation, WifiState};
-    use mobile_session::{BootstrapOptions, bootstrap};
+    use ferrix_hardware_api::{AudioRoute, Orientation, WifiState};
+    use ferrix_session::{BootstrapOptions, bootstrap};
 
     fn services() -> HardwareServices {
         bootstrap(BootstrapOptions::default().with_profile_path(concat!(

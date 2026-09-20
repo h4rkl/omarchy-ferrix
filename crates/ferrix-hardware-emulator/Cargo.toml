@@ -1,13 +1,13 @@
 [package]
-name = "hardware-emulator"
-description = "Deterministic mock implementation of hardware-api for the generic QEMU virtual phone and host tests"
+name = "ferrix-hardware-emulator"
+description = "Deterministic mock implementation of ferrix-hardware-api for the generic QEMU virtual phone and host tests"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-hardware-api = { path = "../hardware-api" }
-target-profile = { path = "../target-profile" }
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+ferrix-target-profile = { path = "../ferrix-target-profile" }
 
 [lints]
 workspace = true

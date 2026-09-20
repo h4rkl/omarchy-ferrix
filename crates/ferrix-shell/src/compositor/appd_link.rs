@@ -1,9 +1,9 @@
-//! Smithay side of the `appd` link: turns link events and `appd` directives
+//! Smithay side of the `ferrix_appd` link: turns link events and `ferrix_appd` directives
 //! into window-stack changes, and turns surface/focus changes into reports.
 //! The connection itself (thread, retries, de-duplication) is the
 //! platform-neutral `crate::appd_link` module.
 
-use app_protocol::{Notification, Report};
+use ferrix_app_protocol::{Notification, Report};
 use smithay::{
     desktop::Window,
     wayland::{compositor::with_states, shell::xdg::XdgToplevelSurfaceData},
@@ -39,14 +39,16 @@ impl Shell {
             .and_then(|window| self.windows.pid_of(window))
     }
 
-    /// Whether reports currently reach `appd`.
+    /// Whether reports currently reach `ferrix_appd`.
     pub fn appd_connected(&self) -> bool {
-        self.appd.as_ref().is_some_and(|link| link.connected())
+        self.ferrix_appd
+            .as_ref()
+            .is_some_and(|link| link.connected())
     }
 
     fn emit_link_status(&self, status: &str, reason: Option<&str>) {
         let socket = self
-            .appd
+            .ferrix_appd
             .as_ref()
             .map(|link| link.socket().display().to_string())
             .unwrap_or_default();
@@ -55,7 +57,7 @@ impl Shell {
 
     /// Drain the link thread's queue (calloop ping callback).
     pub(super) fn appd_wake(&mut self) {
-        let events = match self.appd.as_mut() {
+        let events = match self.ferrix_appd.as_mut() {
             Some(link) => link.drain(),
             None => return,
         };
@@ -74,13 +76,13 @@ impl Shell {
                     self.activate_pid(pid, app_id.as_str());
                 }
                 LinkEvent::Notification(Notification::App { event }) => {
-                    tracing::debug!("appd lifecycle event: {event:?}");
+                    tracing::debug!("ferrix-appd lifecycle event: {event:?}");
                 }
             }
         }
     }
 
-    /// After (re)connecting, replay what a fresh `appd` needs: every mapped
+    /// After (re)connecting, replay what a fresh `ferrix_appd` needs: every mapped
     /// surface with a known pid, then the current focus.
     fn resync_appd(&mut self) {
         let mapped: Vec<(u32, Window)> = self
@@ -89,7 +91,7 @@ impl Shell {
             .filter_map(|(window, pid, _)| pid.map(|pid| (pid, window.clone())))
             .collect();
         let focus = self.focused_pid();
-        let Some(link) = self.appd.as_mut() else {
+        let Some(link) = self.ferrix_appd.as_mut() else {
             return;
         };
         for (pid, window) in mapped {
@@ -99,7 +101,7 @@ impl Shell {
         link.report_focus(focus);
     }
 
-    /// `appd` directive: bring the toplevel of the client with `pid` to the
+    /// `ferrix_appd` directive: bring the toplevel of the client with `pid` to the
     /// front. A pid without a mapped toplevel is recorded, not an error: the
     /// window will be focused when it maps (mapping raises).
     fn activate_pid(&mut self, pid: u32, app_id: &str) {
@@ -115,20 +117,20 @@ impl Shell {
         ));
     }
 
-    /// Report a toplevel's first buffer to `appd`.
+    /// Report a toplevel's first buffer to `ferrix_appd`.
     pub(super) fn report_surface_mapped(&mut self, window: &Window) {
         let Some(pid) = self.windows.pid_of(window) else {
             return;
         };
         let (app_id, title) = toplevel_meta(window);
-        if let Some(link) = self.appd.as_mut() {
+        if let Some(link) = self.ferrix_appd.as_mut() {
             link.report(&Report::SurfaceMapped { pid, app_id, title });
         }
     }
 
     /// Report that the client with `pid` has no mapped toplevel left.
     pub(super) fn report_surface_unmapped(&mut self, pid: u32) {
-        if let Some(link) = self.appd.as_mut() {
+        if let Some(link) = self.ferrix_appd.as_mut() {
             link.report(&Report::SurfaceUnmapped { pid });
         }
     }
@@ -136,19 +138,19 @@ impl Shell {
     /// Report the focused pid (de-duplicated by the link).
     pub(super) fn report_focus(&mut self) {
         let pid = self.focused_pid();
-        if let Some(link) = self.appd.as_mut() {
+        if let Some(link) = self.ferrix_appd.as_mut() {
             link.report_focus(pid);
         }
     }
 
-    /// The trusted home gesture completed. With `appd` linked, `appd` decides
+    /// The trusted home gesture completed. With `ferrix_appd` linked, `ferrix_appd` decides
     /// what home is and answers with an activate directive; without it the
     /// compositor raises the oldest mapped window (the first client to map,
     /// which is the home surface in every supported boot).
     pub fn go_home(&mut self, kind: HomeGestureKind, source: &str) {
         let linked = self.appd_connected()
             && self
-                .appd
+                .ferrix_appd
                 .as_mut()
                 .is_some_and(|link| link.report(&Report::HomeGesture));
         if !linked

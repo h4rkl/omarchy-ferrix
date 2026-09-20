@@ -14,7 +14,7 @@
   ],
   "launch": {
     "exec": [
-      "ferrum-terminal"
+      "ferrix-terminal"
     ]
   }
 }

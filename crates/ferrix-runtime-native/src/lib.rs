@@ -1,7 +1,7 @@
 //! Native application runtime.
 //!
-//! [`NativeRuntime`] implements [`app_runtime_api::Runtime`] for
-//! [`app_api::RuntimeKind::Native`]: every application becomes its own
+//! [`NativeRuntime`] implements [`ferrix_app_runtime_api::Runtime`] for
+//! [`ferrix_app_api::RuntimeKind::Native`]: every application becomes its own
 //! supervised process, started through the `ferrix-sandbox` binary shipped by
 //! this crate, which puts it into Linux namespaces according to the
 //! manifest's runtime-private [`IsolationPolicy`].
@@ -9,7 +9,7 @@
 //! Process tree of one launch:
 //!
 //! ```text
-//! appd -> ferrix-sandbox (stage 1, unshares) -> ferrix-sandbox --init (PID 1 of the
+//! ferrix_appd -> ferrix-sandbox (stage 1, unshares) -> ferrix-sandbox --init (PID 1 of the
 //!         new PID namespace, mounts, reaps, forwards signals) -> application
 //! ```
 //!
@@ -18,7 +18,7 @@
 //! lives in the binary and in the `cfg(target_os = "linux")` parts of
 //! [`report`].
 //!
-//! Nothing here depends on QEMU, kernels, or boards; `appd` composes this
+//! Nothing here depends on QEMU, kernels, or boards; `ferrix_appd` composes this
 //! runtime in its bootstrap code only.
 
 mod plan;

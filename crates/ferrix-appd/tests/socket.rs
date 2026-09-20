@@ -1,4 +1,4 @@
-//! End-to-end over a real Unix socket with the `app_protocol::Client`: hello,
+//! End-to-end over a real Unix socket with the `ferrix_app_protocol::Client`: hello,
 //! catalog from the repository `apps/` directory, typed errors, role gating,
 //! and pushed notifications. Runs on the host; the runtime is the fake.
 
@@ -8,11 +8,11 @@ use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::Duration;
 
-use app_api::{AppError, AppEvent, AppId, ExitReason, LifecycleState};
-use app_protocol::{Client, ClientRole, Notification, Reply, Report, Request};
-use appd::records::Recorder;
-use appd::testing::{FakeProcessTree, FakeRuntime};
-use appd::{Catalog, Server, Service, ServiceOptions};
+use ferrix_app_api::{AppError, AppEvent, AppId, ExitReason, LifecycleState};
+use ferrix_app_protocol::{Client, ClientRole, Notification, Reply, Report, Request};
+use ferrix_appd::records::Recorder;
+use ferrix_appd::testing::{FakeProcessTree, FakeRuntime};
+use ferrix_appd::{Catalog, Server, Service, ServiceOptions};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -24,9 +24,9 @@ struct Fixture {
 }
 
 fn fixture(name: &str) -> Fixture {
-    let dir = std::env::temp_dir().join(format!("appd-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("ferrix-appd-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let socket = dir.join("appd.sock");
+    let socket = dir.join("ferrix-appd.sock");
     let apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
     let runtime = FakeRuntime::native();
     let tree = FakeProcessTree::default();
@@ -160,7 +160,7 @@ fn compositor_role_is_gated_and_associates_surfaces() {
             pid: Some(sandbox_pid + 2),
         })
         .unwrap();
-    assert!(appd::testing::wait_for(TIMEOUT, || {
+    assert!(ferrix_appd::testing::wait_for(TIMEOUT, || {
         f.service
             .instance(&id("org.ferrix.terminal"))
             .is_some_and(|i| i.surface_mapped && i.state == LifecycleState::Foreground)

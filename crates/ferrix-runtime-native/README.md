@@ -1,6 +1,6 @@
-# runtime-native
+# ferrix-runtime-native
 
-The native application runtime: `NativeRuntime` implements `app_runtime_api::Runtime`
+The native application runtime: `NativeRuntime` implements `ferrix_app_runtime_api::Runtime`
 for `RuntimeKind::Native`, and the `ferrix-sandbox` binary is the supervisor
 that puts each application into its own Linux namespaces. All code is safe
 Rust (`rustix`, `signal-hook`, `std::process`).
@@ -8,14 +8,14 @@ Rust (`rustix`, `signal-hook`, `std::process`).
 ## What the sandbox does
 
 Every application is a separate supervised process, so a crash never reaches
-`appd`, the compositor, or the core. The sandbox adds containment on top, per
+`ferrix-appd`, the compositor, or the core. The sandbox adds containment on top, per
 the manifest's runtime-private `IsolationPolicy`:
 
 ```text
-appd -> ferrix-sandbox (stage 1) -> ferrix-sandbox --init (stage 2, PID 1) -> application
+ferrix-appd -> ferrix-sandbox (stage 1) -> ferrix-sandbox --init (stage 2, PID 1) -> application
 ```
 
-- Stage 1 dies with `appd` (parent-death signal), `unshare`s the requested
+- Stage 1 dies with `ferrix-appd` (parent-death signal), `unshare`s the requested
   namespaces in one call, writes the identity `uid_map`/`gid_map` when a user
   namespace was created (ids captured before `unshare`; inside the new
   namespace they read back as the overflow id), sets the hostname to the app
@@ -28,7 +28,7 @@ appd -> ferrix-sandbox (stage 1) -> ferrix-sandbox --init (stage 2, PID 1) -> ap
   sets `no_new_privs`, runs the application, forwards TERM/INT/HUP to it, reaps
   zombies, and exits with the application's shell status (`128 + signal` on a
   signal death). PID 1 exiting kills everything left in the namespace.
-- The runtime maps the forwarded status back to `ExitReason`, so `appd`
+- The runtime maps the forwarded status back to `ExitReason`, so `ferrix-appd`
   classifies crashes exactly.
 
 What each namespace buys: **PID** – the application cannot see or signal
@@ -89,6 +89,6 @@ evidence of record.
 
 ## Validation
 
-macOS host: `cargo test -p runtime-native` (library and pure planning tests).
-Linux: `just linux-check test -p runtime-native` runs `tests/sandbox.rs` inside
+macOS host: `cargo test -p ferrix-runtime-native` (library and pure planning tests).
+Linux: `just linux-check test -p ferrix-runtime-native` runs `tests/sandbox.rs` inside
 the privileged pinned arm64 Alpine Rust container (mock evidence, not QEMU).

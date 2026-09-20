@@ -1,7 +1,7 @@
 //! The application service: single-instance launch, supervision, surface
 //! association, foreground tracking, and notification fan-out.
 //!
-//! All mutable state sits behind one mutex. Runtimes are `app_runtime_api::Runtime`
+//! All mutable state sits behind one mutex. Runtimes are `ferrix_app_runtime_api::Runtime`
 //! trait objects composed by the binary; the library never names an
 //! implementation. Each launched instance gets a waiter thread that polls the
 //! runtime handle and posts the exit back, so a crash is observed, recorded,
@@ -14,12 +14,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use app_api::{
+use ferrix_app_api::{
     APP_ID_ENV, APP_INSTANCE_ENV, APPD_SOCKET_ENV, AppError, AppEvent, AppId, AppInstance,
     DEFAULT_APPD_SOCKET, ExitReason, LifecycleState, RuntimeKind, SCHEMA_VERSION,
 };
-use app_protocol::{ClientRole, Notification, Reply};
-use app_runtime_api::{LaunchContext, RunningApp, Runtime};
+use ferrix_app_protocol::{ClientRole, Notification, Reply};
+use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use serde::Serialize;
 
 use crate::catalog::Catalog;
@@ -196,8 +196,8 @@ impl Service {
         let app = self.resolve_pid(&mut state, pid)?;
         let role = self.catalog.get(&app)?.descriptor.role;
         Some(match role {
-            app_api::AppRole::Home => ClientRole::Home,
-            app_api::AppRole::Application => ClientRole::Application,
+            ferrix_app_api::AppRole::Home => ClientRole::Home,
+            ferrix_app_api::AppRole::Application => ClientRole::Application,
         })
     }
 
@@ -650,7 +650,7 @@ impl Service {
     fn spawn_waiter(self: &Arc<Self>, id: AppId, number: u32, handle: Handle) {
         let service = Arc::clone(self);
         let poll = self.options.poll_interval;
-        let name = format!("appd-wait-{id}");
+        let name = format!("ferrix-appd-wait-{id}");
         let waited = id.clone();
         let spawned = thread::Builder::new().name(name).spawn(move || {
             let id = waited;
@@ -695,7 +695,7 @@ impl Service {
         });
         let service = Arc::clone(self);
         let _ = thread::Builder::new()
-            .name("appd-home-restart".to_owned())
+            .name("ferrix-appd-home-restart".to_owned())
             .spawn(move || {
                 thread::sleep(delay);
                 service.run_pending_restart(token);
@@ -751,7 +751,7 @@ mod tests {
     use super::*;
     use crate::records::{Captured, captured_events};
     use crate::testing::{FakeProcessTree, FakeRuntime, channel_sink, wait_for};
-    use app_api::{AppDescriptor, AppRole, IconRef, RuntimeKind, TrustLevel};
+    use ferrix_app_api::{AppDescriptor, AppRole, IconRef, RuntimeKind, TrustLevel};
     use std::sync::mpsc::Receiver;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -827,7 +827,7 @@ mod tests {
         let tree = FakeProcessTree::default();
         let (recorder, records) = Recorder::capturing("mock");
         let options = ServiceOptions {
-            socket: PathBuf::from("/tmp/appd-test.sock"),
+            socket: PathBuf::from("/tmp/ferrix-appd-test.sock"),
             poll_interval: Duration::from_millis(1),
             ..ServiceOptions::default()
         };
@@ -938,7 +938,10 @@ mod tests {
         let env = h.runtime.last_env(&terminal).unwrap();
         assert!(env.contains(&(APP_ID_ENV.to_owned(), "org.ferrix.terminal".to_owned())));
         assert!(env.contains(&(APP_INSTANCE_ENV.to_owned(), "1".to_owned())));
-        assert!(env.contains(&(APPD_SOCKET_ENV.to_owned(), "/tmp/appd-test.sock".to_owned())));
+        assert!(env.contains(&(
+            APPD_SOCKET_ENV.to_owned(),
+            "/tmp/ferrix-appd-test.sock".to_owned()
+        )));
         assert_eq!(
             captured_events(&h.records),
             ["app-launching", "app-started"]
@@ -1061,7 +1064,7 @@ mod tests {
         let terminal = id("org.ferrix.terminal");
         let instance = h.service.launch(&terminal).unwrap().instance;
         let sandbox = instance.pid.unwrap();
-        // appd -> sandbox (stage 1) -> init (stage 2) -> app
+        // ferrix_appd -> sandbox (stage 1) -> init (stage 2) -> app
         let init = sandbox + 1;
         let app = sandbox + 2;
         h.tree.set_parent(init, sandbox);

@@ -1,4 +1,4 @@
-//! Ferrum mobile product compositor (`mobile-shell`).
+//! Omarchy Ferrix mobile product compositor (`ferrix-shell`).
 //!
 //! A Smithay-based Wayland compositor for the emulator-first mobile Linux
 //! environment: portrait, touch-first, fullscreen-only xdg-shell toplevels,
@@ -7,16 +7,16 @@
 //! same versioned mock profile. Evidence is `QEMU` or `mock`, never a physical
 //! device claim.
 //!
-//! Applications are independent processes supervised by `appd`; the
+//! Applications are independent processes supervised by `ferrix_appd`; the
 //! compositor links to it (`appd_link`) to report which client pid owns each
 //! mapped surface and holds focus, and obeys its activate directives. The
 //! trusted bottom-edge home gesture (`gesture`) is recognised here so no
 //! application can swallow it.
 //!
 //! Usage:
-//!   mobile-shell [/etc/ferrix/profile.toml]              # guest: DRM/libinput
-//!   mobile-shell --nested targets/qemu-aarch64/profile.toml # Linux host window
-//!   mobile-shell --print-config PROFILE                     # any host: resolved config
+//!   ferrix-shell [/etc/ferrix/profile.toml]              # guest: DRM/libinput
+//!   ferrix-shell --nested targets/qemu-aarch64/profile.toml # Linux host window
+//!   ferrix-shell --print-config PROFILE                     # any host: resolved config
 
 mod appd_link;
 mod cli;
@@ -67,7 +67,7 @@ fn emit_geometry(evidence: Evidence, config: &config::ShellConfig, plan: layout:
             ("profile", config.profile_name.as_str().into()),
             ("socket", config.socket_name.as_str().into()),
             ("touch", Value::Bool(config.touch)),
-            ("appd", config.appd_label().into()),
+            ("ferrix-appd", config.appd_label().into()),
         ],
     ));
 }
@@ -78,7 +78,7 @@ fn run(args: Vec<String>, evidence: Evidence) -> Result<(), Failure> {
         println!("{}", cli::USAGE);
         return Ok(());
     }
-    let profile = target_profile::Profile::load(&args.profile_path)
+    let profile = ferrix_target_profile::Profile::load(&args.profile_path)
         .map_err(|e| ("profile", e.to_string()))?;
     let cmdline = match &args.cmdline_path {
         Some(path) => std::fs::read_to_string(path).ok(),
@@ -101,7 +101,7 @@ fn run(args: Vec<String>, evidence: Evidence) -> Result<(), Failure> {
         return Ok(());
     }
 
-    let core = mobile_protocol::subscribe(
+    let core = ferrix_protocol::subscribe(
         std::path::Path::new(&args.core_socket),
         Duration::from_secs(10),
     )

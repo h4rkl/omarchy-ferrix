@@ -1,5 +1,5 @@
 [package]
-name = "runtime-native"
+name = "ferrix-runtime-native"
 description = "Native application runtime: launches applications as supervised Linux processes in their own namespaces through the ferrix-sandbox supervisor"
 version.workspace = true
 edition.workspace = true
@@ -9,8 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-app-api = { path = "../app-api" }
-app-runtime-api = { path = "../app-runtime-api" }
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-runtime-api = { path = "../ferrix-app-runtime-api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 

@@ -1,12 +1,12 @@
-//! Internal contract between `appd` and replaceable runtime adapters.
+//! Internal contract between `ferrix_appd` and replaceable runtime adapters.
 //!
-//! This is deliberately separate from `app-api`: applications and shell
+//! This is deliberately separate from `ferrix-app-api`: applications and shell
 //! clients need identities, descriptors, and lifecycle state, but must not
 //! inherit process-launch or runtime-implementation details.
 
 use std::time::Duration;
 
-use app_api::{AppDescriptor, AppError, ExitReason, RuntimeKind};
+use ferrix_app_api::{AppDescriptor, AppError, ExitReason, RuntimeKind};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub trait RunningApp: Send {
 }
 
 /// Adapter for one runtime kind. `config` is private manifest data interpreted
-/// only by that adapter, keeping `appd` and public clients runtime-neutral.
+/// only by that adapter, keeping `ferrix_appd` and public clients runtime-neutral.
 pub trait Runtime: Send + Sync {
     fn kind(&self) -> RuntimeKind;
     fn launch(

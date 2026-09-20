@@ -1,12 +1,12 @@
 [package]
-name = "app-protocol"
-description = "Versioned line-delimited JSON protocol and Unix-socket client for appd, shared by the compositor, the home surface, applications, and tools"
+name = "ferrix-app-protocol"
+description = "Versioned line-delimited JSON protocol and Unix-socket client for ferrix-appd, shared by the compositor, the home surface, applications, and tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-app-api = { path = "../app-api" }
+ferrix-app-api = { path = "../ferrix-app-api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

@@ -41,7 +41,7 @@ display_for() {
 [ -f "$profile" ] || { echo "missing QEMU profile: $profile" >&2; exit 2; }
 set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m 1024 -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz"
 # Mock-control channel: a virtio-serial port named ferrix.control, exposed on
-# the host as a local Unix socket. mobile-core reads line-delimited JSON
+# the host as a local Unix socket. ferrix-core reads line-delimited JSON
 # commands from it (see scripts/mock_control.py / `just qemu-mock`). Agent
 # sessions keep it beside their other runtime files.
 if [ "$agent" = 1 ]; then
@@ -99,12 +99,12 @@ if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   esac
   gpu="virtio-gpu-pci,xres=$gpu_w,yres=$gpu_h"
   graphics_args="ferrix.graphics=on ferrix.display=${gpu_w}x${gpu_h}"
-  # Guest compositor: mobile-shell (Rust product compositor) or weston
+  # Guest compositor: ferrix-shell (Rust product compositor) or weston
   # (reference). Unset leaves the guest init's default in charge.
   case "${FERRIX_QEMU_SHELL:-}" in
     '') ;;
-    mobile-shell|weston) graphics_args="$graphics_args ferrix.shell=$FERRIX_QEMU_SHELL" ;;
-    *) echo "invalid FERRIX_QEMU_SHELL: $FERRIX_QEMU_SHELL (mobile-shell|weston)" >&2; exit 2 ;;
+    ferrix-shell|weston) graphics_args="$graphics_args ferrix.shell=$FERRIX_QEMU_SHELL" ;;
+    *) echo "invalid FERRIX_QEMU_SHELL: $FERRIX_QEMU_SHELL (ferrix-shell|weston)" >&2; exit 2 ;;
   esac
 fi
 if [ "$agent" = 1 ]; then
