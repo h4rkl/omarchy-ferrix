@@ -178,9 +178,10 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
 
 ## Boundaries
 
-- No phones are inspected or operated. No board targets, Android boot tooling,
-  or Solana Seeker support exist or are claimed without a separately approved
-  board-support proposal.
+- Physical targets are admitted through an exact-model board-support proposal
+  with image-compatibility, backup, recovery, capability, and evidence gates.
+  OnePlus read-only discovery is approved; no model is supported until its
+  proposal passes, and destructive workflows require explicit confirmation.
 - Product code depends on `ferrix-hardware-api`, never on QEMU, kernel, vendor, or
   board details. Target selection lives in `ferrix-session`.
 - Linux services (NetworkManager, UPower, PipeWire, ModemManager, sensors) go

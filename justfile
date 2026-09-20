@@ -14,6 +14,13 @@ host-check:
     @command -v cpio >/dev/null && echo "PASS cpio" || echo "FAIL cpio — brew install cpio"
     @echo "resolved out: {{out}}"
 
+oneplus-tools-check:
+    @command -v adb >/dev/null && adb version | head -2 || { echo "FAIL adb — brew install --cask android-platform-tools" >&2; exit 1; }
+    @command -v fastboot >/dev/null && fastboot --version | head -1 || { echo "FAIL fastboot — brew install --cask android-platform-tools" >&2; exit 1; }
+
+oneplus-discover:
+    @"{{root}}/tools/oneplus/discover.sh"
+
 qemu-build:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-build.sh"
 

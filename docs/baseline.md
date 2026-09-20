@@ -6,7 +6,7 @@ This is the initial, implementation-ready baseline for Omarchy Ferrix's generic 
 
 Omarchy Ferrix is the ship and product name. `ferrix` is its kernel/userspace runtime namespace. Gossan is reserved for a future device image; it does not rename the generic QEMU target or imply that a physical target exists. The project is not a new Linux distribution. It composes an existing mobile-Linux substrate with a deliberately small project layer: the Omarchy Ferrix visual system (`docs/design.md`), Rust mobile services, and (where justified) a Rust Wayland shell. postmarketOS and its tooling provide the initial guest-image, packaging, and QEMU route. Existing Linux system services remain authoritative for real hardware integration.
 
-The Solana Seeker is the intended eventual device target, subject to a separate, explicitly approved board-support proposal. Nothing in this baseline asserts Seeker compatibility, examines a Seeker, or authorizes device work. The generic emulator is the portability contract until that proposal supplies a recovery plan, capability evidence, and a Seeker-specific adapter package.
+Physical delivery targets are admitted separately through checked-in board-support proposals. The repository owner approved read-only discovery and proposal work for an attached OnePlus device on 2026-09-20. No particular OnePlus model or Solana Seeker is supported until an exact target proposal supplies identity and compatibility evidence, a recovery plan, a capability matrix, and a target-specific adapter package. The generic emulator remains the portability contract.
 
 This is a generic virtual-phone environment. It must never claim to emulate or validate a physical device's firmware, secure hardware, modem/radio hardware, vendor drivers, Android compatibility layers, verified boot, or boot chain.
 
@@ -126,11 +126,11 @@ Never put credentials, personal identifiers, or personal backups in `.env`, `out
 
 ## Target extension contract
 
-`targets/qemu-aarch64/` is the initial and only supported target. It defines the portable behavior contract for the rest of the project and is built from the selected postmarketOS/pmbootstrap guest substrate where practical.
+`targets/qemu-aarch64/` is the development and CI portability target. It defines the portable behavior contract for the rest of the project and is built from the selected postmarketOS/pmbootstrap guest substrate where practical.
 
-The first prospective additional target is `targets/boards/solana-seeker/`, but this directory must remain absent until hardware work is separately approved. Keep target selection and adapter wiring in the session/bootstrap layer. Product crates, applications, and `ferrix-hardware-api` must not import a target package or contain target-specific conditionals.
+The first approved physical-target investigation is the attached OnePlus device. Its board directory must remain absent until read-only discovery establishes a stable exact target id and its board-support proposal passes the identity, boot, image-compatibility, backup, and recovery gates. Keep target selection and adapter wiring in the session/bootstrap layer. Product crates, applications, and `ferrix-hardware-api` must not import a target package or contain target-specific conditionals.
 
-Each target package must include a versioned manifest, a capability matrix for every `ferrix-hardware-api` capability (`supported`, `unsupported`, or `mocked`), evidence for each claimed capability, and an explicit recovery procedure for hardware actions. A future Solana Seeker proposal must additionally establish its supported boot route, kernel and driver sources, partition/recovery procedure, modem and audio integration, and a no-device-data collection policy before any device action. Translate target behavior through a dedicated adapter; promote code into `hardware-linux` only after a demonstrated second consumer.
+Each target package must include a versioned manifest, a capability matrix for every `ferrix-hardware-api` capability (`supported`, `unsupported`, or `mocked`), evidence for each claimed capability, and an explicit recovery procedure for hardware actions. A proposal must establish the exact model/codename/revision, supported boot route, bootloader state, kernel and driver sources, partition/recovery procedure, modem and audio integration, firmware policy, and a no-device-data collection policy. Translate target behavior through a dedicated adapter; promote code into `hardware-linux` only after a demonstrated second consumer.
 
 ## First virtual-phone profile
 
@@ -217,7 +217,7 @@ Implement the following `justfile` recipes. Each must print the resolved paths a
 9. Evaluate Catacomb against the product requirements; use it, contribute upstream, or document the reason to build the nested Smithay shell path. Then add an optional QEMU graphical/input backend.
 10. Document every command, expected output, existing-project decision, and known host limitation in `targets/qemu-aarch64/README.md` and `docs/status.md`.
 
-At every step, QEMU evidence must be tagged `mock` or `QEMU`. No physical-device action is authorized by this baseline.
+At every step, QEMU evidence must be tagged `mock` or `QEMU`. Physical evidence must name the exact admitted target and revision. OnePlus discovery and proposal work is authorized; destructive provisioning is authorized only after all target gates pass and the checked-in workflow receives explicit per-run confirmation.
 
 ## Acceptance gates
 
@@ -246,9 +246,9 @@ At every step, QEMU evidence must be tagged `mock` or `QEMU`. No physical-device
 
 ## Explicit exclusions for this baseline
 
-- Connecting to, auditing, unlocking, booting, flashing, or modifying a physical phone.
-- Building an image for, or claiming support for, a physical device.
-- Creating `targets/boards/solana-seeker/`, connecting to a Solana Seeker, or claiming Solana Seeker support. These require a separate board-support proposal and explicit authorization.
+- Destructive or state-changing phone operations before exact device identity, compatible artifacts, backup, and recovery are established by an approved board-support proposal.
+- Claiming support for a model, hardware revision, or capability without target-specific evidence.
+- Creating a board directory under an assumed marketing name before a stable model/codename has been discovered.
 - Android Studio/AVD as the Linux-phone emulator. It may be useful for Android-app work later, but it does not validate this Linux rootfs, init, or Wayland shell.
 - Modem, SMS, calling, real Wi-Fi/Bluetooth, secure hardware, camera, fingerprint, GPU, or vendor-firmware validation.
 - Persistent storage images by default. Use ephemeral disks until a storage test has an explicit persistence and cleanup design.

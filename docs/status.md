@@ -1,5 +1,12 @@
 # Status
 
+## 2026-09-20 (OnePlus target admission started)
+
+- **Authorization:** Repository policy, baseline, plan, and README now admit exact-model physical targets through a checked-in board-support proposal. The owner approved read-only discovery and proposal work for the attached OnePlus; destructive operations remain gated on exact identity, compatible hashed images, verified backup/recovery, and explicit per-run confirmation.
+- **Host tooling:** Android Platform Tools 37.0.1 was installed through Homebrew. `adb` and `fastboot` resolve from `/opt/homebrew/bin`; the ADB server starts successfully.
+- **Workflow:** `just oneplus-tools-check` verifies both tools. `just oneplus-discover` performs read-only, single-device ADB/Fastboot discovery and refuses ambiguous transports; it contains no reboot, unlock, boot, erase, format, flash, or slot-changing command. The pending proposal is `docs/board-support/oneplus-attached.md`.
+- **Current evidence:** Neither ADB, Fastboot, macOS System Profiler, nor the lower-level IOUSB registry exposed the phone. No serial, model, codename, revision, bootloader state, or partition information was obtained, and no phone state was changed. A board directory and device image were intentionally not fabricated without that identity.
+
 ## 2026-09-20 (Ferrix visual system and unified theming)
 
 - **Palette:** First-party surfaces no longer use the Tokyo Night palette (`#1a1b26` background, `#7aa2f7` blue and `#bb9af7` purple accents). The Ferrix system in `docs/design.md` replaces it: slate surfaces (`bg` `#15181c`, `bg_dark` `#0f1114`, `surface` `#1c2126`, `surface_hi` `#262c33`, `border` `#353d46`), steel type (`fg` `#d7dde3`, `fg_dim` `#7d8a96`), one rust accent (`rust` `#d8642a`, `rust_hi` `#f0803f`, `rust_dim` `#8a3f1a`) with `steel` `#8fa3b3` as the secondary accent, desaturated status colors (`ok`, `warn`, `err`), and a sixteen-color terminal ANSI set whose index 0 equals `bg`. `IconTone` in `ferrix-app-api` is unchanged; `ferrix-basic-screen` maps `Blue`/`Cyan` to steel, `Purple`/`Orange` to rust, `Green`/`Yellow`/`Red` to the status colors, and `Neutral` to `fg_dim`.

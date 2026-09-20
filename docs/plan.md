@@ -1,6 +1,6 @@
 # Omarchy Ferrix: Emulator-First Rust Mobile Linux
 
-This document is the execution plan and source of truth for an emulator-first, Rust-first mobile Linux environment. The generic AArch64 QEMU virtual phone is the only initial target. No physical device is implied, required, or supported by this plan.
+This document is the execution plan and source of truth for an emulator-first, Rust-first mobile Linux environment. Generic AArch64 QEMU remains the development and CI portability target; physical delivery targets are admitted through the board-support process below.
 
 ## Mission
 
@@ -20,7 +20,7 @@ future device image and does not rename the generic AArch64 QEMU target.
 
 ## Scope and safety contract
 
-Initial work is limited to local development, containers, CI, and QEMU. Do not connect to, inspect, unlock, boot, flash, or modify physical hardware under this plan. A future physical-target proposal must define its own hardware inventory, recovery procedure, evidence requirements, and explicit approval gates before any device action.
+Physical-target discovery is permitted after explicit owner approval. It starts read-only and must establish the exact model number, codename, hardware revision, bootloader state, partition scheme, supported boot route, kernel/device-tree sources, recovery procedure, and evidence requirements in a checked-in proposal. Unlocking, erasing, formatting, booting, or flashing remains gated on a unique device identity, a compatible hashed image, a usable backup, a tested recovery route, and explicit per-run confirmation. OnePlus discovery and proposal work is approved as of 2026-09-20; no OnePlus model is supported until those gates pass for an exact model and revision.
 
 ## Architecture
 
@@ -134,7 +134,7 @@ Build the touch-first shell: full-screen applications, launcher, status surface,
 
 ### Phase 4 — target readiness
 
-Document the target-package contract, capability matrix format, evidence conventions, and a target-admission checklist. No board package is created until there is a concrete target and explicit authorization for its hardware work.
+Document the target-package contract, capability matrix format, evidence conventions, and target-admission checklist. Discover the approved OnePlus device read-only, approve its completed board-support proposal, then create `targets/boards/<target-id>/` without changing product APIs. Provisioning workflows must refuse unknown, ambiguous, mismatched, or unrecoverable devices.
 
 ## Acceptance criteria
 
@@ -144,7 +144,7 @@ Document the target-package contract, capability matrix format, evidence convent
 - CI runs the QEMU check headlessly under TCG.
 - Product crates compile and test against `ferrix-hardware-api` without importing the emulator implementation.
 - `docs/status.md` labels all virtual-target evidence as `mock` or `QEMU`.
-- No physical-device support is claimed or attempted.
+- Physical-device claims name the exact target and hardware revision and are backed by target-specific evidence; unsupported capabilities remain explicit.
 
 ## Project principle
 
