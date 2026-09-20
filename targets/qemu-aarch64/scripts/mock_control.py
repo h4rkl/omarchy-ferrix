@@ -75,7 +75,7 @@ def send(path, command, timeout, connect_wait):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--socket", required=True, help="host Unix socket of the omarchy.control chardev")
+    parser.add_argument("--socket", required=True, help="host Unix socket of the ferrix.control chardev")
     parser.add_argument("--timeout", type=float, default=15.0, help="seconds to wait for the ack")
     parser.add_argument("--connect-wait", type=float, default=5.0, help="seconds to wait for the socket to appear")
     parser.add_argument("command", nargs="+", help="raw JSON or: NAME key=value ...")

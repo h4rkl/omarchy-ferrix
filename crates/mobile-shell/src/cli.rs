@@ -3,12 +3,12 @@
 use crate::config::DisplayGeometry;
 
 pub const USAGE: &str = "usage: mobile-shell [--nested] [--display WxH] [--socket NAME] [--core PATH] [--cmdline PATH|--no-cmdline] [--print-config] [PROFILE]\n\
-  PROFILE defaults to /etc/omarchy/profile.toml\n\
+  PROFILE defaults to /etc/ferrix/profile.toml\n\
   --nested        run in a host window (Linux host with a Wayland/X11 session); implies --no-cmdline and mock evidence\n\
-  --display WxH   pin the output geometry (overridden by omarchy.display= on the kernel command line)\n\
+  --display WxH   pin the output geometry (overridden by ferrix.display= on the kernel command line)\n\
   --socket NAME   Wayland socket name under XDG_RUNTIME_DIR (default wayland-0)\n\
-  --core PATH     mobile-core state/command socket (default /run/omarchy/core.sock)\n\
-  --cmdline PATH  kernel command line to read omarchy.display= from (default /proc/cmdline)\n\
+  --core PATH     mobile-core state/command socket (default /run/ferrix/core.sock)\n\
+  --cmdline PATH  kernel command line to read ferrix.display= from (default /proc/cmdline)\n\
   --print-config  print the resolved configuration as a JSON record and exit";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,11 +26,11 @@ pub struct Args {
 impl Default for Args {
     fn default() -> Self {
         Self {
-            profile_path: "/etc/omarchy/profile.toml".to_owned(),
+            profile_path: "/etc/ferrix/profile.toml".to_owned(),
             nested: false,
             display: None,
             socket: None,
-            core_socket: std::env::var("OMARCHY_CORE_SOCKET")
+            core_socket: std::env::var("FERRIX_CORE_SOCKET")
                 .ok()
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| mobile_protocol::DEFAULT_SOCKET.to_owned()),
@@ -104,7 +104,7 @@ mod tests {
     #[test]
     fn defaults_target_the_guest() {
         let args = parse_str("").unwrap();
-        assert_eq!(args.profile_path, "/etc/omarchy/profile.toml");
+        assert_eq!(args.profile_path, "/etc/ferrix/profile.toml");
         assert!(!args.nested);
         assert_eq!(args.cmdline_path.as_deref(), Some("/proc/cmdline"));
         assert!(!args.core_socket.is_empty());

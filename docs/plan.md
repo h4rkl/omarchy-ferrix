@@ -1,4 +1,4 @@
-# Emulator-First Rust Mobile Linux
+# Ferrum: Emulator-First Rust Mobile Linux
 
 This document is the execution plan and source of truth for an emulator-first, Rust-first mobile Linux environment. The generic AArch64 QEMU virtual phone is the only initial target. No physical device is implied, required, or supported by this plan.
 
@@ -9,10 +9,14 @@ Build a mobile operating environment with:
 - A reproducible AArch64 emulator target for daily development and CI.
 - A Rust-first userspace for project-owned services and applications.
 - A Rust/Smithay Wayland compositor designed for touch.
-- An Omarchy-inspired visual system and development experience.
+- Ferrum's own restrained, cohesive, low-noise visual system and development experience.
 - A stable hardware abstraction that lets future device targets be added without changing product logic.
 
 The emulator provides phone-shaped display, touch, rotation, battery, charging, connectivity, audio-route, telephony, and suspend mocks. It validates project-owned software and its integration lifecycle only; it does not establish compatibility with any physical device, firmware, radio, secure hardware, or boot chain.
+
+Ferrum is the product and ship name. Ferrix names its kernel/userspace runtime
+surface, including configuration and boot interfaces. Gossan is reserved for a
+future device image and does not rename the generic AArch64 QEMU target.
 
 ## Scope and safety contract
 

@@ -52,8 +52,8 @@ RUN chmod 0755 /usr/local/bin/guest-builder-entrypoint
 # pmbootstrap work directory (chroots, apk cache, pmaports clone, images).
 # pmos-build.sh mounts a Docker volume here (a macOS bind mount cannot hold
 # chroots: virtiofs drops ownership, setuid bits and device nodes); on Linux
-# hosts OMARCHY_PMOS_WORK_BIND=1 binds ${OMARCHY_CACHE_DIR:-.cache/omarchy}/pmbootstrap.
+# hosts FERRIX_PMOS_WORK_BIND=1 binds ${FERRIX_CACHE_DIR:-.cache/ferrix}/pmbootstrap.
 VOLUME ["/cache/pmbootstrap"]
-ENV OMARCHY_PMBOOTSTRAP_CACHE=/cache/pmbootstrap
+ENV FERRIX_PMBOOTSTRAP_CACHE=/cache/pmbootstrap
 ENTRYPOINT ["/usr/local/bin/guest-builder-entrypoint"]
 CMD ["pmbootstrap", "--version"]

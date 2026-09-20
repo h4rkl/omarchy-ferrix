@@ -5,7 +5,7 @@
 # to run as root; it escalates through passwordless sudo). Failures are
 # machine-readable QEMU-route records.
 set -eu
-cache=${OMARCHY_PMBOOTSTRAP_CACHE:-/cache/pmbootstrap}
+cache=${FERRIX_PMBOOTSTRAP_CACHE:-/cache/pmbootstrap}
 
 fail() {
   printf '{"evidence":"QEMU","event":"guest-builder-failed","reason":"%s","detail":"%s"}\n' "$1" "$2" >&2
@@ -37,7 +37,7 @@ mount -t tmpfs -o nosuid,nodev shm /dev/shm || fail "shm-denied" "cannot mount /
 # work directory must be a Docker volume there (pmos-build.sh's default).
 mkdir -p "$cache"
 fs_probe="$cache/.fs-probe.$$"
-fs_detail="use a Docker volume for the pmbootstrap work directory (OMARCHY_PMOS_WORK_VOLUME) instead of a macOS bind mount"
+fs_detail="use a Docker volume for the pmbootstrap work directory (FERRIX_PMOS_WORK_VOLUME) instead of a macOS bind mount"
 touch "$fs_probe"
 chown 1000:1000 "$fs_probe"
 [ "$(stat -c %u "$fs_probe")" = 1000 ] || { rm -f "$fs_probe"; fail "work-fs-no-chown" "$cache does not preserve file ownership; $fs_detail"; }

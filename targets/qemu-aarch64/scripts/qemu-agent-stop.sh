@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-runtime=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
+runtime=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
 pid_file="$runtime/qemu.pid"
 if [ -S "$runtime/qmp.sock" ]; then
   python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" quit || true

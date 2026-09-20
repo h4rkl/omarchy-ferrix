@@ -14,7 +14,7 @@ These rules apply repository-wide. Load only task-relevant detail: `docs/status.
 
 - Evaluate Catacomb reuse/contribution/fork before a new compositor; document gaps before choosing Smithay directly. Develop nested on the host with the versioned mock profile, then integrate into QEMU.
 - Weston and `mobile-basic-screen` are diagnostic/reference surfaces, not the product UI. The product shell is minimal, portrait, touch-first, software-rendered by default, and uses focused fullscreen flows rather than desktop window management. Acceleration must not be required for correctness.
-- Resolve UX choices in this order: explicit requirements, an Omarchy-inspired mobile interpretation (restrained, cohesive, low-noise), then GrapheneOS interaction conventions adapted to this visual system. Do not copy its branding; document intentional departures.
+- Resolve UX choices in this order: explicit requirements, Ferrum's restrained, cohesive, low-noise mobile visual system, then GrapheneOS interaction conventions adapted to that system. Do not copy external branding; document intentional departures.
 - Phase 3 includes launcher/status surfaces, gestures, on-screen keyboard, rotation, brightness, quick settings, notifications, and crash recovery.
 
 ## QEMU and evidence

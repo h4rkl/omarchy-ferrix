@@ -1,16 +1,16 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64
-accel=${OMARCHY_QEMU_ACCEL:-auto}
-graphics=${OMARCHY_QEMU_GRAPHICS:-off}
-mode=${OMARCHY_QEMU_MODE:-run}
-agent=${OMARCHY_QEMU_AGENT:-0}
-profile=${OMARCHY_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
+out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
+accel=${FERRIX_QEMU_ACCEL:-auto}
+graphics=${FERRIX_QEMU_GRAPHICS:-off}
+mode=${FERRIX_QEMU_MODE:-run}
+agent=${FERRIX_QEMU_AGENT:-0}
+profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
 case "$accel" in
   auto) [ "$(uname -s)" = Darwin ] && accel=hvf || accel=tcg ;;
   hvf|kvm|tcg) ;;
-  *) echo "invalid OMARCHY_QEMU_ACCEL: $accel" >&2; exit 2 ;;
+  *) echo "invalid FERRIX_QEMU_ACCEL: $accel" >&2; exit 2 ;;
 esac
 cpu=cortex-a57
 case "$accel" in
@@ -40,18 +40,18 @@ display_for() {
 [ -f "$out/Image" ] && [ -f "$out/initramfs.cpio.gz" ] || { echo "missing guest artifacts; run: just qemu-build" >&2; exit 2; }
 [ -f "$profile" ] || { echo "missing QEMU profile: $profile" >&2; exit 2; }
 set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m 1024 -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz"
-# Mock-control channel: a virtio-serial port named omarchy.control, exposed on
+# Mock-control channel: a virtio-serial port named ferrix.control, exposed on
 # the host as a local Unix socket. mobile-core reads line-delimited JSON
 # commands from it (see scripts/mock_control.py / `just qemu-mock`). Agent
 # sessions keep it beside their other runtime files.
 if [ "$agent" = 1 ]; then
-  control_socket=${OMARCHY_QEMU_CONTROL_SOCKET:-"$out/agent/control.sock"}
+  control_socket=${FERRIX_QEMU_CONTROL_SOCKET:-"$out/agent/control.sock"}
 else
-  control_socket=${OMARCHY_QEMU_CONTROL_SOCKET:-"$out/control.sock"}
+  control_socket=${FERRIX_QEMU_CONTROL_SOCKET:-"$out/control.sock"}
 fi
 mkdir -p "$(dirname "$control_socket")"
 rm -f "$control_socket"
-set -- "$@" -device virtio-serial-pci -chardev "socket,id=omctl,path=$control_socket,server=on,wait=off" -device virtserialport,chardev=omctl,name=omarchy.control
+set -- "$@" -device virtio-serial-pci -chardev "socket,id=omctl,path=$control_socket,server=on,wait=off" -device virtserialport,chardev=omctl,name=ferrix.control
 printf 'mock-control socket: %s\n' "$control_socket"
 if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   width=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
@@ -74,7 +74,7 @@ if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   case "$graphics" in
     off|none) ;;
     *)
-      window_h=${OMARCHY_QEMU_WINDOW_HEIGHT:-}
+      window_h=${FERRIX_QEMU_WINDOW_HEIGHT:-}
       scale=1
       metrics=$(host_window_metrics)
       if [ -n "$metrics" ]; then
@@ -85,7 +85,7 @@ if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
       else
         [ -n "$window_h" ] || window_h=800
       fi
-      case "$window_h" in *[!0-9]*|'') echo "invalid OMARCHY_QEMU_WINDOW_HEIGHT: $window_h" >&2; exit 2 ;; esac
+      case "$window_h" in *[!0-9]*|'') echo "invalid FERRIX_QEMU_WINDOW_HEIGHT: $window_h" >&2; exit 2 ;; esac
       case "$scale" in *[!0-9]*|''|0) scale=1 ;; esac
       [ "$window_h" -ge 200 ] || { echo "host window height too small: $window_h points" >&2; exit 2; }
       target_h=$(( window_h * scale ))
@@ -98,27 +98,27 @@ if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
       ;;
   esac
   gpu="virtio-gpu-pci,xres=$gpu_w,yres=$gpu_h"
-  graphics_args="omarchy.graphics=on omarchy.display=${gpu_w}x${gpu_h}"
+  graphics_args="ferrix.graphics=on ferrix.display=${gpu_w}x${gpu_h}"
   # Guest compositor: mobile-shell (Rust product compositor) or weston
   # (reference). Unset leaves the guest init's default in charge.
-  case "${OMARCHY_QEMU_SHELL:-}" in
+  case "${FERRIX_QEMU_SHELL:-}" in
     '') ;;
-    mobile-shell|weston) graphics_args="$graphics_args omarchy.shell=$OMARCHY_QEMU_SHELL" ;;
-    *) echo "invalid OMARCHY_QEMU_SHELL: $OMARCHY_QEMU_SHELL (mobile-shell|weston)" >&2; exit 2 ;;
+    mobile-shell|weston) graphics_args="$graphics_args ferrix.shell=$FERRIX_QEMU_SHELL" ;;
+    *) echo "invalid FERRIX_QEMU_SHELL: $FERRIX_QEMU_SHELL (mobile-shell|weston)" >&2; exit 2 ;;
   esac
 fi
 if [ "$agent" = 1 ]; then
   runtime="$out/agent"
-  qmp_socket=${OMARCHY_QEMU_QMP_SOCKET:-"$runtime/qmp.sock"}
-  serial_log=${OMARCHY_QEMU_SERIAL_LOG:-"$runtime/serial.log"}
+  qmp_socket=${FERRIX_QEMU_QMP_SOCKET:-"$runtime/qmp.sock"}
+  serial_log=${FERRIX_QEMU_SERIAL_LOG:-"$runtime/serial.log"}
   [ "$graphics" = off ] && graphics=none
   mkdir -p "$runtime"
   rm -f "$qmp_socket"
-  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -device virtio-keyboard-pci -display "$(display_for "$graphics")" -serial "file:$serial_log" -qmp "unix:$qmp_socket,server=on,wait=off"
+  set -- "$@" -append "console=ttyAMA0 panic=-1 ferrix.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -device virtio-keyboard-pci -display "$(display_for "$graphics")" -serial "file:$serial_log" -qmp "unix:$qmp_socket,server=on,wait=off"
 elif [ "$graphics" = off ]; then
-  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode" -nographic
+  set -- "$@" -append "console=ttyAMA0 panic=-1 ferrix.mode=$mode" -nographic
 else
-  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -device virtio-keyboard-pci -display "$(display_for "$graphics")" -serial mon:stdio
+  set -- "$@" -append "console=ttyAMA0 panic=-1 ferrix.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -device virtio-keyboard-pci -display "$(display_for "$graphics")" -serial mon:stdio
 fi
 printf 'QEMU command:'; printf ' %s' "$@"; printf '\n'
 exec "$@"

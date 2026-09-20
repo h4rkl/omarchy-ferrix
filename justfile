@@ -1,7 +1,7 @@
 set shell := ["/bin/sh", "-eu", "-c"]
 
 root := justfile_directory()
-out := env_var_or_default("OMARCHY_OUT_DIR", root + "/out") + "/qemu-aarch64"
+out := env_var_or_default("FERRIX_OUT_DIR", root + "/out") + "/qemu-aarch64"
 
 host-check:
     @echo "Host checks (no tools are installed)"

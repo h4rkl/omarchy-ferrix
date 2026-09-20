@@ -14,15 +14,15 @@
 # Evidence is QEMU/mock; nothing here touches a physical device.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64
+out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
 log="$out/serial.log"
 control="$out/control.sock"
 mock="$root/targets/qemu-aarch64/scripts/mock_control.py"
 # Bounded wait for the whole check, in seconds (0.1 s polling ticks). CI may
 # raise it because TCG on a hosted runner is slower than a local host.
-timeout=${OMARCHY_QEMU_CHECK_TIMEOUT:-90}
+timeout=${FERRIX_QEMU_CHECK_TIMEOUT:-90}
 case "$timeout" in
-  ""|*[!0-9]*|0) echo "invalid OMARCHY_QEMU_CHECK_TIMEOUT: $timeout (positive integer seconds)" >&2; exit 2 ;;
+  ""|*[!0-9]*|0) echo "invalid FERRIX_QEMU_CHECK_TIMEOUT: $timeout (positive integer seconds)" >&2; exit 2 ;;
 esac
 command -v python3 >/dev/null || { echo "missing python3; needed for the mock-control client" >&2; exit 2; }
 mkdir -p "$out"
@@ -54,7 +54,7 @@ wait_for() {
   done
 }
 
-OMARCHY_QEMU_ACCEL=tcg OMARCHY_QEMU_GRAPHICS=off OMARCHY_QEMU_MODE=check OMARCHY_QEMU_CONTROL_SOCKET="$control" \
+FERRIX_QEMU_ACCEL=tcg FERRIX_QEMU_GRAPHICS=off FERRIX_QEMU_MODE=check FERRIX_QEMU_CONTROL_SOCKET="$control" \
   "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$log" 2>&1 &
 qemu_pid=$!
 
@@ -93,4 +93,4 @@ status=0
 wait "$qemu_pid" || status=$?
 cat "$log"
 [ "$status" -eq 0 ] || fail "qemu-exit-$status"
-printf '{"evidence":"QEMU","event":"check-passed","transition":"unplugged-to-charging","channel":"virtio-serial omarchy.control","seconds":%s}\n' "$((tick / 10))"
+printf '{"evidence":"QEMU","event":"check-passed","transition":"unplugged-to-charging","channel":"virtio-serial ferrix.control","seconds":%s}\n' "$((tick / 10))"

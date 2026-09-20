@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This is the initial, implementation-ready baseline for the project's generic AArch64 QEMU virtual phone. It is the primary development and CI target for an Omarchy-inspired, Rust-first mobile shell and its project-owned services.
+This is the initial, implementation-ready baseline for Ferrum's generic AArch64 QEMU virtual phone. It is the primary development and CI target for a Rust-first mobile shell and its project-owned services.
 
-The project is not a new Linux distribution. It composes an existing mobile-Linux substrate with a deliberately small project layer: an Omarchy-style visual system, Rust mobile services, and (where justified) a Rust Wayland shell. postmarketOS and its tooling provide the initial guest-image, packaging, and QEMU route. Existing Linux system services remain authoritative for real hardware integration.
+Ferrum is the ship and product name. Ferrix is the kernel/userspace codename and runtime namespace. Gossan is reserved for a future device image; it does not rename the generic QEMU target or imply that a physical target exists. The project is not a new Linux distribution. It composes an existing mobile-Linux substrate with a deliberately small project layer: the Ferrum visual system, Rust mobile services, and (where justified) a Rust Wayland shell. postmarketOS and its tooling provide the initial guest-image, packaging, and QEMU route. Existing Linux system services remain authoritative for real hardware integration.
 
 The Solana Seeker is the intended eventual device target, subject to a separate, explicitly approved board-support proposal. Nothing in this baseline asserts Seeker compatibility, examines a Seeker, or authorizes device work. The generic emulator is the portability contract until that proposal supplies a recovery plan, capability evidence, and a Seeker-specific adapter package.
 
@@ -24,7 +24,7 @@ This is a generic virtual-phone environment. It must never claim to emulate or v
 | Hardware behavior | Versioned `hardware-emulator` profile | Deterministic state changes for local tests and CI. |
 | CI | Linux runner, TCG-compatible bounded smoke test | No dependency on Apple hardware, display server, or physical phone. |
 | Guest substrate | postmarketOS via `pmbootstrap` | Provides established mobile-Linux packaging, image construction, and a QEMU workflow rather than recreating a distribution build system. |
-| Project product layer | Omarchy-inspired Rust services and mobile shell | Keeps the work differentiated while reusing mature Linux hardware services and distribution infrastructure. |
+| Project product layer | Ferrum Rust services and mobile shell | Keeps the work differentiated while reusing mature Linux hardware services and distribution infrastructure. |
 
 ## Existing-project options and chosen boundary
 
@@ -115,12 +115,12 @@ Use these environment variables only as documented overrides. Defaults must work
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `OMARCHY_OUT_DIR` | `out` | Generated, ignored build artifacts. |
-| `OMARCHY_CACHE_DIR` | `.cache/omarchy` | Download and compiler cache; ignored. |
-| `OMARCHY_QEMU_ACCEL` | `auto` | `hvf`, `kvm`, `tcg`, or `auto`; `auto` resolves per host. |
-| `OMARCHY_QEMU_GRAPHICS` | `off` | `off`, `cocoa`, `gtk`, or another documented backend. Serial remains mandatory. |
-| `OMARCHY_QEMU_PROFILE` | `targets/qemu-aarch64/profile.toml` | Mock product profile path. |
-| `OMARCHY_CONTAINER_RUNTIME` | `docker` | Container command used by image-build recipes. |
+| `FERRIX_OUT_DIR` | `out` | Generated, ignored build artifacts. |
+| `FERRIX_CACHE_DIR` | `.cache/ferrix` | Download and compiler cache; ignored. |
+| `FERRIX_QEMU_ACCEL` | `auto` | `hvf`, `kvm`, `tcg`, or `auto`; `auto` resolves per host. |
+| `FERRIX_QEMU_GRAPHICS` | `off` | `off`, `cocoa`, `gtk`, or another documented backend. Serial remains mandatory. |
+| `FERRIX_QEMU_PROFILE` | `targets/qemu-aarch64/profile.toml` | Mock product profile path. |
+| `FERRIX_CONTAINER_RUNTIME` | `docker` | Container command used by image-build recipes. |
 
 Never put credentials, personal identifiers, or personal backups in `.env`, `out/`, or Git.
 

@@ -3,13 +3,13 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64
-profile=${OMARCHY_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
-socket=${OMARCHY_CORE_SOCKET:-"$out/core.sock"}
+out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
+profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
+socket=${FERRIX_CORE_SOCKET:-"$out/core.sock"}
 mkdir -p "$out"
 
 cargo build --manifest-path "$root/Cargo.toml" -p mobile-core -p mobile-shell
-OMARCHY_CORE_SOCKET="$socket" "$root/target/debug/mobile-core" "$profile" --control none &
+FERRIX_CORE_SOCKET="$socket" "$root/target/debug/mobile-core" "$profile" --control none &
 core_pid=$!
 cleanup() {
   kill "$core_pid" 2>/dev/null || true
@@ -24,4 +24,4 @@ while [ ! -S "$socket" ] && [ "$remaining" -gt 0 ]; do
 done
 [ -S "$socket" ] || { echo "mobile-core did not create $socket" >&2; exit 1; }
 
-OMARCHY_CORE_SOCKET="$socket" "$root/target/debug/mobile-shell" --nested --core "$socket" "$profile"
+FERRIX_CORE_SOCKET="$socket" "$root/target/debug/mobile-shell" --nested --core "$socket" "$profile"

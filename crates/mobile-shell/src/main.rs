@@ -1,4 +1,4 @@
-//! Omarchy mobile product compositor (`mobile-shell`).
+//! Ferrum mobile product compositor (`mobile-shell`).
 //!
 //! A Smithay-based Wayland compositor for the emulator-first mobile Linux
 //! environment: portrait, touch-first, fullscreen-only xdg-shell toplevels,
@@ -8,7 +8,7 @@
 //! device claim.
 //!
 //! Usage:
-//!   mobile-shell [/etc/omarchy/profile.toml]              # guest: DRM/libinput
+//!   mobile-shell [/etc/ferrix/profile.toml]              # guest: DRM/libinput
 //!   mobile-shell --nested targets/qemu-aarch64/profile.toml # Linux host window
 //!   mobile-shell --print-config PROFILE                     # any host: resolved config
 

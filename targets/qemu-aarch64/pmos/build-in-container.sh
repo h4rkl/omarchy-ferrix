@@ -5,13 +5,13 @@
 # the generic QEMU aarch64 device, injects the project readiness marker,
 # exports kernel/initramfs/rootfs image to /out and writes manifest.json.
 set -eu
-project=${OMARCHY_PMOS_PROJECT:-/project}
-out=${OMARCHY_PMOS_OUT:-/out}
-cache=${OMARCHY_PMBOOTSTRAP_CACHE:-/cache/pmbootstrap}
+project=${FERRIX_PMOS_PROJECT:-/project}
+out=${FERRIX_PMOS_OUT:-/out}
+cache=${FERRIX_PMBOOTSTRAP_CACHE:-/cache/pmbootstrap}
 work=$cache/work
 cfg=$cache/pmbootstrap_v3.cfg
 aports=$work/cache_git/pmaports
-password=${OMARCHY_PMOS_PASSWORD:-147147}
+password=${FERRIX_PMOS_PASSWORD:-147147}
 . "$project/pins.env"
 
 log() { printf '[pmos-build] %s\n' "$*"; }
@@ -65,7 +65,7 @@ pmb status || true
 # Detach loop devices and mounts a previous (possibly aborted) run left behind
 # in the Docker VM before touching the chroots.
 pmb shutdown
-if [ "${OMARCHY_PMOS_KEEP_CHROOTS:-0}" != 1 ]; then
+if [ "${FERRIX_PMOS_KEEP_CHROOTS:-0}" != 1 ]; then
   log "zapping existing chroots (packages and caches are kept)"
   pmb zap
 fi
@@ -77,7 +77,7 @@ pmb shutdown
 
 # 5. Finalize as root: inject the readiness marker, export boot files, record
 #    image facts, copy the image to /out.
-sudo -n env OMARCHY_PMOS_PROJECT="$project" OMARCHY_PMOS_OUT="$out" sh "$project/finalize-in-container.sh" "$img"
+sudo -n env FERRIX_PMOS_PROJECT="$project" FERRIX_PMOS_OUT="$out" sh "$project/finalize-in-container.sh" "$img"
 [ -f "$out/image-facts.json" ] || fail "no-image-facts" "finalize did not write image-facts.json"
 
 # 6. Manifest.
@@ -112,15 +112,19 @@ for name in sorted(facts["exported"]):
 manifest = {
     "schema_version": 1,
     "evidence": "QEMU",
+    "identity": {
+        "ship": "Ferrum",
+        "runtime_codename": "Ferrix",
+    },
     "route": "postmarketos-pmbootstrap",
     "target": "qemu-aarch64",
     "built_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "builder": {
         "base_image": os.environ["GUEST_BUILDER_BASE"],
-        "image_tag": os.environ.get("OMARCHY_BUILDER_IMAGE_TAG", ""),
-        "image_id": os.environ.get("OMARCHY_BUILDER_IMAGE_ID", ""),
+        "image_tag": os.environ.get("FERRIX_BUILDER_IMAGE_TAG", ""),
+        "image_id": os.environ.get("FERRIX_BUILDER_IMAGE_ID", ""),
         "privileges": "--privileged (mount, chroot, loop devices)",
-        "work_mount": os.environ.get("OMARCHY_PMOS_WORK_MOUNT", ""),
+        "work_mount": os.environ.get("FERRIX_PMOS_WORK_MOUNT", ""),
     },
     "pmbootstrap": {
         "version": os.environ["pmb_version"],
@@ -149,11 +153,11 @@ manifest = {
         "product": facts["product"],
     },
     "project": {
-        "revision": os.environ.get("OMARCHY_PROJECT_REV", "unknown"),
+        "revision": os.environ.get("FERRIX_PROJECT_REV", "unknown"),
         "pins_env_sha256": sha256(os.path.join(project, "pins.env")),
         "pmbootstrap_cfg_sha256": sha256(os.path.join(project, "pmbootstrap.cfg")),
-        "marker_sha256": sha256(os.path.join(project, "local.d", "omarchy-boot-health.start")),
-        "product_start_sha256": sha256(os.path.join(project, "local.d", "00-omarchy-product.start")),
+        "marker_sha256": sha256(os.path.join(project, "local.d", "ferrix-boot-health.start")),
+        "product_start_sha256": sha256(os.path.join(project, "local.d", "00-ferrix-product.start")),
     },
     "artifacts": artifacts,
 }

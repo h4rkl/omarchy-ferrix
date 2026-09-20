@@ -85,7 +85,7 @@ sourced through `hardware-api` adapters instead of D-Bus in the compositor.
 | Portrait, fullscreen-only xdg toplevels | Implemented (`layout::WindowStack`, `XdgShellHandler`: newest mapped toplevel fills the output; only the Fullscreen wm capability is advertised). |
 | Software rendering by default | Implemented on the `udev` backend (`PixmanRenderer` + `DumbAllocator` + `DrmCompositor`, overlay/cursor planes disabled). |
 | wl_seat keyboard + pointer + touch from libinput | Implemented (virtio-keyboard, virtio-tablet as absolute pointer; touch path wired for real touchscreens). |
-| Output pinned to `omarchy.display=WxH` / profile | Implemented (`config::ShellConfig::resolve`; connector mode match, else synthesised 60 Hz mode). |
+| Output pinned to `ferrix.display=WxH` / profile | Implemented (`config::ShellConfig::resolve`; connector mode match, else synthesised 60 Hz mode). |
 | wlr-layer-shell reserved for status/launcher | Implemented (`WlrLayerShellHandler`, Smithay `LayerMap`; rendered above/below the toplevel by layer). |
 | Nested winit backend from the mock profile | Implemented (`--nested targets/qemu-aarch64/profile.toml`, Linux host only; `mock` evidence). |
 | Machine-readable readiness | Implemented (`compositor-ready`, `client-mapped`, `client-unmapped`, `compositor-frame`, `compositor-failed`, `input-device`, `drm-output`, `display-geometry`). |

@@ -1,8 +1,8 @@
 //! Mock-control channel.
 //!
 //! On the generic QEMU target the host exposes a `virtio-serial` port named
-//! `omarchy.control`; the guest side appears as `/dev/vportNpM` (and as
-//! `/dev/virtio-ports/omarchy.control` when udev runs). The channel carries
+//! `ferrix.control`; the guest side appears as `/dev/vportNpM` (and as
+//! `/dev/virtio-ports/ferrix.control` when udev runs). The channel carries
 //! line-delimited [`ControlCommand`] JSON in and [`Ack`] JSON out. It is
 //! test control of mocked state, never a product interface.
 //!
@@ -21,9 +21,9 @@ use serde_json::json;
 
 use crate::protocol::{Ack, ControlCommand};
 
-pub const PORT_NAME: &str = "omarchy.control";
+pub const PORT_NAME: &str = "ferrix.control";
 const SYSFS_PORTS: &str = "/sys/class/virtio-ports";
-const UDEV_LINK: &str = "/dev/virtio-ports/omarchy.control";
+const UDEV_LINK: &str = "/dev/virtio-ports/ferrix.control";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ControlPath {

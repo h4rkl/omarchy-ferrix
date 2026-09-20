@@ -1,0 +1,67 @@
+#!/bin/sh
+# Start the same Rust product stack used by the Alpine smoke route. This runs
+# before ferrix-boot-health.start (OpenRC local.d lexical order).
+set -eu
+
+mkdir -p /run/ferrix /run/user/0
+chmod 0700 /run/user/0
+export XDG_RUNTIME_DIR=/run/user/0
+export FERRIX_CORE_SOCKET=/run/ferrix/core.sock
+
+/usr/bin/mobile-core /etc/ferrix/profile.toml --control none &
+core_pid=$!
+ready=false
+for _ in $(seq 1 200); do
+  if [ -S "$FERRIX_CORE_SOCKET" ] && kill -0 "$core_pid" 2>/dev/null; then
+    ready=true
+    break
+  fi
+  kill -0 "$core_pid" 2>/dev/null || break
+  sleep 0.1
+done
+[ "$ready" = true ] || {
+  printf '%s\n' '{"evidence":"QEMU","event":"product-core-failed"}' > /dev/console
+  exit 1
+}
+printf '%s\n' '{"evidence":"QEMU","event":"product-core-ready","socket":"/run/ferrix/core.sock"}' > /dev/console
+
+case " $(cat /proc/cmdline 2>/dev/null) " in
+  *" ferrix.graphics=on "*) ;;
+  *) exit 0 ;;
+esac
+
+modprobe virtio_gpu 2>/dev/null || true
+modprobe virtio_input 2>/dev/null || true
+if ! rc-service seatd start >/dev/null 2>&1; then
+  seatd -n -g root &
+fi
+sleep 1
+/usr/bin/mobile-shell --core "$FERRIX_CORE_SOCKET" /etc/ferrix/profile.toml >/run/ferrix/mobile-shell.log 2>&1 &
+shell_pid=$!
+for _ in $(seq 1 200); do
+  if [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && grep -q '"event":"compositor-ready"' /run/ferrix/mobile-shell.log 2>/dev/null; then
+    break
+  fi
+  kill -0 "$shell_pid" 2>/dev/null || break
+  sleep 0.1
+done
+[ -S "$XDG_RUNTIME_DIR/wayland-0" ] || {
+  cat /run/ferrix/mobile-shell.log > /dev/console
+  exit 1
+}
+HOME=/home/user USER=user SHELL=/bin/sh WAYLAND_DISPLAY=wayland-0 \
+  /usr/bin/mobile-basic-screen /etc/ferrix/profile.toml --core "$FERRIX_CORE_SOCKET" \
+  >/run/ferrix/mobile-basic-screen.log 2>&1 &
+screen_pid=$!
+for _ in $(seq 1 100); do
+  grep -q '"event":"basic-screen-frame"' /run/ferrix/mobile-basic-screen.log 2>/dev/null && break
+  kill -0 "$screen_pid" 2>/dev/null || break
+  sleep 0.1
+done
+grep -q '"event":"basic-screen-frame"' /run/ferrix/mobile-basic-screen.log || {
+  cat /run/ferrix/mobile-basic-screen.log > /dev/console
+  exit 1
+}
+cat /run/ferrix/mobile-shell.log > /dev/console
+cat /run/ferrix/mobile-basic-screen.log > /dev/console
+printf '%s\n' '{"evidence":"QEMU","event":"product-wayland-ready","compositor":"mobile-shell","client":"mobile-basic-screen"}' > /dev/console

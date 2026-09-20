@@ -17,7 +17,7 @@ use hardware_api::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_SOCKET: &str = "/run/omarchy/core.sock";
+pub const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "request", rename_all = "kebab-case")]

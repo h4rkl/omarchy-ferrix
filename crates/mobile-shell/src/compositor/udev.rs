@@ -159,7 +159,7 @@ pub fn run(
     let seat_name = session.seat();
 
     let udev = UdevBackend::new(&seat_name).map_err(|e| ("udev", e.to_string()))?;
-    let path = match std::env::var("OMARCHY_DRM_DEVICE") {
+    let path = match std::env::var("FERRIX_DRM_DEVICE") {
         Ok(path) => std::path::PathBuf::from(path),
         Err(_) => primary_gpu(&seat_name)
             .ok()

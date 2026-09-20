@@ -2,11 +2,11 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64
+out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
 runtime="$out/agent"
 pid_file="$runtime/qemu.pid"
 launch_log="$runtime/launch.log"
-profile=${OMARCHY_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
+profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
 
 [ -f "$out/Image" ] && [ -f "$out/initramfs.cpio.gz" ] || { echo "missing guest artifacts; run: just qemu-build" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "missing python3; needed for QMP framebuffer and input control" >&2; exit 2; }
@@ -20,7 +20,7 @@ printf 'starting QEMU agent session\n'
 printf 'serial log: %s\nQMP socket: %s\n' "$runtime/serial.log" "$runtime/qmp.sock"
 # TCG is the portable agent default. A host accelerator remains an explicit
 # override because graphics/readback behavior varies across host backends.
-OMARCHY_QEMU_AGENT=1 OMARCHY_QEMU_MODE=agent OMARCHY_QEMU_ACCEL=${OMARCHY_QEMU_ACCEL:-tcg} OMARCHY_QEMU_GRAPHICS=${OMARCHY_QEMU_GRAPHICS:-none} "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$launch_log" 2>&1 &
+FERRIX_QEMU_AGENT=1 FERRIX_QEMU_MODE=agent FERRIX_QEMU_ACCEL=${FERRIX_QEMU_ACCEL:-tcg} FERRIX_QEMU_GRAPHICS=${FERRIX_QEMU_GRAPHICS:-none} "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$launch_log" 2>&1 &
 pid=$!
 printf '%s\n' "$pid" > "$pid_file"
 for _ in $(seq 1 100); do

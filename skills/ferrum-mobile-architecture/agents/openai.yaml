@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ferrum Mobile Architecture"
+  short_description: "Guide Rust-first multi-runtime mobile architecture"
+  default_prompt: "Use $ferrum-mobile-architecture to design this Ferrum mobile OS change against the agreed Rust-first architecture."

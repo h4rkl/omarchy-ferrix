@@ -6,12 +6,12 @@
 # copies the image to the output directory.
 set -eu
 img=$1
-project=${OMARCHY_PMOS_PROJECT:-/project}
-out=${OMARCHY_PMOS_OUT:-/out}
-marker_src="$project/local.d/omarchy-boot-health.start"
-marker_dst=/etc/local.d/omarchy-boot-health.start
-product_src="$project/local.d/00-omarchy-product.start"
-product_dst=/etc/local.d/00-omarchy-product.start
+project=${FERRIX_PMOS_PROJECT:-/project}
+out=${FERRIX_PMOS_OUT:-/out}
+marker_src="$project/local.d/ferrix-boot-health.start"
+marker_dst=/etc/local.d/ferrix-boot-health.start
+product_src="$project/local.d/00-ferrix-product.start"
+product_dst=/etc/local.d/00-ferrix-product.start
 
 log() { printf '[pmos-finalize] %s\n' "$*"; }
 fail() {
@@ -72,7 +72,7 @@ install -Dm755 "$product_src" "$mnt$product_dst"
 install -Dm755 /product/mobile-core "$mnt/usr/bin/mobile-core"
 install -Dm755 /product/mobile-shell "$mnt/usr/bin/mobile-shell"
 install -Dm755 /product/mobile-basic-screen "$mnt/usr/bin/mobile-basic-screen"
-install -Dm644 /product/profile.toml "$mnt/etc/omarchy/profile.toml"
+install -Dm644 /product/profile.toml "$mnt/etc/ferrix/profile.toml"
 local_enabled=true
 # -L as well as -e: the runlevel entry is a symlink to /etc/init.d/local that
 # dangles when resolved against the container's own root.

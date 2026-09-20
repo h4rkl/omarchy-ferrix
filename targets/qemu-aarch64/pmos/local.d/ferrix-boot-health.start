@@ -5,15 +5,15 @@
 # Evidence label is QEMU: this is a virtual machine, never a physical device.
 mode=run
 case " $(cat /proc/cmdline 2>/dev/null) " in
-  *" omarchy.mode=check "*) mode=check ;;
+  *" ferrix.mode=check "*) mode=check ;;
 esac
-[ -S /run/omarchy/core.sock ] || {
+[ -S /run/ferrix/core.sock ] || {
   printf '%s\n' '{"evidence":"QEMU","event":"pmos-boot-health","status":"failed","reason":"mobile-core-not-ready"}' > /dev/console
   exit 1
 }
 record="{\"evidence\":\"QEMU\",\"event\":\"pmos-boot-health\",\"status\":\"ok\",\"substrate\":\"postmarketos\",\"init\":\"openrc\",\"runlevel\":\"default\",\"mode\":\"$mode\"}"
 printf '%s\n' "$record" > /dev/console
-logger -t omarchy "$record" 2>/dev/null || true
+logger -t ferrix "$record" 2>/dev/null || true
 if [ "$mode" = check ]; then
   printf '%s\n' '{"evidence":"QEMU","event":"pmos-check-poweroff"}' > /dev/console
   # Orderly OpenRC shutdown; QEMU exits when the guest powers off.

@@ -1,6 +1,6 @@
 [package]
 name = "mobile-basic-screen"
-description = "Omarchy-styled QEMU reference basic screen: a software-rendered Wayland client, not the product shell"
+description = "Ferrum-styled QEMU reference basic screen: a software-rendered Wayland client, not the product shell"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-runtime=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
+runtime=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
 [ -S "$runtime/qmp.sock" ] || { echo "QEMU agent session is not running; run: just qemu-agent-start" >&2; exit 2; }
 result="$runtime/frame-result.json"
 for _ in $(seq 1 25); do

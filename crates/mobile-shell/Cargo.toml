@@ -1,6 +1,6 @@
 [package]
 name = "mobile-shell"
-description = "Omarchy mobile product compositor: Smithay-based, software-rendered, portrait, fullscreen-only Wayland shell for the QEMU guest (DRM/libinput) and nested host development (winit)"
+description = "Ferrum mobile product compositor: Smithay-based, software-rendered, portrait, fullscreen-only Wayland shell for the QEMU guest (DRM/libinput) and nested host development (winit)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

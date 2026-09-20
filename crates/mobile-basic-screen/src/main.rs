@@ -1,4 +1,4 @@
-//! Omarchy-styled QEMU reference basic screen.
+//! Ferrum-styled QEMU reference basic screen.
 //!
 //! A small software-rendered Wayland client that draws the first mobile
 //! surface from the versioned mock profile. It is QEMU/mock evidence for the
@@ -10,7 +10,7 @@
 //! adapter.
 //!
 //! Usage:
-//!   mobile-basic-screen [profile.toml] [--core /run/omarchy/core.sock]
+//!   mobile-basic-screen [profile.toml] [--core /run/ferrix/core.sock]
 //!                                                  # guest: connect to Wayland
 //!   mobile-basic-screen [profile.toml] --preview p.ppm  # any host: render PPM
 //!   mobile-basic-screen [profile.toml] --preview p.ppm --page terminal
@@ -56,13 +56,13 @@ pub(crate) fn test_state() -> HardwareState {
 }
 
 /// Canned shell transcript for the host preview; no PTY is involved.
-const PREVIEW_TRANSCRIPT: &[u8] = b"root@omarchy:~# uname -a\r\n\
-Linux omarchy 6.12.0-virt #1 SMP aarch64 Linux\r\n\
-root@omarchy:~# ls --color=always /\r\n\
+const PREVIEW_TRANSCRIPT: &[u8] = b"root@ferrix:~# uname -a\r\n\
+Linux ferrix 6.12.0-virt #1 SMP aarch64 Linux\r\n\
+root@ferrix:~# ls --color=always /\r\n\
 \x1b[1;34mbin\x1b[0m   \x1b[1;34mdev\x1b[0m   \x1b[1;34metc\x1b[0m   \x1b[1;34mproc\x1b[0m  \x1b[1;34mroot\x1b[0m  \x1b[1;34mrun\x1b[0m   \x1b[1;34msys\x1b[0m   \x1b[1;34musr\x1b[0m\r\n\
-root@omarchy:~# printf '\\033[32mok\\033[0m\\n'\r\n\
+root@ferrix:~# printf '\\033[32mok\\033[0m\\n'\r\n\
 \x1b[32mok\x1b[0m\r\n\
-root@omarchy:~# ";
+root@ferrix:~# ";
 
 fn main() -> ExitCode {
     match run() {
@@ -80,7 +80,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut profile_path = mobile_session::GUEST_PROFILE_PATH.to_owned();
-    let mut core_socket = std::env::var("OMARCHY_CORE_SOCKET")
+    let mut core_socket = std::env::var("FERRIX_CORE_SOCKET")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| mobile_protocol::DEFAULT_SOCKET.to_owned());

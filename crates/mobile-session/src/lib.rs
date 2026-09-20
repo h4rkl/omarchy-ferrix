@@ -22,13 +22,13 @@ use hardware_api::{
 use target_profile::{Profile, ProfileError};
 
 /// Profile path inside the guest image.
-pub const GUEST_PROFILE_PATH: &str = "/etc/omarchy/profile.toml";
+pub const GUEST_PROFILE_PATH: &str = "/etc/ferrix/profile.toml";
 /// Profile path when run from the repository root (host tests, nested shell).
 pub const REPO_PROFILE_PATH: &str = "targets/qemu-aarch64/profile.toml";
 /// Environment override for the profile path.
-pub const PROFILE_ENV: &str = "OMARCHY_QEMU_PROFILE";
+pub const PROFILE_ENV: &str = "FERRIX_QEMU_PROFILE";
 /// Environment override for the target id.
-pub const TARGET_ENV: &str = "OMARCHY_TARGET";
+pub const TARGET_ENV: &str = "FERRIX_TARGET";
 /// The default and only supported target.
 pub const DEFAULT_TARGET_ID: &str = hardware_emulator::TARGET_ID;
 
@@ -39,7 +39,7 @@ pub struct BootstrapOptions {
 }
 
 impl BootstrapOptions {
-    /// Reads `OMARCHY_QEMU_PROFILE` and `OMARCHY_TARGET`.
+    /// Reads `FERRIX_QEMU_PROFILE` and `FERRIX_TARGET`.
     pub fn from_env() -> Self {
         Self {
             profile_path: std::env::var_os(PROFILE_ENV).map(PathBuf::from),

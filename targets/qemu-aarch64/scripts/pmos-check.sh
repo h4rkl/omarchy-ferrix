@@ -6,8 +6,8 @@
 # Evidence label: QEMU. Never a physical-device claim.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/pmos
-timeout=${OMARCHY_PMOS_CHECK_TIMEOUT:-600}
+out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/pmos
+timeout=${FERRIX_PMOS_CHECK_TIMEOUT:-600}
 log="$out/check/serial.log"
 mkdir -p "$out/check"
 
@@ -40,7 +40,7 @@ sys.exit(0 if ok else 1)
 PY
 
 start=$(date +%s)
-OMARCHY_QEMU_ACCEL=tcg OMARCHY_QEMU_GRAPHICS=off OMARCHY_QEMU_MODE=check \
+FERRIX_QEMU_ACCEL=tcg FERRIX_QEMU_GRAPHICS=off FERRIX_QEMU_MODE=check \
   "$root/targets/qemu-aarch64/scripts/pmos-run.sh" >"$log" 2>&1 &
 qemu_pid=$!
 ticks=$((timeout * 2))

@@ -93,14 +93,14 @@ jobs:
     timeout-minutes: ${{ inputs.qemu_runner == 'ubuntu-latest' && 180 || 60 }}
     env:
       # Always portable TCG: no KVM/HVF required for correctness.
-      OMARCHY_QEMU_ACCEL: tcg
+      FERRIX_QEMU_ACCEL: tcg
       # Bounded wait for the guest smoke check, in seconds. The local default
       # (45 s) is tuned for an Apple Silicon host; TCG on a hosted runner is
       # slower, so give the guest more headroom. This is only a ceiling: the
       # check still ends as soon as the guest powers off.
-      OMARCHY_QEMU_CHECK_TIMEOUT: "300"
+      FERRIX_QEMU_CHECK_TIMEOUT: "300"
       # Cargo registry + guest target directory used by the build containers.
-      OMARCHY_CACHE_DIR: ${{ github.workspace }}/.cache/omarchy
+      FERRIX_CACHE_DIR: ${{ github.workspace }}/.cache/ferrix
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,10 +146,10 @@ jobs:
         id: guest-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .cache/omarchy
-          key: omarchy-guest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'targets/qemu-aarch64/scripts/qemu-build.sh') }}
+          path: .cache/ferrix
+          key: ferrix-guest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'targets/qemu-aarch64/scripts/qemu-build.sh') }}
           restore-keys: |
-            omarchy-guest-${{ runner.os }}-${{ runner.arch }}-
+            ferrix-guest-${{ runner.os }}-${{ runner.arch }}-
 
       - name: just qemu-build
         run: just qemu-build
@@ -161,7 +161,7 @@ jobs:
         if: always() && steps.guest-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: .cache/omarchy
+          path: .cache/ferrix
           key: ${{ steps.guest-cache.outputs.cache-primary-key }}
 
       # Preserve the serial log and the pinned-input manifest on success and

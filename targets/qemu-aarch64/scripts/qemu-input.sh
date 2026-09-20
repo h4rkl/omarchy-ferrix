@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-runtime=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
+runtime=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
 [ -S "$runtime/qmp.sock" ] || { echo "QEMU agent session is not running; run: just qemu-agent-start" >&2; exit 2; }
 [ "$#" -ge 2 ] || { echo "usage: qemu-input.sh tap X Y | swipe X1 Y1 X2 Y2 | key QCODE" >&2; exit 2; }
 if [ "$1" = tap ] || [ "$1" = swipe ]; then
@@ -11,7 +11,7 @@ if [ "$1" = tap ] || [ "$1" = swipe ]; then
   else
     [ "$#" -eq 5 ] || { echo "usage: qemu-input.sh swipe X1 Y1 X2 Y2" >&2; exit 2; }
   fi
-  profile=${OMARCHY_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
+  profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
   width=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
   height=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
   [ -n "$width" ] && [ -n "$height" ] || { echo "unable to read display dimensions from $profile" >&2; exit 2; }

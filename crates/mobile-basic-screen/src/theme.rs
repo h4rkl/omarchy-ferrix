@@ -1,4 +1,4 @@
-//! Tokyo Night palette, matching Omarchy's default theme. Values are 0xRRGGBB.
+//! Tokyo Night palette, matching Ferrum's default theme. Values are 0xRRGGBB.
 
 pub const BG: u32 = 0x1a1b26;
 pub const BG_DARK: u32 = 0x16161e;

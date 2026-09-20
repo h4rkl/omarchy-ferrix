@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-runtime=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
+runtime=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
 pid_file="$runtime/qemu.pid"
 if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
   printf 'QEMU agent session: running (pid %s)\n' "$(cat "$pid_file")"

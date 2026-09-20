@@ -1,4 +1,4 @@
-//! Composition of the basic screen. Omarchy look and feel (Tokyo Night palette,
+//! Composition of the basic screen. Ferrum look and feel (Tokyo Night palette,
 //! monospace type, flat bordered surfaces); GrapheneOS-style status bar,
 //! minimal launcher grid, and bottom gesture pill where mobile UX is needed.
 //! This is a QEMU reference surface rendered from the mock profile, not the
@@ -116,7 +116,7 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
     let clock_style = Style::bold(s(150) as f32, theme::FG);
     let clock_width = ty.width(clock_style, clock);
     ty.text(c, clock_style, clock, s(460) - clock_width / 2, s(280));
-    let greeting = "Omarchy mobile";
+    let greeting = "Ferrum mobile";
     let greeting_style = Style::regular(s(38) as f32, theme::FG_DIM);
     let greeting_width = ty.width(greeting_style, greeting);
     ty.text(
@@ -820,7 +820,7 @@ fn app_page(c: &mut Canvas, ty: &Type, app: AppId, state: &UiState) {
         AppId::Terminal => (
             theme::PURPLE,
             "SHELL",
-            "guest@omarchy:~$",
+            "guest@ferrix:~$",
             "The mandatory serial console remains available in the host terminal.",
         ),
         AppId::Dialer => (
@@ -920,7 +920,7 @@ pub fn terminal_metrics(ty: &Type, width: u32, height: u32) -> TermMetrics {
 }
 
 /// The Terminal app: a real shell's grid above the touch keyboard. Flat
-/// Omarchy surfaces, the launcher tile's purple as the single accent.
+/// Ferrum surfaces, the launcher tile's purple as the single accent.
 fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snapshot>) {
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
@@ -1407,7 +1407,7 @@ mod tests {
         state.page = Page::App(AppId::Terminal);
         let m = terminal_metrics(&ty, 1080, 2340);
         assert!(m.cols >= 50 && m.rows >= 25, "{}x{}", m.cols, m.rows);
-        let snap = Snapshot::from_bytes(m.cols, m.rows, b"root@omarchy:~# \x1b[42m  \x1b[0m");
+        let snap = Snapshot::from_bytes(m.cols, m.rows, b"root@ferrix:~# \x1b[42m  \x1b[0m");
         let c = compose(&p, 600, &ty, 1080, 2340, &state, Some(&snap));
         // Grid panel background, a green cell background, and the block cursor.
         let blank = (

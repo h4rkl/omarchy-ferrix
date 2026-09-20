@@ -123,8 +123,8 @@ pub fn run(profile: &Profile, core: Subscription, minute: u32) -> Result<(), Str
 
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
-    window.set_app_id("org.omarchy.mobile-basic-screen");
-    window.set_title("Omarchy basic screen (QEMU reference)");
+    window.set_app_id("org.ferrix.mobile-basic-screen");
+    window.set_title("Ferrum basic screen (QEMU reference)");
     window.set_fullscreen(None);
     window.commit();
 

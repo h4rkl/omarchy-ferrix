@@ -1,9 +1,9 @@
 ---
-name: omarchy-mobile-architecture
-description: Guide architecture, planning, and implementation for Omarchy's proposed Linux-hosted, Rust-first mobile OS with Rust/TypeScript-native apps, QEMU-first development, portable device adapters, and optional Android APK compatibility. Use for shell, app-platform, runtime, service, hardware-boundary, or target-design work; do not use for unrelated fixes or as evidence of current Seeker support.
+name: ferrum-mobile-architecture
+description: Guide architecture, planning, and implementation for Ferrum's proposed Linux-hosted, Rust-first mobile OS with Rust/TypeScript-native apps, QEMU-first development, portable device adapters, and optional Android APK compatibility. Use for shell, app-platform, runtime, service, hardware-boundary, or target-design work; do not use for unrelated fixes or as evidence of current Seeker support.
 ---
 
-# Omarchy Mobile Architecture
+# Ferrum Mobile Architecture
 
 Use this skill to keep architectural work aligned with the proposed long-term product direction: Linux is the host OS, Rust owns project services and policy, Rust and TypeScript are first-class application paths, and Android is an optional contained compatibility runtime rather than the host architecture.
 

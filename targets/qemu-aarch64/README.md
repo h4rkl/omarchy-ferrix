@@ -1,6 +1,9 @@
 # Generic AArch64 QEMU virtual phone
 
 This is a **QEMU/mock** target, never a physical-device claim. It uses QEMU `virt`, a serial console, and the versioned mock profile in `profile.toml`.
+It runs Ferrum's Ferrix-codenamed kernel/userspace surface. The emulator and its
+artifacts retain the technical `qemu-aarch64` identity; Gossan is reserved for
+a future device image.
 
 ## Install (macOS / Apple Silicon)
 
@@ -50,7 +53,7 @@ channel, waits for the `power-changed` event the core emits, then sends
 `shutdown` and requires a clean QEMU exit. Every failure is a machine-readable
 `check-failed` record; there is no fallback that prints success. Inspect the
 captured serial output at `out/qemu-aarch64/serial.log`.
-`OMARCHY_QEMU_CHECK_TIMEOUT` (seconds, default 90) bounds the whole check.
+`FERRIX_QEMU_CHECK_TIMEOUT` (seconds, default 90) bounds the whole check.
 
 ### Guest services and the mock-control channel
 
@@ -61,7 +64,7 @@ persistent daemon before anything else. It bootstraps through
 target id `qemu-aarch64`; product code (`mobile-core`, `mobile-basic-screen`,
 `mobile-shell`) depends only on `hardware-api`, and `just arch-check` fails
 if that boundary is crossed. The daemon serves typed state and an event
-stream on `/run/omarchy/core.sock` (line-delimited JSON: `{"request":"state"}`,
+stream on `/run/ferrix/core.sock` (line-delimited JSON: `{"request":"state"}`,
 `{"request":"subscribe"}`, and typed product `{"request":"command",...}`
 requests) and prints every event as a JSON record on the
 serial console. If the binary is missing, exits, or never binds its socket,
@@ -69,9 +72,9 @@ init prints `{"evidence":"QEMU","event":"boot-failed","reason":...}` and, in
 check mode, powers off.
 
 Every QEMU session also attaches a `virtio-serial` port named
-`omarchy.control`, exposed on the host as a Unix socket
+`ferrix.control`, exposed on the host as a Unix socket
 (`out/qemu-aarch64/control.sock`, or `agent/control.sock` for agent sessions;
-`OMARCHY_QEMU_CONTROL_SOCKET` overrides). `mobile-core` reads line-delimited
+`FERRIX_QEMU_CONTROL_SOCKET` overrides). `mobile-core` reads line-delimited
 JSON commands from the guest side (`/dev/vport1p1`, auto-detected via sysfs),
 applies them through the emulator adapter, publishes the resulting
 `HardwareEvent` to serial and to subscribed UI clients, and replies with an
@@ -107,7 +110,7 @@ socket; they do not mutate UI-only state or expose the host mock protocol.
 To open the experimental QEMU Cocoa window and start the guest Wayland compositor, run:
 
 ```sh
-OMARCHY_QEMU_GRAPHICS=cocoa just qemu-run
+FERRIX_QEMU_GRAPHICS=cocoa just qemu-run
 ```
 
 The guest compositor is `mobile-shell` (crate `crates/mobile-shell`), the Rust
@@ -119,11 +122,11 @@ window is QEMU's virtual display. Weston remains selectable as the reference
 compositor:
 
 ```sh
-OMARCHY_QEMU_SHELL=weston OMARCHY_QEMU_GRAPHICS=cocoa just qemu-run
-OMARCHY_QEMU_SHELL=mobile-shell just qemu-agent-start   # the default
+FERRIX_QEMU_SHELL=weston FERRIX_QEMU_GRAPHICS=cocoa just qemu-run
+FERRIX_QEMU_SHELL=mobile-shell just qemu-agent-start   # the default
 ```
 
-The selection travels to the guest as `omarchy.shell=` on the kernel command
+The selection travels to the guest as `ferrix.shell=` on the kernel command
 line; the guest init defaults to `mobile-shell`. Readiness stays observable:
 `mobile-shell` prints `compositor-ready` only once the Wayland socket is
 listening and the DRM output is configured, `client-mapped` when a toplevel
@@ -145,13 +148,13 @@ The host window is sized to fit the desktop. `qemu-run.sh` reads the host's
 visible screen height and backing scale (macOS, via `osascript`), scales the
 profile's portrait panel to that height in physical pixels (aspect ratio
 preserved, never upscaled), and passes the result to the guest as
-`omarchy.display=WxH`. `mobile-shell` reads that value and pins its DRM mode to
-it; for the Weston fallback the guest init generates `/etc/omarchy/weston.ini`
+`ferrix.display=WxH`. `mobile-shell` reads that value and pins its DRM mode to
+it; for the Weston fallback the guest init generates `/etc/ferrix/weston.ini`
 (connector `Virtual-1`, idle blanking off) with the same mode. Pinning matters
 because QEMU's Cocoa UI otherwise pushes its own window size into virtio-gpu and
 the guest surface ends up at an arbitrary size. On a 1920x1080-point Retina
 desktop this opens a fixed 415x900-point window showing an 830x1800 guest panel
-at 1:1 host pixels. Set `OMARCHY_QEMU_WINDOW_HEIGHT` (logical points) to
+at 1:1 host pixels. Set `FERRIX_QEMU_WINDOW_HEIGHT` (logical points) to
 override the automatic height; QEMU's View menu "Zoom To Fit" makes the window
 resizable. Headless sessions (`-display none`) keep the full profile panel so
 framebuffer evidence stays at the mock geometry, and `just qemu-tap` coordinates
@@ -159,7 +162,7 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `mobile-basic-screen`, a fullscreen Rust Wayland client (crate `crates/mobile-basic-screen`) that software-renders an Omarchy-styled basic screen — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, launcher grid, and gesture pill — from the emulator profile's battery, network, and display state. It is built on `smithay-client-toolkit`, `tiny-skia`, and `fontdue`, and is intentionally a reference surface, not the final Rust shell or compositor. Preview it on any host without QEMU:
+The first visible surface is `mobile-basic-screen`, a fullscreen Rust Wayland client (crate `crates/mobile-basic-screen`) that software-renders a Ferrum-styled basic screen — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, launcher grid, and gesture pill — from the emulator profile's battery, network, and display state. It is built on `smithay-client-toolkit`, `tiny-skia`, and `fontdue`, and is intentionally a reference surface, not the final Rust shell or compositor. Preview it on any host without QEMU:
 
 ```sh
 cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
@@ -192,12 +195,12 @@ machine-readable QEMU record and fails if the framebuffer is entirely blank,
 while retaining the PNG for diagnosis.
 
 The agent session is headless by default (`-display none`) and uses portable TCG
-unless `OMARCHY_QEMU_ACCEL` is explicitly set, so it remains useful on hosts
+unless `FERRIX_QEMU_ACCEL` is explicitly set, so it remains useful on hosts
 without a display server. To simultaneously open a local QEMU window, choose a
 host backend:
 
 ```sh
-OMARCHY_QEMU_GRAPHICS=cocoa just qemu-agent-start
+FERRIX_QEMU_GRAPHICS=cocoa just qemu-agent-start
 ```
 
 For deterministic input, coordinates are portrait framebuffer pixels from
@@ -269,7 +272,7 @@ out/qemu-aarch64/agent/launch.log    # resolved QEMU command and host errors
 Run only one session per output directory: `qemu-build`, the check, and the
 agent session all share `out/qemu-aarch64/`, so a concurrent rebuild
 truncates the initramfs under a booting guest and two guests would fight over
-the same control socket. Set `OMARCHY_OUT_DIR` to isolate parallel work.
+the same control socket. Set `FERRIX_OUT_DIR` to isolate parallel work.
 
 `python3` is the only additional host prerequisite for this mode. Its standard
 library is used by the checked-in QMP helper; no Python packages are installed.
@@ -333,9 +336,9 @@ clone between runs), the checked-in `targets/qemu-aarch64/pmos/` inputs (ro),
 the product binaries/profile produced by `qemu-build` (ro), and the output
 directory (rw).
 
-The work directory is a Docker volume (`OMARCHY_PMOS_WORK_VOLUME`, default
-`omarchy-pmbootstrap-work`; remove it with `docker volume rm`), not the
-`${OMARCHY_CACHE_DIR:-.cache/omarchy}/pmbootstrap` path the rest of the cache
+The work directory is a Docker volume (`FERRIX_PMOS_WORK_VOLUME`, default
+`ferrix-pmbootstrap-work`; remove it with `docker volume rm`), not the
+`${FERRIX_CACHE_DIR:-.cache/ferrix}/pmbootstrap` path the rest of the cache
 uses. That is a measured deviation: on this macOS host Docker Desktop mounts
 host directories with virtiofs (`no_xattr`), and as root inside the container
 `chown 1000` left the file at uid 0, `chmod 4755` produced `755`, and `mknod`
@@ -344,7 +347,7 @@ failed with `EPERM`. pmbootstrap chroots need all three (ownership, suid
 chroots, so a bind-mounted work directory would silently corrupt the guest.
 The entrypoint probes the three semantics on the mounted work directory and
 refuses to continue (`guest-builder-failed`, reason `work-fs-*`) when they are
-missing; Linux hosts with a real filesystem can set `OMARCHY_PMOS_WORK_BIND=1`
+missing; Linux hosts with a real filesystem can set `FERRIX_PMOS_WORK_BIND=1`
 to bind the cache directory instead. Before that, the entrypoint verifies
 loop-control, `mount(2)` and a free loop device, then drops to the
 unprivileged `pmos` user because pmbootstrap refuses to run as root (it
@@ -361,8 +364,8 @@ there), zaps stale chroots, runs `pmbootstrap install --password …`, and hands
 the resulting image to `finalize-in-container.sh`. That step mounts the image
 through a loop device, installs the project core, compositor, reference client,
 profile, startup script, and readiness marker
-`targets/qemu-aarch64/pmos/local.d/omarchy-boot-health.start` as
-`/etc/local.d/omarchy-boot-health.start` (OpenRC's `local` service is the last
+`targets/qemu-aarch64/pmos/local.d/ferrix-boot-health.start` as
+`/etc/local.d/ferrix-boot-health.start` (OpenRC's `local` service is the last
 one in the default runlevel, so the record means multi-user is up), copies
 `vmlinuz` and `initramfs` off the boot partition, captures the kernel command
 line boot-deploy generated, reads installed package versions from the apk
@@ -375,13 +378,13 @@ here on purpose for the first route because the readiness marker is a
 `local.d` script. The systemd variant is a documented follow-up, not a gap in
 pmbootstrap.
 
-The test password (`OMARCHY_PMOS_PASSWORD`, default `147147`, user `user`) is
+The test password (`FERRIX_PMOS_PASSWORD`, default `147147`, user `user`) is
 handled in plain text by pmbootstrap and is only for this emulator image.
 
 ### Outputs and manifest
 
 Everything is generated under the ignored `out/qemu-aarch64/pmos/`
-(`OMARCHY_OUT_DIR` relocates `out/`):
+(`FERRIX_OUT_DIR` relocates `out/`):
 
 ```text
 out/qemu-aarch64/pmos/vmlinuz            # kernel from the pmOS boot partition
@@ -411,24 +414,24 @@ image against the manifest before booting.
 ### Running and checking
 
 `pmos-run.sh` boots with `-kernel`/`-initrd` from the exported files, the
-recorded command line plus `panic=-1 omarchy.mode=<run|check>`, the disk as
-`virtio-blk`, user-mode networking (`OMARCHY_PMOS_SSH_PORT=2222` adds an SSH
+recorded command line plus `panic=-1 ferrix.mode=<run|check>`, the disk as
+`virtio-blk`, user-mode networking (`FERRIX_PMOS_SSH_PORT=2222` adds an SSH
 host forward) and `-nographic` by default, so the serial console is always
-present. Set `OMARCHY_QEMU_GRAPHICS=cocoa` (or another QEMU display backend)
+present. Set `FERRIX_QEMU_GRAPHICS=cocoa` (or another QEMU display backend)
 to attach virtio GPU/input devices and start `mobile-shell` plus
 `mobile-basic-screen`. The
 pristine image is never written: QEMU boots a qcow2 overlay
 (`out/qemu-aarch64/pmos/run/disk.qcow2`, kept between runs unless
-`OMARCHY_PMOS_FRESH=1`). Press `Ctrl-a`, then `x` to quit. `OMARCHY_PMOS_MEMORY`
-(MiB, default 2048) and `OMARCHY_PMOS_SMP` (default 2) adjust the machine.
+`FERRIX_PMOS_FRESH=1`). Press `Ctrl-a`, then `x` to quit. `FERRIX_PMOS_MEMORY`
+(MiB, default 2048) and `FERRIX_PMOS_SMP` (default 2) adjust the machine.
 
 `pmos-check.sh` always uses TCG, a fresh overlay, `-no-reboot`, a bounded
-timeout (`OMARCHY_PMOS_CHECK_TIMEOUT`, default 600 s) and captures serial to
+timeout (`FERRIX_PMOS_CHECK_TIMEOUT`, default 600 s) and captures serial to
 `check/serial.log`. It passes only when QEMU exits cleanly after the guest
 printed
 
 ```json
-{"evidence":"QEMU","event":"product-core-ready","socket":"/run/omarchy/core.sock"}
+{"evidence":"QEMU","event":"product-core-ready","socket":"/run/ferrix/core.sock"}
 {"evidence":"QEMU","event":"pmos-boot-health","status":"ok","substrate":"postmarketos","init":"openrc","runlevel":"default","mode":"check"}
 {"evidence":"QEMU","event":"pmos-check-poweroff"}
 ```
@@ -437,7 +440,7 @@ and powered itself off (the marker calls `poweroff` in check mode). Failures
 are reported as `{"evidence":"QEMU","event":"pmos-check-failed","reason":…}`
 with the serial log retained. Observed on this Apple Silicon host (QEMU 11.1.1,
 label QEMU): the TCG check passes in about 40 s from launch to `reboot: Power
-down`; under HVF `pmos-run` reaches the `omarchy login:` prompt in about 15 s.
+down`; under HVF `pmos-run` reaches the `ferrix login:` prompt in about 15 s.
 
 ### Limitations
 
@@ -449,7 +452,7 @@ down`; under HVF `pmos-run` reaches the `omarchy login:` prompt in about 15 s.
 - postmarketOS ships `quiet splash` on that command line, so the serial log
   carries OpenRC service output and the project records but few kernel
   messages; the kernel version is recorded in `manifest.json`, not on serial.
-- The pmbootstrap UI selection remains `console`; Omarchy supplies its own
+- The pmbootstrap UI selection remains `console`; Ferrum supplies its own
   compositor/client rather than a postmarketOS desktop package. The product
   graphical startup path is present, but only the core has been exercised by
   the bounded pmOS check so far; framebuffer evidence currently comes from the
@@ -461,6 +464,6 @@ down`; under HVF `pmos-run` reaches the `omarchy login:` prompt in about 15 s.
   downloaded; the binary repository behind a stable channel can still change,
   so the manifest's package versions, not the channel alone, define the build.
 - The pmbootstrap work directory lives in a Docker volume rather than under
-  `.cache/omarchy` (see above); `just qemu-clean` does not remove it.
+  `.cache/ferrix` (see above); `just qemu-clean` does not remove it.
 - First build downloads several hundred MB of packages; subsequent builds reuse
   the volume's apk cache and pmaports clone.

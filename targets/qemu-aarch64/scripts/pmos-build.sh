@@ -2,16 +2,16 @@
 # Build the postmarketOS guest for generic AArch64 QEMU `virt` with pmbootstrap
 # inside the pinned guest-builder container (QEMU/mock evidence only; no
 # physical device is involved). Outputs land in
-# ${OMARCHY_OUT_DIR:-out}/qemu-aarch64/pmos/ with a manifest.json.
+# ${FERRIX_OUT_DIR:-out}/qemu-aarch64/pmos/ with a manifest.json.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/pmos
-product=${OMARCHY_OUT_DIR:-"$root/out"}/qemu-aarch64/product
-cache=${OMARCHY_CACHE_DIR:-"$root/.cache/omarchy"}
+out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/pmos
+product=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/product
+cache=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}
 pmos_dir=$root/targets/qemu-aarch64/pmos
 builder_dir=$root/containers/guest-builder
 . "$pmos_dir/pins.env"
-tag=${OMARCHY_GUEST_BUILDER_TAG:-"omarchy-guest-builder:pmbootstrap-$PMBOOTSTRAP_TAG"}
+tag=${FERRIX_GUEST_BUILDER_TAG:-"ferrix-guest-builder:pmbootstrap-$PMBOOTSTRAP_TAG"}
 
 command -v docker >/dev/null || { echo "missing docker; start Docker Desktop (see just host-check)" >&2; exit 2; }
 docker info >/dev/null 2>&1 || { echo "docker daemon is not running; start Docker Desktop" >&2; exit 2; }
@@ -25,11 +25,11 @@ mkdir -p "$out"
 # mounts from macOS provide none of them (verified: chown stays uid 0, 4755
 # becomes 755, mknod is EPERM), so the default is a Docker volume inside the
 # Docker VM. Linux hosts can bind the cache directory instead.
-if [ "${OMARCHY_PMOS_WORK_BIND:-0}" = 1 ]; then
+if [ "${FERRIX_PMOS_WORK_BIND:-0}" = 1 ]; then
   work_mount="$cache/pmbootstrap"
   mkdir -p "$work_mount"
 else
-  work_mount=${OMARCHY_PMOS_WORK_VOLUME:-omarchy-pmbootstrap-work}
+  work_mount=${FERRIX_PMOS_WORK_VOLUME:-ferrix-pmbootstrap-work}
   docker volume create "$work_mount" >/dev/null
 fi
 printf 'resolved output: %s\n' "$out"
@@ -64,12 +64,12 @@ status_file=$(mktemp "$out/.build-status.XXXXXX")
     -v "$pmos_dir":/project:ro \
     -v "$product":/product:ro \
     -v "$out":/out \
-    -e "OMARCHY_BUILDER_IMAGE_ID=$image_id" \
-    -e "OMARCHY_BUILDER_IMAGE_TAG=$tag" \
-    -e "OMARCHY_PROJECT_REV=$project_rev" \
-    -e "OMARCHY_PMOS_PASSWORD=${OMARCHY_PMOS_PASSWORD:-147147}" \
-    -e "OMARCHY_PMOS_KEEP_CHROOTS=${OMARCHY_PMOS_KEEP_CHROOTS:-0}" \
-    -e "OMARCHY_PMOS_WORK_MOUNT=$work_mount" \
+    -e "FERRIX_BUILDER_IMAGE_ID=$image_id" \
+    -e "FERRIX_BUILDER_IMAGE_TAG=$tag" \
+    -e "FERRIX_PROJECT_REV=$project_rev" \
+    -e "FERRIX_PMOS_PASSWORD=${FERRIX_PMOS_PASSWORD:-147147}" \
+    -e "FERRIX_PMOS_KEEP_CHROOTS=${FERRIX_PMOS_KEEP_CHROOTS:-0}" \
+    -e "FERRIX_PMOS_WORK_MOUNT=$work_mount" \
     "$tag" sh /project/build-in-container.sh 2>&1 || status=$?
   echo "$status" > "$status_file"
 } | tee "$out/build.log"

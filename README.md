@@ -1,10 +1,17 @@
-# omarchy-rust
+# Ferrum
 
 An emulator-first, Rust-first mobile Linux environment. The only supported
 target is a generic AArch64 QEMU `virt` virtual phone; every result in this
 repository is labelled `QEMU` or `mock` and none of it is a physical-device
 claim. This is not a Linux distribution: postmarketOS (via pmbootstrap) is the
 guest substrate, and the project adds a small Rust layer on top.
+
+The naming model is deliberate: **Ferrum** is the product and ship name,
+**Ferrix** is the kernel/userspace codename and runtime namespace, and
+**Gossan** is reserved for a future device image. Three names, one metal.
+Runtime paths, environment variables, kernel parameters, hostnames, and service
+identifiers therefore use `ferrix`. The current emulator remains the generic
+`qemu-aarch64` target and does not use the Gossan name.
 
 Read `AGENTS.md` before contributing. `docs/baseline.md` is the implementation
 authority and `docs/plan.md` the long-term direction.
@@ -47,11 +54,11 @@ apps / shell ──▶ mobile-protocol ──▶ mobile-core ──▶ hardware-
 | `crates/hardware-api` | Stable, target-neutral capability traits and serde types: `Power`, `Display`, `Input`, `Network`, `Bluetooth`, `Audio`, `Telephony`, and `Lifecycle`; typed state, errors, events, product commands, and the separate host-only `MockControl` surface. No target conditionals. |
 | `crates/target-profile` | The one strict, schema-versioned parser for `targets/qemu-aarch64/profile.toml` (`toml` + `serde`, unknown keys rejected, ranges validated). |
 | `crates/hardware-emulator` | Deterministic implementation of every capability from the profile, with mutation methods that emit events. Every capability reports `mocked`. |
-| `crates/mobile-session` | Bootstrap layer. Loads the profile, selects adapters by target id (`OMARCHY_TARGET`, only `qemu-aarch64`), and hands product code a `HardwareServices` bundle. It is the only crate allowed to depend on `hardware-emulator`; `tests/architecture.rs` enforces that (`just arch-check`). |
+| `crates/mobile-session` | Bootstrap layer. Loads the profile, selects adapters by target id (`FERRIX_TARGET`, only `qemu-aarch64`), and hands product code a `HardwareServices` bundle. It is the only crate allowed to depend on `hardware-emulator`; `tests/architecture.rs` enforces that (`just arch-check`). |
 | `crates/mobile-protocol` | Shared, schema-versioned Unix-socket contract and client for state snapshots, subscriptions, and portable product commands. It deliberately excludes host mock mutations. |
-| `crates/mobile-core` | Persistent daemon. Serves the shared protocol on `/run/omarchy/core.sock`, routes product commands through portable capability traits, applies mock-control commands only on the test channel, and prints machine-readable JSON records to serial. |
+| `crates/mobile-core` | Persistent daemon. Serves the shared protocol on `/run/ferrix/core.sock`, routes product commands through portable capability traits, applies mock-control commands only on the test channel, and prints machine-readable JSON records to serial. |
 | `crates/mobile-shell` | Default product compositor, built on Smithay 0.7: portrait-first, rotation-aware, fullscreen-only xdg-shell, one seat (keyboard, pointer, touch via libinput), and pixman software rendering into DRM dumb buffers on `virtio-gpu`. GL is optional and used only by nested host development. The Catacomb evaluation is in `crates/mobile-shell/EVALUATION.md`. |
-| `crates/mobile-basic-screen` | Omarchy-styled reference Wayland client with launcher, status bar, connected quick settings, notifications, responsive portrait/landscape layouts, and a working terminal with on-screen keyboard. It is a reference product client, not final compositor-owned shell chrome. |
+| `crates/mobile-basic-screen` | Ferrum-styled reference Wayland client with launcher, status bar, connected quick settings, notifications, responsive portrait/landscape layouts, and a working terminal with on-screen keyboard. It is a reference product client, not final compositor-owned shell chrome. |
 
 Targets and tooling live under `targets/qemu-aarch64/` (see its README for
 every command and its limitations) and `containers/guest-builder/` (the
@@ -69,9 +76,9 @@ just qemu-mock set-power charging=true   # host -> guest mock-control command
 just qemu-agent-stop
 ```
 
-Interactive sessions: `just qemu-run` (serial), `OMARCHY_QEMU_GRAPHICS=cocoa
+Interactive sessions: `just qemu-run` (serial), `FERRIX_QEMU_GRAPHICS=cocoa
 just qemu-run` (window, `mobile-shell` compositor by default,
-`OMARCHY_QEMU_SHELL=weston` for the reference compositor).
+`FERRIX_QEMU_SHELL=weston` for the reference compositor).
 
 postmarketOS route:
 
@@ -79,7 +86,7 @@ postmarketOS route:
 just pmos-build        # build pmOS and inject the product stack
 just pmos-check        # fresh TCG boot; requires product-core-ready
 just pmos-run          # interactive serial route
-OMARCHY_QEMU_GRAPHICS=cocoa just pmos-run  # graphical route (not yet validated here)
+FERRIX_QEMU_GRAPHICS=cocoa just pmos-run  # graphical route (not yet validated here)
 ```
 
 Host-side development without QEMU: `just shell-nested` builds and launches
@@ -98,7 +105,7 @@ only when the serial log shows, in order:
    its socket;
 2. init's `boot-health` (evidence `QEMU`), which init may only print after the
    core reported;
-3. `mock-control` ready on the virtio-serial port `omarchy.control`;
+3. `mock-control` ready on the virtio-serial port `ferrix.control`;
 4. no `charging:true` before the host sends `set-power charging=true` over
    that real channel;
 5. the `power-changed` event the core emitted in response;

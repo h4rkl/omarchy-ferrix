@@ -1,6 +1,6 @@
 //! Resolved compositor configuration.
 //!
-//! Geometry precedence is: kernel command line `omarchy.display=WxH` (the QEMU
+//! Geometry precedence is: kernel command line `ferrix.display=WxH` (the QEMU
 //! launcher pins the guest panel to the virtio-gpu size it created), then an
 //! explicit `--display WxH` flag, then the versioned mock profile's `[display]`
 //! table. Values are emulator-test configuration, never hardware facts.
@@ -55,11 +55,11 @@ impl GeometrySource {
     }
 }
 
-/// Extract `omarchy.display=WxH` from a kernel command line.
+/// Extract `ferrix.display=WxH` from a kernel command line.
 pub fn display_from_cmdline(cmdline: &str) -> Option<DisplayGeometry> {
     cmdline
         .split_whitespace()
-        .filter_map(|word| word.strip_prefix("omarchy.display="))
+        .filter_map(|word| word.strip_prefix("ferrix.display="))
         .find_map(|value| DisplayGeometry::parse(value).ok())
 }
 
@@ -198,7 +198,7 @@ route = "speaker"
 
     #[test]
     fn cmdline_geometry_is_extracted() {
-        let cmdline = "console=ttyAMA0 panic=-1 omarchy.mode=agent omarchy.graphics=on omarchy.display=830x1800 omarchy.shell=mobile-shell";
+        let cmdline = "console=ttyAMA0 panic=-1 ferrix.mode=agent ferrix.graphics=on ferrix.display=830x1800 ferrix.shell=mobile-shell";
         assert_eq!(
             display_from_cmdline(cmdline),
             Some(DisplayGeometry {
@@ -207,7 +207,7 @@ route = "speaker"
             })
         );
         assert_eq!(display_from_cmdline("console=ttyAMA0"), None);
-        assert_eq!(display_from_cmdline("omarchy.display=bad"), None);
+        assert_eq!(display_from_cmdline("ferrix.display=bad"), None);
     }
 
     #[test]
@@ -217,8 +217,7 @@ route = "speaker"
             width: 540,
             height: 1170,
         };
-        let cfg =
-            ShellConfig::resolve(&profile, Some(flag), Some("omarchy.display=830x1800"), None);
+        let cfg = ShellConfig::resolve(&profile, Some(flag), Some("ferrix.display=830x1800"), None);
         assert_eq!(
             cfg.geometry,
             DisplayGeometry {

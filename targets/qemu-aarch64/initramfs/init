@@ -5,10 +5,10 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
-mkdir -p /run /run/omarchy /etc/omarchy
-cp /profile.toml /etc/omarchy/profile.toml
+mkdir -p /run /run/ferrix /etc/ferrix
+cp /profile.toml /etc/ferrix/profile.toml
 check_mode=false
-grep -q 'omarchy.mode=check' /proc/cmdline && check_mode=true
+grep -q 'ferrix.mode=check' /proc/cmdline && check_mode=true
 # Machine-readable boot failure. No success record is ever printed on this
 # path; in check mode the guest powers off so the host check fails fast.
 boot_failed() {
@@ -19,19 +19,19 @@ boot_failed() {
   exec /bin/sh
 }
 # The persistent Rust mobile core: it owns hardware state (mock adapter for
-# this target), serves it on /run/omarchy/core.sock, and takes test commands
-# from the host over the virtio-serial port omarchy.control (built into the
+# this target), serves it on /run/ferrix/core.sock, and takes test commands
+# from the host over the virtio-serial port ferrix.control (built into the
 # Alpine linux-virt kernel; modprobe is a no-op there).
 modprobe virtio_console 2>/dev/null || true
 [ -x /usr/bin/mobile-core ] || boot_failed core-missing
 # The core writes its JSON records straight to the serial console (no log
 # relay, so records are never delayed). It binds the state socket immediately
 # before printing boot-health, so a live process plus the socket is readiness.
-/usr/bin/mobile-core /etc/omarchy/profile.toml --socket /run/omarchy/core.sock --control auto --shutdown-marker /run/omarchy/shutdown &
+/usr/bin/mobile-core /etc/ferrix/profile.toml --socket /run/ferrix/core.sock --control auto --shutdown-marker /run/ferrix/shutdown &
 core_pid=$!
 core_ready=false
 for _ in $(seq 1 200); do
-  if [ -S /run/omarchy/core.sock ] && kill -0 "$core_pid" 2>/dev/null; then
+  if [ -S /run/ferrix/core.sock ] && kill -0 "$core_pid" 2>/dev/null; then
     core_ready=true
     break
   fi
@@ -46,8 +46,8 @@ if [ "$core_ready" != true ]; then
   fi
 fi
 # Only now is the guest healthy: the core actually reported.
-printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok","core":"mobile-core","socket":"/run/omarchy/core.sock"}'
-if grep -q 'omarchy.graphics=on' /proc/cmdline; then
+printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok","core":"mobile-core","socket":"/run/ferrix/core.sock"}'
+if grep -q 'ferrix.graphics=on' /proc/cmdline; then
   export XDG_RUNTIME_DIR=/run/user/0
   mkdir -p "$XDG_RUNTIME_DIR"
   chmod 700 "$XDG_RUNTIME_DIR"
@@ -57,32 +57,32 @@ if grep -q 'omarchy.graphics=on' /proc/cmdline; then
   /sbin/udevd --daemon
   /sbin/udevadm trigger --action=add
   /sbin/udevadm settle
-  # Compositor selection. omarchy.shell=mobile-shell starts the Rust product
+  # Compositor selection. ferrix.shell=mobile-shell starts the Rust product
   # compositor (crates/mobile-shell: Smithay, pixman software rendering into
-  # DRM dumb buffers, libinput); omarchy.shell=weston keeps the reference
-  # compositor. Default mobile-shell; the host overrides it with OMARCHY_QEMU_SHELL.
-  shell=$(sed -n 's/.*omarchy\.shell=\([a-z-]*\).*/\1/p' /proc/cmdline)
+  # DRM dumb buffers, libinput); ferrix.shell=weston keeps the reference
+  # compositor. Default mobile-shell; the host overrides it with FERRIX_QEMU_SHELL.
+  shell=$(sed -n 's/.*ferrix\.shell=\([a-z-]*\).*/\1/p' /proc/cmdline)
   case "$shell" in
     mobile-shell|weston) ;;
     *) shell=mobile-shell ;;
   esac
   # Output geometry. The host launcher may request a window-friendly portrait
-  # panel (omarchy.display=WxH); otherwise the profile panel is used. Weston is
+  # panel (ferrix.display=WxH); otherwise the profile panel is used. Weston is
   # pinned to exactly this mode because host UI size hints (QEMU's Cocoa
   # window pushes its own size into virtio-gpu) must not change the guest
   # surface. virtio-gpu accepts any mode timing, so a simple modeline suffices.
-  display=$(sed -n 's/.*omarchy\.display=\([0-9][0-9]*x[0-9][0-9]*\).*/\1/p' /proc/cmdline)
+  display=$(sed -n 's/.*ferrix\.display=\([0-9][0-9]*x[0-9][0-9]*\).*/\1/p' /proc/cmdline)
   display_source=cmdline
   if [ -z "$display" ]; then
-    display_w=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' /etc/omarchy/profile.toml)
-    display_h=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' /etc/omarchy/profile.toml)
+    display_w=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' /etc/ferrix/profile.toml)
+    display_h=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' /etc/ferrix/profile.toml)
     display="${display_w}x${display_h}"
     display_source=profile
   fi
   display_w=${display%x*}
   display_h=${display#*x}
   modeline=$(awk -v w="$display_w" -v h="$display_h" 'BEGIN { ht = w + 160; vt = h + 40; printf "%.3f %d %d %d %d %d %d %d %d -hsync +vsync", ht * vt * 60 / 1000000, w, w + 48, w + 80, ht, h, h + 3, h + 8, vt }')
-  cat > /etc/omarchy/weston.ini <<EOF
+  cat > /etc/ferrix/weston.ini <<EOF
 [core]
 idle-time=0
 
@@ -96,12 +96,12 @@ EOF
   comp_pid=
   if [ "$shell" = mobile-shell ]; then
     comp_log=/run/mobile-shell.log
-    # mobile-shell reads omarchy.display= itself and pins the DRM mode. Its
+    # mobile-shell reads ferrix.display= itself and pins the DRM mode. Its
     # JSON records (display-geometry, drm-output, input-device,
     # compositor-ready, client-mapped) go to the log and are replayed to the
     # console once the client has drawn; readiness is the socket plus the
     # compositor-ready record, never the process start alone.
-    /usr/bin/mobile-shell /etc/omarchy/profile.toml >"$comp_log" 2>&1 &
+    /usr/bin/mobile-shell /etc/ferrix/profile.toml >"$comp_log" 2>&1 &
     comp_pid=$!
     for _ in $(seq 1 150); do
       if [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && grep -q '"event":"compositor-ready"' "$comp_log" 2>/dev/null; then
@@ -112,7 +112,7 @@ EOF
     done
   else
     comp_log=/run/weston.log
-    weston --config=/etc/omarchy/weston.ini --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
+    weston --config=/etc/ferrix/weston.ini --backend=drm-backend.so --shell=desktop-shell.so --socket=wayland-0 --continue-without-input --log=/run/weston.log &
     for _ in $(seq 1 50); do
       [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break
       sleep 0.1
@@ -123,9 +123,9 @@ EOF
     # kernel starts init with an empty environment, so the client would
     # otherwise have no HOME/USER/SHELL to hand to the spawned shell.
     mkdir -p /root
-    hostname omarchy 2>/dev/null || true
+    hostname ferrix 2>/dev/null || true
     export HOME=/root USER=root SHELL=/bin/sh
-    WAYLAND_DISPLAY=wayland-0 /usr/bin/mobile-basic-screen /etc/omarchy/profile.toml --core /run/omarchy/core.sock >/run/mobile-basic-screen.log 2>&1 &
+    WAYLAND_DISPLAY=wayland-0 /usr/bin/mobile-basic-screen /etc/ferrix/profile.toml --core /run/ferrix/core.sock >/run/mobile-basic-screen.log 2>&1 &
     client_pid=$!
     client_ready=false
     for _ in $(seq 1 100); do
@@ -176,10 +176,10 @@ if [ "$check_mode" = true ]; then
   # {"cmd":"shutdown"}; mobile-core leaves this marker. Bounded so a lost host
   # never leaves the guest running forever.
   for _ in $(seq 1 1800); do
-    [ -e /run/omarchy/shutdown ] && break
+    [ -e /run/ferrix/shutdown ] && break
     sleep 0.1
   done
-  [ -e /run/omarchy/shutdown ] || printf '%s\n' '{"evidence":"QEMU","event":"check-timeout","reason":"no-shutdown-command"}'
+  [ -e /run/ferrix/shutdown ] || printf '%s\n' '{"evidence":"QEMU","event":"check-timeout","reason":"no-shutdown-command"}'
   # Let the core's ack and last records reach the host before power-off.
   sleep 1
   poweroff -f

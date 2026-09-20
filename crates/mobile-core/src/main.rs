@@ -3,11 +3,11 @@
 //! Bootstraps hardware access through `mobile-session` (never through an
 //! adapter directly), then:
 //!
-//! 1. binds the state socket (`--socket`, `OMARCHY_CORE_SOCKET`, default
-//!    `/run/omarchy/core.sock`) and only then prints the machine-readable
+//! 1. binds the state socket (`--socket`, `FERRIX_CORE_SOCKET`, default
+//!    `/run/ferrix/core.sock`) and only then prints the machine-readable
 //!    `boot-health` record — a record is evidence that the services exist;
 //! 2. opens the mock-control channel when the target has one
-//!    (`--control auto|none|PATH`, `OMARCHY_CONTROL_PORT`);
+//!    (`--control auto|none|PATH`, `FERRIX_CONTROL_PORT`);
 //! 3. publishes every hardware event as a JSON record on stdout (serial in
 //!    the guest) and to every subscribed client.
 //!
@@ -30,8 +30,8 @@ use serde_json::{Value, json};
 use crate::protocol::{Ack, ControlCommand};
 use crate::server::{Server, Subscribers, broadcast};
 
-const DEFAULT_SOCKET: &str = "/run/omarchy/core.sock";
-const DEFAULT_SHUTDOWN_MARKER: &str = "/run/omarchy/shutdown";
+const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
+const DEFAULT_SHUTDOWN_MARKER: &str = "/run/ferrix/shutdown";
 
 /// Prints one JSON record per line and flushes, so serial captures are exact.
 pub(crate) fn emit(value: Value) {
@@ -53,10 +53,10 @@ fn parse_args() -> Result<Args, String> {
     let env = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
     let mut args = Args {
         profile: None,
-        socket: PathBuf::from(env("OMARCHY_CORE_SOCKET").unwrap_or(DEFAULT_SOCKET.to_owned())),
-        control: control::ControlPath::parse(&env("OMARCHY_CONTROL_PORT").unwrap_or("auto".into())),
+        socket: PathBuf::from(env("FERRIX_CORE_SOCKET").unwrap_or(DEFAULT_SOCKET.to_owned())),
+        control: control::ControlPath::parse(&env("FERRIX_CONTROL_PORT").unwrap_or("auto".into())),
         shutdown_marker: PathBuf::from(
-            env("OMARCHY_SHUTDOWN_MARKER").unwrap_or(DEFAULT_SHUTDOWN_MARKER.to_owned()),
+            env("FERRIX_SHUTDOWN_MARKER").unwrap_or(DEFAULT_SHUTDOWN_MARKER.to_owned()),
         ),
     };
     let mut it = std::env::args().skip(1);
