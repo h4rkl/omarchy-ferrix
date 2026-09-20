@@ -62,6 +62,34 @@ def ppm_to_png(source, destination):
     return any(pixels)
 
 
+QCODE_PLAIN = {
+    " ": "spc", "\n": "ret", "\t": "tab", "-": "minus", "=": "equal", "[": "bracket_left",
+    "]": "bracket_right", "\\": "backslash", ";": "semicolon", "'": "apostrophe",
+    "`": "grave_accent", ",": "comma", ".": "dot", "/": "slash",
+}
+QCODE_SHIFTED = {
+    "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9",
+    ")": "0", "_": "minus", "+": "equal", "{": "bracket_left", "}": "bracket_right",
+    "|": "backslash", ":": "semicolon", '"': "apostrophe", "~": "grave_accent", "<": "comma",
+    ">": "dot", "?": "slash",
+}
+
+
+def text_to_qcodes(text):
+    """Map ASCII text to QEMU send-key qcode combinations (US layout)."""
+    combos = []
+    for char in text:
+        if char.isascii() and char.isalnum():
+            combos.append(["shift", char.lower()] if char.isupper() else [char])
+        elif char in QCODE_PLAIN:
+            combos.append([QCODE_PLAIN[char]])
+        elif char in QCODE_SHIFTED:
+            combos.append(["shift", QCODE_SHIFTED[char]])
+        else:
+            raise RuntimeError(f"cannot type {char!r}: no US-layout qcode")
+    return combos
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket", required=True)
@@ -88,6 +116,8 @@ def main():
     swipe.add_argument("--height", type=int, required=True)
     key = action.add_parser("key")
     key.add_argument("key")
+    typed = action.add_parser("type", help="type ASCII text on the virtual keyboard; \\n sends Enter")
+    typed.add_argument("text")
     action.add_parser("quit")
     args = parser.parse_args()
     if args.action == "screenshot":
@@ -143,6 +173,10 @@ def main():
         ]})
     elif args.action == "key":
         request(args.socket, "send-key", {"keys": [{"type": "qcode", "data": args.key}]})
+    elif args.action == "type":
+        for keys in text_to_qcodes(args.text):
+            request(args.socket, "send-key", {"keys": [{"type": "qcode", "data": key} for key in keys]})
+            time.sleep(0.05)
     else:
         request(args.socket, "quit")
 

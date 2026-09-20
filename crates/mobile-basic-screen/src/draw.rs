@@ -2,6 +2,10 @@
 //! `fontdue` text rasterization. Reuses popular libraries per AGENTS.md; only
 //! the small glue below is project code. Software rendering is intentional.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 #[derive(Clone, Copy, Debug)]
@@ -171,9 +175,18 @@ impl Canvas {
     }
 }
 
+/// Rasterized glyph, cached per (character, size, weight). A terminal grid
+/// redraws a couple of thousand glyphs per frame, so the cache keeps software
+/// rendering cheap under TCG emulation.
+struct Glyph {
+    metrics: fontdue::Metrics,
+    coverage: Vec<u8>,
+}
+
 pub struct Type {
     regular: fontdue::Font,
     bold: fontdue::Font,
+    cache: RefCell<HashMap<(char, u32, u8), Rc<Glyph>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -218,7 +231,11 @@ impl Type {
             &include_bytes!("../assets/JetBrainsMono-Bold.ttf")[..],
             settings,
         )?;
-        Ok(Self { regular, bold })
+        Ok(Self {
+            regular,
+            bold,
+            cache: RefCell::new(HashMap::new()),
+        })
     }
 
     fn font(&self, weight: Weight) -> &fontdue::Font {
@@ -226,6 +243,17 @@ impl Type {
             Weight::Regular => &self.regular,
             Weight::Bold => &self.bold,
         }
+    }
+
+    fn glyph(&self, weight: Weight, px: f32, ch: char) -> Rc<Glyph> {
+        let key = (ch, px.to_bits(), weight as u8);
+        if let Some(glyph) = self.cache.borrow().get(&key) {
+            return Rc::clone(glyph);
+        }
+        let (metrics, coverage) = self.font(weight).rasterize(ch, px);
+        let glyph = Rc::new(Glyph { metrics, coverage });
+        self.cache.borrow_mut().insert(key, Rc::clone(&glyph));
+        glyph
     }
 
     pub fn width(&self, style: Style, text: &str) -> i32 {
@@ -237,19 +265,47 @@ impl Type {
         w.round() as i32
     }
 
+    /// Horizontal advance of one glyph; for the monospace face this is the
+    /// terminal cell width.
+    pub fn advance(&self, style: Style, ch: char) -> f32 {
+        self.font(style.weight).metrics(ch, style.px).advance_width
+    }
+
+    /// Distance from the top of a line box to its baseline.
+    pub fn ascent(&self, style: Style) -> i32 {
+        self.font(style.weight)
+            .horizontal_line_metrics(style.px)
+            .map(|m| m.ascent.round() as i32)
+            .unwrap_or(style.px.round() as i32)
+    }
+
+    /// Recommended line box height for the face at this size.
+    pub fn line_height(&self, style: Style) -> i32 {
+        self.font(style.weight)
+            .horizontal_line_metrics(style.px)
+            .map(|m| m.new_line_size.round() as i32)
+            .unwrap_or((style.px * 1.3).round() as i32)
+    }
+
+    /// Draws a single glyph with its origin (pen position) at `x`. Returns the
+    /// advance so callers can lay out text or a fixed grid.
+    pub fn char(&self, canvas: &mut Canvas, style: Style, ch: char, x: i32, baseline: i32) -> f32 {
+        let glyph = self.glyph(style.weight, style.px, ch);
+        let metrics = &glyph.metrics;
+        let gx = x + metrics.xmin;
+        let gy = baseline - metrics.height as i32 - metrics.ymin;
+        for (row, chunk) in glyph.coverage.chunks(metrics.width.max(1)).enumerate() {
+            for (col, alpha) in chunk.iter().enumerate() {
+                canvas.blend(gx + col as i32, gy + row as i32, style.color, *alpha);
+            }
+        }
+        metrics.advance_width
+    }
+
     pub fn text(&self, canvas: &mut Canvas, style: Style, text: &str, x: i32, baseline: i32) {
-        let font = self.font(style.weight);
         let mut pen = x as f32;
         for ch in text.chars() {
-            let (metrics, coverage) = font.rasterize(ch, style.px);
-            let gx = pen.round() as i32 + metrics.xmin;
-            let gy = baseline - metrics.height as i32 - metrics.ymin;
-            for (row, chunk) in coverage.chunks(metrics.width.max(1)).enumerate() {
-                for (col, alpha) in chunk.iter().enumerate() {
-                    canvas.blend(gx + col as i32, gy + row as i32, style.color, *alpha);
-                }
-            }
-            pen += metrics.advance_width;
+            pen += self.char(canvas, style, ch, pen.round() as i32, baseline);
         }
     }
 }

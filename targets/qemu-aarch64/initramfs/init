@@ -57,6 +57,12 @@ EOF
     sleep 0.1
   done
   if [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
+    # Shell environment for the Terminal app's PTY session (BusyBox sh). The
+    # kernel starts init with an empty environment, so the client would
+    # otherwise have no HOME/USER/SHELL to hand to the spawned shell.
+    mkdir -p /root
+    hostname omarchy 2>/dev/null || true
+    export HOME=/root USER=root SHELL=/bin/sh
     WAYLAND_DISPLAY=wayland-0 /usr/bin/mobile-basic-screen /etc/omarchy/profile.toml >/run/mobile-basic-screen.log 2>&1 &
     client_pid=$!
     client_ready=false

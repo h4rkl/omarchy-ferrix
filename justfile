@@ -38,6 +38,9 @@ qemu-swipe x1 y1 x2 y2:
 qemu-key key:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}"
 
+qemu-type text:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" type "{{text}}"
+
 qemu-agent-stop:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-stop.sh"
 

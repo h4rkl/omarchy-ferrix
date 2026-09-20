@@ -2,15 +2,24 @@
 //! xdg-toplevel with a software-rendered wl_shm buffer. Emits a
 //! machine-readable record only after the first frame is actually attached and
 //! committed, per the evidence rules.
+//!
+//! The client runs on calloop (Smithay's event loop) so the Terminal app's PTY
+//! reader thread can wake the UI through a ping source instead of polling.
+//! Keyboard input arrives as raw `wl_keyboard` evdev codes; see `keymap` for
+//! why libxkbcommon is not linked into this static guest binary.
 
 use std::io::Write as _;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
+use smithay_client_toolkit::reexports::calloop::EventLoop;
+use smithay_client_toolkit::reexports::calloop::ping::make_ping;
+use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
 use smithay_client_toolkit::reexports::client::protocol::{
-    wl_output, wl_pointer, wl_seat, wl_shm, wl_surface, wl_touch,
+    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface, wl_touch,
 };
-use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
+use smithay_client_toolkit::reexports::client::{Connection, Dispatch, QueueHandle, WEnum};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_output, delegate_pointer, delegate_registry, delegate_seat,
@@ -31,9 +40,15 @@ use smithay_client_toolkit::{
 };
 
 use crate::draw::Type;
-use crate::interaction::{Input, UiState};
+use crate::interaction::{AppId, Input, Page, TermAction, UiState};
+use crate::keymap;
 use crate::profile::Profile;
 use crate::screen;
+use crate::terminal::{Geometry, Session, Snapshot};
+
+/// The guest shell. BusyBox `sh` in the Alpine smoke-test guest; `HOME`,
+/// `USER`, and `SHELL` come from the init environment.
+const SHELL: &str = "/bin/sh";
 
 struct App {
     registry_state: RegistryState,
@@ -54,14 +69,40 @@ struct App {
     cursor_surface: Option<wl_surface::WlSurface>,
     cursor_buffer: Option<Buffer>,
     touch: Option<wl_touch::WlTouch>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    mods: keymap::Modifiers,
+    keyboard_reported: bool,
     input: Input,
     ui: UiState,
+    session: Option<Session>,
+    session_error: Option<String>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+    terminal_ready_reported: bool,
+    terminal_exit_reported: bool,
+}
+
+fn emit(record: String) {
+    println!("{record}");
+    let _ = std::io::stdout().flush();
+}
+
+fn json_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
     let ty = Type::load()?;
     let conn = Connection::connect_to_env().map_err(|e| format!("wayland connect: {e}"))?;
-    let (globals, mut event_queue) =
+    let (globals, event_queue) =
         registry_queue_init(&conn).map_err(|e| format!("wayland registry: {e}"))?;
     let qh = event_queue.handle();
 
@@ -80,6 +121,17 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
     let initial = (profile.display_width, profile.display_height);
     let pool = SlotPool::new((initial.0 * initial.1 * 4) as usize, &shm)
         .map_err(|e| format!("shm pool: {e}"))?;
+
+    let mut event_loop: EventLoop<App> =
+        EventLoop::try_new().map_err(|e| format!("event loop: {e}"))?;
+    let handle = event_loop.handle();
+    WaylandSource::new(conn.clone(), event_queue)
+        .insert(handle.clone())
+        .map_err(|e| format!("wayland event source: {e}"))?;
+    let (ping, ping_source) = make_ping().map_err(|e| format!("terminal wake: {e}"))?;
+    handle
+        .insert_source(ping_source, |_, _, app: &mut App| app.terminal_wake())
+        .map_err(|e| format!("terminal wake source: {e}"))?;
 
     let mut app = App {
         registry_state: RegistryState::new(&globals),
@@ -100,14 +152,22 @@ pub fn run(profile: &Profile, minute: u32) -> Result<(), String> {
         cursor_surface: None,
         cursor_buffer: None,
         touch: None,
+        keyboard: None,
+        mods: keymap::Modifiers::default(),
+        keyboard_reported: false,
         input: Input::default(),
         ui: UiState::new(profile.wifi == "connected", profile.bluetooth_present),
+        session: None,
+        session_error: None,
+        wake: Arc::new(move || ping.ping()),
+        terminal_ready_reported: false,
+        terminal_exit_reported: false,
     };
 
     while app.running {
-        event_queue
-            .blocking_dispatch(&mut app)
-            .map_err(|e| format!("wayland dispatch: {e}"))?;
+        event_loop
+            .dispatch(None, &mut app)
+            .map_err(|e| format!("event loop dispatch: {e}"))?;
         if let Some(err) = app.error.take() {
             return Err(err);
         }
@@ -166,9 +226,145 @@ impl App {
         Ok(())
     }
 
+    fn on_terminal(&self) -> bool {
+        self.ui.page == Page::App(AppId::Terminal)
+    }
+
+    fn geometry(&self) -> Geometry {
+        let m = screen::terminal_metrics(&self.ty, self.size.0, self.size.1);
+        let clamp = |v: usize| u16::try_from(v).unwrap_or(u16::MAX);
+        let clamp_px = |v: i32| u16::try_from(v.max(1)).unwrap_or(u16::MAX);
+        Geometry {
+            cols: clamp(m.cols),
+            rows: clamp(m.rows),
+            cell_w: clamp_px(m.cell_w),
+            cell_h: clamp_px(m.cell_h),
+        }
+    }
+
+    fn open_session(&mut self) {
+        let geometry = self.geometry();
+        self.terminal_ready_reported = false;
+        self.terminal_exit_reported = false;
+        match Session::spawn(SHELL, &[], geometry, Arc::clone(&self.wake)) {
+            Ok(session) => {
+                emit(format!(
+                    "{{\"evidence\":\"QEMU\",\"event\":\"terminal-spawned\",\"shell\":\"{}\",\"cols\":{},\"rows\":{}}}",
+                    session.program(),
+                    geometry.cols,
+                    geometry.rows
+                ));
+                self.session = Some(session);
+                self.session_error = None;
+            }
+            Err(error) => {
+                emit(format!(
+                    "{{\"evidence\":\"QEMU\",\"event\":\"terminal-error\",\"shell\":\"{SHELL}\",\"error\":\"{}\"}}",
+                    json_escape(&error)
+                ));
+                self.session_error = Some(error);
+            }
+        }
+    }
+
+    /// Runs after every UI change: starts the shell when the Terminal app is
+    /// first opened and forwards queued terminal actions to the session. The
+    /// session outlives navigation, like a backgrounded phone app; Enter on an
+    /// exited shell restarts it.
+    fn after_input(&mut self) {
+        if self.on_terminal() && self.session.is_none() && self.session_error.is_none() {
+            self.open_session();
+        }
+        for action in std::mem::take(&mut self.ui.pending) {
+            match action {
+                TermAction::Input(bytes) => {
+                    let live = self
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.exited().is_none());
+                    if live {
+                        if let Some(session) = &self.session {
+                            session.write(bytes);
+                        }
+                    } else if bytes == b"\r" {
+                        self.session = None;
+                        self.session_error = None;
+                        self.open_session();
+                    }
+                }
+                TermAction::Scroll(lines) => {
+                    if let Some(session) = &self.session {
+                        session.scroll(lines);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ping handler: the PTY reader produced output or the shell exited.
+    fn terminal_wake(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        session.pump();
+        let exited = session.exited().map(str::to_owned);
+        let first_line = (!self.terminal_ready_reported)
+            .then(|| session.snapshot().first_text_line())
+            .flatten();
+        if let Some(reason) = exited
+            && !self.terminal_exit_reported
+        {
+            self.terminal_exit_reported = true;
+            emit(format!(
+                "{{\"evidence\":\"QEMU\",\"event\":\"terminal-exited\",\"reason\":\"{}\"}}",
+                json_escape(&reason)
+            ));
+        }
+        if let Some(line) = first_line {
+            self.terminal_ready_reported = true;
+            emit(format!(
+                "{{\"evidence\":\"QEMU\",\"event\":\"terminal-ready\",\"shell\":\"{SHELL}\",\"line\":\"{}\"}}",
+                json_escape(&line)
+            ));
+        }
+        if self.on_terminal() {
+            self.draw();
+        }
+    }
+
+    fn key_pressed(&mut self, code: u32) {
+        if !self.on_terminal() {
+            return;
+        }
+        let Some(bytes) = keymap::bytes(code, self.mods, self.ui.term_app_cursor) else {
+            return;
+        };
+        if !self.keyboard_reported {
+            self.keyboard_reported = true;
+            emit(format!(
+                "{{\"evidence\":\"QEMU\",\"event\":\"keyboard-input\",\"code\":{code},\"bytes\":{}}}",
+                bytes.len()
+            ));
+        }
+        self.ui.pending.push(TermAction::Input(bytes));
+        self.after_input();
+    }
+
     fn draw(&mut self) {
         let (w, h) = self.size;
         let stride = w as i32 * 4;
+        let snapshot = if self.on_terminal() {
+            match (&self.session, &self.session_error) {
+                (Some(session), _) => Some(session.snapshot()),
+                (None, Some(error)) => Some(Snapshot::failed(error.clone())),
+                (None, None) => None,
+            }
+        } else {
+            None
+        };
+        if let Some(snapshot) = &snapshot {
+            self.ui.term_app_cursor = snapshot.app_cursor;
+        }
         let (buffer, canvas_bytes) =
             match self
                 .pool
@@ -181,7 +377,15 @@ impl App {
                     return;
                 }
             };
-        let frame = screen::compose(&self.profile, self.minute, &self.ty, w, h, &self.ui);
+        let frame = screen::compose(
+            &self.profile,
+            self.minute,
+            &self.ty,
+            w,
+            h,
+            &self.ui,
+            snapshot.as_ref(),
+        );
         canvas_bytes.copy_from_slice(&frame.xrgb_bytes());
         self.window
             .wl_surface()
@@ -194,11 +398,10 @@ impl App {
         self.window.commit();
         if !self.first_frame_reported {
             self.first_frame_reported = true;
-            println!(
+            emit(format!(
                 "{{\"evidence\":\"QEMU\",\"event\":\"basic-screen-frame\",\"status\":\"committed\",\"width\":{w},\"height\":{h},\"profile\":\"{}\"}}",
                 self.profile.name
-            );
-            let _ = std::io::stdout().flush();
+            ));
         }
     }
 }
@@ -227,6 +430,10 @@ impl WindowHandler for App {
             .map(NonZeroU32::get)
             .unwrap_or(self.size.1);
         self.size = (w, h);
+        let geometry = self.geometry();
+        if let Some(session) = self.session.as_mut() {
+            session.resize(geometry);
+        }
         self.draw();
     }
 }
@@ -307,19 +514,24 @@ impl SeatHandler for App {
             Capability::Pointer if self.pointer.is_none() => {
                 self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
                 let cursor_ready = self.pointer.is_some() && self.install_touch_cursor(qh).is_ok();
-                println!(
+                emit(format!(
                     "{{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"pointer\",\"status\":\"{}\"}}",
                     if cursor_ready { "ok" } else { "failed" }
-                );
-                let _ = std::io::stdout().flush();
+                ));
             }
             Capability::Touch if self.touch.is_none() => {
                 self.touch = self.seat_state.get_touch(qh, &seat).ok();
-                println!(
+                emit(format!(
                     "{{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"touch\",\"status\":\"{}\"}}",
                     if self.touch.is_some() { "ok" } else { "failed" }
+                ));
+            }
+            Capability::Keyboard if self.keyboard.is_none() => {
+                self.keyboard = Some(seat.get_keyboard(qh, ()));
+                emit(
+                    "{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"keyboard\",\"status\":\"ok\"}"
+                        .to_owned(),
                 );
-                let _ = std::io::stdout().flush();
             }
             _ => {}
         }
@@ -347,11 +559,48 @@ impl SeatHandler for App {
                     touch.release();
                 }
             }
+            Capability::Keyboard => {
+                if let Some(keyboard) = self.keyboard.take() {
+                    keyboard.release();
+                }
+                self.mods = keymap::Modifiers::default();
+            }
             _ => {}
         }
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
+    fn event(
+        app: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_keyboard::Event::Modifiers {
+                mods_depressed,
+                mods_locked,
+                ..
+            } => app.mods = keymap::Modifiers::from_xkb(mods_depressed, mods_locked),
+            wl_keyboard::Event::Key {
+                key,
+                state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+                ..
+            } => {
+                app.key_pressed(key);
+                if app.on_terminal() {
+                    app.draw();
+                }
+            }
+            wl_keyboard::Event::Leave { .. } => app.mods = keymap::Modifiers::default(),
+            _ => {}
+        }
+    }
 }
 
 impl PointerHandler for App {
@@ -372,11 +621,10 @@ impl PointerHandler for App {
                     if let Some(surface) = self.cursor_surface.as_ref() {
                         let hotspot = Self::CURSOR_SIZE / 2;
                         pointer.set_cursor(serial, Some(surface), hotspot, hotspot);
-                        println!(
+                        emit(format!(
                             "{{\"evidence\":\"QEMU\",\"event\":\"cursor-ready\",\"style\":\"transparent-ring\",\"size\":{}}}",
                             Self::CURSOR_SIZE
-                        );
-                        let _ = std::io::stdout().flush();
+                        ));
                     }
                     redraw |= self
                         .input
@@ -392,27 +640,26 @@ impl PointerHandler for App {
                 }
                 PointerEventKind::Press { button: 0x110, .. } => {
                     redraw |= self.input.down(0, event.position, &mut self.ui, self.size);
-                    println!(
+                    emit(format!(
                         "{{\"evidence\":\"QEMU\",\"event\":\"input-press\",\"x\":{},\"y\":{}}}",
                         event.position.0, event.position.1
-                    );
-                    let _ = std::io::stdout().flush();
+                    ));
                 }
                 PointerEventKind::Release { button: 0x110, .. } => {
                     redraw |= self
                         .input
                         .motion(0, event.position, &mut self.ui, self.size);
                     redraw |= self.input.up(0, &mut self.ui, self.size);
-                    println!(
+                    emit(format!(
                         "{{\"evidence\":\"QEMU\",\"event\":\"input-release\",\"page\":\"{:?}\"}}",
                         self.ui.page
-                    );
-                    let _ = std::io::stdout().flush();
+                    ));
                 }
                 _ => {}
             }
         }
         if redraw {
+            self.after_input();
             self.draw();
         }
     }
@@ -433,6 +680,7 @@ impl TouchHandler for App {
         if surface == *self.window.wl_surface()
             && self.input.down(id, position, &mut self.ui, self.size)
         {
+            self.after_input();
             self.draw();
         }
     }
@@ -447,6 +695,7 @@ impl TouchHandler for App {
         id: i32,
     ) {
         if self.input.up(id, &mut self.ui, self.size) {
+            self.after_input();
             self.draw();
         }
     }
@@ -461,6 +710,7 @@ impl TouchHandler for App {
         position: (f64, f64),
     ) {
         if self.input.motion(id, position, &mut self.ui, self.size) {
+            self.after_input();
             self.draw();
         }
     }

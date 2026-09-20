@@ -1,6 +1,8 @@
 //! Target-independent interaction model shared by pointer and touch input.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+use crate::osk::{self, Key, OskState};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppId {
     Settings,
@@ -53,6 +55,19 @@ pub enum Target {
     Bluetooth,
     Brightness,
     ClearNotifications,
+    /// An on-screen keyboard key on the Terminal page.
+    Key(Key),
+    /// The terminal grid itself: vertical drags scroll history.
+    TermArea,
+}
+
+/// Terminal work produced by the interaction model for the session owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TermAction {
+    /// Bytes for the shell's stdin.
+    Input(Vec<u8>),
+    /// Viewport scroll in lines; positive moves into history.
+    Scroll(i32),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +78,11 @@ pub struct UiState {
     pub bluetooth_on: bool,
     pub brightness: u8,
     pub notification_visible: bool,
+    pub osk: OskState,
+    /// Queued terminal actions; the session owner drains these after input.
+    pub pending: Vec<TermAction>,
+    /// Mirror of the terminal's DECCKM mode so arrows encode correctly.
+    pub term_app_cursor: bool,
 }
 
 impl UiState {
@@ -74,6 +94,9 @@ impl UiState {
             bluetooth_on,
             brightness: 72,
             notification_visible: true,
+            osk: OskState::default(),
+            pending: Vec::new(),
+            term_app_cursor: false,
         }
     }
 
@@ -99,8 +122,19 @@ impl UiState {
             Target::Bluetooth => self.bluetooth_on = !self.bluetooth_on,
             Target::Brightness => {}
             Target::ClearNotifications => self.notification_visible = false,
+            Target::Key(key) => {
+                if let Some(bytes) = self.osk.press(key, self.term_app_cursor) {
+                    self.pending.push(TermAction::Input(bytes));
+                }
+            }
+            Target::TermArea => {}
         }
     }
+}
+
+/// Terminal scroll step in panel pixels: one text line on the 1080 panel.
+fn scroll_line(size: (u32, u32)) -> f64 {
+    f64::from(size.0) * 39.0 / 1080.0
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +142,8 @@ struct Contact {
     id: i32,
     start: (f64, f64),
     current: (f64, f64),
+    /// Last position at which a scroll step was emitted.
+    anchor: (f64, f64),
     target: Option<Target>,
 }
 
@@ -127,14 +163,16 @@ impl Input {
         if self.contact.is_some() {
             return false;
         }
-        let target = hit_test(state.page, position, size);
+        let target = hit_test(state, position, size);
         self.contact = Some(Contact {
             id,
             start: position,
             current: position,
+            anchor: position,
             target,
         });
-        state.pressed = target;
+        // The grid itself has no press feedback; keys and controls do.
+        state.pressed = target.filter(|t| *t != Target::TermArea);
         true
     }
 
@@ -154,7 +192,18 @@ impl Input {
             state.brightness = brightness_at(position.0, size.0);
             return old != state.brightness;
         }
-        let target = hit_test(state.page, position, size);
+        if contact.target == Some(Target::TermArea) {
+            // Dragging down reveals history, one step per text line.
+            let step = scroll_line(size);
+            let lines = ((position.1 - contact.anchor.1) / step).trunc() as i32;
+            if lines != 0 {
+                contact.anchor.1 += f64::from(lines) * step;
+                state.pending.push(TermAction::Scroll(lines));
+                return true;
+            }
+            return false;
+        }
+        let target = hit_test(state, position, size);
         let pressed = if distance(contact.start, position) < tap_slop(size) {
             contact
                 .target
@@ -185,7 +234,7 @@ impl Input {
             state.back();
         } else if distance(contact.start, contact.current) < tap_slop(size)
             && let Some(target) = contact.target
-            && hit_test(state.page, contact.current, size) == Some(target)
+            && hit_test(state, contact.current, size) == Some(target)
         {
             if target == Target::Brightness {
                 state.brightness = brightness_at(contact.current.0, size.0);
@@ -215,13 +264,26 @@ fn brightness_at(x: f64, width: u32) -> u8 {
     ((x.clamp(w * 0.12, w * 0.88) - w * 0.12) * 100.0 / (w * 0.76)).round() as u8
 }
 
-pub fn hit_test(page: Page, position: (f64, f64), size: (u32, u32)) -> Option<Target> {
+pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Option<Target> {
     let (x, y) = position;
     let (w, h) = (f64::from(size.0), f64::from(size.1));
     if y >= h * 0.92 {
         return Some(Target::Home);
     }
-    match page {
+    match state.page {
+        Page::App(AppId::Terminal) => {
+            let area = osk::terminal_area(size);
+            if x <= w * 0.22 && y < f64::from(area.y) {
+                return Some(Target::Back);
+            }
+            if let Some((_, key)) = osk::keys(size, &state.osk)
+                .into_iter()
+                .find(|(rect, _)| osk::contains(*rect, position))
+            {
+                return Some(Target::Key(key));
+            }
+            osk::contains(area, position).then_some(Target::TermArea)
+        }
         Page::Launcher => {
             if y <= h * 0.08 {
                 return Some(Target::Status);
@@ -311,6 +373,63 @@ mod tests {
         input.motion(0, (900.0, 1130.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
         assert!(state.brightness > 90);
+    }
+
+    #[test]
+    fn terminal_keys_queue_shell_input_and_drags_scroll_history() {
+        let mut state = UiState::new(true, true);
+        let mut input = Input::default();
+        // Tap the Terminal tile (third column of the first launcher row).
+        input.down(0, (852.0, 1236.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.page, Page::App(AppId::Terminal));
+
+        let keys = osk::keys(SIZE, &state.osk);
+        let center = |wanted: Key| {
+            let (r, _) = keys
+                .iter()
+                .find(|(_, k)| *k == wanted)
+                .expect("key on layout");
+            (f64::from(r.x + r.w / 2), f64::from(r.y + r.h / 2))
+        };
+        for key in [Key::Char('l'), Key::Char('s'), Key::Enter] {
+            input.down(0, center(key), &mut state, SIZE);
+            assert_eq!(state.pressed, Some(Target::Key(key)));
+            input.up(0, &mut state, SIZE);
+        }
+        assert_eq!(
+            state.pending,
+            vec![
+                TermAction::Input(b"l".to_vec()),
+                TermAction::Input(b"s".to_vec()),
+                TermAction::Input(b"\r".to_vec()),
+            ]
+        );
+        state.pending.clear();
+
+        // Ctrl is sticky for one key: ctrl, c -> ETX.
+        input.down(0, center(Key::Ctrl), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        input.down(0, center(Key::Char('c')), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.pending, vec![TermAction::Input(vec![0x03])]);
+        state.pending.clear();
+
+        // Dragging down inside the grid scrolls into history without pressing.
+        let area = osk::terminal_area(SIZE);
+        let x = f64::from(area.x + area.w / 2);
+        let y = f64::from(area.y + area.h / 2);
+        input.down(0, (x, y), &mut state, SIZE);
+        assert_eq!(state.pressed, None);
+        input.motion(0, (x, y + 200.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.pending, vec![TermAction::Scroll(5)]);
+        assert_eq!(state.page, Page::App(AppId::Terminal));
+
+        // Back arrow in the header returns to the launcher; the shell keeps running.
+        input.down(0, (80.0, 160.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.page, Page::Launcher);
     }
 
     #[test]

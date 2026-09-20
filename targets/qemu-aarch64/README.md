@@ -127,6 +127,43 @@ marking the exact hotspot; native Wayland touch contacts do not show a cursor.
 These interactions demonstrate the guest input path; this client remains a
 reference surface rather than the final product compositor or mobile shell.
 
+### Terminal app
+
+The Terminal tile opens a working shell inside the reference surface: the
+client spawns BusyBox `/bin/sh` on a PTY and renders it through
+`alacritty_terminal` (Alacritty's VT parser and grid, Apache-2.0) with the
+same software renderer as the rest of the screen. Input comes from the
+touch keyboard drawn below the grid (letters, `?123` symbols, shift within
+symbols for the remaining punctuation, plus an `esc tab ctrl ` \ | ← ↓ ↑ →`
+accessory row; shift and ctrl are sticky for one key) or from the virtual
+keyboard QEMU attaches as `virtio-keyboard-pci`, so typing in the Cocoa
+window works as well. Dragging inside the grid scrolls history. The session
+keeps running while you navigate Home and back; when the shell exits, tapping
+Enter restarts it. Serial evidence records are `terminal-spawned`,
+`terminal-ready` (first line the shell wrote), `keyboard-input`, and
+`terminal-exited`.
+
+Drive it deterministically from the host:
+
+```sh
+just qemu-tap 852 1236            # open the Terminal tile
+just qemu-type 'uname -a'         # virtual keyboard, US layout; \n sends Enter
+just qemu-key ret
+just qemu-frame                   # inspect out/qemu-aarch64/agent/frame.png
+```
+
+Touch-keyboard taps use the same coordinates the client hit-tests; the unit
+tests in `crates/mobile-basic-screen/src/osk.rs` pin the layout. Preview the
+page on any host without QEMU (canned transcript, no PTY):
+
+```sh
+cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/terminal.ppm --page terminal
+```
+
+The physical-keyboard path is a small hand-rolled US evdev table because the
+static musl guest binary does not link libxkbcommon; the touch keyboard is the
+primary phone input.
+
 Inspect session state with `just qemu-agent-status`, and end it cleanly with
 `just qemu-agent-stop`. Agent artifacts are:
 

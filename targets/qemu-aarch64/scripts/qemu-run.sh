@@ -94,11 +94,11 @@ if [ "$agent" = 1 ]; then
   [ "$graphics" = off ] && graphics=none
   mkdir -p "$runtime"
   rm -f "$qmp_socket"
-  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -display "$(display_for "$graphics")" -serial "file:$serial_log" -qmp "unix:$qmp_socket,server=on,wait=off"
+  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -device virtio-keyboard-pci -display "$(display_for "$graphics")" -serial "file:$serial_log" -qmp "unix:$qmp_socket,server=on,wait=off"
 elif [ "$graphics" = off ]; then
   set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode" -nographic
 else
-  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -display "$(display_for "$graphics")" -serial mon:stdio
+  set -- "$@" -append "console=ttyAMA0 panic=-1 omarchy.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -device virtio-keyboard-pci -display "$(display_for "$graphics")" -serial mon:stdio
 fi
 printf 'QEMU command:'; printf ' %s' "$@"; printf '\n'
 exec "$@"
