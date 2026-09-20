@@ -506,7 +506,10 @@ to attach virtio GPU/input devices and start `ferrix-shell` plus
 `ferrix-basic-screen`. The
 pristine image is never written: QEMU boots a qcow2 overlay
 (`out/qemu-aarch64/pmos/run/disk.qcow2`, kept between runs unless
-`FERRIX_PMOS_FRESH=1`). Press `Ctrl-a`, then `x` to quit. `FERRIX_PMOS_MEMORY`
+`FERRIX_PMOS_FRESH=1`). The overlay is paired with the base-image hash from
+`manifest.json`; after `pmos-build` changes the raw image, `pmos-run`
+automatically replaces the now-incompatible overlay instead of trying to boot
+it with the new image's filesystem UUIDs. Press `Ctrl-a`, then `x` to quit. `FERRIX_PMOS_MEMORY`
 (MiB, default 2048) and `FERRIX_PMOS_SMP` (default 2) adjust the machine.
 
 `pmos-check.sh` always uses TCG, a fresh overlay, `-no-reboot`, a bounded

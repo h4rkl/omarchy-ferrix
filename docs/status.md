@@ -1,5 +1,10 @@
 # Status
 
+## 2026-09-20 (pmOS interactive overlay invalidation)
+
+- **Fix (QEMU):** `pmos-run` now records the manifest's raw-disk SHA-256 beside each qcow2 overlay and recreates a persistent run overlay when a new `pmos-build` changes its backing image. Previously, the retained overlay could contain the old partition/filesystem UUIDs while the newly exported kernel command line named the new UUIDs, causing postmarketOS initramfs to enter its debug shell. Check mode remains fresh on every boot, and `FERRIX_PMOS_FRESH=1` still forces an interactive reset.
+- **Validation (QEMU):** Shell syntax and `git diff --check` pass. A fresh TCG `just pmos-check` reached `product-core-ready` and `pmos-boot-health`, then powered off cleanly in 43 seconds. The existing unmarked run overlay was automatically refreshed; an HVF console boot reached the `ferrix login:` prompt, and the exact `FERRIX_QEMU_GRAPHICS=cocoa just pmos-run` route reached `product-wayland-ready`. Its 1080x2340 QEMU framebuffer was captured from the monitor to `out/qemu-aarch64/pmos/run/frame.png` and inspected as a nonblank Ferrix launcher. This is QEMU/mock evidence only.
+
 ## 2026-09-20 (OnePlus target admission started)
 
 - **Authorization:** Repository policy, baseline, plan, and README now admit exact-model physical targets through a checked-in board-support proposal. The owner approved read-only discovery and proposal work for the attached OnePlus; destructive operations remain gated on exact identity, compatible hashed images, verified backup/recovery, and explicit per-run confirmation.

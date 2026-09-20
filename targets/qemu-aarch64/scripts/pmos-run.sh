@@ -24,10 +24,23 @@ cpu=cortex-a57
 case "$accel" in hvf|kvm) cpu=host ;; esac
 command -v qemu-system-aarch64 >/dev/null || { echo "missing qemu-system-aarch64; install with: brew install qemu" >&2; exit 2; }
 command -v qemu-img >/dev/null || { echo "missing qemu-img (part of the qemu package)" >&2; exit 2; }
-for f in vmlinuz initramfs qemu-aarch64.img cmdline.txt; do
+for f in vmlinuz initramfs qemu-aarch64.img cmdline.txt manifest.json; do
   [ -f "$out/$f" ] || { echo "missing pmOS guest artifact $out/$f; run: just pmos-build" >&2; exit 2; }
 done
 cmdline=$(tr '\n' ' ' < "$out/cmdline.txt" | sed 's/ *$//')
+base_sha=$(python3 - "$out/manifest.json" <<'PY'
+import json, sys
+
+try:
+    manifest = json.load(open(sys.argv[1]))
+    value = manifest["artifacts"]["qemu-aarch64.img"]["sha256"]
+except (OSError, KeyError, TypeError, ValueError) as error:
+    raise SystemExit(f"invalid pmOS manifest image hash: {error}")
+if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+    raise SystemExit("invalid pmOS manifest image hash: expected 64 lowercase hex characters")
+print(value)
+PY
+)
 # panic=-1 reboots on a kernel panic; in check mode -no-reboot turns that into
 # a QEMU exit so a hung guest never waits out the timeout.
 append="$cmdline panic=-1 ferrix.mode=$mode"
@@ -37,10 +50,19 @@ append="$cmdline panic=-1 ferrix.mode=$mode"
 # deterministic); run mode keeps its overlay unless FERRIX_PMOS_FRESH=1.
 overlay_dir="$out/$mode"
 overlay="$overlay_dir/disk.qcow2"
+backing_marker="$overlay_dir/backing-image.sha256"
 mkdir -p "$overlay_dir"
+recreate=0
 if [ "$mode" = check ] || [ "${FERRIX_PMOS_FRESH:-0}" = 1 ] || [ ! -f "$overlay" ]; then
-  rm -f "$overlay"
+  recreate=1
+elif [ ! -f "$backing_marker" ] || [ "$(cat "$backing_marker")" != "$base_sha" ]; then
+  echo "pmOS backing image changed; refreshing $overlay"
+  recreate=1
+fi
+if [ "$recreate" = 1 ]; then
+  rm -f "$overlay" "$backing_marker"
   qemu-img create -q -f qcow2 -b "$out/qemu-aarch64.img" -F raw "$overlay"
+  printf '%s\n' "$base_sha" > "$backing_marker"
 fi
 
 netdev="user,id=net"
