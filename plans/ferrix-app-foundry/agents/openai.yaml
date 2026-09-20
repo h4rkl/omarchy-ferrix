@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ferrix App Foundry"
+  short_description: "Turn upstream plugin ideas into verified Ferrix apps"
+  default_prompt: "Use $ferrix-app-foundry to classify an Omarchy plugin, define its Ferrix flavour, or plan and validate an implementation."
