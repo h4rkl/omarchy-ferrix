@@ -360,6 +360,14 @@ pub fn run(
         }
 
         if !frame_pending && shell.take_redraw() {
+            let full_redraw = shell.take_full_redraw();
+            let focused_pid = shell.focused_pid();
+            if full_redraw {
+                // A fullscreen focus switch replaces the entire scene. Reset
+                // buffer ages so DrmCompositor redraws the new client even if
+                // its surface damage/element id resembles the old one.
+                compositor.reset_buffer_ages();
+            }
             let elements = render::collect_elements(&shell, &mut renderer);
             match compositor.render_frame(
                 &mut renderer,
@@ -368,6 +376,15 @@ pub fn run(
                 FrameFlags::empty(),
             ) {
                 Ok(result) => {
+                    if full_redraw {
+                        shell.emit(
+                            "focus-frame",
+                            &[
+                                ("pid", focused_pid.into()),
+                                ("empty", Value::Bool(result.is_empty)),
+                            ],
+                        );
+                    }
                     if !result.is_empty {
                         match compositor.queue_frame(()) {
                             Ok(()) => frame_pending = true,

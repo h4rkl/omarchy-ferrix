@@ -80,6 +80,13 @@ struct Tracked {
     instance: AppInstance,
     handle: Option<Handle>,
     terminate_requested: bool,
+    /// Kernel pid of the Wayland client that owns the mapped surface. The
+    /// runtime pid belongs to the sandbox supervisor and cannot be used by
+    /// the compositor to find the application's toplevel.
+    surface_pid: Option<u32>,
+    /// A launch/activation request that must be delivered once a surface pid
+    /// is known. This closes the race where activation arrives before map.
+    activation_pending: bool,
 }
 
 #[derive(Default)]
@@ -315,18 +322,25 @@ impl Service {
             self.recorder.app_surface_unknown(pid, app_id);
             return None;
         };
-        let tracked = state.instances.get_mut(&app)?;
-        if !tracked.instance.state.is_running() {
-            return None;
-        }
-        tracked.instance.surface_mapped = true;
+        let (was_starting, activation_pending) = {
+            let tracked = state.instances.get_mut(&app)?;
+            if !tracked.instance.state.is_running() {
+                return None;
+            }
+            tracked.instance.surface_mapped = true;
+            tracked.surface_pid = Some(pid);
+            (
+                tracked.instance.state == LifecycleState::Starting,
+                std::mem::take(&mut tracked.activation_pending),
+            )
+        };
         self.recorder.app_surface(&app, pid, app_id, title);
         if let Some(reported) = app_id
             && reported != app.as_str()
         {
             self.recorder.app_id_mismatch(&app, pid, reported);
         }
-        if tracked.instance.state == LifecycleState::Starting {
+        if was_starting {
             let focused = state.focused_pid == Some(pid)
                 || state.foreground.as_ref() == Some(&app)
                 || state.foreground.is_none();
@@ -338,6 +352,12 @@ impl Service {
         } else {
             self.publish_instance(&state, &app);
         }
+        if activation_pending {
+            self.publish(&Notification::Activate {
+                pid,
+                app_id: app.clone(),
+            });
+        }
         Some(app)
     }
 
@@ -347,6 +367,9 @@ impl Service {
         let app = self.resolve_pid(&mut state, pid)?;
         let tracked = state.instances.get_mut(&app)?;
         tracked.instance.surface_mapped = false;
+        if tracked.surface_pid == Some(pid) {
+            tracked.surface_pid = None;
+        }
         if state.foreground.as_ref() == Some(&app) {
             state.foreground = None;
             self.transition(&mut state, &app, LifecycleState::Background);
@@ -447,6 +470,8 @@ impl Service {
         tracked.instance.state = final_state;
         tracked.instance.exit = Some(reason);
         tracked.instance.surface_mapped = false;
+        tracked.surface_pid = None;
+        tracked.activation_pending = false;
         tracked.handle = None;
         state.pids.retain(|_, app| app != id);
         if state.foreground.as_ref() == Some(id) {
@@ -553,6 +578,8 @@ impl Service {
                 instance: instance.clone(),
                 handle: Some(Arc::clone(&handle)),
                 terminate_requested: false,
+                surface_pid: None,
+                activation_pending: true,
             },
         );
         self.recorder.app_started(id, number, pid, &diagnostics);
@@ -563,16 +590,18 @@ impl Service {
 
     /// Pushes `Activate` for a running app; `None` when it is not running.
     fn activate_locked(&self, state: &mut State, id: &AppId) -> Option<AppInstance> {
-        let tracked = state.instances.get(id)?;
+        let tracked = state.instances.get_mut(id)?;
         if !tracked.instance.state.is_running() {
             return None;
         }
         let instance = tracked.instance.clone();
-        if let Some(pid) = instance.pid {
+        if let Some(pid) = tracked.surface_pid {
             self.publish(&Notification::Activate {
                 pid,
                 app_id: id.clone(),
             });
+        } else {
+            tracked.activation_pending = true;
         }
         Some(instance)
     }
@@ -960,18 +989,79 @@ mod tests {
         assert_eq!(second.instance.instance, first.instance.instance);
         assert_eq!(h.runtime.launch_count(), 1);
 
-        let pid = first.instance.pid.unwrap();
+        let supervisor_pid = first.instance.pid.unwrap();
+        assert!(
+            notifications(&compositor)
+                .iter()
+                .all(|notification| !matches!(notification, Notification::Activate { .. })),
+            "activation waits for a compositor-visible surface pid"
+        );
+        let client_pid = supervisor_pid + 100;
+        h.tree.set_parent(client_pid, supervisor_pid);
+        assert_eq!(
+            h.service
+                .surface_mapped(client_pid, Some("org.ferrix.terminal"), Some("Terminal")),
+            Some(terminal.clone())
+        );
         let compositor_notes = notifications(&compositor);
         assert!(compositor_notes.contains(&Notification::Activate {
-            pid,
+            pid: client_pid,
             app_id: terminal.clone()
         }));
+
+        let third = h.service.launch(&terminal).unwrap();
+        assert!(third.activated_existing);
+        assert!(
+            notifications(&compositor).contains(&Notification::Activate {
+                pid: client_pid,
+                app_id: terminal.clone()
+            })
+        );
         // The home surface sees lifecycle events but never compositor directives.
         assert!(
             notifications(&home)
                 .iter()
                 .all(|n| matches!(n, Notification::App { .. }))
         );
+    }
+
+    #[test]
+    fn activation_uses_each_apps_own_mapped_client_pid() {
+        let h = harness();
+        let compositor = subscribe(&h.service, ClientRole::Compositor);
+        let home = id("org.ferrix.home");
+        let terminal = id("org.ferrix.terminal");
+
+        let home_supervisor = h.service.launch(&home).unwrap().instance.pid.unwrap();
+        let home_client = home_supervisor + 100;
+        h.tree.set_parent(home_client, home_supervisor);
+        h.service
+            .surface_mapped(home_client, Some(home.as_str()), Some("Home"));
+
+        let terminal_supervisor = h.service.launch(&terminal).unwrap().instance.pid.unwrap();
+        let terminal_client = terminal_supervisor + 100;
+        h.tree.set_parent(terminal_client, terminal_supervisor);
+        h.service
+            .surface_mapped(terminal_client, Some(terminal.as_str()), Some("Terminal"));
+        let _ = notifications(&compositor);
+
+        h.service.activate(&home).unwrap();
+        h.service.activate(&terminal).unwrap();
+        let activations = notifications(&compositor);
+        assert!(activations.contains(&Notification::Activate {
+            pid: home_client,
+            app_id: home,
+        }));
+        assert!(activations.contains(&Notification::Activate {
+            pid: terminal_client,
+            app_id: terminal,
+        }));
+        assert!(activations.iter().all(|notification| match notification {
+            Notification::Activate { pid, .. } => {
+                *pid != home_supervisor && *pid != terminal_supervisor
+            }
+            Notification::App { .. } => true,
+        }));
     }
 
     #[test]

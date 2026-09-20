@@ -143,12 +143,20 @@ grandchild of `ferrix-appd`). The xdg `app_id` string an application sets is unt
 metadata: it is recorded and compared, never used to identify the caller.
 
 `ferrix-appd` pushes `Notification::Activate{pid}` to the compositor to raise a
-window: on a second launch of a running app, on `Request::Home`, on the
-compositor's `HomeGesture` report, and when an application yields the
-foreground. When the focused client disconnects, the compositor refocuses the
-next mapped window (the home surface when nothing else is running) and reports
-the change; `ferrix-appd` marks the instance crashed or terminated from the exit
-status it observes directly.
+window: on a first launch once its surface maps, on a second launch of a running
+app, on `Request::Home`, on the compositor's `HomeGesture` report, and when an
+application yields the foreground. The pid is always the mapped Wayland client
+pid reported by the compositor, never the sandbox supervisor pid. An activation
+that arrives before `SurfaceMapped` is retained on that app instance and
+delivered when its client pid becomes known. This is a platform invariant for
+every runtime-backed app, not Terminal-specific launcher behavior. When the
+surface first maps it joins the top of the fullscreen stack; later buffer
+commits update that surface without raising it, so a background app's periodic
+redraw cannot cover the foreground app. When the
+focused client disconnects, the compositor refocuses the next mapped window
+(the home surface when nothing else is running) and reports the change;
+`ferrix-appd` marks the instance crashed or terminated from the exit status it
+observes directly.
 
 ## Trusted gestures
 

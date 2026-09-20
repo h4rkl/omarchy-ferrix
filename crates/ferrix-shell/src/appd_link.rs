@@ -188,12 +188,11 @@ fn link_thread(
             return;
         }
         // Blocks until ferrix_appd closes the stream (the reader thread drops its
-        // sender); the reader already woke the loop for each notification.
+        // sender). Wake again after forwarding into our own queue: the protocol
+        // reader's wake can race ahead of this handoff, leaving the compositor
+        // asleep with an activation waiting here until unrelated input arrives.
         for notification in notifications {
-            if tx
-                .send((LinkEvent::Notification(notification), None))
-                .is_err()
-            {
+            if !send(LinkEvent::Notification(notification), None) {
                 return;
             }
         }
@@ -368,6 +367,7 @@ mod tests {
             pid: 7,
             app_id: AppId::new("org.ferrix.home").unwrap(),
         };
+        let wakes_before_activate = wake_count.load(Ordering::SeqCst);
         ferrix_appd.push(&activate);
         let event = wait_for(&mut link, &wakes, |e| {
             matches!(e, LinkEvent::Notification(_))
@@ -376,6 +376,10 @@ mod tests {
             LinkEvent::Notification(n) => assert_eq!(n, activate),
             other => panic!("unexpected {other:?}"),
         }
+        assert!(
+            wake_count.load(Ordering::SeqCst) >= wakes_before_activate + 2,
+            "the protocol reader wake and the forwarded-queue wake both fire"
+        );
 
         // ferrix_appd goes away: Lost, then exactly one Retrying while it is down.
         drop(ferrix_appd);

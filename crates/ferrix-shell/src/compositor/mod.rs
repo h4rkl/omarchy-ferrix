@@ -207,6 +207,10 @@ pub struct Shell {
     pub cursor_status: CursorImageStatus,
     pub pointer_location: Point<f64, Logical>,
     redraw_requested: bool,
+    /// The focused fullscreen surface changed. DRM buffer-age damage alone
+    /// cannot reliably describe that scene replacement, so the backend must
+    /// invalidate its damage history before presenting the next frame.
+    full_redraw_requested: bool,
     mapped_clients: usize,
 
     pub compositor_state: CompositorState,
@@ -331,6 +335,7 @@ impl Shell {
             cursor_status: CursorImageStatus::default_named(),
             pointer_location: Point::from((0.0, 0.0)),
             redraw_requested: true,
+            full_redraw_requested: false,
             mapped_clients: 0,
             compositor_state,
             xdg_shell_state,
@@ -362,6 +367,11 @@ impl Shell {
     /// Take the pending redraw request.
     pub fn take_redraw(&mut self) -> bool {
         std::mem::take(&mut self.redraw_requested)
+    }
+
+    /// Consume a request to invalidate backend damage history.
+    pub fn take_full_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.full_redraw_requested)
     }
 
     pub fn emit(&self, event: &str, fields: &[(&str, Value)]) {
@@ -520,6 +530,7 @@ impl Shell {
         }
         self.sync_pointer_focus();
         self.report_focus();
+        self.full_redraw_requested = true;
         self.request_redraw();
     }
 

@@ -197,18 +197,28 @@ fn subscribers_receive_catalog_and_lifecycle_notifications() {
         other => panic!("unexpected {other:?}"),
     }
 
-    // A compositor subscriber gets the Activate directive on a second launch.
-    let compositor = Client::connect(&f.socket, ClientRole::Compositor, TIMEOUT)
-        .unwrap()
-        .subscribe()
+    // A compositor subscriber gets the mapped Wayland client pid, not the
+    // sandbox supervisor pid, in the Activate directive on a second launch.
+    let client_pid = instance.pid.unwrap() + 2;
+    f.tree.set_parent(client_pid, instance.pid.unwrap() + 1);
+    f.tree
+        .set_parent(instance.pid.unwrap() + 1, instance.pid.unwrap());
+    let mut compositor = Client::connect(&f.socket, ClientRole::Compositor, TIMEOUT).unwrap();
+    compositor
+        .report(&Report::SurfaceMapped {
+            pid: client_pid,
+            app_id: Some("org.ferrix.terminal".to_owned()),
+            title: Some("Terminal".to_owned()),
+        })
         .unwrap();
+    let compositor = compositor.subscribe().unwrap();
     let (compositor_rx, _reporter) = compositor.spawn(Arc::new(|| {}));
     let (_, existing) = tool.launch(&terminal).unwrap();
     assert!(existing);
     assert_eq!(
         compositor_rx.recv_timeout(TIMEOUT).unwrap(),
         Notification::Activate {
-            pid: instance.pid.unwrap(),
+            pid: client_pid,
             app_id: terminal.clone(),
         }
     );

@@ -71,7 +71,11 @@ not-running -> starting -> foreground <-> background
   no runtime for the kind (`web`, `android`) -> `RuntimeUnsupported`; already
   running -> `activated_existing = true` plus `Notification::Activate{pid}` to
   compositor subscribers; otherwise the runtime spawns, the instance is
-  `starting`, and a waiter thread polls the handle until it exits.
+  `starting`, and a waiter thread polls the handle until it exits. Activation
+  always names that instance's mapped Wayland client pid. If launch or
+  activation wins the race with the first surface, the directive is held and
+  delivered when `SurfaceMapped` supplies the compositor-visible pid; the
+  sandbox supervisor pid is never used as a toplevel identity.
 - `SurfaceMapped` for a `starting` instance moves it to `foreground` when the
   compositor last reported focus on that pid or nothing else holds the
   foreground, else `background`. `FocusChanged` swaps foreground/background;

@@ -146,11 +146,13 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         let Some(index) = self.entries.iter().position(|e| &e.id == id) else {
             return false;
         };
-        let was_mapped = self.entries[index].mapped;
+        if self.entries[index].mapped {
+            return false;
+        }
         let mut entry = self.entries.remove(index);
         entry.mapped = true;
         self.entries.push(entry);
-        !was_mapped
+        true
     }
 
     /// Move a mapped toplevel to the top so [`WindowStack::focused`] returns
@@ -311,6 +313,27 @@ mod tests {
         assert!(stack.mark_mapped(&2));
         assert_eq!(stack.focused(), Some(&2));
         assert_eq!(stack.mapped_count(), 2);
+    }
+
+    #[test]
+    fn background_buffer_commits_do_not_raise_the_window() {
+        let mut stack: WindowStack<&'static str> = WindowStack::new();
+        stack.push_with_pid("home", Some(100));
+        stack.mark_mapped(&"home");
+        stack.push_with_pid("terminal", Some(200));
+        stack.mark_mapped(&"terminal");
+        assert_eq!(stack.focused(), Some(&"terminal"));
+
+        assert!(!stack.mark_mapped(&"home"), "home was already mapped");
+        assert_eq!(
+            stack.focused(),
+            Some(&"terminal"),
+            "a background clock redraw must not change fullscreen focus"
+        );
+        assert_eq!(
+            stack.iter().copied().collect::<Vec<_>>(),
+            vec!["home", "terminal"]
+        );
     }
 
     #[test]

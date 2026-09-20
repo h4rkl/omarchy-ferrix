@@ -45,7 +45,8 @@ docker run --rm --platform linux/arm64 \
   "$rust_image" sh -ec 'apk add --no-cache gcc musl-dev pkgconf pixman-dev libinput-dev eudev-dev libseat-dev libdrm-dev libxkbcommon-dev mesa-dev >/dev/null; cargo build --release --locked -p ferrix-shell --no-default-features --features udev'
 [ -x "$cache/guest-target/ferrix-shell/release/ferrix-shell" ] || { echo "guest ferrix-shell build failed" >&2; exit 1; }
 stage=$(mktemp -d "$out/initramfs-root.XXXXXX")
-trap 'rm -rf "$stage"' EXIT
+initramfs_tmp=$(mktemp "$out/initramfs.cpio.gz.XXXXXX")
+trap 'rm -rf "$stage"; rm -f "$initramfs_tmp"' EXIT
 printf 'resolved output: %s\n' "$out"
 printf 'builder image: %s\n' "$image"
 docker pull --platform linux/arm64 "$image" >/dev/null
@@ -77,7 +78,9 @@ cp "$root"/apps/*.json "$out/product/apps/"
 cp "$cache/guest-target/ferrix-shell/release/ferrix-shell" "$out/product/ferrix-shell"
 cp "${FERRIX_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$out/product/profile.toml"
 cp "${FERRIX_QEMU_COLORS:-$root/themes/ferrix/colors.toml}" "$out/product/colors.toml"
-(cd "$stage" && find . -print | cpio -o -H newc 2>/dev/null | gzip -9) > "$out/initramfs.cpio.gz"
+(cd "$stage" && find . -print | cpio -o -H newc 2>/dev/null | gzip -9) > "$initramfs_tmp"
+gzip -t "$initramfs_tmp" || { echo "generated initramfs failed gzip integrity check" >&2; exit 1; }
+mv "$initramfs_tmp" "$out/initramfs.cpio.gz"
 image_hash=$(shasum -a 256 "$out/Image" | awk '{print $1}')
 initramfs_hash=$(shasum -a 256 "$out/initramfs.cpio.gz" | awk '{print $1}')
 screen_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-basic-screen" | awk '{print $1}')

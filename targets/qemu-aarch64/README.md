@@ -150,6 +150,16 @@ The home surface asks it to launch (`{"request":"launch","id":"org.ferrix.termin
 the compositor reports surfaces and focus to it by kernel-reported client pid
 and obeys its `activate` notifications; applications may only yield the
 foreground. Roles are declared at `hello` and gate what each connection may do.
+For every app, `ferrix-appd` keeps the runtime supervisor pid separate from the
+mapped Wayland client pid. A launch or activation that arrives before the first
+surface is retained on that app instance, then sent to the compositor when
+`SurfaceMapped` supplies the client pid. Reopening an app, Home, and foreground
+yield therefore raise the app's real toplevel; they never try to raise the
+sandbox supervisor. This is the common lifecycle path for future native and
+runtime-backed apps, not a Terminal-specific exception. A toplevel is raised
+when it maps for the first time or when an explicit activation names it;
+subsequent buffer commits from background apps (for example Home's clock tick)
+update their content without changing fullscreen focus or stack order.
 
 Every native application runs as `ferrix-appd -> ferrix-sandbox -> init -> app`. The
 sandbox (crate `crates/ferrix-runtime-native`, safe Rust on `rustix`/`signal-hook`)
@@ -172,7 +182,7 @@ Deterministic crash demonstration from the host (agent session):
 
 ```sh
 just qemu-tap 180 1236                 # Terminal tile: ferrix-appd launches ferrix-terminal
-just qemu-frame                        # Terminal surface, prompt root@org.ferrix.terminal
+just qemu-frame                        # Terminal surface, prompt root@org:~#
 just qemu-type 'kill -SEGV $PPID'      # the shell's parent is the Terminal app
 just qemu-key ret                      # app dies with SIGSEGV inside its namespaces
 just qemu-frame                        # home surface again, with the crash notice
@@ -244,7 +254,7 @@ repository file, so the nested `mock` session reports `theme-loaded` with that
 path; set it to another `colors.toml` to preview a different palette on the
 host.
 
-`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`), the catalog hash (`apps_sha256`), and the theme file hash (`colors_sha256`, with its source path as `colors`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs.
+`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`), the catalog hash (`apps_sha256`), and the theme file hash (`colors_sha256`, with its source path as `colors`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs. The initramfs is first written to a temporary sibling, checked with `gzip -t`, and atomically moved into place, so an interrupted or corrupt archive cannot replace the last usable guest artifact or receive a manifest hash.
 
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. This smoke-test image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the postmarketOS/pmbootstrap guest (below) is the full mobile-image route.
 
@@ -304,9 +314,9 @@ The Terminal tile asks `ferrix-appd` to launch `ferrix-terminal` (crate
 Wayland client in its own Linux namespaces: it spawns BusyBox `/bin/sh` on a
 PTY and renders it through `alacritty_terminal` (Alacritty's VT parser and
 grid, Apache-2.0) with the shared `ferrix-ui` software renderer. Because the
-sandbox sets the UTS hostname, the prompt reads `root@org.ferrix.terminal`,
-and `cat /proc/1/comm` shows `ferrix-sandbox`: the app sees only its own
-process tree. Input comes from the
+sandbox sets the full UTS hostname to `org.ferrix.terminal`; BusyBox's `\h`
+prompt displays its short form as `root@org:~#`. `cat /proc/1/comm` shows
+`ferrix-sandbox`: the app sees only its own process tree. Input comes from the
 touch keyboard drawn below the grid (letters, `?123` symbols, shift within
 symbols for the remaining punctuation, plus an `esc tab ctrl ` \ | ← ↓ ↑ →`
 accessory row; shift and ctrl are sticky for one key) or from the virtual
@@ -319,6 +329,13 @@ surface. When the shell exits, tapping Enter restarts it. Serial evidence
 records are `app-context`, `terminal-frame`, `terminal-spawned`,
 `terminal-ready` (first line the shell wrote), `keyboard-input`, and
 `terminal-exited`.
+
+Opening Terminal must leave the Terminal framebuffer visible and the PTY alive;
+returning immediately to the launcher without `terminal-exited` is an activation
+failure, not an application exit. In a healthy run, serial includes
+`app-surface` for the Terminal's Wayland client followed by `client-activated`
+with that same client pid and `raised:true`. The `app-started` pid is the sandbox
+supervisor and is intentionally different.
 
 Drive it deterministically from the host:
 
