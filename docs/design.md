@@ -2,7 +2,7 @@
 
 This is the reference for how Omarchy Ferrix surfaces look, read, and are
 themed. `ferrix-ui` implements it; `ferrix-basic-screen`, `ferrix-terminal`,
-and future first-party surfaces consume it. `docs/baseline.md` stays the
+and future first-party surfaces consume it. `plans/baseline.md` stays the
 implementation authority; this document does not change targets, guest
 construction, or the hardware boundary. All rendered evidence is `QEMU` or
 `mock`.
@@ -212,7 +212,7 @@ Intentional departures from the marketing position, and future work:
 When a choice is not settled here, resolve it in this order, matching
 `AGENTS.md`:
 
-1. Explicit requirements in the task or in `docs/baseline.md`.
+1. Explicit requirements in the task or in `plans/baseline.md`.
 2. This visual system.
 3. GrapheneOS interaction conventions, adapted to this system (status bar
    layout, quick-settings behavior, gesture semantics).

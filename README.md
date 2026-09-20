@@ -25,8 +25,8 @@ namespace. Runtime paths, environment variables, kernel parameters, hostnames,
 and service identifiers therefore use `ferrix`. The current emulator remains
 the generic `qemu-aarch64` target.
 
-Read `AGENTS.md` before contributing. `docs/baseline.md` is the implementation
-authority, `docs/plan.md` the long-term direction, `docs/design.md` the visual
+Read `AGENTS.md` before contributing. `plans/baseline.md` is the implementation
+authority, `plans/plan.md` the long-term direction, `docs/design.md` the visual
 system and theming contract, and `docs/status.md` the evidence log.
 
 ## Current status

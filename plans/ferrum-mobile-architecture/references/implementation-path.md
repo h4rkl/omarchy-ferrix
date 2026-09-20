@@ -6,7 +6,7 @@ Read this reference when turning the flexible architecture into repository chang
 
 The current repository baseline defines the implemented authority. Before introducing an Android runtime, a web application runtime, new public app APIs, or a device target:
 
-1. Compare the proposed change with `docs/baseline.md` and `docs/plan.md`.
+1. Compare the proposed change with `plans/baseline.md` and `plans/plan.md`.
 2. Record the conflict or expansion explicitly.
 3. Change the authoritative documents only when the user has requested the architectural pivot.
 4. Preserve the existing QEMU smoke contract while adding new, separately bounded checks.

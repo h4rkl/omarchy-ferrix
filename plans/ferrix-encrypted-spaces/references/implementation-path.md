@@ -29,7 +29,7 @@ Outcome:
 
 Evidence:
 
-- Architecture review against `docs/baseline.md`, `docs/plan.md`, `docs/app-platform.md`, and repository boundaries.
+- Architecture review against `plans/baseline.md`, `plans/plan.md`, `docs/app-platform.md`, and repository boundaries.
 - No physical-target or forensic-deniability claim.
 - Existing headless QEMU check remains ephemeral and unchanged unless the approved baseline explicitly revises it.
 

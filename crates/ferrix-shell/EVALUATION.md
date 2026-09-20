@@ -28,7 +28,7 @@ tagged 2025-06-24) and its `anvil`/`smallvil` examples.
 
 ## Gap analysis against this project's requirements
 
-| Requirement (AGENTS.md / docs/baseline.md) | Catacomb | Gap |
+| Requirement (AGENTS.md / plans/baseline.md) | Catacomb | Gap |
 | --- | --- | --- |
 | MIT/Apache-2.0-compatible dependencies; workspace is `MIT OR Apache-2.0` | GPL-3.0-only | **Blocking for reuse-as-library or fork inside this workspace.** Linking or vendoring Catacomb code would relicense the shell under GPL-3.0. Running it as a separate process would be allowed, but see the next rows. |
 | Minimal portrait touch-first shell, focused fullscreen flows, no desktop window management | Tiling (primary/secondary split), overview grid, cycle gestures, drag-and-drop | Opposite product model. Removing tiling/overview means deleting most of `windows/`, `overview.rs`, `input.rs` gesture logic and the IPC surface: little would remain to reuse. |

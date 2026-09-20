@@ -13,7 +13,7 @@ This skill is a forward architecture blueprint. It does not claim that encrypted
 
 Before architecture or implementation work:
 
-1. Read the repository `AGENTS.md`, `docs/baseline.md`, `docs/plan.md`, and `docs/status.md`; baseline wins conflicts.
+1. Read the repository `AGENTS.md`, `plans/baseline.md`, `plans/plan.md`, and `docs/status.md`; baseline wins conflicts.
 2. Read `docs/app-platform.md` when changing application identity, lifecycle, sandboxing, sockets, the launcher, or `ferrix-appd`.
 3. Read `targets/qemu-aarch64/README.md` when changing guest construction, storage images, QEMU workflows, or evidence.
 4. Preserve unrelated user changes and the repository's existing validation requirements.

@@ -14,7 +14,7 @@ This skill records a **proposed architecture**, not implemented state, device ev
 Before acting:
 
 1. Read the repository `AGENTS.md`.
-2. Read `docs/baseline.md` and `docs/plan.md` for architecture work; baseline wins conflicts.
+2. Read `plans/baseline.md` and `plans/plan.md` for architecture work; baseline wins conflicts.
 3. Read `docs/status.md` for implemented state and limitations.
 4. Read `targets/qemu-aarch64/README.md` when changing QEMU workflows or evidence.
 

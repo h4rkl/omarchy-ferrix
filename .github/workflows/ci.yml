@@ -1,4 +1,4 @@
-# Linux CI for the emulator-first project (see AGENTS.md and docs/baseline.md).
+# Linux CI for the emulator-first project (see AGENTS.md and plans/baseline.md).
 #
 # Two jobs:
 #   rust        - host toolchain checks (fmt, clippy, test) on ubuntu-latest.

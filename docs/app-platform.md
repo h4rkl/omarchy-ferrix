@@ -4,7 +4,7 @@ This document records the application contract implemented in the workspace:
 how applications are identified, described, launched, isolated, and tracked,
 and which process owns which state. It applies the bundled
 `ferrum-mobile-architecture` skill (phases 1 and 2 of its implementation path)
-to the current crates. `docs/baseline.md` remains the implementation
+to the current crates. `plans/baseline.md` remains the implementation
 authority; this document does not change the target, the guest substrate, or
 the hardware boundary. Evidence is QEMU/mock only; nothing here is a
 physical-device claim.

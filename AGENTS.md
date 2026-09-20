@@ -1,6 +1,6 @@
 # Repository instructions
 
-These rules apply repository-wide. Load only task-relevant detail: `docs/status.md` for implemented state/limitations; `targets/qemu-aarch64/README.md` for QEMU operation; and both `docs/baseline.md` (implementation authority) and `docs/plan.md` (long-term direction) before changing architecture, targets, guest construction, hardware APIs, or the product shell. Baseline wins conflicts.
+These rules apply repository-wide. Load only task-relevant detail: `docs/status.md` for implemented state/limitations; `targets/qemu-aarch64/README.md` for QEMU operation; and both `plans/baseline.md` (implementation authority) and `plans/plan.md` (long-term direction) before changing architecture, targets, guest construction, hardware APIs, or the product shell. Baseline wins conflicts.
 
 ## Boundaries
 

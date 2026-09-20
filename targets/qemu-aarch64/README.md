@@ -393,7 +393,7 @@ or mock; do not infer physical-device support.
 
 ## postmarketOS guest route (pmbootstrap)
 
-This is the intended **full guest substrate** from `docs/baseline.md`; the
+This is the intended **full guest substrate** from `plans/baseline.md`; the
 Alpine initramfs above stays the explicitly labelled smoke-test route. It is a
 **QEMU** target only: generic AArch64 `virt`, never a physical device. The
 first route is console-only (postmarketOS UI `console`, OpenRC); the project
