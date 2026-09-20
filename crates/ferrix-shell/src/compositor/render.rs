@@ -17,7 +17,7 @@ use smithay::{
 
 use super::{Shell, cursor_hotspot};
 
-/// Output clear color: the active theme's `bg` (Ferrix slate `#15181c` from
+/// Output clear color: the active theme's `bg` (Ferrix black `#000000` from
 /// `themes/ferrix/colors.toml`, or whatever `colors.toml` `theme::init`
 /// loaded). It is visible before any client maps and wherever no surface
 /// covers the output, which is how a framebuffer capture proves this

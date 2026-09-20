@@ -1,6 +1,7 @@
 # Ferrix palette: the canonical colors.toml for Omarchy Ferrix surfaces.
 #
-# Slate surfaces, steel type, one sharp rust accent. Values are "#rrggbb".
+# A black chassis with Space Monkey-informed amber type, rust action, and teal
+# information. Values are "#rrggbb".
 #
 # Key set: the flat top-level keys are those of Omarchy desktop theme files
 # (themes/<name>/colors.toml in the omarchy repository), so a desktop theme
@@ -23,37 +24,39 @@
 schema_version = 1
 mode = "dark"
 
-accent = "#d8642a"
-selection = "#262c33"
-muted = "#353d46"
+accent = "#bd4924"
+# The desktop source's gold selection is deliberately replaced by warm
+# charcoal for a low-glare mobile pressed fill.
+selection = "#2a211b"
+muted = "#6f6868"
 
-background = "#15181c"
-dark_background = "#0f1114"
-lighter_background = "#1c2126"
+background = "#000000"
+dark_background = "#000000"
+lighter_background = "#171311"
 
-foreground = "#d7dde3"
-dark_foreground = "#7d8a96"
-light_foreground = "#c5ccd3"
-bright_foreground = "#e6ebef"
+foreground = "#e7aa5a"
+dark_foreground = "#948a8b"
+light_foreground = "#e6d9db"
+bright_foreground = "#f1e5e7"
 
-red = "#cf5b4c"
-yellow = "#d9a441"
-orange = "#d8642a"
-green = "#7fa86a"
-cyan = "#7fb2b0"
-blue = "#7595b3"
-magenta = "#b08aa0"
+red = "#fd6883"
+yellow = "#f9cc6c"
+orange = "#df782d"
+green = "#df782d"
+cyan = "#bd4924"
+blue = "#66a891"
+magenta = "#a8a9eb"
 
-bright_red = "#e0705f"
-bright_yellow = "#e8b95a"
-bright_green = "#97c07f"
-bright_cyan = "#98cbc9"
-bright_blue = "#8fb0cf"
-bright_magenta = "#c7a1ba"
+bright_red = "#ff8297"
+bright_yellow = "#fcd675"
+bright_green = "#c8e292"
+bright_cyan = "#9bf1e1"
+bright_blue = "#f8a788"
+bright_magenta = "#bebffd"
 
 [ferrix]
-steel = "#8fa3b3"
-ok = "#6fa287"
-rust_hi = "#f0803f"
-rust_dim = "#8a3f1a"
-bright_black = "#4a5560"
+steel = "#66a891"
+ok = "#66a891"
+rust_hi = "#df782d"
+rust_dim = "#6b2411"
+bright_black = "#6f6868"

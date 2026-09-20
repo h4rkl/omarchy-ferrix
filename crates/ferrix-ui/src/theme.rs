@@ -1,8 +1,8 @@
 //! The Ferrix palette and the `colors.toml` theming contract.
 //!
-//! Ferrix's look is dark slate surfaces, steel type, and one sharp oxidized
-//! orange (rust) accent used sparingly. Status colors are desaturated and
-//! industrial. All values are `0xRRGGBB`.
+//! Ferrix's look is a black chassis, amber type, and one rust accent used
+//! sparingly. Teal carries passive information; status colors stay purposeful.
+//! All values are `0xRRGGBB`.
 //!
 //! | Field        | Role                                                    |
 //! |--------------|---------------------------------------------------------|
@@ -87,23 +87,23 @@ impl Theme {
     /// The built-in Ferrix palette, identical to `themes/ferrix/colors.toml`.
     pub const fn ferrix() -> Self {
         Self {
-            bg: 0x15181c,
-            bg_dark: 0x0f1114,
-            surface: 0x1c2126,
-            surface_hi: 0x262c33,
-            border: 0x353d46,
-            fg: 0xd7dde3,
-            fg_dim: 0x7d8a96,
-            rust: 0xd8642a,
-            rust_hi: 0xf0803f,
-            rust_dim: 0x8a3f1a,
-            steel: 0x8fa3b3,
-            ok: 0x6fa287,
-            warn: 0xd9a441,
-            err: 0xcf5b4c,
+            bg: 0x000000,
+            bg_dark: 0x000000,
+            surface: 0x171311,
+            surface_hi: 0x2a211b,
+            border: 0x6f6868,
+            fg: 0xe7aa5a,
+            fg_dim: 0x948a8b,
+            rust: 0xbd4924,
+            rust_hi: 0xdf782d,
+            rust_dim: 0x6b2411,
+            steel: 0x66a891,
+            ok: 0x66a891,
+            warn: 0xf9cc6c,
+            err: 0xfd6883,
             ansi: [
-                0x15181c, 0xcf5b4c, 0x7fa86a, 0xd9a441, 0x7595b3, 0xb08aa0, 0x7fb2b0, 0xc5ccd3,
-                0x4a5560, 0xe0705f, 0x97c07f, 0xe8b95a, 0x8fb0cf, 0xc7a1ba, 0x98cbc9, 0xe6ebef,
+                0x000000, 0xfd6883, 0xdf782d, 0xf9cc6c, 0x66a891, 0xa8a9eb, 0xbd4924, 0xe6d9db,
+                0x6f6868, 0xff8297, 0xc8e292, 0xfcd675, 0xf8a788, 0xbebffd, 0x9bf1e1, 0xf1e5e7,
             ],
         }
     }
@@ -463,9 +463,9 @@ bright_magenta = "#bb9af7"
 
     #[test]
     fn rejects_bad_hex() {
-        for bad in ["#d8642", "d8642a", "#d8642g", "#d8642a00", "rust"] {
+        for bad in ["#bd492", "bd4924", "#bd492g", "#bd492400", "rust"] {
             let text =
-                CANONICAL_TOML.replace("accent = \"#d8642a\"", &format!("accent = \"{bad}\""));
+                CANONICAL_TOML.replace("accent = \"#bd4924\"", &format!("accent = \"{bad}\""));
             assert_eq!(
                 Theme::from_toml(&text),
                 Err(ThemeError::Color {
@@ -475,19 +475,19 @@ bright_magenta = "#bb9af7"
                 "{bad}"
             );
         }
-        let text = CANONICAL_TOML.replace("steel = \"#8fa3b3\"", "steel = \"#8fa3b\"");
+        let text = CANONICAL_TOML.replace("steel = \"#66a891\"", "steel = \"#66a89\"");
         assert_eq!(
             Theme::from_toml(&text),
             Err(ThemeError::Color {
                 key: "ferrix.steel".into(),
-                value: "#8fa3b".into()
+                value: "#66a89".into()
             })
         );
     }
 
     #[test]
     fn rejects_missing_key() {
-        let text = CANONICAL_TOML.replace("background = \"#15181c\"\n", "");
+        let text = CANONICAL_TOML.replace("background = \"#000000\"\n", "");
         match Theme::from_toml(&text) {
             Err(ThemeError::Parse(message)) => assert!(
                 message.contains("background"),
@@ -523,7 +523,7 @@ bright_magenta = "#bb9af7"
         let env = dir.write("env.toml", DESKTOP_FILE);
         let system = dir.write(
             "system.toml",
-            &CANONICAL_TOML.replace("accent = \"#d8642a\"", "accent = \"#123456\""),
+            &CANONICAL_TOML.replace("accent = \"#bd4924\"", "accent = \"#123456\""),
         );
 
         let out = load(Some(&explicit), Some(env.as_os_str()), &system);

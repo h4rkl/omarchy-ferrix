@@ -1,5 +1,35 @@
 # Status
 
+## 2026-09-21 (Space Monkey palette and BMW design dock)
+
+- **Default theme:** `themes/ferrix/colors.toml` and the matching built-in
+  `Theme::ferrix()` now use a black chassis with adapted Space Monkey signal
+  colors: black `#000000` ground and recessed areas, warm-charcoal
+  surfaces, amber `#e7aa5a` type, rust `#bd4924` action, teal `#66a891`
+  information, gold warnings, and pink-red errors. This replaces the first,
+  overly brown cocoa pass. The raised touch surface is intentionally `#2a211b`
+  rather than Space Monkey's bright desktop gold selection. The exact palette
+  remains staged into the QEMU guest and recorded by its existing
+  `colors_sha256` manifest field.
+- **Design dock:** `docs/design.md` now makes the division explicit: Space
+  Monkey is the palette reference; BMW-inspired cockpit philosophy governs
+  driver-oriented priority, grouped information, low-light legibility, and a
+  stable action hierarchy. It explicitly excludes external logos, typefaces,
+  artwork, wallpapers, desktop configuration, vehicle-interface copy, and
+  branding. This is a visual-system change only; targets, guest construction,
+  hardware APIs, and product-shell architecture are unchanged.
+- **Graphical evidence (QEMU/mock, TCG, 1080×2340):** After rebuilding the
+  guest, `just qemu-agent-start` reached `home-ready` with eight catalog tiles
+  and `just qemu-frame` captured the nonblank launcher at
+  `out/qemu-aarch64/agent/frame.png`. Inspection confirms a black field,
+  charcoal cards and tiles, amber readouts and labels, teal network and
+  information glyphs, quiet stone hairlines, and the single rust Terminal
+  anchor. The first brown/cocoa capture is superseded historical evidence.
+  This is QEMU/mock evidence only.
+- **Validation:** `cargo fmt --check`, workspace Clippy with warnings denied,
+  `cargo test --workspace`, a fresh `just qemu-build`, inspected graphical QEMU
+  capture, and `just qemu-check` all pass.
+
 ## 2026-09-21 (mobile navigation and app dismissal gestures)
 
 - **Gestures:** A normal bottom-edge tap or upward swipe minimizes the foreground application to Home and keeps its supervised instance alive. An upward swipe longer than 55% of the panel's shorter side sends the new compositor-only `CloseGesture`; `ferrix-appd` terminates the foreground application and explicitly protects Home. Inward swipes from either side edge perform application Back, covering Android's two-sided convention and the iOS left-edge convention; at an application root, Back yields to Home instead of killing the process.

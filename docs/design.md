@@ -1,95 +1,176 @@
 # Omarchy Ferrix visual system
 
-This is the reference for how Omarchy Ferrix surfaces look, read, and are
-themed. `ferrix-ui` implements it; `ferrix-basic-screen`, `ferrix-terminal`,
-and future first-party surfaces consume it. `plans/baseline.md` stays the
-implementation authority; this document does not change targets, guest
-construction, or the hardware boundary. All rendered evidence is `QEMU` or
-`mock`.
+This document is the design authority for first-party Omarchy Ferrix surfaces.
+It defines how the system looks, reads, and behaves; `ferrix-ui` implements the
+shared primitives, and first-party shells and applications consume them.
 
-## Principles
+`plans/baseline.md` remains the implementation authority. This document does
+not alter targets, guest construction, hardware boundaries, or the distinction
+between the product shell and diagnostic surfaces. Rendered evidence must be
+labelled `QEMU`, `mock`, or with the exact admitted physical target.
 
-- **Restrained, cohesive, low-noise.** Dark slate surfaces, steel type, and
-  oxidized orange as the unmistakable Ferrix signature. Nothing animates or
-  glows to attract attention.
-- **Industrial.** Tight radii, hairline borders, thin rule lines, generous dark
-  negative space. Panels read as machined parts, not cards floating on a
-  gradient.
-- **Low-light instrument panel.** The visual approach takes inspiration from
-  the legibility of 1980s BMW dashboards: a non-reflective dark field, warm
-  orange hierarchy, and a small luminance range that keeps controls readable
-  in a dark room. It is an interaction principle, not copied vehicle branding
-  or an imitation of a dashboard.
-- **Terminal-first.** The Terminal uses a true monospace face and the ANSI
-  palette is part of the system, not an afterthought.
-- **Touch-first portrait.** 1080x2340 is the design width; every metric scales
-  with `v * width / 1080`. Fullscreen focused flows, no desktop window
-  management.
-- **Software-rendered.** tiny-skia and fontdue into a plain buffer.
-  Acceleration is never required for correctness, so effects that need it
-  (blur, large shadows, alpha-heavy layering) are out.
+## Design thesis
+
+Omarchy Ferrix is a low-light mobile instrument: black, warm, direct, and
+quiet. It is for someone operating a developer-grade Linux phone who needs to
+understand system state and find the next action at a glance.
+
+**Space Monkey supplies the signal colors. BMW-inspired cockpit design
+supplies the discipline. Ferrix turns both into a touch-first system.**
+
+The chassis is black. Amber readouts, rust actions, teal information, and rare
+semantic color sit on top of it. This keeps Space Monkey's character without
+washing the entire interface in brown. It is not a nostalgic desktop skin or
+dashboard skeuomorphism, and it does not copy external logos, vehicle controls,
+typefaces, iconography, wallpaper, or branding.
+
+## Design dock
+
+Use this sequence whenever a first-party surface is added or changed:
+
+1. **Name the task.** What is the person trying to learn or do here?
+2. **Choose the lead signal.** Give the most important state or next action the
+   strongest position, type scale, or action treatment.
+3. **Group supporting state.** Put related information into one readable
+   cluster instead of distributing equal-weight cards across the screen.
+4. **Spend one accent.** A region gets one rust action cue. Teal may carry
+   passive information, but it must not compete for action priority.
+5. **Remove one element.** If a divider, label, color, or animation does not
+   clarify state or action, remove it.
+
+### Source and adaptation
+
+The signal palette is selectively adapted from
+[Ty Richards' Space Monkey theme](https://github.com/TyRichards/omarchy-space-monkey-theme/)
+at commit `814af8923d701e779d2894bd1b2b1d4cbec820ff`. Space Monkey's amber,
+rust, teal, violet, and pink relationships are the visual reference. Its
+GPL-3.0 desktop configuration, artwork, wallpapers, and branding are not
+bundled.
+
+The adaptation is intentional:
+
+- Ferrix replaces the theme's brown field with black and warm charcoal. Brown
+  survives only as a trace in raised surfaces and the rust action family.
+- Space Monkey's bright gold desktop selection becomes a dark charcoal
+  `surface_hi`, because a full mobile tile must remain comfortable in low
+  light.
+- Ferrix adds semantic action, information, success, warning, and error roles
+  so state is consistent across independent processes.
+- The existing token name `steel` remains stable in code, but its current
+  visual role is Space Monkey teal.
+
+### BMW-inspired philosophy
+
+BMW is a usability reference, not a styling kit:
+
+- **Oriented toward the operator.** The next action occupies the natural visual
+  and thumb path; secondary controls recede.
+- **Readable at a glance.** Numeric state, status, and warnings use distinct
+  positions and intensities rather than ornamental containers.
+- **Stable controls.** Controls do not move when their value changes. A person
+  learns the surface spatially.
+- **Progressive disclosure.** The default view shows operational state;
+  adjustment and detail appear only when requested.
+- **Tactile response without imitation.** Pressed fills, outlines, and short
+  state changes communicate contact. Faux switches, gauges, chrome, and carbon
+  fibre do not belong here.
+
+## Signature: the instrument rail
+
+The instrument rail is the system's one distinctive graphic device: a thin
+warm rule that ties a title, active destination, or primary readout to its
+control context. It may appear beneath a status strip, beside a crash notice,
+or above the Terminal identity area.
+
+- Use `rust_dim` for structure and `rust_hi` only when the rail identifies the
+  currently actionable region.
+- Keep it 1–2 px at the 1080 px design width.
+- Use at most one rail per region. It never becomes a frame, glow, underline
+  on every label, or decorative grid.
+
+The rail is where the design spends its boldness. Everything around it stays
+quiet.
+
+## Core principles
+
+- **Black chassis, warm instruments.** Black carries the field, amber carries
+  the reading order, rust carries action, and teal carries information.
+- **Touch-first portrait.** The reference canvas is 1080×2340. Fullscreen,
+  focused flows take priority over desktop window-management patterns.
+- **Terminal-first, not terminal-only.** Terminal typography and ANSI color are
+  first-class, while ordinary applications remain clear to non-shell users.
+- **Software-rendered by default.** Correctness cannot require blur, large
+  shadows, translucency stacks, or GPU effects.
+- **State before decoration.** Color, type, spacing, and rules explain current
+  state or available action. They do not fill empty space.
+- **Calm failure.** Errors become specific, local, and recoverable. Alarm color
+  is reserved for the element that needs attention.
 
 ## Palette
 
-Values are `0xRRGGBB`. These are the only colors first-party surfaces use.
+Values are `0xRRGGBB`. The canonical values live in
+`themes/ferrix/colors.toml`; the built-in `Theme::ferrix()` must remain exactly
+equivalent.
 
-### Surfaces (slate)
-
-| Token | Value | Role |
-| --- | --- | --- |
-| `bg` | `#15181c` | Main background. |
-| `bg_dark` | `#0f1114` | Bars, keyboard wells, terminal grid background. |
-| `surface` | `#1c2126` | Cards and tiles. |
-| `surface_hi` | `#262c33` | Pressed, raised, and track fills. |
-| `border` | `#353d46` | Hairlines. |
-
-### Type (steel)
+### Chassis and surfaces
 
 | Token | Value | Role |
 | --- | --- | --- |
-| `fg` | `#d7dde3` | Primary text. |
-| `fg_dim` | `#7d8a96` | Secondary text, inactive glyphs. |
+| `bg` | `#000000` | Main black field. |
+| `bg_dark` | `#000000` | Status strips, keyboard wells, terminal grid. |
+| `surface` | `#171311` | Cards, rows, and launcher tiles. |
+| `surface_hi` | `#2a211b` | Pressed and raised surfaces; inactive tracks. |
+| `border` | `#6f6868` | Quiet warm-stone hairlines and neutral outlines. |
 
-### Accents
-
-| Token | Value | Role |
-| --- | --- | --- |
-| `rust` | `#d8642a` | The accent: focus, active toggles, pressed outlines, primary glyphs. |
-| `rust_hi` | `#f0803f` | Brighter direct-action orange: pressed controls, cursor ring, and Terminal identity rule. |
-| `rust_dim` | `#8a3f1a` | Deep Terminal tile, fill behind accent text, and quiet structural orange. |
-| `steel` | `#8fa3b3` | Secondary accent: network glyphs, links, anything an app calls "blue". |
-
-### Status (desaturated)
+### Type and semantic color
 
 | Token | Value | Role |
 | --- | --- | --- |
-| `ok` | `#6fa287` | Charging, connected (verdigris). |
-| `warn` | `#d9a441` | Warnings, exited-shell notes (amber). |
-| `err` | `#cf5b4c` | Errors, crash banners (signal red). |
+| `fg` | `#e7aa5a` | Primary text and numeric readouts. |
+| `fg_dim` | `#948a8b` | Secondary text and inactive glyphs. |
+| `rust` | `#bd4924` | Focus, active toggles, action outlines, primary glyphs. |
+| `rust_hi` | `#df782d` | Direct manipulation, pressed action, cursor ring. |
+| `rust_dim` | `#6b2411` | Instrument rails, quiet action structure, Terminal tile. |
+| `steel` | `#66a891` | Teal information, network state, links, descriptor blue. |
+| `ok` | `#66a891` | Charging, connected, completed successfully. |
+| `warn` | `#f9cc6c` | Degraded state and action required soon. |
+| `err` | `#fd6883` | Failed action, crash, destructive consequence. |
+
+### Color budget
+
+- Most pixels belong to `bg`, `bg_dark`, and `surface`.
+- Amber establishes reading order; it is not a large-area fill.
+- Rust is scarce: one action cue per region, strengthened from `rust_dim` to
+  `rust` to `rust_hi` as interaction priority increases.
+- Teal describes passive information and connection. It never becomes the
+  primary action color.
+- Warning and error colors appear only when those states exist.
+- Pure white is not part of the first-party UI palette. Pure black is reserved
+  for recessed areas, not used to flatten all surface depth.
 
 ### Terminal ANSI
 
-Normal 0-7, bright 8-15. Colors 0 and 15 match `bg` and the brightest
-foreground so the grid sits flush with the rest of the surface.
+Normal colors are indices 0–7; bright colors are 8–15. Index 0 matches `bg`,
+and index 15 is the brightest foreground, so the terminal belongs to the same
+visual system without flattening command output into one hue.
 
 | Index | Normal | Index | Bright |
 | --- | --- | --- | --- |
-| 0 | `#15181c` | 8 | `#4a5560` |
-| 1 | `#cf5b4c` | 9 | `#e0705f` |
-| 2 | `#7fa86a` | 10 | `#97c07f` |
-| 3 | `#d9a441` | 11 | `#e8b95a` |
-| 4 | `#7595b3` | 12 | `#8fb0cf` |
-| 5 | `#b08aa0` | 13 | `#c7a1ba` |
-| 6 | `#7fb2b0` | 14 | `#98cbc9` |
-| 7 | `#c5ccd3` | 15 | `#e6ebef` |
+| 0 | `#000000` | 8 | `#6f6868` |
+| 1 | `#fd6883` | 9 | `#ff8297` |
+| 2 | `#df782d` | 10 | `#c8e292` |
+| 3 | `#f9cc6c` | 11 | `#fcd675` |
+| 4 | `#66a891` | 12 | `#f8a788` |
+| 5 | `#a8a9eb` | 13 | `#bebffd` |
+| 6 | `#bd4924` | 14 | `#9bf1e1` |
+| 7 | `#e6d9db` | 15 | `#f1e5e7` |
 
-### Icon tones
+### Descriptor tone mapping
 
-Application descriptors (`apps/*.json`) declare an `IconTone` from
-`ferrix-app-api`. The enum is a stable contract and is not renamed; the theme
-maps it:
+Application descriptors declare the stable `IconTone` enum from
+`ferrix-app-api`. Theme language must not leak into that public contract.
 
-| `IconTone` | Token |
+| `IconTone` | Rendered token |
 | --- | --- |
 | `Blue`, `Cyan` | `steel` |
 | `Purple`, `Orange` | `rust` |
@@ -98,124 +179,251 @@ maps it:
 | `Red` | `err` |
 | `Neutral` | `fg_dim` |
 
-## Shape and type
+## Contrast and accessibility
 
-- **Radii.** Cards and tiles 8-10 px at 1080 width; small chips 6 px. No pill
-  shapes except the compositor home indicator.
-- **Hairlines.** 1-2 px borders use `border`. Section emphasis uses a thin
-  `rust_dim` rule; the Terminal identity rule may use `rust_hi`. Never use a
-  filled header.
-- **System face — IBM Plex Sans Condensed.** The compact, engineered forms
-  give system labels the disciplined instrument-panel character without
-  copying an automotive typeface. Use Regular for body/chrome and Medium or
-  SemiBold for titles and numeric readouts.
-- **Terminal face — IBM Plex Mono.** Its sober, highly differentiated glyphs
-  suit a real shell and visually belong to the system face. Terminal cell
-  metrics always come from this face; do not substitute a proportional
-  fallback inside a grid.
-- **Global fallback — Noto.** Fall back by script to Noto Sans UI (system) and
-  Noto Sans Mono / Noto Sans Mono CJK (terminal where a fixed cell is
-  available). Ship only the script packs selected by locale or language
-  settings: Latin/Cyrillic/Greek first, then Arabic UI, Indic UI, CJK, and
-  other Noto Sans script families on demand. This avoids pretending that a
-  Latin-only display face serves every language.
-- **Current implementation boundary.** The renderer currently embeds
-  JetBrains Mono as a temporary single-face implementation and has no
-  fallback-chain or complex-text shaping support. The font selections above
-  become a shipped claim only with script fallback, bidi, and shaping support;
-  until then non-Latin text must show an explicit missing-glyph fallback rather
-  than silently presenting itself as supported.
-- **Type.** Section labels are uppercase, letter-spaced, in `fg_dim` or
-  `rust_dim` when they establish navigation. Numeric readouts (clock,
-  percentages) are bold `fg`; white is never used as a large luminous field.
-- **Orange hierarchy.** `rust_dim` may carry quiet structural rules and
-  the Terminal tile. Reserve `rust`/`rust_hi` for its icon and direct focus
-  and action: the focused tile, active toggle, cursor ring, or pressed
-  control. The palette moves from dim → rust → rust_hi only with increasing
-  interaction priority; this keeps orange a clear product signature without
-  eye-straining bright fills.
-- **Night readability.** Do not use gradients, bloom, large white areas, or
-  competing saturated colors. Keep ambient information steel-gray, use orange
-  to locate navigation and control state, and use status colors only when the
-  state itself needs attention.
-- **Negative space.** Prefer spacing over dividers. Dividers, when needed, are
-  hairlines.
-- **Status colors** appear only on the element they describe (a battery glyph,
-  a crash banner), never as decoration.
+- Text, icons, shape, and wording work together. Color alone never
+  communicates focus, success, warning, failure, charging, or connectivity.
+- Primary text uses `fg`; `fg_dim` is limited to supporting text, metadata, and
+  inactive controls at a size that remains legible.
+- A border is structure, not state. Active controls also change label, glyph,
+  outline weight, or adjacent wording.
+- Every interactive element has visible default, focused, pressed, active,
+  disabled, and error treatment where those states apply.
+- Touch targets stay at least 48 logical pixels on the final scaled surface;
+  visual glyphs may be smaller inside them.
+- The UI must remain understandable in monochrome inspection and under common
+  color-vision deficiencies.
+- Missing glyphs, truncated values, and unavailable services are explicit
+  states, never silent disappearance.
+
+## Layout
+
+All metrics scale from the 1080 px reference width using
+`scaled = value * width / 1080`. Multiply before dividing so narrow surfaces do
+not jump to unscaled values.
+
+### Portrait hierarchy
+
+```text
+┌────────────────────────────────┐
+│ status / immediate system state│
+├────────────────────────────────┤  instrument rail
+│                                │
+│ primary readout or task title  │
+│ supporting identity / context  │
+│                                │
+│ grouped operational state      │
+│                                │
+│ focused content or controls    │
+│                                │
+│ contextual action / explanation│
+├────────────────────────────────┤
+│ trusted home gesture zone      │
+└────────────────────────────────┘
+```
+
+- Keep the status strip stable across first-party surfaces.
+- Place the primary readout or task title above operational detail.
+- Prefer one focused content column. Launcher tiles may use a grid because the
+  catalog is a peer set; settings and task flows should not.
+- Preserve the compositor-owned bottom gesture zone. Application content and
+  hit targets must not compete with it.
+
+### Landscape adaptation
+
+Landscape is a reflow, not a scaled-down portrait screenshot. Put the primary
+state or navigation cluster in the leading region and the active content in
+the wider trailing region. Do not create more hierarchy levels merely because
+horizontal space exists.
+
+### Spacing and geometry
+
+- Cards and tiles use 8–10 px radii at reference width; compact chips and back
+  controls use 6 px. Only the trusted home indicator is pill-shaped.
+- Hairlines are 1–2 px and never truncate below one physical pixel.
+- Prefer negative space over dividers. When a divider is necessary, use one
+  hairline or one instrument rail, not both.
+- Align related labels and values to a shared edge. Avoid centered body copy;
+  centered alignment is reserved for a singular readout or empty state.
+- No gradient, bloom, glass, large drop shadow, or decorative translucency.
+
+## Typography
+
+### Intended family
+
+- **System — IBM Plex Sans Condensed.** Regular for body and chrome; Medium or
+  SemiBold for titles and numeric readouts. Its compact engineered forms suit
+  the instrument character without copying an automotive face.
+- **Terminal — IBM Plex Mono.** Terminal cell metrics always come from a true
+  monospace face.
+- **Fallback — Noto.** Resolve by script to Noto Sans UI and, where fixed cells
+  are available, Noto Sans Mono or Noto Sans Mono CJK. Ship locale-selected
+  packs rather than pretending one Latin face supports every language.
+
+### Hierarchy
+
+- **Readout:** time, percentage, call duration, or the one value anchoring the
+  page. Bold, tabular where available, and visually dominant.
+- **Title:** the task or destination, not a slogan.
+- **Body:** current state, explanation, or content.
+- **Utility:** short uppercase navigation labels and compact metadata, with
+  restrained tracking.
+- **Terminal:** grid-bound monospace text; never substitute proportional text
+  inside terminal cells.
+
+White is never used as a large luminous field. Uppercase is a utility voice,
+not a body-copy style.
+
+### Current implementation boundary
+
+The renderer currently embeds JetBrains Mono as a temporary single-family
+implementation. It has no fallback chain, bidirectional layout, or complex-text
+shaping. IBM Plex and Noto are design selections, not shipped claims, until
+font packaging, shaping, fallback, and script-specific graphical evidence
+exist. Unsupported text must expose a missing-glyph state honestly.
+
+## Components and states
+
+### Status strip
+
+Show only immediately useful system state: time, connectivity, and power. Use
+stable positions and compact glyphs. Opening quick settings expands this state;
+the strip itself does not become a second launcher.
+
+### Operational card
+
+Lead with the value, follow with the state, then its evidence label when
+mocked. A card groups one subject. It does not collect unrelated metrics merely
+to balance the layout.
+
+### Launcher tile
+
+The glyph and label identify the application. Running, starting, and crashed
+states add a compact state cue without moving the tile. The catalog gets one
+rust anchor—the Terminal—not a rainbow of equal accents.
+
+### Rows and controls
+
+Rows use a stable label edge and place the current value or affordance opposite
+it. Active toggles keep the black surface and gain rust outline plus a textual
+or glyph state. Disabled controls remain legible and state why they cannot act.
+
+### Notices and errors
+
+A notice uses a local instrument rail or semantic outline, a factual reason,
+and the next available action. It never takes over the entire screen unless the
+screen genuinely cannot continue.
+
+### On-screen keyboard
+
+The keyboard is an instrument bed: `bg_dark` well, `surface` character keys,
+darker function keys, and rust only for pressed or latched state. Key geometry
+and hit-test geometry are the same data.
+
+### Interaction state matrix
+
+| State | Surface | Outline / rail | Content |
+| --- | --- | --- | --- |
+| Default | `surface` | `border` hairline | `fg` or `fg_dim` |
+| Focused | `surface` | `rust` | `fg`; explicit focus target |
+| Pressed | `surface_hi` | heavier `rust` | action label or glyph |
+| Active | `surface` | `rust` | state word and active glyph |
+| Disabled | `bg` or `surface` | quiet `border` | `fg_dim` plus reason when needed |
+| Warning | normal surface | local `warn` cue | specific warning text |
+| Error | normal surface | local `err` cue | failure and recovery action |
+
+## Motion and feedback
+
+Current correctness does not depend on animation. Immediate pressed-state
+feedback is required; decorative motion is not.
+
+Future motion must:
+
+- explain a state transition, spatial relationship, or gesture result;
+- remain short and interruptible;
+- avoid continuous ambient movement;
+- honor reduced-motion settings by removing travel rather than merely speeding
+  it up;
+- leave the final state fully legible when animation is unavailable.
 
 ## Copy
 
-System-style lines: short, factual, evidence-labelled where state is mocked.
-No greetings, no reassurance, no exclamation marks.
+The voice is short, factual, and calm. Write from the person's side of the
+screen: name what they can recognize and what they can do next.
 
-| Before | After |
+| Avoid | Use |
 | --- | --- |
 | You're all caught up | No notifications |
 | Settings are ready | Mock state · QEMU |
-| Good morning / afternoon / evening | `ferrix · qemu-aarch64 · mock` |
+| Good morning | `ferrix · qemu-aarch64 · mock` |
+| Something went wrong | Network unavailable · retry |
+| Submit | Save changes |
 
 Rules:
 
-- Name the thing, then the state. Separate fields with ` · `.
-- Say `mock` or `QEMU` when the value comes from the profile or the emulator.
-  Never imply a physical device.
-- Serial and JSON evidence records are a machine-readable contract. Their
-  record names, keys, and values do not change for tone.
-- Documentation follows the same register: state what exists, what it does
-  not do, and how to verify it.
+- Name the thing, then the state. Separate compact fields with ` · `.
+- Use the same verb before and after an action: `Save changes` becomes
+  `Changes saved`.
+- Empty states explain the available action; errors state the cause and
+  recovery route when known.
+- Say `mock` or `QEMU` when state comes from the emulator. Never imply physical
+  hardware evidence.
+- Serial and JSON evidence are contracts. Their keys and values do not change
+  for tone.
+- No greetings, apologies, reassurance, exclamation marks, or promotional
+  copy in system surfaces.
 
-## Theming
+## Theming contract
 
-Colors are loaded once at process start from a TOML file and exposed through
-`ferrix_ui::theme`.
+Colors load once at process start through `ferrix_ui::theme`.
 
-- **Canonical file:** `themes/ferrix/colors.toml`, checked in. A unit test
-  asserts it parses to the built-in `Theme::ferrix()`.
-- **Lookup order:** explicit path passed to `theme::init` → `$FERRIX_COLORS`
-  → `/etc/ferrix/colors.toml` → built-in `Theme::ferrix()`.
-- **Format:** the token names above, each `#rrggbb`, plus `ansi` as a list of
-  sixteen colors. Unknown keys and malformed colors are errors.
-- **Evidence:** `theme-loaded` with `source` = `builtin` or the resolved path;
-  `theme-invalid` with the error when a file was present but rejected (the
-  process then continues on the built-in theme).
-- **Access:** `theme::get()` returns the loaded theme; if `init` was never
-  called it returns the built-in.
+- **Canonical file:** `themes/ferrix/colors.toml`.
+- **Equivalence:** a unit test asserts that the canonical file parses to the
+  built-in `Theme::ferrix()`.
+- **Lookup order:** explicit path passed to `theme::init` → `$FERRIX_COLORS` →
+  `/etc/ferrix/colors.toml` → built-in theme.
+- **Desktop-compatible keys:** `accent`, `selection`, `muted`, the background
+  and foreground families, and named normal/bright terminal colors. Supported
+  unused desktop keys are accepted and ignored.
+- **Ferrix extension:** optional `[ferrix]` keys are `steel`, `ok`, `rust_hi`,
+  `rust_dim`, and `bright_black`, each with a documented desktop-key fallback.
+- **Schema:** optional `schema_version`; only version 1 is accepted.
+- **Evidence:** `theme-loaded` names the built-in or resolved file;
+  `theme-invalid` names a rejected configured source before falling back.
 
-This is a file contract. The desktop "Unified Theming" story is satisfied by
-writing a compatible `colors.toml` to `/etc/ferrix/`; there is no live sync
-service, file watcher, or desktop transport in this repository.
+This is a file contract, not a live synchronization service. A desktop theme
+can be previewed through the compatible keys, but the Ferrix default remains
+the adapted and tested mobile palette above.
 
-## What this pass implements
+## Implementation and evidence
 
-Implemented:
+Implemented today:
 
-- The palette, ANSI colors, and icon-tone mapping above, replacing the
-  earlier Tokyo Night values.
-- The `colors.toml` theming contract, lookup order, and evidence records.
-- The industrial shape language (radii, hairlines, rule lines) applied to the
-  home surface, quick settings, notifications, and Terminal.
-- The copy rules, applied to first-party surface strings.
+- shared palette, ANSI mapping, descriptor-tone mapping, and theme loading;
+- software-rendered cards, rows, fields, keyboard, launcher, status surfaces,
+  quick settings, notifications, and Terminal;
+- tight radii, hairlines, instrument rails, focused fullscreen flows, and
+  concise evidence-labelled copy.
 
-Intentional departures from the marketing position, and future work:
+Selected but not yet shipped:
 
-- **Layout.** The launcher keeps a catalog tile grid restyled in this system.
-  Micro-tiling layouts and terminal-first navigation are not part of the
-  current launcher; the product shell stays focused-fullscreen and touch-first
-  per `AGENTS.md`.
-- **Theme sync.** A file contract, not a live sync service (above).
-- **Everything else in the positioning** (agents, clipboard or history sync,
-  key storage) is not implemented and is not claimed by any surface or
-  document in this repository.
+- IBM Plex and Noto font stack;
+- script shaping, bidirectional layout, and fallback-chain support;
+- compositor-owned final shell chrome and any future motion system.
+
+Every graphical change must be exercised through the documented preview or
+nested workflow, then captured and inspected in the actual QEMU framebuffer
+before `docs/status.md` makes a rendered claim. A process-start record alone is
+not visual evidence. QEMU evidence never establishes physical-device support.
 
 ## UX resolution order
 
-When a choice is not settled here, resolve it in this order, matching
-`AGENTS.md`:
+Resolve an unsettled choice in this order:
 
-1. Explicit requirements in the task or in `plans/baseline.md`.
+1. Explicit task requirements and `plans/baseline.md`.
 2. This visual system.
-3. GrapheneOS interaction conventions, adapted to this system (status bar
-   layout, quick-settings behavior, gesture semantics).
+3. GrapheneOS interaction conventions, adapted to this system for status,
+   quick settings, gestures, permissions, and recovery.
 
-No external branding is copied. "Ferrix" is the product name only; palette,
-type, and iconography are the project's own.
+Ferrix remains the only product identity. Space Monkey is a documented palette
+reference, and BMW is a documented usability influence.

@@ -447,7 +447,7 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders the Omarchy Ferrix launcher — the slate/steel/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
+The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders the Omarchy Ferrix launcher — the black/amber/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
 
 ```sh
 cargo run -p ferrix-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
@@ -473,7 +473,7 @@ log:
 
 A file that is present but rejected produces `theme-invalid` (with `source`
 and `error`) first and the process continues on the built-in palette
-(`"source":"builtin"`). `ferrix-shell` paints the theme `bg` (`#15181c`) as
+(`"source":"builtin"`). `ferrix-shell` paints the theme `bg` (`#000000`) as
 the clear color under every client, so a framebuffer capture taken before a
 client maps shows that color exactly when the product compositor is the one
 scanning out. `just shell-nested` exports `FERRIX_COLORS` pointing at the

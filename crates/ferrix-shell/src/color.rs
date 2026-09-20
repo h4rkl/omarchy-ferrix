@@ -7,7 +7,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 /// The active theme's `bg` as `[r, g, b]` channels in `0.0..=1.0`, the form
-/// the renderers' clear color takes. Ferrix slate `#15181c` unless a loaded
+/// the renderers' clear color takes. Ferrix black `#000000` unless a loaded
 /// `colors.toml` says otherwise.
 pub fn clear_rgb() -> [f32; 3] {
     rgb_channels(ferrix_ui::theme::get().bg)
@@ -45,11 +45,8 @@ mod tests {
         // No test in this binary calls `theme::init`, so `get()` is the built-in
         // palette, which the canonical `themes/ferrix/colors.toml` must equal.
         let bg = Theme::ferrix().bg;
-        assert_eq!(bg, 0x15181c, "Ferrix slate bg");
+        assert_eq!(bg, 0x000000, "Ferrix black bg");
         assert_eq!(clear_rgb(), rgb_channels(bg));
-        assert!(close(
-            clear_rgb(),
-            [21.0 / 255.0, 24.0 / 255.0, 28.0 / 255.0]
-        ));
+        assert!(close(clear_rgb(), [0.0, 0.0, 0.0]));
     }
 }

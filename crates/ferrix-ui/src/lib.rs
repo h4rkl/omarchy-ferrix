@@ -2,7 +2,7 @@
 //!
 //! - [`draw`]: a thin `tiny-skia` + `fontdue` canvas with the embedded
 //!   JetBrains Mono faces.
-//! - [`theme`]: the Ferrix palette (slate surfaces, steel type, rust accent)
+//! - [`theme`]: the Ferrix palette (black surfaces, amber type, rust accent)
 //!   and the `colors.toml` loader behind [`theme::get`].
 //! - [`osk`] and [`keymap`]: the touch keyboard geometry and the evdev keymap
 //!   shared by hit testing, rendering, and terminal input.
