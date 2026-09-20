@@ -1,0 +1,50 @@
+schema_version = 1
+name = "no-modem"
+description = "Target without a modem: the telephony service reports modem absent, registration and signal fall back, and a dial is rejected with a typed no-modem error."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "absent" }
+expect = [ { event = "telephony-event", kind = "modem-changed", modem = { state = "absent" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "dial", number = "+15550100001" }
+expect_ack_error = true
+note = "client verb through the normal service path; rejected with no-modem"
+
+[[step]]
+service = "telephony"
+command = { cmd = "state" }
+ack = { status = "ok" }
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+expect = [ { event = "telephony-event", kind = "modem-changed", modem = { state = "ready" } } ]
+note = "teardown"

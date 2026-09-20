@@ -21,14 +21,17 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ferrix_app_api::{AppDescriptor, AppError, AppEvent, AppId, AppInstance, SCHEMA_VERSION};
+use ferrix_app_api::{
+    AppDescriptor, AppError, AppEvent, AppId, AppIdentity, AppInstance, SCHEMA_VERSION,
+};
 use serde::{Deserialize, Serialize};
 
 pub use ferrix_app_api::DEFAULT_APPD_SOCKET as DEFAULT_SOCKET;
 
 /// Who is on the other end of a connection. Roles gate what `ferrix_appd` accepts:
 /// only a compositor may send surface reports; only the home surface and
-/// tools may launch arbitrary apps.
+/// tools may launch arbitrary apps; only services and tools may resolve a
+/// pid to an application identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClientRole {
@@ -36,6 +39,10 @@ pub enum ClientRole {
     Home,
     Application,
     Tool,
+    /// A platform service (telephony, network, contacts) that resolves its
+    /// own peers through [`Request::Identify`]. Bootstrap-trusted like the
+    /// compositor: it is not launched by `ferrix_appd`.
+    Service,
 }
 
 /// Messages that receive exactly one [`Reply`].
@@ -45,6 +52,12 @@ pub enum Request {
     /// Identify the connection. Must precede privileged requests.
     Hello {
         role: ClientRole,
+    },
+    /// Resolve a kernel pid (the caller's `SO_PEERCRED` peer) to the
+    /// application it belongs to and that application's granted
+    /// capabilities. Wire form: `{"request":"identify","pid":N}`.
+    Identify {
+        pid: u32,
     },
     Catalog,
     Instances,
@@ -109,6 +122,14 @@ pub enum Reply {
         evidence: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         home: Option<AppId>,
+    },
+    /// Result of `Identify`. The identity fields are flattened so the wire
+    /// form is exactly
+    /// `{"reply":"identity","schema_version":1,"app":"org.ferrix.phone"|null,"trust":"untrusted"|null,"granted":["telephony-call",...]}`.
+    Identity {
+        schema_version: u32,
+        #[serde(flatten)]
+        identity: AppIdentity,
     },
     Catalog {
         schema_version: u32,
@@ -238,6 +259,18 @@ impl Client {
             Reply::Instances { instances, .. } => Ok(instances),
             Reply::Error { error } => Err(error.to_string()),
             other => Err(format!("unexpected ferrix-appd instances reply: {other:?}")),
+        }
+    }
+
+    /// Resolves a peer pid to its application identity (`service` and
+    /// `tool` roles). An unknown or exited pid yields
+    /// [`AppIdentity::unknown`]; a role refusal is an `Err`.
+    pub fn identify(&mut self, pid: u32) -> Result<AppIdentity, String> {
+        match self.request(&Request::Identify { pid })? {
+            Reply::Identity { identity, .. } => Ok(identity),
+            Reply::Error { error } => Err(error.to_string()),
+            Reply::ProtocolError { reason } => Err(format!("identify refused: {reason}")),
+            other => Err(format!("unexpected ferrix-appd identify reply: {other:?}")),
         }
     }
 
@@ -396,6 +429,58 @@ mod tests {
         };
         let text = serde_json::to_string(&event).unwrap();
         assert_eq!(serde_json::from_str::<Notification>(&text).unwrap(), event);
+    }
+
+    #[test]
+    fn identify_and_identity_have_the_documented_wire_forms() {
+        use ferrix_app_api::{AppCapability, TrustLevel};
+
+        let request = Request::Identify { pid: 4242 };
+        assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"request":"identify","pid":4242}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Inbound>(r#"{"request":"identify","pid":4242}"#).unwrap(),
+            Inbound::Request(request)
+        );
+        assert!(serde_json::from_str::<Inbound>(r#"{"request":"identify"}"#).is_err());
+
+        let known = Reply::Identity {
+            schema_version: SCHEMA_VERSION,
+            identity: AppIdentity {
+                app: Some(AppId::new("org.ferrix.phone").unwrap()),
+                trust: Some(TrustLevel::Untrusted),
+                granted: [AppCapability::TelephonyCall, AppCapability::TelephonyState]
+                    .into_iter()
+                    .collect(),
+            },
+        };
+        let text = serde_json::to_string(&known).unwrap();
+        assert_eq!(
+            text,
+            r#"{"reply":"identity","schema_version":1,"app":"org.ferrix.phone","trust":"untrusted","granted":["telephony-state","telephony-call"]}"#
+        );
+        assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), known);
+
+        let unknown = Reply::Identity {
+            schema_version: SCHEMA_VERSION,
+            identity: AppIdentity::unknown(),
+        };
+        let text = serde_json::to_string(&unknown).unwrap();
+        assert_eq!(
+            text,
+            r#"{"reply":"identity","schema_version":1,"app":null,"trust":null,"granted":[]}"#
+        );
+        assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), unknown);
+
+        assert_eq!(
+            serde_json::to_string(&Request::Hello {
+                role: ClientRole::Service
+            })
+            .unwrap(),
+            r#"{"request":"hello","role":"service"}"#
+        );
     }
 
     #[test]

@@ -1,0 +1,18 @@
+[package]
+name = "ferrix-network-mock"
+description = "Deterministic QEMU/host network adapter with synthetic access points driven by the versioned profile and host mock-control scenarios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+ferrix-mock-control = { path = "../ferrix-mock-control" }
+ferrix-network-adapter-api = { path = "../ferrix-network-adapter-api" }
+ferrix-network-api = { path = "../ferrix-network-api" }
+ferrix-target-profile = { path = "../ferrix-target-profile" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[lints]
+workspace = true

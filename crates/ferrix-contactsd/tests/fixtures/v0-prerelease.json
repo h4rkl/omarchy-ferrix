@@ -1,0 +1,15 @@
+{
+  "contacts": [
+    {
+      "id": "c_00000000000000a1",
+      "name": "Test Contact A1",
+      "phones": ["+1 555 010 0091", "ext 77"],
+      "created_ms": 1700000000000
+    },
+    {
+      "id": "legacy-2",
+      "name": "   ",
+      "phones": []
+    }
+  ]
+}

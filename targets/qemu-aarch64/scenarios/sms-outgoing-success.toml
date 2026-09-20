@@ -1,0 +1,50 @@
+schema_version = 1
+name = "sms-outgoing-success"
+description = "Outgoing SMS: sending, sent, delivered (delivery report)."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sms-result", result = "sent" }
+ack = { status = "ok" }
+
+[[step]]
+service = "telephony"
+command = { cmd = "send-sms", number = "+15550100030", body = "synthetic outgoing message" }
+expect = [ { event = "telephony-event", kind = "sms-changed", sms = { direction = "outgoing", state = "sending" } } ]
+note = "client verb through the normal service path"
+
+[[step]]
+service = "telephony"
+command = { cmd = "tick", ms = 1000 }
+expect = [ { event = "telephony-event", kind = "sms-changed", sms = { direction = "outgoing", state = "sent" } } ]
+note = "submission completes on the deterministic clock"
+
+[[step]]
+service = "telephony"
+command = { cmd = "deliver-sms" }
+expect = [ { event = "telephony-event", kind = "sms-changed", sms = { direction = "outgoing", state = "delivered" } } ]

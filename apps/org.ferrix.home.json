@@ -14,11 +14,19 @@
   "capabilities": [
     "core-state",
     "core-control",
-    "background"
+    "background",
+    "telephony-state",
+    "network-state",
+    "network-control"
   ],
   "launch": {
     "exec": [
       "ferrix-basic-screen"
-    ]
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
   }
 }

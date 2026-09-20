@@ -7,6 +7,10 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/pmos
+# OPT-IN Android runtime image lives beside the default one (pmos-build.sh).
+android=${FERRIX_PMOS_ANDROID:-0}
+case "$android" in 0|1) ;; *) echo "invalid FERRIX_PMOS_ANDROID: $android (0|1)" >&2; exit 2 ;; esac
+[ "$android" != 1 ] || out="$out-android"
 timeout=${FERRIX_PMOS_CHECK_TIMEOUT:-600}
 log="$out/check/serial.log"
 mkdir -p "$out/check"
@@ -63,4 +67,12 @@ grep -q '"event":"pmos-boot-health"' "$log" || fail "missing-pmos-boot-health"
 grep '"event":"pmos-boot-health"' "$log" | grep -q '"status":"ok"' || fail "pmos-boot-health-not-ok"
 grep -q '"event":"product-core-ready"' "$log" || fail "missing-product-core-ready"
 grep -q '"event":"pmos-check-poweroff"' "$log" || fail "missing-pmos-check-poweroff"
-printf '{"evidence":"QEMU","event":"pmos-check-passed","accel":"tcg","seconds":%s,"serial_log":"%s"}\n' "$elapsed" "$log"
+if [ "$android" = 1 ]; then
+  # The Waydroid image must at least report the Binder device nodes and its
+  # init/container outcome; the records are reprinted so the check output
+  # carries them. Nothing here claims the runtime renders anything.
+  grep -q '"event":"android-binder-devices"' "$log" || fail "missing-android-binder-devices"
+  grep -q '"event":"waydroid-init"' "$log" || fail "missing-waydroid-init"
+  grep -E '"event":"(android-binder-devices|waydroid-init|waydroid-properties|waydroid-container|android-app-staged)"' "$log"
+fi
+printf '{"evidence":"QEMU","event":"pmos-check-passed","accel":"tcg","android":%s,"seconds":%s,"serial_log":"%s"}\n' "$android" "$elapsed" "$log"

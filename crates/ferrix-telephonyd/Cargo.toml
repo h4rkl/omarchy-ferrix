@@ -1,0 +1,29 @@
+[package]
+name = "ferrix-telephonyd"
+description = "Privileged telephony service: owns modem/SIM/registration/call/SMS state through a backend adapter, authorizes clients by verified AppId and capability, and serves ferrix-telephony-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Production ModemManager backend (Linux only). Off by default so the macOS
+# host builds and tests the daemon with the mock backend.
+production = ["dep:ferrix-telephony-mm", "ferrix-telephony-mm/production"]
+
+[dependencies]
+ferrix-mock-control = { path = "../ferrix-mock-control" }
+ferrix-target-profile = { path = "../ferrix-target-profile" }
+ferrix-telephony-adapter-api = { path = "../ferrix-telephony-adapter-api" }
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+# Composed in `src/main.rs` only; the library never names a backend.
+ferrix-telephony-mm = { path = "../ferrix-telephony-mm", optional = true }
+ferrix-telephony-mock = { path = "../ferrix-telephony-mock" }
+ferrix-telephony-protocol = { path = "../ferrix-telephony-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["net"] }
+
+[lints]
+workspace = true

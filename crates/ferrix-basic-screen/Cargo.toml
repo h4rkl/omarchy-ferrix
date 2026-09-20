@@ -16,3 +16,7 @@ ferrix-hardware-api = { path = "../ferrix-hardware-api" }
 ferrix-protocol = { path = "../ferrix-protocol" }
 ferrix-session = { path = "../ferrix-session" }
 ferrix-target-profile = { path = "../ferrix-target-profile" }
+ferrix-network-api = { path = "../ferrix-network-api" }
+ferrix-network-protocol = { path = "../ferrix-network-protocol" }
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+ferrix-telephony-protocol = { path = "../ferrix-telephony-protocol" }

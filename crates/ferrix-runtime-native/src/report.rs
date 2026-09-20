@@ -7,7 +7,7 @@ use std::io::Write as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{AppliedIsolation, IsolationPolicy, IsolationReport, NamespaceSet};
+use crate::{AppliedIsolation, IsolationPolicy, IsolationReport, NamespaceSet, RunDirOutcome};
 
 /// Builds one record: `evidence` first, then `event`, then the fields.
 pub fn record(evidence: &str, event: &str, fields: Value) -> Value {
@@ -39,6 +39,9 @@ pub struct SandboxReady {
     pub namespaces: NamespaceSet,
     pub private_tmp: bool,
     pub no_new_privs: bool,
+    /// Socket-directory outcome: `{mode, sockets: [names]}` (plus `missing`
+    /// when a listed socket did not exist at launch).
+    pub run_dir: RunDirOutcome,
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -46,7 +49,8 @@ pub struct SandboxReady {
 
 impl SandboxReady {
     pub fn applied(&self) -> AppliedIsolation {
-        self.namespaces.applied(self.private_tmp, self.no_new_privs)
+        self.namespaces
+            .applied(self.private_tmp, self.no_new_privs, self.run_dir.clone())
     }
 
     pub fn isolation_report(&self, requested: IsolationPolicy) -> IsolationReport {
@@ -65,6 +69,7 @@ impl SandboxReady {
 pub struct InitReport {
     pub private_tmp: bool,
     pub no_new_privs: bool,
+    pub run_dir: RunDirOutcome,
     pub reasons: Vec<String>,
 }
 
@@ -291,15 +296,34 @@ mod tests {
             },
             private_tmp: true,
             no_new_privs: true,
+            run_dir: RunDirOutcome {
+                mode: crate::RunDirMode::Private,
+                sockets: vec!["ferrix-appd.sock".to_owned(), "core.sock".to_owned()],
+                missing: Vec::new(),
+            },
             degraded: false,
             reason: None,
         };
         let text = serde_json::to_string(&ready).unwrap();
+        assert!(
+            text.contains(
+                r#""run_dir":{"mode":"private","sockets":["ferrix-appd.sock","core.sock"]}"#
+            ),
+            "{text}"
+        );
         let back: SandboxReady = serde_json::from_str(&text).unwrap();
         assert_eq!(back, ready);
         let report = ready.isolation_report(IsolationPolicy::default());
         assert!(!report.degraded);
         assert!(report.applied.mount_namespace && report.applied.private_tmp);
+        assert_eq!(report.applied.run_dir, ready.run_dir);
         assert_eq!(report.requested, IsolationPolicy::default());
+
+        // A report from a sandbox without the field reads as `inherit`.
+        let legacy: SandboxReady = serde_json::from_str(
+            r#"{"app":"org.ferrix.x","init_pid":3,"namespaces":{"pid":true},"private_tmp":true,"no_new_privs":true,"degraded":false}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.run_dir, RunDirOutcome::default());
     }
 }

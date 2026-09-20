@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.browser",
+  "runtime": "android",
+  "name": "Brave",
+  "icon": {
+    "glyph": "◐",
+    "tone": "neutral"
+  },
+  "launchable": true,
+  "trust": "untrusted",
+  "capabilities": [
+    "background"
+  ],
+  "launch": {
+    "package": "com.brave.browser",
+    "activity": null,
+    "apk": {
+      "pins": "tools/android/brave.pins"
+    }
+  }
+}

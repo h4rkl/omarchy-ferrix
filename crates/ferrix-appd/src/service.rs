@@ -7,7 +7,7 @@
 //! runtime handle and posts the exit back, so a crash is observed, recorded,
 //! and published without ever touching the compositor or the core.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -15,8 +15,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{
-    APP_ID_ENV, APP_INSTANCE_ENV, APPD_SOCKET_ENV, AppError, AppEvent, AppId, AppInstance,
-    DEFAULT_APPD_SOCKET, ExitReason, LifecycleState, RuntimeKind, SCHEMA_VERSION,
+    APP_ID_ENV, APP_INSTANCE_ENV, APPD_SOCKET_ENV, AppCapability, AppError, AppEvent, AppId,
+    AppIdentity, AppInstance, DEFAULT_APPD_SOCKET, ExitReason, GrantsPolicy, LifecycleState,
+    RuntimeKind, SCHEMA_VERSION,
 };
 use ferrix_app_protocol::{ClientRole, Notification, Reply};
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
@@ -41,6 +42,9 @@ pub struct ServiceOptions {
     /// How often waiter threads poll a running instance.
     pub poll_interval: Duration,
     pub restart: HomeRestartConfig,
+    /// The authorization policy. The default is the **empty** policy: no
+    /// application holds any effective capability until a row grants it.
+    pub grants: GrantsPolicy,
 }
 
 impl Default for ServiceOptions {
@@ -50,6 +54,7 @@ impl Default for ServiceOptions {
             terminate_grace: Duration::from_secs(2),
             poll_interval: Duration::from_millis(20),
             restart: HomeRestartConfig::default(),
+            grants: GrantsPolicy::empty(),
         }
     }
 }
@@ -87,6 +92,9 @@ struct Tracked {
     /// A launch/activation request that must be delivered once a surface pid
     /// is known. This closes the race where activation arrives before map.
     activation_pending: bool,
+    /// Effective capabilities fixed at launch (`declared ∩ granted`); what
+    /// `Identify` reports for every pid resolved to this instance.
+    granted: BTreeSet<AppCapability>,
 }
 
 #[derive(Default)]
@@ -162,6 +170,38 @@ impl Service {
 
     pub fn options(&self) -> &ServiceOptions {
         &self.options
+    }
+
+    pub fn grants(&self) -> &GrantsPolicy {
+        &self.options.grants
+    }
+
+    /// Resolves a kernel pid to the identity services enforce against: the
+    /// running instance it belongs to (directly or through its ancestors),
+    /// that descriptor's trust ring, and the effective capabilities fixed at
+    /// launch. A pid that is unknown, or whose instance has exited, is
+    /// [`AppIdentity::unknown`]; nothing a client claims about itself is
+    /// consulted.
+    pub fn identify(&self, pid: u32) -> AppIdentity {
+        let mut state = self.lock_state();
+        let Some(app) = self.resolve_pid(&mut state, pid) else {
+            return AppIdentity::unknown();
+        };
+        let Some(tracked) = state
+            .instances
+            .get(&app)
+            .filter(|t| t.instance.state.is_running())
+        else {
+            return AppIdentity::unknown();
+        };
+        let Some(entry) = self.catalog.get(&app) else {
+            return AppIdentity::unknown();
+        };
+        AppIdentity {
+            app: Some(app.clone()),
+            trust: Some(entry.descriptor.trust),
+            granted: tracked.granted.clone(),
+        }
     }
 
     pub fn supports(&self, kind: RuntimeKind) -> bool {
@@ -541,6 +581,10 @@ impl Service {
         let number = state.next_instance;
         state.next_instance += 1;
         self.recorder.app_launching(id, number);
+        // Authorization is decided here, once, from the checked-in policy:
+        // the runtime and every service see only the effective set.
+        let granted = self.options.grants.effective(descriptor);
+        let denied = self.options.grants.denied(descriptor);
         let context = LaunchContext {
             instance: number,
             env: vec![
@@ -552,11 +596,30 @@ impl Service {
                 ),
             ],
             evidence: self.recorder.evidence().to_owned(),
+            granted: granted.clone(),
         };
-        let running = runtime
+        let mut running = runtime
             .launch(descriptor, &entry.launch, &context)
             .inspect_err(|error| self.recorder.app_launch_failed(id, error))?;
         let pid = running.pid();
+        if let Some(pid) = pid
+            && let Some(owner) = state.pids.get(&pid)
+            && owner != id
+        {
+            let error = AppError::LaunchFailed {
+                id: id.clone(),
+                reason: format!(
+                    "runtime pid {pid} is already owned by {owner}; shared runtime surfaces are unsupported"
+                ),
+            };
+            // A compatibility runtime may expose one compositor client pid
+            // for every contained app. Until appd has a trusted per-surface
+            // bridge, refuse a second owner instead of silently reassigning
+            // that surface and its authorization identity.
+            let _ = running.terminate(self.options.terminate_grace);
+            self.recorder.app_launch_failed(id, &error);
+            return Err(error);
+        }
         let diagnostics = running.diagnostics();
         let instance = AppInstance {
             app: id.clone(),
@@ -580,9 +643,11 @@ impl Service {
                 terminate_requested: false,
                 surface_pid: None,
                 activation_pending: true,
+                granted: granted.clone(),
             },
         );
-        self.recorder.app_started(id, number, pid, &diagnostics);
+        self.recorder
+            .app_started(id, number, pid, &granted, &denied, &diagnostics);
         self.publish_instance(state, id);
         self.spawn_waiter(id.clone(), number, handle);
         Ok(instance)
@@ -836,6 +901,12 @@ mod tests {
                 AppRole::Application,
                 true,
             ),
+            descriptor(
+                "org.example.android-two",
+                RuntimeKind::Android,
+                AppRole::Application,
+                true,
+            ),
         ])
         .unwrap()
     }
@@ -852,16 +923,21 @@ mod tests {
     }
 
     fn harness_with_clock(clock: Clock) -> Harness {
+        harness_with(catalog(), GrantsPolicy::empty(), clock)
+    }
+
+    fn harness_with(catalog: Catalog, grants: GrantsPolicy, clock: Clock) -> Harness {
         let runtime = FakeRuntime::native();
         let tree = FakeProcessTree::default();
         let (recorder, records) = Recorder::capturing("mock");
         let options = ServiceOptions {
             socket: PathBuf::from("/tmp/ferrix-appd-test.sock"),
             poll_interval: Duration::from_millis(1),
+            grants,
             ..ServiceOptions::default()
         };
         let service = Service::new(
-            catalog(),
+            catalog,
             vec![Box::new(runtime.clone())],
             Box::new(tree.clone()),
             recorder,
@@ -953,6 +1029,42 @@ mod tests {
         );
         assert!(!h.service.supports(RuntimeKind::Web));
         assert!(h.service.supports(RuntimeKind::Native));
+    }
+
+    #[test]
+    fn shared_runtime_pid_cannot_be_reassigned_to_another_app() {
+        let runtime = FakeRuntime::new(RuntimeKind::Android);
+        let (recorder, records) = Recorder::capturing("mock");
+        let service = Arc::new(Service::new(
+            catalog(),
+            vec![Box::new(runtime.clone())],
+            Box::new(FakeProcessTree::default()),
+            recorder,
+            ServiceOptions::default(),
+        ));
+        let first = id("org.example.android");
+        let second = id("org.example.android-two");
+        let first_pid = service.launch(&first).unwrap().instance.pid.unwrap();
+        runtime.set_next_pid(first_pid);
+
+        let error = service.launch(&second).unwrap_err();
+        assert!(matches!(
+            error,
+            AppError::LaunchFailed { reason, .. }
+                if reason.contains("shared runtime surfaces are unsupported")
+        ));
+        assert!(runtime.last_terminated(&second));
+        assert_eq!(service.identify(first_pid).app, Some(first));
+        assert!(service.instance(&second).is_none());
+        assert_eq!(
+            captured_events(&records),
+            [
+                "app-launching",
+                "app-started",
+                "app-launching",
+                "app-launch-failed"
+            ]
+        );
     }
 
     #[test]
@@ -1418,7 +1530,7 @@ mod tests {
             assert_eq!(
                 notifications(rx),
                 [Notification::App {
-                    event: AppEvent::CatalogChanged { apps: 5 }
+                    event: AppEvent::CatalogChanged { apps: 6 }
                 }]
             );
         }
@@ -1426,5 +1538,126 @@ mod tests {
         drop(a);
         h.service.announce_catalog();
         assert_eq!(h.service.subscriber_count(), 1);
+    }
+
+    // -- grants and identity ------------------------------------------------
+
+    /// Terminal declares shell, background, and telephony-sms; the policy
+    /// grants shell, background, and network-control (never declared).
+    fn grants_harness() -> Harness {
+        let mut home = descriptor("org.ferrix.home", RuntimeKind::Native, AppRole::Home, true);
+        home.trust = TrustLevel::Privileged;
+        home.capabilities = [AppCapability::CoreState, AppCapability::CoreControl]
+            .into_iter()
+            .collect();
+        let mut terminal = descriptor(
+            "org.ferrix.terminal",
+            RuntimeKind::Native,
+            AppRole::Application,
+            true,
+        );
+        terminal.capabilities = [
+            AppCapability::Shell,
+            AppCapability::Background,
+            AppCapability::TelephonySms,
+        ]
+        .into_iter()
+        .collect();
+        let catalog = Catalog::from_descriptors([home, terminal]).unwrap();
+        let grants = GrantsPolicy::from_json(
+            r#"{"schema_version":1,"grants":{"org.ferrix.terminal":["shell","background","network-control"]}}"#,
+        )
+        .unwrap();
+        harness_with(catalog, grants, Arc::new(Instant::now))
+    }
+
+    fn started_record(records: &Captured, app: &str) -> serde_json::Value {
+        records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r["event"] == "app-started" && r["app"] == app)
+            .cloned()
+            .expect("app-started record")
+    }
+
+    #[test]
+    fn effective_grants_are_declared_intersect_granted_and_reach_the_runtime() {
+        let h = grants_harness();
+        let terminal = id("org.ferrix.terminal");
+        let sandbox_pid = h.service.launch(&terminal).unwrap().instance.pid.unwrap();
+
+        let expected: BTreeSet<AppCapability> = [AppCapability::Shell, AppCapability::Background]
+            .into_iter()
+            .collect();
+        // The runtime receives exactly the effective set.
+        assert_eq!(h.runtime.last_granted(&terminal), Some(expected.clone()));
+        // The record names both halves; the undeclared grant is nowhere.
+        let started = started_record(&h.records, "org.ferrix.terminal");
+        assert_eq!(
+            started["granted"],
+            serde_json::json!(["shell", "background"])
+        );
+        assert_eq!(
+            started["denied_capabilities"],
+            serde_json::json!(["telephony-sms"])
+        );
+
+        // Identify: the supervisor pid and a grandchild resolve the same way.
+        let identity = h.service.identify(sandbox_pid);
+        assert_eq!(identity.app, Some(terminal.clone()));
+        assert_eq!(identity.trust, Some(TrustLevel::Untrusted));
+        assert_eq!(identity.granted, expected);
+        assert!(!identity.has(AppCapability::TelephonySms));
+        assert!(!identity.has(AppCapability::NetworkControl));
+        let init = sandbox_pid + 1;
+        let app = sandbox_pid + 2;
+        h.tree.set_parent(init, sandbox_pid);
+        h.tree.set_parent(app, init);
+        assert_eq!(h.service.identify(app), identity);
+    }
+
+    #[test]
+    fn unknown_and_exited_pids_have_no_identity() {
+        let h = grants_harness();
+        assert_eq!(h.service.identify(4242), AppIdentity::unknown());
+
+        let terminal = id("org.ferrix.terminal");
+        let sandbox_pid = h.service.launch(&terminal).unwrap().instance.pid.unwrap();
+        let app = sandbox_pid + 2;
+        h.tree.set_parent(app, sandbox_pid);
+        assert!(h.service.identify(app).is_known());
+
+        assert!(
+            h.runtime
+                .exit(&terminal, ExitReason::Signaled { signal: 11 })
+        );
+        wait_state(&h.service, &terminal, LifecycleState::Crashed);
+        assert_eq!(h.service.identify(sandbox_pid), AppIdentity::unknown());
+        assert_eq!(h.service.identify(app), AppIdentity::unknown());
+
+        // A relaunch is a fresh instance with a fresh identity.
+        let relaunched = h.service.launch(&terminal).unwrap().instance.pid.unwrap();
+        assert_ne!(relaunched, sandbox_pid);
+        assert!(h.service.identify(relaunched).is_known());
+        assert_eq!(h.service.identify(sandbox_pid), AppIdentity::unknown());
+    }
+
+    #[test]
+    fn without_a_grants_row_even_a_privileged_app_gets_nothing() {
+        let h = grants_harness();
+        let home = id("org.ferrix.home");
+        let pid = h.service.launch(&home).unwrap().instance.pid.unwrap();
+        let identity = h.service.identify(pid);
+        assert_eq!(identity.app, Some(home.clone()));
+        assert_eq!(identity.trust, Some(TrustLevel::Privileged));
+        assert!(identity.granted.is_empty());
+        assert_eq!(h.runtime.last_granted(&home), Some(BTreeSet::new()));
+        let started = started_record(&h.records, "org.ferrix.home");
+        assert_eq!(started["granted"], serde_json::json!([]));
+        assert_eq!(
+            started["denied_capabilities"],
+            serde_json::json!(["core-state", "core-control"])
+        );
     }
 }

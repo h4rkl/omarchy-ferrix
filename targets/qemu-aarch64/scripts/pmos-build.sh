@@ -7,6 +7,34 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/pmos
 product=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/product
+# OPT-IN Android compatibility runtime (Waydroid). FERRIX_PMOS_ANDROID=1
+# builds a separate image under .../pmos-android/ from
+# pmbootstrap-android.cfg with the pinned container images fetched by
+# `just waydroid-images-fetch`; the default build, pmos-check, and CI are
+# unchanged. QEMU evidence only; claim level none until demonstrated.
+android=${FERRIX_PMOS_ANDROID:-0}
+case "$android" in 0|1) ;; *) echo "invalid FERRIX_PMOS_ANDROID: $android (0|1)" >&2; exit 2 ;; esac
+android_mounts=""
+if [ "$android" = 1 ]; then
+  out="$out-android"
+  images_dir=${FERRIX_WAYDROID_IMAGES:-"${FERRIX_OUT_DIR:-$root/out}/android/waydroid/current"}
+  images_dir=$(CDPATH= cd -P -- "$images_dir" 2>/dev/null && pwd) || { echo "missing Waydroid images at $images_dir; run: just waydroid-images-fetch" >&2; exit 2; }
+  for f in system.img vendor.img images.json; do
+    [ -f "$images_dir/$f" ] || { echo "missing $images_dir/$f; run: just waydroid-images-fetch" >&2; exit 2; }
+  done
+  sh "$root/tools/android/waydroid-images-fetch.sh" --verify-only >/dev/null || { echo "Waydroid images failed verification; re-run: just waydroid-images-fetch" >&2; exit 2; }
+  android_mounts="-v $images_dir:/android/images:ro"
+  # Brave APK: staged only when present AND verified against tools/android/brave.pins.
+  brave_tag=$(sed -n 's/^BRAVE_TAG=//p' "$root/tools/android/brave.pins" | head -1)
+  brave_asset=$(sed -n 's/^BRAVE_ASSET=//p' "$root/tools/android/brave.pins" | head -1)
+  brave_apk="${FERRIX_OUT_DIR:-$root/out}/android/brave/$brave_tag/$brave_asset"
+  if [ -f "$brave_apk" ] && sh "$root/tools/android/brave-verify.sh" "$brave_apk" >/dev/null; then
+    android_mounts="$android_mounts -v $brave_apk:/android/brave.apk:ro"
+    printf 'brave apk: %s (verified)\n' "$brave_apk"
+  else
+    printf '{"evidence":"host","event":"android-brave-absent","path":"%s"}\n' "$brave_apk"
+  fi
+fi
 cache=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}
 pmos_dir=$root/targets/qemu-aarch64/pmos
 builder_dir=$root/containers/guest-builder
@@ -16,7 +44,12 @@ tag=${FERRIX_GUEST_BUILDER_TAG:-"ferrix-guest-builder:pmbootstrap-$PMBOOTSTRAP_T
 command -v docker >/dev/null || { echo "missing docker; start Docker Desktop (see just host-check)" >&2; exit 2; }
 docker info >/dev/null 2>&1 || { echo "docker daemon is not running; start Docker Desktop" >&2; exit 2; }
 "$root/targets/qemu-aarch64/scripts/qemu-build.sh"
-for file in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal profile.toml colors.toml apps/org.ferrix.home.json; do
+# Every product artifact the finalize step installs, including the service
+# daemons, the apps, and the ADR-004 grants policy (without it ferrix-appd
+# starts with an empty policy and the home surface has no capabilities).
+for file in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
+    ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings \
+    profile.toml colors.toml apps/org.ferrix.home.json apps/grants.json; do
   [ -f "$product/$file" ] || { echo "missing product artifact $product/$file" >&2; exit 1; }
 done
 mkdir -p "$out"
@@ -70,6 +103,8 @@ status_file=$(mktemp "$out/.build-status.XXXXXX")
     -e "FERRIX_PMOS_PASSWORD=${FERRIX_PMOS_PASSWORD:-147147}" \
     -e "FERRIX_PMOS_KEEP_CHROOTS=${FERRIX_PMOS_KEEP_CHROOTS:-0}" \
     -e "FERRIX_PMOS_WORK_MOUNT=$work_mount" \
+    -e "FERRIX_PMOS_ANDROID=$android" \
+    $android_mounts \
     "$tag" sh /project/build-in-container.sh 2>&1 || status=$?
   echo "$status" > "$status_file"
 } | tee "$out/build.log"

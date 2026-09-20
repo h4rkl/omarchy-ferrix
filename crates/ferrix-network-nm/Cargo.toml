@@ -1,0 +1,21 @@
+[package]
+name = "ferrix-network-nm"
+description = "NetworkManager production adapter for ferrix-networkd via the maintained D-Bus API (zbus)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# The D-Bus backend itself. Off by default so the host builds and tests the
+# pure mapping tables without a bus; `ferrix-networkd --features production`
+# turns it on.
+production = ["dep:zbus"]
+
+[dependencies]
+ferrix-network-adapter-api = { path = "../ferrix-network-adapter-api" }
+ferrix-network-api = { path = "../ferrix-network-api" }
+# D-Bus (MIT). Blocking API only; the async executor is unused.
+zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
+
+[lints]
+workspace = true

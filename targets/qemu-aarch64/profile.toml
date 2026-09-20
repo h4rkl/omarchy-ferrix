@@ -23,3 +23,34 @@ sim = "present"
 
 [audio]
 route = "speaker"
+
+# Detailed mock telephony state (ADR-006). Synthetic values only: the mock
+# adapter in ferrix-telephonyd starts from these; the host mock-control
+# channel `ferrix.telephony` mutates them. Never a carrier or device fact.
+[telephony]
+modem = "ready"
+sim = "ready"
+sim_pin = "0000"
+operator = "Ferrix Mock"
+access = "lte"
+signal_bars = 3
+roaming = false
+features = ["voice", "sms", "multipart-sms", "delivery-reports", "dtmf", "hold", "audio-route", "sim-pin", "radio-power"]
+
+# Detailed mock network state (ADR-006). Synthetic access points for the mock
+# adapter in ferrix-networkd; `connected` names the one joined at boot.
+[network]
+adapter = "present"
+radio = "enabled"
+connected = "ferrix-lab"
+
+[[network.access_points]]
+ssid = "ferrix-lab"
+security = "wpa2-psk"
+signal_percent = 78
+passphrase = "mock-passphrase"
+
+[[network.access_points]]
+ssid = "ferrix-guest"
+security = "open"
+signal_percent = 41

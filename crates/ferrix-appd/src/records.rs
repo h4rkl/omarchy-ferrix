@@ -5,12 +5,13 @@
 //! runs; neither is a physical-device claim. A [`Recorder`] carries the label
 //! and a sink so the service can be tested without reading stdout.
 
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ferrix_app_api::{AppError, AppId, ExitReason};
+use ferrix_app_api::{AppCapability, AppError, AppId, ExitReason};
 use serde_json::{Map, Value};
 
 /// Evidence label for the QEMU guest.
@@ -134,16 +135,63 @@ impl Recorder {
         );
     }
 
-    pub fn app_started(&self, app: &AppId, instance: u32, pid: Option<u32>, diagnostics: &Value) {
+    /// `granted` is the effective set (`declared ∩ granted`);
+    /// `denied_capabilities` is what the descriptor declared but the grants
+    /// policy withheld.
+    pub fn app_started(
+        &self,
+        app: &AppId,
+        instance: u32,
+        pid: Option<u32>,
+        granted: &BTreeSet<AppCapability>,
+        denied: &BTreeSet<AppCapability>,
+        diagnostics: &Value,
+    ) {
         self.emit(
             "app-started",
             [
                 ("app", Value::from(app.as_str())),
                 ("instance", Value::from(instance)),
                 ("pid", pid.map_or(Value::Null, Value::from)),
+                ("granted", capabilities(granted)),
+                ("denied_capabilities", capabilities(denied)),
                 ("runtime_diagnostics", diagnostics.clone()),
             ],
         );
+    }
+
+    /// A `service`/`tool` connection resolved `pid`. Emitted once per
+    /// connection per pid by the server so a polling daemon cannot flood
+    /// the log.
+    pub fn appd_identify(&self, pid: u32, app: Option<&AppId>, granted_count: usize) {
+        self.emit(
+            "appd-identify",
+            [
+                ("pid", Value::from(pid)),
+                ("app", opt_str(app.map(AppId::as_str))),
+                ("granted_count", Value::from(granted_count)),
+            ],
+        );
+    }
+
+    pub fn grants_loaded(&self, apps: usize, path: &Path) {
+        self.emit(
+            "grants-loaded",
+            [
+                ("apps", Value::from(apps)),
+                ("path", Value::from(path.display().to_string())),
+            ],
+        );
+    }
+
+    /// No grants file: the policy is empty and every application has zero
+    /// effective capabilities.
+    pub fn grants_missing(&self) {
+        self.emit("grants-missing", [("apps", Value::from(0))]);
+    }
+
+    pub fn grants_invalid(&self, reason: &str) {
+        self.emit("grants-invalid", [("reason", Value::from(reason))]);
     }
 
     pub fn app_launch_failed(&self, app: &AppId, error: &AppError) {
@@ -269,6 +317,11 @@ impl Recorder {
 
 fn opt_str(value: Option<&str>) -> Value {
     value.map_or(Value::Null, Value::from)
+}
+
+/// A capability set as a JSON array of wire names, in `Ord` order.
+fn capabilities(set: &BTreeSet<AppCapability>) -> Value {
+    Value::Array(set.iter().map(|c| Value::from(c.name())).collect())
 }
 
 /// Event names of captured records, in order; for tests.

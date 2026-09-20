@@ -6,12 +6,13 @@
 //! `colors.toml` restyles every surface. This is a QEMU reference surface
 //! rendered from the mock profile, not the product shell.
 
-use ferrix_hardware_api::{HardwareState, ModemRegistration, WifiState};
+use ferrix_hardware_api::HardwareState;
 use ferrix_ui::draw::{Canvas, Rect, Style, Type, Weight};
 use ferrix_ui::theme;
 
 use crate::catalog::{Tile, tone_color};
 use crate::interaction::{Page, Target, UiState, tile_rects};
+use crate::status::Reach;
 
 /// Footer caption of the launcher. Says what this surface is, not what it
 /// wants to be.
@@ -108,6 +109,7 @@ pub fn compose(
             h: card_h,
         },
         state.pressed == Some(Target::Network),
+        state,
     );
 
     if let Some(notice) = &state.crash_notice {
@@ -120,8 +122,7 @@ pub fn compose(
                 w: w - 2 * margin,
                 h: s(112),
             },
-            &notice.name,
-            &notice.reason,
+            &notice.text(),
         );
     }
     launcher_grid(&mut c, ty, state);
@@ -179,6 +180,7 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
             h: card_height,
         },
         state.pressed == Some(Target::Network),
+        state,
     );
     if let Some(notice) = &state.crash_notice {
         crash_banner(
@@ -190,8 +192,7 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
                 w: s(820),
                 h: s(96),
             },
-            &notice.name,
-            &notice.reason,
+            &notice.text(),
         );
     }
     launcher_grid(c, ty, state);
@@ -277,21 +278,9 @@ fn status_bar(
     x -= ty.width(pct_style, &pct) + bar_h / 4;
     ty.text(c, pct_style, &pct, x, baseline);
     x -= bar_h / 3;
-    x -= wifi_icon(
-        c,
-        x,
-        mid + bar_h / 4,
-        bar_h / 2,
-        p.network.wifi == WifiState::Connected,
-    );
+    x -= wifi_icon(c, x, mid + bar_h / 4, bar_h / 2, state.net.reach);
     x -= bar_h / 3;
-    signal_bars(
-        c,
-        x,
-        mid + bar_h / 4,
-        bar_h / 2,
-        p.telephony.registration == ModemRegistration::Registered,
-    );
+    signal_bars(c, x, mid + bar_h / 4, bar_h / 2, state.tele.bars);
 }
 
 /// Draws a battery outline with proportional fill, right edge at `right`.
@@ -386,13 +375,16 @@ fn bolt(c: &mut Canvas, cx: i32, cy: i32, h: i32, color: u32) {
     }
 }
 
-/// Network glyphs are steel: the secondary accent, never rust.
-fn wifi_icon(c: &mut Canvas, right: i32, base: i32, size: i32, connected: bool) -> i32 {
+/// Network glyphs are steel: the secondary accent, never rust. The lit arcs
+/// follow the connectivity check (`local`/`portal` one, `limited` two,
+/// `full` three); an unlinked radio keeps the dot only.
+fn wifi_icon(c: &mut Canvas, right: i32, base: i32, size: i32, reach: Reach) -> i32 {
     let t = theme::get();
     let cx = right - size;
-    let color = if connected { t.steel } else { t.fg_dim };
+    let lit = reach.arcs() as usize;
+    let color = if lit > 0 { t.steel } else { t.fg_dim };
     for (i, r) in [size / 4, size * 5 / 8, size].into_iter().enumerate() {
-        let on = connected || i == 0;
+        let on = i < lit;
         for dy in -r - 2..=0 {
             for dx in -r - 2..=r + 2 {
                 let d2 = dx * dx + dy * dy;
@@ -406,13 +398,14 @@ fn wifi_icon(c: &mut Canvas, right: i32, base: i32, size: i32, connected: bool) 
     2 * size
 }
 
-fn signal_bars(c: &mut Canvas, right: i32, base: i32, size: i32, registered: bool) {
+/// `bars` (0..=4) lit of four; the daemon's signal when reachable.
+fn signal_bars(c: &mut Canvas, right: i32, base: i32, size: i32, bars: u8) {
     let t = theme::get();
     let bw = size / 4;
     let gap = 4;
     for i in 0..4 {
         let bh = size * (i + 1) / 4 + 4;
-        let on = registered || i == 0;
+        let on = i < i32::from(bars.min(4));
         c.fill_rect(
             Rect {
                 x: right - (4 - i) * (bw + gap),
@@ -506,12 +499,21 @@ fn battery_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
     );
 }
 
-fn network_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: bool) {
+/// The network card reads the status summaries (service when reachable,
+/// hardware-api otherwise) and names the source on its last line.
+fn network_card(
+    c: &mut Canvas,
+    _p: &HardwareState,
+    ty: &Type,
+    r: Rect,
+    pressed: bool,
+    state: &UiState,
+) {
     let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     card(c, ty, r, "NETWORK", pressed);
-    let connected = p.network.wifi == WifiState::Connected;
+    let connected = state.net.connected;
     ty.text(
         c,
         Style::bold(s(48) as f32, if connected { t.steel } else { t.fg_dim }),
@@ -520,33 +522,32 @@ fn network_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
         r.y + s(140),
     );
     let wifi_line = if connected {
-        "connected"
+        format!("connected \u{b7} {}", state.net.reach.name())
+    } else if state.net.wifi_on {
+        "disconnected".to_owned()
     } else {
-        p.network.wifi.name()
+        "disabled".to_owned()
     };
     ty.text(
         c,
         Style::regular(s(30) as f32, t.fg),
-        wifi_line,
+        &wifi_line,
         r.x + s(32),
         r.y + s(196),
     );
     let cell = format!(
-        "LTE {} \u{b7} SIM {}",
-        if p.telephony.registration == ModemRegistration::Registered {
+        "cell {} \u{b7} sim {} \u{b7} {}",
+        if state.tele.registered {
             "ok"
         } else {
-            p.telephony.registration.name()
+            state.tele.registration.as_str()
         },
-        p.telephony.sim.name()
+        state.tele.sim,
+        state.tele.source.name()
     );
-    ty.text(
-        c,
-        Style::regular(s(26) as f32, t.fg_dim),
-        &cell,
-        r.x + s(32),
-        r.y + s(258),
-    );
+    let cell_style = Style::regular(s(26) as f32, t.fg_dim);
+    let cell = ferrix_ui::widgets::ellipsize(ty, cell_style, &cell, r.w - s(64));
+    ty.text(c, cell_style, &cell, r.x + s(32), r.y + s(258));
 }
 
 /// The launcher grid: three columns, rows growing with the catalog. Tiles
@@ -699,7 +700,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
                 cy + u(14),
             );
         }
-        "dialer" => {
+        "phone" => {
             for row in 0..3 {
                 for col in 0..3 {
                     c.fill_circle(
@@ -777,7 +778,7 @@ pub fn tile_glyph(ty: &Type, tile: &Tile) -> String {
 
 /// Restrained crash notice: a flat surface with an `err` rule at the left
 /// and one line of text. Dismissed by the next tap or by relaunching the app.
-fn crash_banner(c: &mut Canvas, ty: &Type, r: Rect, name: &str, reason: &str) {
+fn crash_banner(c: &mut Canvas, ty: &Type, r: Rect, text: &str) {
     let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
@@ -793,14 +794,13 @@ fn crash_banner(c: &mut Canvas, ty: &Type, r: Rect, name: &str, reason: &str) {
         s(2),
         t.err,
     );
-    let text = format!("{name} \u{b7} crashed \u{b7} {reason}");
     let mut style = Style::regular(s(28) as f32, t.fg);
     let max = r.w - s(72);
-    while ty.width(style, &text) > max && style.px > 12.0 {
+    while ty.width(style, text) > max && style.px > 12.0 {
         style.px -= 2.0;
     }
     let baseline = r.y + r.h / 2 + (style.px * 0.36) as i32;
-    ty.text(c, style, &text, r.x + s(48), baseline);
+    ty.text(c, style, text, r.x + s(48), baseline);
 }
 
 fn shell_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: &UiState) {
@@ -853,25 +853,9 @@ fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiStat
     let name = tile.map_or("Unknown", |t| t.name.as_str());
     page_header(c, ty, name, state);
     let fallback_title = format!("{name} \u{b7} not installed");
+    // Phone, Messages, Contacts, and Settings are real applications launched
+    // by `ferrix-appd`; only camera and files keep illustrative pages.
     let (accent, eyebrow, title, detail) = match tile.map_or("", Tile::kind) {
-        "settings" => (
-            t.steel,
-            "DEVICE",
-            "Mock state \u{b7} QEMU",
-            "Display, sound, connectivity, and privacy read the target profile's mock values.",
-        ),
-        "messages" => (
-            t.steel,
-            "INBOX",
-            "No conversations",
-            "No messaging service is connected.",
-        ),
-        "dialer" => (
-            t.steel,
-            "CALLS",
-            "Modem registered \u{b7} mock",
-            "No voice path on the generic QEMU target.",
-        ),
         "camera" => (
             t.fg_dim,
             "CAMERA",
@@ -1135,7 +1119,19 @@ mod tests {
     }
 
     fn state() -> UiState {
-        UiState::new(true, true, test_tiles())
+        let mut state = UiState::new(true, true, test_tiles());
+        let hw = profile();
+        state.tele = crate::status::telephony_summary(None, &hw);
+        state.net = crate::status::network_summary(None, &hw);
+        state
+    }
+
+    fn terminal_index(state: &UiState) -> usize {
+        state
+            .tiles
+            .iter()
+            .position(|t| t.kind() == "terminal")
+            .expect("terminal tile")
     }
 
     #[test]
@@ -1190,7 +1186,10 @@ mod tests {
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
         let state = state();
-        assert_eq!(state.tiles.len(), 6);
+        assert!(
+            state.tiles.len() >= 7,
+            "phone, messages, contacts, settings, terminal, camera, files"
+        );
         let c = compose(
             &p,
             9 * 60 + 41,
@@ -1307,11 +1306,12 @@ mod tests {
         let p = profile();
         let mut state = state();
         let plain = compose(&p, 600, &ty, 1080, 2340, &state);
-        let r = tile_rects((1080, 2340), 7)[0];
+        let index = terminal_index(&state);
+        let r = tile_rects((1080, 2340), state.tiles.len())[index];
         let dot = (r.x + r.w - scale(34, 1080), r.y + scale(34, 1080));
         assert_eq!(plain.get(dot.0, dot.1), t.rust_dim);
 
-        state.tiles[0].running = true;
+        state.tiles[index].running = true;
         let running = compose(&p, 600, &ty, 1080, 2340, &state);
         assert_eq!(
             running.get(dot.0, dot.1),
@@ -1319,18 +1319,18 @@ mod tests {
             "running dot is the rust accent"
         );
 
-        state.tiles[0].starting = true;
+        state.tiles[index].starting = true;
         let starting = compose(&p, 600, &ty, 1080, 2340, &state);
         let label_y = r.y + r.h - scale(44, 1080) - 10;
         let label_differs =
             (r.x..r.x + r.w).any(|x| starting.get(x, label_y) != running.get(x, label_y));
         assert!(label_differs, "starting label replaces the name");
 
-        state.crash_notice = Some(CrashNotice {
-            app: state.tiles[0].id.clone(),
-            name: state.tiles[0].name.clone(),
-            reason: "signal 11".to_owned(),
-        });
+        state.crash_notice = Some(CrashNotice::crashed(
+            state.tiles[index].id.clone(),
+            state.tiles[index].name.clone(),
+            "signal 11".to_owned(),
+        ));
         let crashed = compose(&p, 600, &ty, 1080, 2340, &state);
         let banner_y = scale(944, 1080) + scale(56, 1080);
         assert_eq!(crashed.get(540, banner_y - scale(40, 1080)), t.surface);
@@ -1340,6 +1340,23 @@ mod tests {
             "err accent bar"
         );
         assert_eq!(plain.get(540, banner_y), t.bg, "no banner without a crash");
+        // A failed launch uses the same banner with the "could not start" line.
+        state.crash_notice = Some(CrashNotice::launch_failed(
+            state.tiles[index].id.clone(),
+            "Brave".to_owned(),
+            "no android runtime is available".to_owned(),
+        ));
+        let failed = compose(&p, 600, &ty, 1080, 2340, &state);
+        assert_eq!(
+            failed.get(scale(48, 1080) + scale(22, 1080), banner_y),
+            t.err
+        );
+        let text_differs = (scale(120, 1080)..scale(900, 1080))
+            .any(|x| failed.get(x, banner_y) != crashed.get(x, banner_y));
+        assert!(
+            text_differs,
+            "launch-failure text differs from the crash text"
+        );
     }
 
     #[test]
@@ -1371,6 +1388,36 @@ mod tests {
         assert_eq!(tile_glyph(&ty, &tile), "P");
         tile.icon.glyph = String::new();
         assert_eq!(tile_glyph(&ty, &tile), "P");
+    }
+
+    #[test]
+    fn status_bar_follows_the_service_summaries() {
+        let t = theme::get();
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        let mut full = state();
+        full.tele.bars = 4;
+        full.net.reach = Reach::Full;
+        let strong = compose(&p, 600, &ty, 1080, 2340, &full);
+        let mut weak = state();
+        weak.tele.bars = 1;
+        weak.net.reach = Reach::Disconnected;
+        weak.net.connected = false;
+        let faint = compose(&p, 600, &ty, 1080, 2340, &weak);
+        let bar_h = scale(72, 1080);
+        // Somewhere in the right third of the strip the strong frame shows
+        // steel where the weak one shows the dim track.
+        let region = (700..1080).flat_map(|x| (0..bar_h).map(move |y| (x, y)));
+        let mut steel_to_track = 0;
+        for (x, y) in region {
+            if strong.get(x, y) == t.steel && faint.get(x, y) == t.surface_hi {
+                steel_to_track += 1;
+            }
+        }
+        assert!(
+            steel_to_track > 20,
+            "signal bars and wifi arcs dim with the summary"
+        );
     }
 
     #[test]

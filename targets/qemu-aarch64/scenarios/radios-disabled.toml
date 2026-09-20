@@ -1,0 +1,75 @@
+schema_version = 1
+name = "radios-disabled"
+description = "Airplane mode: telephony radio off (registration lost, dial rejected) and Wi-Fi radio disabled (scan rejected); both recover."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "network"
+command = { cmd = "set-adapter", present = true }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "network"
+command = { cmd = "set-radio", enabled = true }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "off" }
+expect = [ { event = "telephony-event", kind = "radio-power-changed", radio = "off" } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "dial", number = "+15550100040" }
+expect_ack_error = true
+note = "client verb; rejected while radios are off"
+
+[[step]]
+service = "network"
+command = { cmd = "set-radio", enabled = false }
+expect = [ { event = "network-event", kind = "radio-changed", radio = { state = "disabled" } } ]
+
+[[step]]
+service = "network"
+command = { cmd = "scan" }
+expect_ack_error = true
+note = "client verb; rejected with radio-disabled"
+
+[[step]]
+service = "network"
+command = { cmd = "set-radio", enabled = true }
+expect = [ { event = "network-event", kind = "radio-changed", radio = { state = "enabled" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+expect = [ { event = "telephony-event", kind = "radio-power-changed", radio = "on" } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "teardown"

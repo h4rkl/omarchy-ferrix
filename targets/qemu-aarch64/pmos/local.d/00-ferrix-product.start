@@ -25,9 +25,105 @@ done
 }
 printf '%s\n' '{"evidence":"QEMU","event":"product-core-ready","socket":"/run/ferrix/core.sock"}' > /dev/console
 
-case " $(cat /proc/cmdline 2>/dev/null) " in
+# --- Service daemons (ADR-001, 002, 003) ------------------------------------
+# Backend selection is a bootstrap decision (never an app's): kernel command
+# line `ferrix.telephony=mock|modemmanager` / `ferrix.network=mock|networkmanager`
+# wins, then the environment (FERRIX_TELEPHONY_BACKEND / FERRIX_NETWORK_BACKEND
+# from /etc/ferrix/backends.env if present), default `mock`. The production
+# adapters need ModemManager/NetworkManager running on the system bus and the
+# daemons built with the `production` feature; until that is verified in this
+# image the default stays mock. There is no mock-control channel on this
+# route (--mock-control none): pmos-run attaches no virtio-serial ports.
+# /var/lib/ferrix is on the real root filesystem, so stores persist across
+# guest reboots (unlike the Alpine smoke guest's tmpfs).
+cmdline=$(cat /proc/cmdline 2>/dev/null || true)
+[ ! -f /etc/ferrix/backends.env ] || . /etc/ferrix/backends.env
+cmdline_value() { printf '%s' "$cmdline" | sed -n "s/.*ferrix\.$1=\([a-z-]*\).*/\1/p"; }
+telephony_backend=$(cmdline_value telephony)
+[ -n "$telephony_backend" ] || telephony_backend=${FERRIX_TELEPHONY_BACKEND:-mock}
+network_backend=$(cmdline_value network)
+[ -n "$network_backend" ] || network_backend=${FERRIX_NETWORK_BACKEND:-mock}
+case "$telephony_backend" in mock|modemmanager) ;; *) telephony_backend=mock ;; esac
+case "$network_backend" in mock|networkmanager) ;; *) network_backend=mock ;; esac
+mkdir -p /var/lib/ferrix/telephony /var/lib/ferrix/contacts
+chmod 0700 /var/lib/ferrix/telephony /var/lib/ferrix/contacts
+export FERRIX_APPD_SOCKET=/run/ferrix/ferrix-appd.sock
+export FERRIX_DEFAULT_REGION=US
+export FERRIX_TARGET=qemu-aarch64
+# supervise NAME CMD...: restart on non-zero exit with backoff, recording it.
+supervise() {
+  sv_name=$1
+  shift
+  (
+    backoff=1
+    while :; do
+      "$@" >>/run/ferrix/"$sv_name".log 2>&1 || {
+        status=$?
+        printf '{"evidence":"QEMU","event":"daemon-restarted","name":"%s","exit":%s,"backoff_s":%s}\n' "$sv_name" "$status" "$backoff" > /dev/console
+        sleep "$backoff"
+        [ "$backoff" -ge 8 ] || backoff=$((backoff * 2))
+        continue
+      }
+      exit 0
+    done
+  ) &
+}
+start_service() {
+  ss_name=$1
+  ss_backend=$2
+  ss_bin=$3
+  shift 3
+  if [ ! -x "$ss_bin" ]; then
+    printf '{"evidence":"QEMU","event":"product-service-missing","name":"%s","binary":"%s"}\n' "$ss_name" "$ss_bin" > /dev/console
+    return 0
+  fi
+  : > /run/ferrix/"$ss_name".log
+  supervise "$ss_name" "$ss_bin" "$@"
+  printf '{"evidence":"QEMU","event":"product-service-started","name":"%s","backend":"%s"}\n' "$ss_name" "$ss_backend" > /dev/console
+}
+start_service ferrix-telephonyd "$telephony_backend" /usr/bin/ferrix-telephonyd \
+  --backend "$telephony_backend" --profile /etc/ferrix/profile.toml --socket /run/ferrix/telephonyd.sock \
+  --mock-control none --appd "$FERRIX_APPD_SOCKET" --data-dir /var/lib/ferrix/telephony
+start_service ferrix-networkd "$network_backend" /usr/bin/ferrix-networkd \
+  --backend "$network_backend" --profile /etc/ferrix/profile.toml --socket /run/ferrix/networkd.sock \
+  --mock-control none --appd "$FERRIX_APPD_SOCKET"
+if [ -f /usr/share/ferrix/contacts/mock-contacts.json ]; then
+  start_service ferrix-contactsd fixtures /usr/bin/ferrix-contactsd \
+    --socket /run/ferrix/contactsd.sock --data-dir /var/lib/ferrix/contacts \
+    --appd "$FERRIX_APPD_SOCKET" --fixtures /usr/share/ferrix/contacts/mock-contacts.json
+else
+  start_service ferrix-contactsd store /usr/bin/ferrix-contactsd \
+    --socket /run/ferrix/contactsd.sock --data-dir /var/lib/ferrix/contacts --appd "$FERRIX_APPD_SOCKET"
+fi
+for _ in $(seq 1 150); do
+  [ -S /run/ferrix/telephonyd.sock ] && [ -S /run/ferrix/networkd.sock ] && [ -S /run/ferrix/contactsd.sock ] && break
+  sleep 0.1
+done
+svc_flag() { if [ -S "$1" ]; then printf true; else printf false; fi; }
+printf '{"evidence":"QEMU","event":"product-services-ready","telephony":%s,"network":%s,"contacts":%s,"telephony_backend":"%s","network_backend":"%s","data_dir":"/var/lib/ferrix","persistent":true}\n' \
+  "$(svc_flag /run/ferrix/telephonyd.sock)" "$(svc_flag /run/ferrix/networkd.sock)" "$(svc_flag /run/ferrix/contactsd.sock)" "$telephony_backend" "$network_backend" > /dev/console
+# The daemons' own records (telephonyd-ready, networkd-ready, ...) are
+# replayed to the console so the serial log carries them.
+for name in ferrix-telephonyd ferrix-networkd ferrix-contactsd; do
+  [ -f /run/ferrix/"$name".log ] && cat /run/ferrix/"$name".log > /dev/console || true
+done
+
+case " $cmdline " in
   *" ferrix.graphics=on "*) ;;
-  *) exit 0 ;;
+  *)
+    # Headless: ferrix-appd is still the identity authority (ADR-004) for
+    # the daemons, without a home surface or autostarted apps.
+    if [ -x /usr/bin/ferrix-appd ]; then
+      /usr/bin/ferrix-appd --socket "$FERRIX_APPD_SOCKET" --app-dir /usr/share/ferrix/apps --no-autostart \
+        >/run/ferrix/ferrix-appd.log 2>&1 &
+      for _ in $(seq 1 100); do
+        grep -q '"event":"ferrix-appd-ready"' /run/ferrix/ferrix-appd.log 2>/dev/null && break
+        sleep 0.1
+      done
+      cat /run/ferrix/ferrix-appd.log > /dev/console || true
+    fi
+    exit 0
+    ;;
 esac
 
 modprobe virtio_gpu 2>/dev/null || true
@@ -78,6 +174,14 @@ grep -q '"event":"basic-screen-frame"' /run/ferrix/ferrix-appd.log || {
   cat /run/ferrix/ferrix-appd.log > /dev/console
   exit 1
 }
+# The launcher is hit-testable only after home-ready (catalog loaded); wait
+# bounded so a first tap is deterministic, and say so if it never came.
+for _ in $(seq 1 100); do
+  grep -q '"event":"home-ready"' /run/ferrix/ferrix-appd.log 2>/dev/null && break
+  sleep 0.1
+done
+grep -q '"event":"home-ready"' /run/ferrix/ferrix-appd.log 2>/dev/null \
+  || printf '%s\n' '{"evidence":"QEMU","event":"product-home-not-ready","reason":"no-home-ready-record"}' > /dev/console
 cat /run/ferrix/ferrix-shell.log > /dev/console
 cat /run/ferrix/ferrix-appd.log > /dev/console
 printf '%s\n' '{"evidence":"QEMU","event":"product-wayland-ready","compositor":"ferrix-shell","client":"ferrix-basic-screen","ferrix-appd":"/run/ferrix/ferrix-appd.sock"}' > /dev/console

@@ -11,6 +11,7 @@ ferrix-app-protocol = { path = "../ferrix-app-protocol" }
 ferrix-app-runtime-api = { path = "../ferrix-app-runtime-api" }
 # Composed in `src/main.rs` only; the library never names a runtime implementation.
 ferrix-runtime-native = { path = "../ferrix-runtime-native" }
+ferrix-runtime-android = { path = "../ferrix-runtime-android" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 

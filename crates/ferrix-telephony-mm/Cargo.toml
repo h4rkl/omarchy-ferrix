@@ -1,0 +1,23 @@
+[package]
+name = "ferrix-telephony-mm"
+description = "ModemManager production adapter for ferrix-telephonyd via the maintained D-Bus API (zbus); never speaks QMI/MBIM/QRTR/AT directly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# The D-Bus backend. Off by default: the pure state-mapping table builds and
+# tests everywhere; the adapter itself is meant for the Linux guest.
+production = ["dep:zbus"]
+
+[dependencies]
+ferrix-telephony-adapter-api = { path = "../ferrix-telephony-adapter-api" }
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Popular, maintained, MIT D-Bus client. Blocking API only: the daemon and the
+# adapter contract are synchronous.
+zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
+
+[lints]
+workspace = true

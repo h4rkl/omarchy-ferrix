@@ -13,6 +13,11 @@
 //! forwards TERM/INT/HUP, and exits with the application's shell status. Stage
 //! 1 forwards that status upward, so the launcher classifies the exit exactly.
 //!
+//! With `run_dir.mode = private` (or `private-run`) stage 2 also replaces the
+//! platform socket directory with a private tmpfs holding only the listed
+//! sockets, so an application can `connect()` exactly the daemons its grants
+//! allow (ADR-004 §4).
+//!
 //! All records are single JSON lines on stdout with the evidence label first:
 //! `sandbox-ready`, `sandbox-failed`, `sandbox-mount-failed`,
 //! `sandbox-degraded`, `sandbox-exec-failed`, `sandbox-app-exited`,
@@ -71,7 +76,7 @@ fn main() -> ExitCode {
 #[cfg(target_os = "linux")]
 mod linux {
     use std::ffi::CStr;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::{Child, Command, ExitCode, ExitStatus};
     use std::thread;
     use std::time::Duration;
@@ -80,11 +85,16 @@ mod linux {
     use ferrix_runtime_native::channel::{ReportListener, WaitOutcome, send_line};
     use ferrix_runtime_native::{
         EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport, IsolationMode,
-        IsolationPolicy, NamespaceSet, ProbeReport, SANDBOX_INTERNAL_STATUS, SandboxArgs,
-        SandboxReady, UserNamespace, emit, record, select_namespaces, shell_status_of,
+        IsolationPolicy, NamespaceSet, ProbeReport, RUN_ROOT, RunDirMode, RunDirOutcome,
+        RunDirPolicy, SANDBOX_INTERNAL_STATUS, SandboxArgs, SandboxReady, USER_RUN_DIR,
+        UserNamespace, emit, is_valid_socket_name, record, run_dir, select_namespaces,
+        shell_status_of,
     };
     use rustix::io::Errno;
-    use rustix::mount::{MountFlags, MountPropagationFlags, mount, mount_change};
+    use rustix::mount::{
+        MountFlags, MountPropagationFlags, UnmountFlags, mount, mount_bind, mount_bind_recursive,
+        mount_change, mount_move, unmount,
+    };
     use rustix::process::{
         Pid, Signal, WaitOptions, getegid, geteuid, kill_process, set_parent_process_death_signal,
         waitpid,
@@ -447,6 +457,7 @@ mod linux {
 
         let mut private_tmp = false;
         let mut no_new_privs = false;
+        let mut run_dir_outcome = RunDirOutcome::default();
         match listener
             .map(|l| l.wait_for_line(&mut child, INIT_REPORT_TIMEOUT, &mut forward_pending))
         {
@@ -454,11 +465,24 @@ mod linux {
                 Ok(report) => {
                     private_tmp = report.private_tmp;
                     no_new_privs = report.no_new_privs;
+                    run_dir_outcome = report.run_dir;
                     notes.extend(report.reasons);
                 }
                 Err(e) => notes.push(format!("unreadable init report: {e}")),
             },
             Some(Err(WaitOutcome::ChildExited(status))) => {
+                // Stage 2 refuses to start the application when a Required
+                // policy's socket-directory view cannot be built; forward
+                // that as the isolation failure it is (no readiness).
+                if shell_status_of(status) == ISOLATION_UNAVAILABLE_STATUS {
+                    return fail(
+                        evidence,
+                        app,
+                        "init stage could not establish required isolation (see sandbox-mount-failed)"
+                            .to_owned(),
+                        ISOLATION_UNAVAILABLE_STATUS,
+                    );
+                }
                 notes.push(format!(
                     "init stage exited with status {} before reporting",
                     shell_status_of(status)
@@ -473,6 +497,8 @@ mod linux {
         let degraded = !missing.is_empty()
             || (args.policy.private_tmp && !private_tmp)
             || (args.policy.no_new_privs && !no_new_privs)
+            || (args.policy.run_dir.is_private()
+                && run_dir_outcome.mode != args.policy.run_dir.mode)
             || !notes.is_empty();
         let ready = SandboxReady {
             app: app.to_owned(),
@@ -480,6 +506,7 @@ mod linux {
             namespaces: applied,
             private_tmp,
             no_new_privs,
+            run_dir: run_dir_outcome,
             degraded,
             reason: (!notes.is_empty()).then(|| notes.join("; ")),
         };
@@ -580,6 +607,180 @@ mod linux {
         }
     }
 
+    // -- socket-directory view (ADR-004 §4) ------------------------------
+
+    /// Where the filtered view is assembled before it is moved into place.
+    /// `/tmp` is preferred: with `private_tmp` it is this namespace's own
+    /// tmpfs; otherwise the directory only exists between `mkdir` and the
+    /// `rmdir` after the move. A sibling of the socket directory is the
+    /// fallback for `private` (never for `private-run`, whose target `/run`
+    /// would contain it).
+    fn staging_dir(socket_dir: &Path, mode: RunDirMode) -> Result<PathBuf, String> {
+        let name = format!(".ferrix-run-{}", std::process::id());
+        let mut candidates = vec![PathBuf::from("/tmp").join(&name)];
+        if mode == RunDirMode::Private {
+            candidates.push(socket_dir.with_file_name(name));
+        }
+        let mut errors = Vec::new();
+        for candidate in candidates {
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => return Ok(candidate),
+                Err(e) => errors.push(format!("{}: {e}", candidate.display())),
+            }
+        }
+        Err(format!("no staging directory: {}", errors.join("; ")))
+    }
+
+    /// Builds the application's view of the platform socket directory.
+    ///
+    /// The originals must stay visible while the sockets are bind-mounted by
+    /// path, so the view is assembled on a tmpfs at a staging directory (each
+    /// listed socket file is created there and the original bind-mounted
+    /// over it, `/run/user` bound back recursively under `private-run`) and
+    /// then moved over the target in one `mount(MS_MOVE)`. Nothing is opened
+    /// or held open. Propagation is already private (stage 2 starts with
+    /// `mount --make-rprivate /`), which `MS_MOVE` requires.
+    fn setup_run_dir(policy: &RunDirPolicy) -> Result<RunDirOutcome, String> {
+        let socket_dir = run_dir();
+        let target = match policy.mode {
+            RunDirMode::Inherit => return Ok(RunDirOutcome::default()),
+            RunDirMode::Private => socket_dir.clone(),
+            RunDirMode::PrivateRun => PathBuf::from(RUN_ROOT),
+        };
+        if !target.is_dir() {
+            return Err(format!("{} is not a directory", target.display()));
+        }
+        // Where the socket directory sits inside the new view.
+        let relative = match policy.mode {
+            RunDirMode::PrivateRun => socket_dir
+                .strip_prefix(RUN_ROOT)
+                .map_err(|_| {
+                    format!(
+                        "{} is not under {RUN_ROOT}; private-run needs it there",
+                        socket_dir.display()
+                    )
+                })?
+                .to_path_buf(),
+            _ => PathBuf::new(),
+        };
+        let staging = staging_dir(&socket_dir, policy.mode)?;
+        let result = assemble_run_dir(&staging, &relative, &socket_dir, &target, policy);
+        let _ = std::fs::remove_dir(&staging);
+        result
+    }
+
+    fn assemble_run_dir(
+        staging: &Path,
+        relative: &Path,
+        socket_dir: &Path,
+        target: &Path,
+        policy: &RunDirPolicy,
+    ) -> Result<RunDirOutcome, String> {
+        mount(
+            "tmpfs",
+            staging,
+            "tmpfs",
+            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+            c"mode=0755,size=1m",
+        )
+        .map_err(|e| format!("mount tmpfs on {}: {e}", staging.display()))?;
+        let result = populate_run_dir(staging, relative, socket_dir, policy);
+        match result {
+            Ok(outcome) => match mount_move(staging, target) {
+                Ok(()) => Ok(outcome),
+                Err(e) => {
+                    let _ = unmount(staging, UnmountFlags::DETACH);
+                    Err(format!(
+                        "move {} onto {}: {e}",
+                        staging.display(),
+                        target.display()
+                    ))
+                }
+            },
+            Err(error) => {
+                let _ = unmount(staging, UnmountFlags::DETACH);
+                Err(error)
+            }
+        }
+    }
+
+    fn populate_run_dir(
+        staging: &Path,
+        relative: &Path,
+        socket_dir: &Path,
+        policy: &RunDirPolicy,
+    ) -> Result<RunDirOutcome, String> {
+        let io =
+            |what: &str, path: &Path, e: std::io::Error| format!("{what} {}: {e}", path.display());
+        let view = staging.join(relative);
+        std::fs::create_dir_all(&view).map_err(|e| io("create", &view, e))?;
+        if policy.mode == RunDirMode::PrivateRun && Path::new(USER_RUN_DIR).is_dir() {
+            let user = staging.join(
+                Path::new(USER_RUN_DIR)
+                    .strip_prefix(RUN_ROOT)
+                    .unwrap_or(Path::new("user")),
+            );
+            std::fs::create_dir_all(&user).map_err(|e| io("create", &user, e))?;
+            mount_bind_recursive(USER_RUN_DIR, &user)
+                .map_err(|e| format!("bind {USER_RUN_DIR} into the view: {e}"))?;
+        }
+        let mut sockets = Vec::new();
+        let mut missing = Vec::new();
+        for name in &policy.sockets {
+            if !is_valid_socket_name(name) {
+                return Err(format!("invalid socket name {name:?}"));
+            }
+            let source = socket_dir.join(name);
+            if !source.exists() {
+                missing.push(name.clone());
+                continue;
+            }
+            let dest = view.join(name);
+            std::fs::File::create(&dest).map_err(|e| io("create", &dest, e))?;
+            mount_bind(&source, &dest)
+                .map_err(|e| format!("bind {} into the view: {e}", source.display()))?;
+            sockets.push(name.clone());
+        }
+        Ok(RunDirOutcome {
+            mode: policy.mode,
+            sockets,
+            missing,
+        })
+    }
+
+    /// Applies the socket-directory policy in stage 2 or the probe. `Err`
+    /// carries the reason; the caller decides whether that is fatal.
+    fn apply_run_dir(
+        evidence: &str,
+        app: &str,
+        policy: &IsolationPolicy,
+        mount_namespace: bool,
+        reasons: &mut Vec<String>,
+    ) -> Result<RunDirOutcome, String> {
+        if !policy.run_dir.is_private() {
+            return Ok(RunDirOutcome::default());
+        }
+        if !mount_namespace {
+            reasons.push("run_dir needs the mount namespace".to_owned());
+            return Ok(RunDirOutcome::default());
+        }
+        setup_run_dir(&policy.run_dir).map_err(|error| {
+            emit(&record(
+                evidence,
+                "sandbox-mount-failed",
+                json!({
+                    "app": app,
+                    "target": match policy.run_dir.mode {
+                        RunDirMode::PrivateRun => RUN_ROOT.to_owned(),
+                        _ => run_dir().display().to_string(),
+                    },
+                    "error": error,
+                }),
+            ));
+            error
+        })
+    }
+
     fn apply_no_new_privs(evidence: &str, app: &str, reasons: &mut Vec<String>) -> bool {
         match set_no_new_privs(true) {
             Ok(()) => true,
@@ -610,6 +811,24 @@ mod linux {
             }
             false
         };
+        let run_dir_outcome =
+            match apply_run_dir(evidence, app, &args.policy, applied.mount, &mut reasons) {
+                Ok(outcome) => outcome,
+                Err(error) if args.policy.mode == IsolationMode::Required => {
+                    // Required means required: never start the application
+                    // with a wider socket view than the policy allows.
+                    emit(&record(
+                        evidence,
+                        "sandbox-failed",
+                        json!({ "app": app, "reason": format!("required run_dir view: {error}") }),
+                    ));
+                    return exit_code(ISOLATION_UNAVAILABLE_STATUS);
+                }
+                Err(error) => {
+                    reasons.push(format!("run_dir: {error}"));
+                    RunDirOutcome::default()
+                }
+            };
         let no_new_privs =
             args.policy.no_new_privs && apply_no_new_privs(evidence, app, &mut reasons);
 
@@ -618,6 +837,7 @@ mod linux {
             let report = InitReport {
                 private_tmp,
                 no_new_privs,
+                run_dir: run_dir_outcome,
                 reasons: reasons.clone(),
             };
             let _ = send_line(name, &serde_json::to_string(&report).unwrap_or_default());
@@ -719,13 +939,19 @@ mod linux {
         } else {
             false
         };
+        let run_dir_outcome = apply_run_dir(evidence, "probe", policy, applied.mount, &mut reasons)
+            .unwrap_or_else(|error| {
+                reasons.push(format!("run_dir: {error}"));
+                RunDirOutcome::default()
+            });
         let no_new_privs =
             policy.no_new_privs && apply_no_new_privs(evidence, "probe", &mut reasons);
         let report = ProbeReport {
-            applied: applied.applied(private_tmp, no_new_privs),
             degraded: !reasons.is_empty()
                 || (policy.private_tmp && !private_tmp)
-                || (policy.no_new_privs && !no_new_privs),
+                || (policy.no_new_privs && !no_new_privs)
+                || (policy.run_dir.is_private() && run_dir_outcome.mode != policy.run_dir.mode),
+            applied: applied.applied(private_tmp, no_new_privs, run_dir_outcome),
             reason: (!reasons.is_empty()).then(|| reasons.join("; ")),
         };
         emit(&record(

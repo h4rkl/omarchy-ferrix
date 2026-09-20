@@ -11,7 +11,9 @@
 //! Hardware state (battery, network, modem) comes from the persistent
 //! `ferrix-core` over its state socket; the profile supplies only the panel
 //! geometry and name. Product code depends on `ferrix-hardware-api`, never on an
-//! adapter.
+//! adapter. When `ferrix-telephonyd` / `ferrix-networkd` are reachable the
+//! status bar and the Wi-Fi toggle use them (ADR-001/002) and fall back to
+//! the coarse hardware-api summary and the core command otherwise.
 //!
 //! Colors come from `ferrix_ui::theme` (`colors.toml` contract), loaded once
 //! here before the first frame in both modes.
@@ -24,7 +26,9 @@
 //!
 //! `PAGE` is `launcher` (default), `quick-settings`, `notifications`,
 //! `notifications-empty`, or the kind of a non-launchable catalog entry
-//! (`settings`, `camera`, ...) for its reference page. `--size` overrides the
+//! (`camera`, `files`) for its reference page. Launchable entries (Phone,
+//! Messages, Contacts, Settings, Terminal) are real apps started by
+//! `ferrix-appd`, not pages of this surface. `--size` overrides the
 //! profile's panel size, e.g. `830x1800` for the narrow QEMU display window.
 //!
 //! The profile defaults to the guest copy when present, else the repository
@@ -35,6 +39,7 @@
 mod catalog;
 mod interaction;
 mod screen;
+mod status;
 
 #[cfg(target_os = "linux")]
 mod app;
@@ -203,6 +208,9 @@ fn run() -> Result<(), String> {
         let mut state = interaction::UiState::new(wifi_on, bt_on, tiles);
         state.brightness = hw.display.brightness_percent;
         state.identity = screen::identity_line(&session.target_id);
+        // No daemons on the host: the status bar shows the hardware-api summary.
+        state.tele = status::telephony_summary(None, &hw);
+        state.net = status::network_summary(None, &hw);
         state.page = preview_page(&args.page, &mut state)?;
         let (width, height) = args
             .size
@@ -311,17 +319,18 @@ mod tests {
             Ok(Page::Notifications)
         );
         assert!(!state.notification_visible);
-        let settings =
-            state.tile_index(&ferrix_app_api::AppId::new("org.ferrix.settings").unwrap());
+        let camera = state.tile_index(&ferrix_app_api::AppId::new("org.ferrix.camera").unwrap());
         assert_eq!(
-            preview_page("settings", &mut state).ok(),
-            settings.map(Page::Reference)
+            preview_page("camera", &mut state).ok(),
+            camera.map(Page::Reference)
         );
-        let error = preview_page("terminal", &mut state).unwrap_err();
-        assert!(
-            error.contains("settings"),
-            "launchable kinds are not pages: {error}"
-        );
+        for launchable in ["terminal", "settings", "phone"] {
+            let error = preview_page(launchable, &mut state).unwrap_err();
+            assert!(
+                error.contains("camera"),
+                "launchable kinds are not pages: {error}"
+            );
+        }
         assert!(preview_page("bogus", &mut state).is_err());
     }
 }

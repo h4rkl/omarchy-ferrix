@@ -1,0 +1,18 @@
+[package]
+name = "ferrix-phone"
+description = "Omarchy Ferrix Phone: independent software-rendered Wayland client for simulated and real call flows (app id org.ferrix.phone)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-protocol = { path = "../ferrix-app-protocol" }
+ferrix-contacts-api = { path = "../ferrix-contacts-api" }
+ferrix-contacts-protocol = { path = "../ferrix-contacts-protocol" }
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+ferrix-telephony-protocol = { path = "../ferrix-telephony-protocol" }
+ferrix-ui = { path = "../ferrix-ui" }
+
+[lints]
+workspace = true

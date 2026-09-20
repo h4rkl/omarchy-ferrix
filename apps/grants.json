@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "grants": {
+    "org.ferrix.home": [
+      "core-state",
+      "core-control",
+      "background",
+      "network-state",
+      "network-control",
+      "telephony-state"
+    ],
+    "org.ferrix.terminal": [
+      "shell",
+      "background"
+    ],
+    "org.ferrix.phone": [
+      "telephony-state",
+      "telephony-call",
+      "contacts-read",
+      "background"
+    ],
+    "org.ferrix.messages": [
+      "telephony-state",
+      "telephony-sms",
+      "contacts-read",
+      "background"
+    ],
+    "org.ferrix.contacts": [
+      "contacts-read",
+      "contacts-write"
+    ],
+    "org.ferrix.settings": [
+      "network-state",
+      "network-control",
+      "telephony-state",
+      "core-state",
+      "core-control"
+    ],
+    "org.ferrix.browser": [
+      "background"
+    ]
+  }
+}

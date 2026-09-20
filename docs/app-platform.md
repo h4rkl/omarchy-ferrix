@@ -42,11 +42,11 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 
 | Crate | Owns | Trust ring |
 | --- | --- | --- |
-| `ferrix-app-api` | public `AppId`, `RuntimeKind`, `AppDescriptor`, `LifecycleState`, `ExitReason`, `AppInstance`, `AppEvent`, `AppError`, and launch environment constants | contract |
-| `ferrix-app-protocol` | `Request`/`Report`/`Reply`/`Notification` wire types, blocking client, subscription reader | contract |
-| `ferrix-app-runtime-api` | internal `Runtime`/`RunningApp` traits, launch context, and opaque runtime configuration boundary | internal contract |
-| `ferrix-appd` | catalog, single-instance policy, lifecycle state machine, crash records, home restart policy, surface association, role gating | system |
-| `ferrix-runtime-native` | native launch configuration and isolation types; the native `Runtime` that spawns `ferrix-sandbox`, classifies exits, and terminates | internal adapter |
+| `ferrix-app-api` | public `AppId`, `RuntimeKind`, `AppDescriptor`, `AppCapability`, `AppIdentity`, `GrantsPolicy`, `LifecycleState`, `ExitReason`, `AppInstance`, `AppEvent`, `AppError`, and launch environment constants | contract |
+| `ferrix-app-protocol` | `Request`/`Report`/`Reply`/`Notification` wire types (including `Identify`/`Identity`), blocking client, subscription reader | contract |
+| `ferrix-app-runtime-api` | internal `Runtime`/`RunningApp` traits, launch context (with the effective grants), and opaque runtime configuration boundary | internal contract |
+| `ferrix-appd` | catalog, grants policy, single-instance policy, lifecycle state machine, crash records, home restart policy, surface association, pid → identity resolution, role gating | system |
+| `ferrix-runtime-native` | native launch configuration and isolation types (namespaces, private `/tmp`, socket-directory view); the native `Runtime` that spawns `ferrix-sandbox`, classifies exits, and terminates | internal adapter |
 | `ferrix-shell` | toplevels keyed by client pid, focus, `Activate` handling, bottom-edge home gesture, crash refocus | system |
 | `ferrix-basic-screen` | catalog-driven launcher, in-process quick settings/notifications, illustrative reference pages, crash notice | privileged first-party |
 | `ferrix-terminal` | the Terminal as an independent Wayland client | untrusted application |
@@ -69,7 +69,9 @@ Descriptors are JSON files, one per application, in `apps/` (installed to
 `/usr/share/ferrix/apps/` in the guest). Fields: `schema_version`, `id`,
 `runtime` (`native` | `web` | `android`), `name`, `icon` (`glyph`, `tone`),
 `launchable`, `autostart`, `role` (`application` | `home`), `trust`,
-and `capabilities`. A daemon-private `launch` object in the same manifest is
+and `capabilities`. `capabilities` is a **declaration** (discovery: what the
+application asks for); it grants nothing. Authorization comes from the
+separate grants policy described under *Grants and identity*. A daemon-private `launch` object in the same manifest is
 opaque to `ferrix-appd` and interpreted only by the selected runtime adapter. For the
 native adapter it contains `exec` (program resolved through `PATH`) and an
 optional isolation policy. The `launch` object is never returned by
@@ -93,6 +95,47 @@ clean exit (`Terminated`) from a signal death or non-zero exit (`Crashed`).
 serial record. Exactly one instance per application exists at a time: a second
 `Launch` activates the running instance instead.
 
+## Grants and identity
+
+Authorization is decided by `ferrix-appd` from two inputs that are kept apart
+on purpose (ADR-004):
+
+- the descriptor **declares** capabilities (`capabilities`);
+- the checked-in **grants policy** `apps/grants.json` (installed beside the
+  descriptors; `--grants PATH` / `FERRIX_APP_GRANTS` override it) says what
+  each application *may* hold: `{"schema_version": 1, "grants": {"<app id>":
+  ["telephony-call", ...]}}`, parsed strictly (`deny_unknown_fields`, ids and
+  capability names validated, schema 1 only).
+
+The effective set is `declared ∩ granted`. It is computed once at launch,
+handed to the runtime in `LaunchContext.granted`, fixed for the life of the
+instance, and reported in the `app-started` record as `granted` together with
+`denied_capabilities` (declared but withheld). Trust rings never bypass the
+file: `org.ferrix.home` is `privileged` and still only holds what its row
+grants. **An application without a row, or a system without a grants file,
+has zero effective capabilities**; a missing file is recorded
+(`grants-missing`), a file that exists but is invalid is a startup failure
+(`grants-invalid`).
+
+Capability names (`AppCapability`, kebab-case on the wire): `core-state`,
+`core-control`, `shell`, `background`, `telephony-state`, `telephony-call`,
+`telephony-sms`, `contacts-read`, `contacts-write`, `network-state`,
+`network-control`. Read-only `*-state` grants and privileged `*-control`/
+`*-call`/`*-sms`/`*-write` grants are distinct so a state grant can never
+reach a control verb.
+
+Services (telephony, network, contacts) never trust an `AppId` in a payload.
+They read the peer pid from their own socket (`SO_PEERCRED`), connect to
+`ferrix-appd` with role `service`, and send `{"request":"identify","pid":P}`.
+`ferrix-appd` resolves the pid through the same `/proc` ancestry walk used for
+surface association to a **running** instance and replies
+`{"reply":"identity","schema_version":1,"app":"org.ferrix.phone","trust":"untrusted","granted":["telephony-state","telephony-call"]}`;
+a pid it did not launch, or whose instance has exited, yields
+`{"reply":"identity","schema_version":1,"app":null,"trust":null,"granted":[]}`.
+Every daemon checks the required capability on every request against that
+identity (ADR-004 §3). `Identify` is answered for the `service` and `tool`
+roles only.
+
 ## Launch and isolation
 
 `ferrix-appd` launches through the `ferrix-app-runtime-api::Runtime` trait. The native runtime spawns
@@ -108,7 +151,8 @@ safe Rust (the workspace forbids `unsafe`) on top of `rustix` and
    identity uid/gid mapping when a user namespace was created, sets the UTS
    hostname to the application id, and spawns stage 2.
 2. Stage 2 is PID 1 of the application's PID namespace. It makes mount
-   propagation private, mounts a fresh `/proc` and a tmpfs `/tmp`, sets
+   propagation private, mounts a fresh `/proc` and a tmpfs `/tmp`, builds the
+   socket-directory view when `run_dir.mode` is not `inherit` (below), sets
    `no_new_privs`, spawns the application, forwards `TERM`/`INT`/`HUP`, reaps
    zombies, and exits with the application's status (`128 + signal` on a
    signal death). When PID 1 exits the kernel kills everything left in the
@@ -118,20 +162,61 @@ safe Rust (the workspace forbids `unsafe`) on top of `rustix` and
    could not be established and surfaces as `AppError::IsolationUnavailable`.
 
 The `IsolationPolicy` default requests all four namespaces, a private `/tmp`,
-and `no_new_privs`, in `required` mode. `best-effort` mode still starts the
+and `no_new_privs`, in `required` mode, with `run_dir: {mode: inherit}`.
+`best-effort` mode still starts the
 application as a separate supervised process and reports the degraded
 isolation in the private runtime diagnostics attached to the `app-started`
 evidence record; it never hides it or exposes Linux-specific fields as public
 application state.
 
+### Socket visibility
+
+Platform daemons listen under one directory, `/run/ferrix` (`FERRIX_RUN_DIR`
+in nested runs): `ferrix-appd.sock`, `core.sock`, `telephonyd.sock`,
+`networkd.sock`, `contactsd.sock`. The Wayland socket is elsewhere
+(`XDG_RUNTIME_DIR`, `/run/user/<uid>`). A manifest opts into the filtered
+view with `"isolation": {"run_dir": {"mode": "private-run"}}`; the native runtime
+then **derives the visible socket list from the effective grants** (a list
+written into the manifest is replaced, never merged): always
+`ferrix-appd.sock`; `core-*` → `core.sock`; `telephony-*` → `telephonyd.sock`;
+`network-*` → `networkd.sock`; `contacts-*` → `contactsd.sock`. Stage 2 mounts
+a tmpfs on a staging directory, creates one file per listed socket and
+bind-mounts the original over it (the originals stay visible until the very
+end, so no descriptor has to be held open), then `mount --move`s the staging
+directory over `/run/ferrix`. Inside the application `connect()` on any other
+daemon socket fails with `ENOENT`; the host's directory is untouched. A
+listed socket whose daemon is not running yet is reported as `missing`, not
+bound, and not a failure. `mode: private-run` goes further: a tmpfs replaces
+all of `/run`, with the filtered `/run/ferrix` and `/run/user` bind-mounted
+back, so the D-Bus system bus socket (`/run/dbus/system_bus_socket`) and
+everything else under `/run` disappear from the application's view.
+
+Under `required`, a socket-directory view that cannot be built (no
+`/run/ferrix`, no mount permission) stops the launch with exit 126 →
+`AppError::IsolationUnavailable`; under `best-effort` the application starts
+with the inherited directory and the `sandbox-ready`/`app-started`
+diagnostics say `run_dir: {mode: inherit}` with `degraded: true`. The
+`sandbox-ready` record always carries `run_dir: {mode, sockets: [names]}`.
+On macOS the policy parses and is recorded as `inherit` (not enforced); the
+Linux behaviour is exercised by `tests/sandbox.rs` in the pinned container
+(`mock` evidence).
+
 What isolation provides today: a crash is confined to one process tree; the
 application cannot see or signal platform processes (PID namespace); it has a
 private `/proc` and `/tmp`, its own IPC and hostname namespaces, and cannot
-gain privileges. What it does not provide yet: a different uid, seccomp
-filters, cgroup resource limits, a network namespace, or a restricted
-filesystem view. The Wayland socket, the core socket, and the `ferrix-appd` socket
-remain reachable because they live on the shared filesystem; permission
-enforcement at those services is phase 3 work.
+gain privileges; with `run_dir.mode = private-run` it can reach exactly the
+daemon sockets its grants imply, and every daemon additionally enforces
+capabilities per request after resolving the caller through `Identify`.
+What it does not provide yet: a different uid (every application runs as the
+launcher's uid), seccomp filters, cgroup resource limits, a network
+namespace, or a restricted view of the filesystem beyond `/proc`, `/tmp`, and
+the socket directory. With `mode: private` the rest of `/run` is unchanged,
+so the D-Bus system bus socket remains visible (though only the daemons
+speak D-Bus; applications have no grant that reaches ModemManager or
+NetworkManager directly); `mode: private-run` hides it. Every checked-in
+launchable native application uses `private-run`; `private` remains available
+only as a documented compatibility mode for manifests that deliberately need
+other `/run` facilities.
 
 ## Surface association and focus
 
@@ -169,23 +254,39 @@ keyboard and navigation into compositor-owned chrome is phase 3 work.
 
 ## Protocol roles
 
-Connections identify themselves with `Hello{role}`. On Linux/QEMU, `ferrix-appd`
+Connections identify themselves with `Hello{role}`; roles are `compositor`,
+`home`, `application`, `tool`, and `service`. On Linux/QEMU, `ferrix-appd`
 reads the peer PID from the socket and resolves launched descendants back to
 their daemon-owned application identity; a launched app claiming a different
-role is rejected. `ferrix-appd` then gates by the verified role:
-surface and focus reports are accepted only from the compositor; `Launch`,
-`Activate`, and `Terminate` only from the home surface and tools;
-`YieldForeground` from applications and the home surface. Malformed lines get
-`Reply::ProtocolError`; failures are typed `AppError`s. A schema mismatch is
-rejected at `Hello`. Compositor/tool authentication is still a bootstrap trust
-boundary because those processes are not launched by `ferrix-appd`; splitting their
-privileged endpoint or passing an inherited capability is future hardening.
+role (`tool`, `service`, `compositor`) is rejected at `Hello`. `ferrix-appd`
+then gates by the verified role:
+
+| message | roles |
+|---|---|
+| `Catalog`, `Instances`, `Subscribe` | any |
+| `Home` | `compositor`, `home`, `application`, `tool` |
+| `Identify` | `service`, `tool` |
+| `Launch`, `Activate`, `Terminate` | `home`, `tool` |
+| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture` | `compositor` |
+| `YieldForeground` | `application`, `home` |
+
+A `service` resolves identities and observes lifecycle events; it never
+launches, activates, terminates, returns home, or sends reports. Malformed
+lines get `Reply::ProtocolError`; failures are typed `AppError`s. A schema
+mismatch is rejected at `Hello`. Compositor, tool, and service authentication
+is still a bootstrap trust boundary because those processes are not launched
+by `ferrix-appd` (they start from the session before any application exists);
+splitting their privileged endpoint or passing an inherited capability is
+future hardening.
 
 ## Evidence
 
 Records are single JSON lines with `"evidence"` first (`QEMU` in the guest,
 `mock` nested on a host). New names: `ferrix-appd-ready`, `app-launching`,
-`app-started`, `sandbox-ready`, `app-surface`, `app-foreground`,
+`app-started` (with `granted`, `denied_capabilities`), `sandbox-ready` (with
+`run_dir`), `grants-loaded`, `grants-missing`, `grants-invalid`,
+`appd-identify` (`pid`, `app|null`, `granted_count`; once per connection per
+pid), `app-surface`, `app-foreground`,
 `app-background`, `app-exited`, `app-crashed`, `home-restarting`,
 `home-restart-abandoned`, `ferrix-appd-failed` (ferrix-appd and sandbox); `client-gone`,
 `client-activated`, `home-gesture`, `ferrix-appd-link` (compositor); `home-launch`,
@@ -195,6 +296,11 @@ evidence for this slice is recorded in `docs/status.md`.
 
 ## Not in this slice
 
-Portals and permission enforcement (phase 3), the Rust SDK beyond the launch
-environment constants, the TypeScript/web runtime, the Android compatibility
-runtime, per-application logs, cgroup limits, and any device target.
+Portals and user-facing permission prompts (grants are a checked-in policy,
+not a runtime consent flow), a different uid per application, seccomp, cgroup
+limits, a network namespace, a filesystem view restricted beyond `/proc`,
+`/tmp`, and the socket directory, authenticated (rather than bootstrap-trusted)
+compositor/tool/service endpoints, the Rust SDK beyond the launch environment
+constants, the TypeScript/web runtime, per-application logs, and any device
+target. The Android compatibility runtime is specified separately (ADR-005);
+it never receives a `/run/ferrix` socket.

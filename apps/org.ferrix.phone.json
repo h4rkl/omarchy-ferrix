@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.phone",
+  "runtime": "native",
+  "name": "Phone",
+  "icon": {
+    "glyph": "☎",
+    "tone": "blue"
+  },
+  "launchable": true,
+  "capabilities": [
+    "telephony-state",
+    "telephony-call",
+    "contacts-read",
+    "background"
+  ],
+  "launch": {
+    "exec": [
+      "ferrix-phone"
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
+  }
+}

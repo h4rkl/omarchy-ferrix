@@ -1,0 +1,19 @@
+[package]
+name = "ferrix-settings"
+description = "Omarchy Ferrix Settings: independent software-rendered Wayland client for network and radio settings (app id org.ferrix.settings)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-protocol = { path = "../ferrix-app-protocol" }
+ferrix-contacts-api = { path = "../ferrix-contacts-api" }
+ferrix-network-api = { path = "../ferrix-network-api" }
+ferrix-network-protocol = { path = "../ferrix-network-protocol" }
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+ferrix-telephony-protocol = { path = "../ferrix-telephony-protocol" }
+ferrix-ui = { path = "../ferrix-ui" }
+
+[lints]
+workspace = true

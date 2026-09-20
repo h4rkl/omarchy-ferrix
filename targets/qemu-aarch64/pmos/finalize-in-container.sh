@@ -69,18 +69,73 @@ boot_mounted=1
 # Readiness marker (OpenRC local.d, default runlevel).
 install -Dm755 "$marker_src" "$mnt$marker_dst"
 install -Dm755 "$product_src" "$mnt$product_dst"
-install -Dm755 /product/ferrix-core "$mnt/usr/bin/ferrix-core"
-install -Dm755 /product/ferrix-shell "$mnt/usr/bin/ferrix-shell"
-install -Dm755 /product/ferrix-basic-screen "$mnt/usr/bin/ferrix-basic-screen"
-install -Dm755 /product/ferrix-appd "$mnt/usr/bin/ferrix-appd"
-install -Dm755 /product/ferrix-sandbox "$mnt/usr/bin/ferrix-sandbox"
-install -Dm755 /product/ferrix-terminal "$mnt/usr/bin/ferrix-terminal"
+# Product binaries: the same set qemu-build.sh stages for the smoke guest,
+# including the service daemons and the Phone/Messages/Contacts/Settings apps.
+product_bins="ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings"
+for bin in $product_bins; do
+  [ -f "/product/$bin" ] || fail "missing-product-binary" "$bin not in /product; run just qemu-build first"
+  install -Dm755 "/product/$bin" "$mnt/usr/bin/$bin"
+done
 install -Dm644 /product/profile.toml "$mnt/etc/ferrix/profile.toml"
 install -Dm644 /product/colors.toml "$mnt/etc/ferrix/colors.toml"
-mkdir -p "$mnt/usr/share/ferrix/apps"
+mkdir -p "$mnt/usr/share/ferrix/apps" "$mnt/var/lib/ferrix/telephony" "$mnt/var/lib/ferrix/contacts"
+chmod 0700 "$mnt/var/lib/ferrix/telephony" "$mnt/var/lib/ferrix/contacts"
+# Catalog plus grants.json (ADR-004); ferrix-appd reads <app dir>/grants.json.
 for descriptor in /product/apps/*.json; do
   install -Dm644 "$descriptor" "$mnt/usr/share/ferrix/apps/$(basename "$descriptor")"
 done
+[ -f "$mnt/usr/share/ferrix/apps/grants.json" ] || fail "missing-grants" "/product/apps/grants.json not staged"
+contacts_fixtures_sha=""
+if [ -f /product/contacts/mock-contacts.json ]; then
+  install -Dm644 /product/contacts/mock-contacts.json "$mnt/usr/share/ferrix/contacts/mock-contacts.json"
+  contacts_fixtures_sha=$(sha256sum "$mnt/usr/share/ferrix/contacts/mock-contacts.json" | cut -d' ' -f1)
+fi
+# --- OPT-IN Android compatibility runtime (Waydroid) -------------------------
+# Only when FERRIX_PMOS_ANDROID=1: stage the pinned container images, the
+# software-rendering properties, the nftables rule, the first-boot init
+# script (00-ferrix-android.start, before 00-ferrix-product.start), and the
+# verified Brave APK when pmos-build mounted one. `waydroid init` itself runs
+# at first guest boot (offline, from /etc/waydroid-extra/images): it needs
+# the guest's dbus/lxc environment, not a loop-mounted rootfs.
+android_facts='"enabled": false'
+if [ "${FERRIX_PMOS_ANDROID:-0}" = 1 ]; then
+  for f in system.img vendor.img images.json; do
+    [ -f "/android/images/$f" ] || fail "android-images-missing" "/android/images/$f not mounted"
+  done
+  install -Dm644 /android/images/system.img "$mnt/etc/waydroid-extra/images/system.img"
+  install -Dm644 /android/images/vendor.img "$mnt/etc/waydroid-extra/images/vendor.img"
+  install -Dm644 /android/images/images.json "$mnt/etc/waydroid-extra/images.json"
+  cat > "$mnt/etc/ferrix/waydroid-properties.ini" <<'INI'
+[properties]
+ro.hardware.gralloc=default
+ro.hardware.egl=swiftshader
+persist.waydroid.multi_windows=false
+INI
+  install -Dm755 "$project/local.d/00-ferrix-android.start" "$mnt/etc/local.d/00-ferrix-android.start"
+  mkdir -p "$mnt/var/lib/waydroid" "$mnt/etc/nftables.d"
+  nft_rule=false
+  if [ -f "$mnt/usr/share/nftables.avail/51_waydroid.nft" ]; then
+    ln -sf /usr/share/nftables.avail/51_waydroid.nft "$mnt/etc/nftables.d/51_waydroid.nft"
+    nft_rule=true
+  fi
+  # cgroups and dbus in the default runlevel (waydroid-container is started
+  # by the first-boot script after init, never before).
+  for svc in cgroups dbus; do
+    if [ -x "$mnt/etc/init.d/$svc" ] && [ ! -L "$mnt/etc/runlevels/default/$svc" ] && [ ! -L "$mnt/etc/runlevels/boot/$svc" ]; then
+      ln -s "/etc/init.d/$svc" "$mnt/etc/runlevels/default/$svc"
+    fi
+  done
+  brave_sha=""
+  if [ -f /android/brave.apk ]; then
+    install -Dm644 /android/brave.apk "$mnt/usr/share/ferrix/android/brave.apk"
+    brave_sha=$(sha256sum "$mnt/usr/share/ferrix/android/brave.apk" | cut -d' ' -f1)
+  fi
+  waydroid_pkg=$(awk '/^P:waydroid$/ { getline; sub(/^V:/, ""); print; exit }' "$mnt/lib/apk/db/installed")
+  [ -n "$waydroid_pkg" ] || fail "waydroid-not-installed" "package waydroid missing from the rootfs apk database"
+  android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"brave_apk_sha256\": \"$brave_sha\", \"init_mode\": \"first-boot\""
+  log "android runtime staged (waydroid $waydroid_pkg)"
+fi
+
 local_enabled=true
 # -L as well as -e: the runlevel entry is a symlink to /etc/init.d/local that
 # dangles when resolved against the container's own root.
@@ -137,7 +192,7 @@ exported="$exported,\"cmdline.txt\""
 # Facts from the installed rootfs.
 os_release=$(sed -n 's/^PRETTY_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$mnt/etc/os-release" | head -1)
 os_version=$(sed -n 's/^VERSION_ID="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$mnt/etc/os-release" | head -1)
-packages=$(awk -v want=" device-qemu-aarch64 device-qemu-aarch64-kernel-stable linux-postmarketos-stable postmarketos-base postmarketos-base-openrc postmarketos-mkinitfs boot-deploy systemd-boot openrc busybox musl alpine-base networkmanager " '
+packages=$(awk -v want=" device-qemu-aarch64 device-qemu-aarch64-kernel-stable linux-postmarketos-stable postmarketos-base postmarketos-base-openrc postmarketos-mkinitfs boot-deploy systemd-boot openrc busybox musl alpine-base networkmanager modemmanager waydroid waydroid-openrc waydroid-nftrules lxc nftables dnsmasq pulseaudio dbus " '
   /^P:/ { name = substr($0, 3) }
   /^V:/ { if (index(want, " " name " ")) printf "%s\"%s\":\"%s\"", (n++ ? "," : ""), name, substr($0, 3) }
 ' "$mnt/lib/apk/db/installed")
@@ -150,6 +205,18 @@ appd_sha=$(sha256sum "$mnt/usr/bin/ferrix-appd" | cut -d' ' -f1)
 sandbox_sha=$(sha256sum "$mnt/usr/bin/ferrix-sandbox" | cut -d' ' -f1)
 terminal_sha=$(sha256sum "$mnt/usr/bin/ferrix-terminal" | cut -d' ' -f1)
 colors_sha=$(sha256sum "$mnt/etc/ferrix/colors.toml" | cut -d' ' -f1)
+grants_sha=$(sha256sum "$mnt/usr/share/ferrix/apps/grants.json" | cut -d' ' -f1)
+service_shas=""
+for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do
+  key=$(printf '%s' "$bin" | tr '-' '_')
+  service_shas="$service_shas, \"${key}_sha256\": \"$(sha256sum "$mnt/usr/bin/$bin" | cut -d' ' -f1)\""
+done
+# Production backends are selected at boot by 00-ferrix-product.start; record
+# whether the D-Bus services they need are even installed in this image.
+nm_installed=false
+mm_installed=false
+grep -q '^P:networkmanager$' "$mnt/lib/apk/db/installed" && nm_installed=true
+grep -q '^P:modemmanager$' "$mnt/lib/apk/db/installed" && mm_installed=true
 cat > "$out/image-facts.json" <<JSON
 {
   "os_release": {"pretty_name": "$os_release", "version_id": "$os_version"},
@@ -158,7 +225,8 @@ cat > "$out/image-facts.json" <<JSON
   "kernel_cmdline_source": "$cmdline_source",
   "partitions": [$partitions],
   "readiness_marker": {"path": "$marker_dst", "sha256": "$marker_sha", "service": "openrc local", "local_service_was_enabled": $local_enabled},
-  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "ferrix_core_sha256": "$core_sha", "ferrix_shell_sha256": "$shell_sha", "ferrix_basic_screen_sha256": "$screen_sha", "ferrix_appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrix_terminal_sha256": "$terminal_sha", "colors_path": "/etc/ferrix/colors.toml", "colors_sha256": "$colors_sha"},
+  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "ferrix_core_sha256": "$core_sha", "ferrix_shell_sha256": "$shell_sha", "ferrix_basic_screen_sha256": "$screen_sha", "ferrix_appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrix_terminal_sha256": "$terminal_sha"$service_shas, "grants_sha256": "$grants_sha", "contacts_fixtures_sha256": "$contacts_fixtures_sha", "colors_path": "/etc/ferrix/colors.toml", "colors_sha256": "$colors_sha", "telephony_backend_default": "mock", "network_backend_default": "mock", "networkmanager_installed": $nm_installed, "modemmanager_installed": $mm_installed},
+  "android": {$android_facts},
   "exported": [$exported,"qemu-aarch64.img"]
 }
 JSON

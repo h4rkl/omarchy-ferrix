@@ -33,7 +33,11 @@ work_version=$(python3 -c 'import pmb.config; print(pmb.config.work_version)')
 mkdir -p "$work/cache_git"
 chmod 0700 "$work"
 [ -f "$work/version" ] || printf '%s\n' "$work_version" > "$work/version"
-cp "$project/pmbootstrap.cfg" "$cfg"
+# OPT-IN Android runtime: the -android cfg only differs in extra_packages.
+cfg_src=pmbootstrap.cfg
+[ "${FERRIX_PMOS_ANDROID:-0}" != 1 ] || cfg_src=pmbootstrap-android.cfg
+log "pmbootstrap config: $cfg_src"
+cp "$project/$cfg_src" "$cfg"
 chmod 0600 "$cfg"
 cfg_work=$(sed -n 's/^work *= *//p' "$cfg")
 [ "$cfg_work" = "$work" ] || fail "config-work-mismatch" "pmbootstrap.cfg work=$cfg_work, expected $work"
@@ -77,7 +81,7 @@ pmb shutdown
 
 # 5. Finalize as root: inject the readiness marker, export boot files, record
 #    image facts, copy the image to /out.
-sudo -n env FERRIX_PMOS_PROJECT="$project" FERRIX_PMOS_OUT="$out" sh "$project/finalize-in-container.sh" "$img"
+sudo -n env FERRIX_PMOS_PROJECT="$project" FERRIX_PMOS_OUT="$out" FERRIX_PMOS_ANDROID="${FERRIX_PMOS_ANDROID:-0}" sh "$project/finalize-in-container.sh" "$img"
 [ -f "$out/image-facts.json" ] || fail "no-image-facts" "finalize did not write image-facts.json"
 
 # 6. Manifest.
@@ -151,11 +155,13 @@ manifest = {
         "partitions": facts["partitions"],
         "readiness_marker": facts["readiness_marker"],
         "product": facts["product"],
+        "android": facts.get("android", {"enabled": False}),
     },
     "project": {
         "revision": os.environ.get("FERRIX_PROJECT_REV", "unknown"),
         "pins_env_sha256": sha256(os.path.join(project, "pins.env")),
-        "pmbootstrap_cfg_sha256": sha256(os.path.join(project, "pmbootstrap.cfg")),
+        "pmbootstrap_cfg_sha256": sha256(os.path.join(project, "pmbootstrap-android.cfg" if os.environ.get("FERRIX_PMOS_ANDROID") == "1" else "pmbootstrap.cfg")),
+        "pmbootstrap_cfg": "pmbootstrap-android.cfg" if os.environ.get("FERRIX_PMOS_ANDROID") == "1" else "pmbootstrap.cfg",
         "marker_sha256": sha256(os.path.join(project, "local.d", "ferrix-boot-health.start")),
         "product_start_sha256": sha256(os.path.join(project, "local.d", "00-ferrix-product.start")),
     },

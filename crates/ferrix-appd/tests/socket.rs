@@ -8,11 +8,13 @@ use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::Duration;
 
-use ferrix_app_api::{AppError, AppEvent, AppId, ExitReason, LifecycleState};
+use ferrix_app_api::{
+    AppCapability, AppError, AppEvent, AppId, AppIdentity, ExitReason, LifecycleState, TrustLevel,
+};
 use ferrix_app_protocol::{Client, ClientRole, Notification, Reply, Report, Request};
 use ferrix_appd::records::Recorder;
 use ferrix_appd::testing::{FakeProcessTree, FakeRuntime};
-use ferrix_appd::{Catalog, Server, Service, ServiceOptions};
+use ferrix_appd::{Catalog, Server, Service, ServiceOptions, load_grants};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -31,6 +33,8 @@ fn fixture(name: &str) -> Fixture {
     let runtime = FakeRuntime::native();
     let tree = FakeProcessTree::default();
     let (recorder, _records) = Recorder::capturing("mock");
+    // The repository grants policy beside the descriptors.
+    let (grants, _source) = load_grants(None, std::slice::from_ref(&apps)).unwrap();
     let service = Arc::new(Service::new(
         Catalog::load_dir(&apps).unwrap(),
         vec![Box::new(runtime.clone())],
@@ -39,6 +43,7 @@ fn fixture(name: &str) -> Fixture {
         ServiceOptions {
             socket: socket.clone(),
             poll_interval: Duration::from_millis(1),
+            grants,
             ..ServiceOptions::default()
         },
     ));
@@ -77,10 +82,17 @@ fn hello_catalog_and_typed_errors_over_the_socket() {
     assert!(home.instances().unwrap().is_empty());
 
     // A reference entry is not launchable: typed error, not a protocol error.
+    // Which entries are illustrative changes as apps land, so pick one from
+    // the catalog instead of naming it.
+    let reference = apps
+        .iter()
+        .find(|d| !d.launchable)
+        .map(|d| d.id.clone())
+        .expect("a non-launchable reference entry in apps/");
     assert_eq!(
-        home.launch(&id("org.ferrix.settings")),
+        home.launch(&reference),
         Err(Ok(AppError::NotLaunchable {
-            id: id("org.ferrix.settings")
+            id: reference.clone()
         }))
     );
     assert_eq!(
@@ -165,6 +177,104 @@ fn compositor_role_is_gated_and_associates_surfaces() {
             .instance(&id("org.ferrix.terminal"))
             .is_some_and(|i| i.surface_mapped && i.state == LifecycleState::Foreground)
     }));
+}
+
+/// A `service`-role client resolves the pid of a launched application's
+/// grandchild (what a daemon reads from `SO_PEERCRED`) to its identity and
+/// effective grants; unknown pids and privileged verbs are refused or empty.
+#[test]
+fn service_role_identifies_launched_pids_over_the_socket() {
+    let f = fixture("identify");
+    let mut tool = Client::connect(&f.socket, ClientRole::Tool, TIMEOUT).unwrap();
+    let terminal = id("org.ferrix.terminal");
+    let (instance, _) = tool.launch(&terminal).unwrap();
+    let sandbox_pid = instance.pid.unwrap();
+    // ferrix-appd -> sandbox -> init -> app: the daemon sees the app pid.
+    let app_pid = sandbox_pid + 2;
+    f.tree.set_parent(app_pid, sandbox_pid + 1);
+    f.tree.set_parent(sandbox_pid + 1, sandbox_pid);
+
+    let mut service = Client::connect(&f.socket, ClientRole::Service, TIMEOUT).unwrap();
+    let identity = service.identify(app_pid).unwrap();
+    assert_eq!(identity.app, Some(terminal.clone()));
+    assert_eq!(identity.trust, Some(TrustLevel::Untrusted));
+    assert_eq!(
+        identity.granted,
+        [AppCapability::Shell, AppCapability::Background]
+            .into_iter()
+            .collect()
+    );
+    assert!(!identity.has(AppCapability::TelephonyCall));
+
+    // The literal wire shape daemons are coded against.
+    let raw = raw_line(
+        &f.socket,
+        &[
+            serde_json::json!({"request": "hello", "role": "service"}),
+            serde_json::json!({"request": "identify", "pid": app_pid}),
+        ],
+    );
+    assert_eq!(
+        raw,
+        r#"{"reply":"identity","schema_version":1,"app":"org.ferrix.terminal","trust":"untrusted","granted":["shell","background"]}"#
+    );
+
+    // Unknown pid: `app: null`, no trust, no grants.
+    assert_eq!(service.identify(999_999).unwrap(), AppIdentity::unknown());
+    let raw = raw_line(
+        &f.socket,
+        &[
+            serde_json::json!({"request": "hello", "role": "service"}),
+            serde_json::json!({"request": "identify", "pid": 999_999}),
+        ],
+    );
+    assert_eq!(
+        raw,
+        r#"{"reply":"identity","schema_version":1,"app":null,"trust":null,"granted":[]}"#
+    );
+
+    // A service may not launch; an application may not identify.
+    assert!(matches!(
+        service.request(&Request::Launch { id: terminal.clone() }).unwrap(),
+        Reply::ProtocolError { reason } if reason.contains("service")
+    ));
+    assert_eq!(f.runtime.launch_count(), 1);
+    let mut app = Client::connect(&f.socket, ClientRole::Application, TIMEOUT).unwrap();
+    assert!(app.identify(app_pid).is_err());
+
+    // After a crash the same pid resolves to nothing.
+    assert!(
+        f.runtime
+            .exit(&terminal, ExitReason::Signaled { signal: 11 })
+    );
+    assert!(ferrix_appd::testing::wait_for(TIMEOUT, || {
+        f.service
+            .instance(&terminal)
+            .is_some_and(|i| i.state == LifecycleState::Crashed)
+    }));
+    assert_eq!(service.identify(app_pid).unwrap(), AppIdentity::unknown());
+    assert_eq!(
+        service.identify(sandbox_pid).unwrap(),
+        AppIdentity::unknown()
+    );
+}
+
+/// Sends `lines` on a fresh connection and returns the last reply verbatim.
+fn raw_line(socket: &Path, lines: &[serde_json::Value]) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    let mut stream = UnixStream::connect(socket).unwrap();
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut last = String::new();
+    for value in lines {
+        let mut text = serde_json::to_string(value).unwrap();
+        text.push('\n');
+        stream.write_all(text.as_bytes()).unwrap();
+        last.clear();
+        reader.read_line(&mut last).unwrap();
+    }
+    last.trim().to_owned()
 }
 
 #[test]

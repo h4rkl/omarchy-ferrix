@@ -1,0 +1,54 @@
+schema_version = 1
+name = "outgoing-call-connected"
+description = "Outgoing call: dialing, remote answers, active, local hangup."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-outgoing-result", result = "connected" }
+ack = { status = "ok" }
+
+[[step]]
+service = "telephony"
+command = { cmd = "dial", number = "+15550100007" }
+expect = [ { event = "telephony-event", kind = "call-changed", call = { direction = "outgoing", state = "dialing" } } ]
+note = "client verb through the normal service path"
+
+[[step]]
+service = "telephony"
+command = { cmd = "remote-answer" }
+expect = [ { event = "telephony-event", kind = "call-changed", call = { state = "active" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "tick", ms = 3000 }
+
+[[step]]
+service = "telephony"
+command = { cmd = "hangup" }
+expect = [ { event = "telephony-event", kind = "call-changed", call = { state = "ended", end_reason = { kind = "local-hangup" } } } ]
+note = "client verb"

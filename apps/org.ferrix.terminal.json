@@ -15,6 +15,11 @@
   "launch": {
     "exec": [
       "ferrix-terminal"
-    ]
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
   }
 }

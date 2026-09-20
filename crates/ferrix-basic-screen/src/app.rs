@@ -2,12 +2,19 @@
 //! hardware events and `ferrix_appd` lifecycle notifications into the launcher,
 //! sends hardware commands and launch requests, and shows crash notices.
 //!
-//! Both background sources (the core event reader and the `ferrix_appd`
-//! notification reader) wake the UI through the runner's single [`Wake`]
-//! handle; `wake` drains whichever channel has data. When `ferrix_appd` is not
-//! reachable the catalog comes from the descriptor directory and a thread
-//! keeps retrying every second, so the launcher is never blank and starts
-//! launching as soon as the service appears.
+//! Every background source (the core event reader, the `ferrix_appd`
+//! notification reader, and the telephony/network reconnectors) wakes the
+//! UI through the runner's single [`Wake`] handle; `wake` drains whichever
+//! channel has data. When `ferrix_appd` is not reachable the catalog comes
+//! from the descriptor directory and a thread keeps retrying every second,
+//! so the launcher is never blank and starts launching as soon as the
+//! service appears. `CatalogChanged` re-fetches the catalog.
+//!
+//! Status bar and quick settings follow ADR-001/002: signal, registration,
+//! SIM, and connectivity come from `ferrix-telephonyd` / `ferrix-networkd`
+//! while they are reachable, the Wi-Fi toggle goes to `ferrix-networkd`
+//! (`SetRadio`), and both fall back to the hardware-api summary and the
+//! core's product command otherwise (`status.rs` holds the pure rule).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -18,7 +25,13 @@ use std::time::Duration;
 use ferrix_app_api::{AppEvent, AppId, LifecycleState};
 use ferrix_app_protocol::{Client, ClientRole, Notification, Subscription};
 use ferrix_hardware_api::{HardwareCommand, HardwareEvent, HardwareState, WifiState};
+use ferrix_network_api::NetworkState;
+use ferrix_network_protocol::{
+    Client as NetClient, ClientKind as NetKind, Feed, Reconnector as NetReconnector,
+};
 use ferrix_target_profile::Profile;
+use ferrix_telephony_api::RedactedTelephonyState;
+use ferrix_telephony_protocol::{ClientKind as TeleKind, Reconnector as TeleReconnector, Update};
 use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
 use ferrix_ui::draw::{Canvas, Type};
 use ferrix_ui::evidence::{emit, json_escape};
@@ -28,6 +41,7 @@ use crate::EVIDENCE;
 use crate::catalog::{self, tiles_from_catalog};
 use crate::interaction::{CrashNotice, Input, SystemAction, UiState};
 use crate::screen;
+use crate::status::{self, WifiRoute};
 
 pub const APP_ID: &str = "org.ferrix.home";
 const TITLE: &str = "ferrix \u{b7} home";
@@ -57,6 +71,15 @@ struct Home {
     appd_unavailable_reported: bool,
     /// Request/reply connection for launches (Home role), opened lazily.
     launcher: Option<Client>,
+    /// `home-ready` was emitted (first composed frame with a catalog).
+    ready_reported: bool,
+    /// `ferrix-telephonyd` snapshot while reachable (ADR-001 status source).
+    telephony: Receiver<Update>,
+    tele_state: Option<RedactedTelephonyState>,
+    /// `ferrix-networkd` snapshot while reachable (ADR-002 status source).
+    network: Receiver<Feed>,
+    net_state: Option<NetworkState>,
+    network_socket: PathBuf,
 }
 
 fn connect_subscription(socket: &Path) -> Result<Subscription, String> {
@@ -149,6 +172,19 @@ pub fn run(
         let mut ui = UiState::new(wifi_on, bt_on, tiles);
         ui.brightness = hw.display.brightness_percent;
         ui.identity = screen::identity_line(&target);
+        ui.tele = status::telephony_summary(None, &hw);
+        ui.net = status::network_summary(None, &hw);
+
+        let telephony = TeleReconnector::new(
+            ferrix_telephony_protocol::socket_path(),
+            TeleKind::Home,
+            APPD_TIMEOUT,
+        )
+        .spawn(Arc::clone(&wake));
+        let network_socket = ferrix_network_protocol::socket_path();
+        let network = NetReconnector::new(network_socket.clone(), NetKind::Application)
+            .with_timeout(APPD_TIMEOUT)
+            .spawn(Arc::clone(&wake));
 
         Ok(Home {
             ty,
@@ -164,6 +200,12 @@ pub fn run(
             ferrix_appd,
             appd_unavailable_reported,
             launcher: None,
+            ready_reported: false,
+            telephony,
+            tele_state: None,
+            network,
+            net_state: None,
+            network_socket,
         })
     })
 }
@@ -177,17 +219,50 @@ fn appd_connected_record(socket: &Path, apps: usize) -> String {
 
 impl Home {
     fn sync_controls(&mut self) {
-        self.ui.wifi_on = self.hw.network.wifi != WifiState::Disabled;
+        // The Wi-Fi toggle mirrors the network service when it is reachable.
+        self.ui.wifi_on = match &self.net_state {
+            Some(net) => net.radio.is_enabled(),
+            None => self.hw.network.wifi != WifiState::Disabled,
+        };
         self.ui.bluetooth_on = self.hw.bluetooth.enabled;
         self.ui.brightness = self.hw.display.brightness_percent;
+        self.ui.tele = status::telephony_summary(self.tele_state.as_ref(), &self.hw);
+        self.ui.net = status::network_summary(self.net_state.as_ref(), &self.hw);
+    }
+
+    /// Wi-Fi through `ferrix-networkd` (`SetRadio`); the authoritative state
+    /// comes back on the subscription.
+    fn set_wifi_via_networkd(&mut self, enabled: bool) {
+        let outcome = NetClient::connect(&self.network_socket, NetKind::Application, APPD_TIMEOUT)
+            .and_then(|mut client| client.set_radio(enabled));
+        match outcome {
+            Ok(()) => emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ui-command\",\"target\":\"networkd\",\"command\":\"set-radio\",\"enabled\":{enabled},\"status\":\"ok\"}}"
+            )),
+            Err(error) => {
+                self.sync_controls();
+                emit(format!(
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ui-command-failed\",\"target\":\"networkd\",\"error\":\"{}\"}}",
+                    json_escape(&error.to_string())
+                ));
+            }
+        }
     }
 
     /// Runs after every UI change: forwards queued hardware requests to the
-    /// core and launch requests to `ferrix_appd`.
+    /// network service or the core, and launch requests to `ferrix_appd`.
     fn after_input(&mut self) {
         for action in std::mem::take(&mut self.ui.pending_system) {
             let command = match action {
-                SystemAction::WifiEnabled(enabled) => HardwareCommand::SetWifiEnabled { enabled },
+                SystemAction::WifiEnabled(enabled) => {
+                    match status::wifi_route(self.net_state.is_some()) {
+                        WifiRoute::Networkd => {
+                            self.set_wifi_via_networkd(enabled);
+                            continue;
+                        }
+                        WifiRoute::Core => HardwareCommand::SetWifiEnabled { enabled },
+                    }
+                }
                 SystemAction::BluetoothEnabled(enabled) => {
                     HardwareCommand::SetBluetoothEnabled { enabled }
                 }
@@ -269,6 +344,7 @@ impl Home {
                     json_escape(&error.to_string())
                 ));
                 self.set_starting(id, false);
+                self.launch_notice(id, error.to_string());
             }
             Err(Err(transport)) => {
                 // The connection is gone; the next launch reconnects.
@@ -278,6 +354,52 @@ impl Home {
                     json_escape(&transport)
                 ));
                 self.set_starting(id, false);
+                self.launch_notice(id, "ferrix-appd \u{b7} unavailable".to_owned());
+            }
+        }
+    }
+
+    /// Shows the low-noise "could not start" banner for a refused launch and
+    /// records it. Reasons are typed `AppError` text, never process output.
+    fn launch_notice(&mut self, id: &AppId, reason: String) {
+        let name = self
+            .ui
+            .tile_index(id)
+            .map(|index| self.ui.tiles[index].name.clone())
+            .unwrap_or_else(|| id.to_string());
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-launch-notice\",\"app\":\"{id}\",\"reason\":\"{}\"}}",
+            json_escape(&reason)
+        ));
+        self.ui.crash_notice = Some(CrashNotice::launch_failed(id.clone(), name, reason));
+    }
+
+    /// Re-fetches the catalog and instances over the request connection
+    /// after `CatalogChanged`.
+    fn refresh_catalog(&mut self) -> bool {
+        let fetched = match self.launcher() {
+            Some(client) => client
+                .catalog()
+                .and_then(|apps| client.instances().map(|i| (apps, i))),
+            None => Err("ferrix-appd unavailable".to_owned()),
+        };
+        match fetched {
+            Ok((apps, instances)) => {
+                let tiles = tiles_from_catalog(&apps, &instances);
+                emit(format!(
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"catalog-refreshed\",\"apps\":{}}}",
+                    tiles.len()
+                ));
+                self.ui.set_tiles(tiles);
+                true
+            }
+            Err(error) => {
+                self.launcher = None;
+                emit(format!(
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"catalog-refresh-failed\",\"error\":\"{}\"}}",
+                    json_escape(&error)
+                ));
+                false
             }
         }
     }
@@ -285,14 +407,15 @@ impl Home {
     /// Folds one `ferrix_appd` notification into the tiles. Returns whether the
     /// launcher changed.
     fn apply_notification(&mut self, notification: Notification) -> bool {
-        let Notification::App {
-            event: AppEvent::Lifecycle { instance },
-        } = notification
-        else {
-            // `Activate` is a compositor directive; `CatalogChanged` would need
-            // a fresh request connection and is not needed for the reference
-            // catalog.
-            return false;
+        let instance = match notification {
+            Notification::App {
+                event: AppEvent::Lifecycle { instance },
+            } => instance,
+            Notification::App {
+                event: AppEvent::CatalogChanged { .. },
+            } => return self.refresh_catalog(),
+            // `Activate` is a compositor directive.
+            Notification::Activate { .. } => return false,
         };
         let Some(index) = self.ui.tile_index(&instance.app) else {
             return false;
@@ -311,11 +434,7 @@ impl Home {
                     instance.app,
                     json_escape(&reason)
                 ));
-                self.ui.crash_notice = Some(CrashNotice {
-                    app: instance.app,
-                    name,
-                    reason,
-                });
+                self.ui.crash_notice = Some(CrashNotice::crashed(instance.app, name, reason));
             }
             LifecycleState::Starting | LifecycleState::Foreground | LifecycleState::Background => {
                 // A relaunch of the crashed app retires its notice.
@@ -439,9 +558,97 @@ impl Home {
     }
 }
 
+impl Home {
+    /// Drains the telephony and network reconnectors. A lost daemon drops
+    /// its snapshot so the summaries fall back to the hardware-api matrix.
+    fn services_wake(&mut self) -> bool {
+        let mut changed = false;
+        loop {
+            match self.telephony.try_recv() {
+                Ok(Update::Snapshot(view)) => {
+                    self.tele_state = Some(view.redacted());
+                    emit(format!(
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"status-source\",\"service\":\"telephony\",\"status\":\"connected\"}}"
+                    ));
+                    changed = true;
+                }
+                Ok(Update::Event(event)) => {
+                    if let Some(state) = self.tele_state.as_mut() {
+                        event.apply_redacted(state);
+                    }
+                    changed = true;
+                }
+                Ok(Update::Disconnected) => {
+                    self.tele_state = None;
+                    emit(format!(
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"status-source\",\"service\":\"telephony\",\"status\":\"fallback-hardware-api\"}}"
+                    ));
+                    changed = true;
+                }
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+        loop {
+            match self.network.try_recv() {
+                Ok(Feed::Snapshot { state, .. }) => {
+                    self.net_state = Some(state);
+                    emit(format!(
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"status-source\",\"service\":\"network\",\"status\":\"connected\"}}"
+                    ));
+                    changed = true;
+                }
+                Ok(Feed::Event(event)) => {
+                    if let Some(state) = self.net_state.as_mut() {
+                        event.apply_to(state);
+                    }
+                    changed = true;
+                }
+                Ok(Feed::Disconnected { .. }) => {
+                    if self.net_state.take().is_some() {
+                        emit(format!(
+                            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"status-source\",\"service\":\"network\",\"status\":\"fallback-hardware-api\"}}"
+                        ));
+                    }
+                    changed = true;
+                }
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+        if changed {
+            self.sync_controls();
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ui-state\",\"source\":\"services\",\"signal_bars\":{},\"registration\":\"{}\",\"sim\":\"{}\",\"telephony_source\":\"{}\",\"reach\":\"{}\",\"network_source\":\"{}\"}}",
+                self.ui.tele.bars,
+                self.ui.tele.registration,
+                self.ui.tele.sim,
+                self.ui.tele.source.name(),
+                self.ui.net.reach.name(),
+                self.ui.net.source.name()
+            ));
+        }
+        changed
+    }
+}
+
 impl ClientHandler for Home {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
-        screen::compose(&self.hw, self.minute, &self.ty, size.0, size.1, &self.ui)
+        let frame = screen::compose(&self.hw, self.minute, &self.ty, size.0, size.1, &self.ui);
+        // The launcher is hit-testable once a frame with the catalog is
+        // composed; the runner's `basic-screen-frame` follows the commit.
+        if !self.ready_reported && !self.ui.tiles.is_empty() {
+            self.ready_reported = true;
+            let catalog = match self.ferrix_appd {
+                AppdLink::Connected(_) => "appd",
+                AppdLink::Connecting(_) => "descriptors",
+            };
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-ready\",\"tiles\":{},\"catalog\":\"{catalog}\",\"width\":{},\"height\":{}}}",
+                self.ui.tiles.len(),
+                size.0,
+                size.1
+            ));
+        }
+        frame
     }
 
     fn pointer_down(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
@@ -509,7 +716,8 @@ impl ClientHandler for Home {
     fn wake(&mut self) -> bool {
         let hardware = self.hardware_wake();
         let ferrix_appd = self.appd_wake();
-        hardware || ferrix_appd
+        let services = self.services_wake();
+        hardware || ferrix_appd || services
     }
 
     fn page_name(&self) -> String {

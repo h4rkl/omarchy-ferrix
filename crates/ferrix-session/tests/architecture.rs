@@ -3,7 +3,7 @@
 //! on `ferrix-app-api`/`ferrix-app-protocol`, never on an application runtime
 //! implementation. `just arch-check` runs this.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const FORBIDDEN: &str = "ferrix-hardware-emulator";
 const FORBIDDEN_RUNTIME: &str = "ferrix-runtime-native";
@@ -247,5 +247,242 @@ fn target_profile_is_the_only_toml_schema_parser() {
     assert!(
         offenders.is_empty(),
         "profile TOML must be parsed only by ferrix-target-profile: {offenders:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Mobile-connectivity programme guards (docs/adr/001..006)
+// ---------------------------------------------------------------------------
+
+/// Adapter implementations and internal adapter contracts that only a daemon
+/// binary may compose.
+const SERVICE_ADAPTER_CRATES: &[&str] = &[
+    "ferrix-telephony-mock",
+    "ferrix-telephony-mm",
+    "ferrix-telephony-adapter-api",
+    "ferrix-network-mock",
+    "ferrix-network-nm",
+    "ferrix-network-adapter-api",
+    "ferrix-runtime-android",
+];
+
+/// Daemon crates that applications and shells talk to only over a protocol.
+const SERVICE_DAEMON_CRATES: &[&str] =
+    &["ferrix-telephonyd", "ferrix-networkd", "ferrix-contactsd"];
+
+/// Applications, shells, the core, and public contract crates: none may name
+/// a service adapter, a daemon crate, or a runtime implementation.
+const CONNECTIVITY_PRODUCT_CRATES: &[&str] = &[
+    "ferrix-phone",
+    "ferrix-messages",
+    "ferrix-contacts",
+    "ferrix-settings",
+    "ferrix-terminal",
+    "ferrix-basic-screen",
+    "ferrix-shell",
+    "ferrix-core",
+    "ferrix-ui",
+    "ferrix-telephony-api",
+    "ferrix-telephony-protocol",
+    "ferrix-network-api",
+    "ferrix-network-protocol",
+    "ferrix-contacts-api",
+    "ferrix-contacts-protocol",
+    "ferrix-app-api",
+    "ferrix-app-protocol",
+];
+
+/// Public contract crates that must stay vendor- and implementation-neutral.
+const NEUTRAL_CONTRACT_CRATES: &[&str] = &[
+    "ferrix-telephony-api",
+    "ferrix-telephony-protocol",
+    "ferrix-network-api",
+    "ferrix-network-protocol",
+    "ferrix-contacts-api",
+    "ferrix-contacts-protocol",
+];
+
+/// Daemons whose library must work with any backend; only `main.rs` names one.
+const DAEMON_COMPOSITION: &[(&str, &[&str])] = &[
+    (
+        "ferrix-telephonyd",
+        &["ferrix_telephony_mock", "ferrix_telephony_mm"],
+    ),
+    (
+        "ferrix-networkd",
+        &["ferrix_network_mock", "ferrix_network_nm"],
+    ),
+    ("ferrix-appd", &["ferrix_runtime_android"]),
+];
+
+#[test]
+fn product_and_contract_crates_do_not_depend_on_service_adapters_or_daemons() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut offenders = Vec::new();
+    for name in CONNECTIVITY_PRODUCT_CRATES {
+        let manifest = crates.join(name).join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        for forbidden in SERVICE_ADAPTER_CRATES.iter().chain(SERVICE_DAEMON_CRATES) {
+            if manifest_names_dependency(&manifest, &format!("\"{forbidden}\""))
+                || manifest_names_dependency(&manifest, &format!("{forbidden} ="))
+            {
+                offenders.push(format!("{} -> {forbidden}", manifest.display()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "apps, shells, the core, and contract crates use *-api/*-protocol only: {offenders:?}"
+    );
+}
+
+#[test]
+fn service_contract_crates_are_vendor_neutral() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    for name in NEUTRAL_CONTRACT_CRATES {
+        let src = crates.join(name).join("src");
+        let Ok(entries) = std::fs::read_dir(&src) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let code = code_without_comments(&path);
+            for needle in [
+                "qemu",
+                "cfg(target",
+                "cfg(feature",
+                "emulator",
+                "qmi",
+                "mbim",
+                "qrtr",
+                "modemmanager",
+                "networkmanager",
+                "waydroid",
+                "binder",
+                "zbus",
+                "dbus",
+                "wpa_supplicant",
+                "iwd",
+            ] {
+                assert!(
+                    !code.contains(needle),
+                    "{} mentions {needle} outside comments; contracts must not name an implementation",
+                    path.display()
+                );
+            }
+        }
+        let manifest = crates.join(name).join("Cargo.toml");
+        if manifest.is_file() {
+            for needle in ["zbus", "dbus", "rustix", "libc"] {
+                assert!(
+                    !manifest_names_dependency(&manifest, needle),
+                    "{} depends on {needle}; contract crates are pure types and a socket client",
+                    manifest.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn daemons_name_their_backends_only_in_main() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut offenders = Vec::new();
+    for (daemon, backends) in DAEMON_COMPOSITION {
+        let src = crates.join(daemon).join("src");
+        let Ok(entries) = std::fs::read_dir(&src) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.file_name().and_then(|n| n.to_str()) == Some("main.rs") {
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let code = code_without_comments(&path);
+            for backend in *backends {
+                if code.contains(backend) {
+                    offenders.push(format!("{} names {backend}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "daemon libraries work with any backend; only main.rs composes one: {offenders:?}"
+    );
+}
+
+/// Evidence records must not carry personal data. This scans every crate's
+/// Rust sources for record fields that would leak numbers or bodies.
+#[test]
+fn evidence_records_do_not_name_personal_fields() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut offenders = Vec::new();
+    let forbidden_keys = [
+        "\\\"number\\\":",
+        "\\\"body\\\":",
+        "\\\"imsi\\\":",
+        "\\\"iccid\\\":",
+        "\\\"imei\\\":",
+        "\\\"bssid\\\":",
+        "\\\"passphrase\\\":",
+        "(\"number\",",
+        "(\"body\",",
+        "(\"imsi\",",
+        "(\"iccid\",",
+        "(\"imei\",",
+        "(\"bssid\",",
+        "(\"passphrase\",",
+    ];
+    for entry in std::fs::read_dir(&crates).expect("crates dir").flatten() {
+        let src = entry.path().join("src");
+        let Ok(files) = std::fs::read_dir(&src) else {
+            continue;
+        };
+        let mut stack: Vec<PathBuf> = files.flatten().map(|e| e.path()).collect();
+        while let Some(path) = stack.pop() {
+            if path.is_dir() {
+                if let Ok(more) = std::fs::read_dir(&path) {
+                    stack.extend(more.flatten().map(|e| e.path()));
+                }
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in text.lines() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                // Only lines that build an evidence record are checked.
+                let is_record = trimmed.contains("\"evidence\"")
+                    || trimmed.contains("emit(")
+                    || trimmed.contains(".record(");
+                if !is_record {
+                    continue;
+                }
+                for key in forbidden_keys {
+                    if trimmed.contains(key) {
+                        offenders.push(format!("{}: {}", path.display(), trimmed));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "evidence records carry ids and states only, never numbers, bodies, or radio identifiers: {offenders:?}"
     );
 }

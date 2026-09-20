@@ -3,7 +3,9 @@
 #
 #   1. boot the generic AArch64 virt guest with serial captured to a file;
 #   2. wait for the persistent ferrix-core's `boot-health` record and the
-#      init-emitted QEMU `boot-health` that follows it (no fallbacks exist);
+#      init-emitted QEMU `boot-health` that follows it (no fallbacks exist),
+#      then for `telephonyd-ready` and `networkd-ready` (ADR-006; the mock
+#      telephony/network daemons; FERRIX_QEMU_REQUIRE_SERVICES=0 skips these);
 #   3. assert the mock is still *unplugged*, then send the unplugged->charging
 #      command over the REAL host->guest mock-control channel;
 #   4. wait for the `power-changed` record ferrix-core emits;
@@ -63,6 +65,22 @@ qemu_pid=$!
 wait_for '"evidence":"mock","event":"boot-health","status":"ok"' core-boot-health
 wait_for '"evidence":"QEMU","event":"boot-health","status":"ok"' guest-boot-health
 wait_for '"event":"mock-control","status":"ready"' mock-control-ready
+# ADR-006: the telephony and network daemons run with mock backends in the
+# smoke guest and must report ready. FERRIX_QEMU_REQUIRE_SERVICES=0 turns the
+# two assertions off (integration only, while a daemon is still a skeleton);
+# the check record says which mode ran so the evidence stays honest.
+require_services=${FERRIX_QEMU_REQUIRE_SERVICES:-1}
+case "$require_services" in
+  0|1) ;;
+  *) echo "invalid FERRIX_QEMU_REQUIRE_SERVICES: $require_services (0|1)" >&2; exit 2 ;;
+esac
+if [ "$require_services" = 1 ]; then
+  wait_for '"event":"telephonyd-ready"' telephonyd-ready
+  wait_for '"event":"networkd-ready"' networkd-ready
+  services=required
+else
+  services=optional
+fi
 if grep -q '"charging":true' "$log"; then
   fail "charging-true-before-transition"
 fi
@@ -93,4 +111,4 @@ status=0
 wait "$qemu_pid" || status=$?
 cat "$log"
 [ "$status" -eq 0 ] || fail "qemu-exit-$status"
-printf '{"evidence":"QEMU","event":"check-passed","transition":"unplugged-to-charging","channel":"virtio-serial ferrix.control","seconds":%s}\n' "$((tick / 10))"
+printf '{"evidence":"QEMU","event":"check-passed","transition":"unplugged-to-charging","channel":"virtio-serial ferrix.control","services":"%s","seconds":%s}\n' "$services" "$((tick / 10))"

@@ -25,8 +25,10 @@ mod plan;
 mod policy;
 mod report;
 mod runtime;
+mod sockets;
 
 pub use plan::*;
 pub use policy::*;
 pub use report::*;
 pub use runtime::*;
+pub use sockets::*;

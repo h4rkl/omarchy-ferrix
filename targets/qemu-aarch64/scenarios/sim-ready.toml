@@ -1,0 +1,54 @@
+schema_version = 1
+name = "sim-ready"
+description = "SIM ready at boot: registration, access technology, and signal bars are reported; a state query acks."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "absent" }
+expect = [ { event = "telephony-event", kind = "sim-changed", sim = { state = "absent" } } ]
+note = "leave and re-enter ready so the transition is observable"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+expect = [ { event = "telephony-event", kind = "sim-changed", sim = { state = "ready" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "registered" }, access = "lte" } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 4 }
+expect = [ { event = "telephony-event", kind = "signal-changed", signal = { bars = 4 } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "state" }
+ack = { status = "ok" }

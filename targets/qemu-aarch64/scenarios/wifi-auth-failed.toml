@@ -1,0 +1,35 @@
+schema_version = 1
+name = "wifi-auth-failed"
+description = "Connecting with a wrong synthetic passphrase fails with authentication-failed; the connection returns to disconnected."
+
+[[step]]
+service = "network"
+command = { cmd = "set-adapter", present = true }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "network"
+command = { cmd = "set-radio", enabled = true }
+note = "setup"
+
+[[step]]
+service = "network"
+command = { cmd = "set-connect-result", result = "auth-failed" }
+ack = { status = "ok" }
+
+[[step]]
+service = "network"
+command = { cmd = "connect", ssid = "ferrix-lab", passphrase = "wrong-passphrase" }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "associating" } } ]
+note = "client verb"
+
+[[step]]
+service = "network"
+command = { cmd = "tick", ms = 5000 }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "authenticating" } }, { event = "network-event", kind = "connection-changed", connection = { state = "failed", error = { kind = "authentication-failed" } } } ]
+note = "deterministic time, never wall clock"
+
+[[step]]
+service = "network"
+command = { cmd = "set-connect-result", result = "connected" }
+note = "teardown"

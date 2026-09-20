@@ -1,0 +1,47 @@
+schema_version = 1
+name = "sms-incoming-multipart"
+description = "Concatenated SMS: parts arrive separately and are published once as one received message; a second message arrives as a whole multipart batch."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "incoming-sms-part", number = "+15550100021", ref_id = 7, index = 1, count = 2, text = "synthetic part one " }
+note = "incomplete: nothing is published yet (part indexes are 1-based)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "tick", ms = 500 }
+
+[[step]]
+service = "telephony"
+command = { cmd = "incoming-sms-part", number = "+15550100021", ref_id = 7, index = 2, count = 2, text = "synthetic part two" }
+expect = [ { event = "telephony-event", kind = "sms-changed", sms = { direction = "incoming", state = "received" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "incoming-sms-multipart", number = "+15550100021", ref_id = 8, parts = ["synthetic A ", "synthetic B ", "synthetic C"] }
+expect = [ { event = "telephony-event", kind = "sms-changed", sms = { direction = "incoming", state = "received" } } ]

@@ -7,5 +7,22 @@
     "glyph": "⚙",
     "tone": "blue"
   },
-  "launchable": false
+  "launchable": true,
+  "capabilities": [
+    "network-state",
+    "network-control",
+    "telephony-state",
+    "core-state",
+    "core-control"
+  ],
+  "launch": {
+    "exec": [
+      "ferrix-settings"
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
+  }
 }

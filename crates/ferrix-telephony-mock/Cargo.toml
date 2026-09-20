@@ -1,0 +1,18 @@
+[package]
+name = "ferrix-telephony-mock"
+description = "Deterministic QEMU/host telephony adapter driven by the versioned profile and host mock-control scenarios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+ferrix-mock-control = { path = "../ferrix-mock-control" }
+ferrix-target-profile = { path = "../ferrix-target-profile" }
+ferrix-telephony-adapter-api = { path = "../ferrix-telephony-adapter-api" }
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[lints]
+workspace = true

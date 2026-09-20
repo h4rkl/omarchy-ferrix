@@ -16,8 +16,9 @@ with a channel-driven fake runtime and a fake process tree.
 
 | module | role |
 |---|---|
-| `catalog` | `Catalog::load_dir` over `*.json` descriptors (`AppDescriptor::from_json`); rejects duplicate ids and a second `role: home`; lookup, `launchable()`, `autostart()`, `home()` |
-| `service` | `Service`: launch/activate/terminate/home, pid association, foreground/background, subscribers, exit handling, home restart |
+| `catalog` | `Catalog::load_dir` over `*.json` descriptors (`AppDescriptor::from_json`; `grants.json` is skipped); rejects duplicate ids and a second `role: home`; lookup, `launchable()`, `autostart()`, `home()` |
+| `grants` | `load_grants`: the `GrantsPolicy` from `--grants`/`FERRIX_APP_GRANTS`, else `<first app dir>/grants.json`, else the empty policy (`GrantsSource::Missing`) |
+| `service` | `Service`: launch/activate/terminate/home, effective grants at launch, pid association, `identify(pid)`, foreground/background, subscribers, exit handling, home restart |
 | `lifecycle` | pure restart policy: `HomeRestartConfig`, `HomeRestartTracker::record_exit(now)` |
 | `process_tree` | `ProcessTree` trait, `/proc/<pid>/status`-backed `ProcTree`, bounded `ancestors()` walk |
 | `server` | Unix listener, thread per connection, `Inbound` parsing, role gating (`allowed`, `dispatch`), subscription hand-off |
@@ -31,7 +32,9 @@ message. After that the table in `server::allowed` applies:
 
 | message | roles |
 |---|---|
-| `Catalog`, `Instances`, `Subscribe`, `Home` | any |
+| `Catalog`, `Instances`, `Subscribe` | any |
+| `Home` | `compositor`, `home`, `application`, `tool` |
+| `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
 | `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
@@ -39,10 +42,33 @@ message. After that the table in `server::allowed` applies:
 A refused request gets `Reply::ProtocolError`; a refused report is dropped
 (reports are never replied to) and an `ferrix-appd-request-rejected` record is
 emitted. Malformed lines get `ProtocolError` and the connection stays open.
-Roles are declared, not authenticated: the gating is a structural safeguard
-that keeps an application from steering the compositor or launching other
-apps by accident or by a compromised client library; access to the socket
-path is the actual boundary.
+On Linux the peer pid (`SO_PEERCRED`) of a connection is resolved through the
+same ancestry walk as surfaces: a launched application that says `Hello` with
+`tool`, `service`, or `compositor` is rejected (`peer pid N is application,
+not service`). Compositor, tool, and service roles remain bootstrap trust:
+those processes are not launched by `ferrix-appd`, so access to the socket
+path is their boundary.
+
+## Grants and `Identify`
+
+`apps/grants.json` (`GrantsPolicy`, schema 1, strict) is loaded at startup
+beside the catalog: `grants-loaded{apps,path}`, or `grants-missing` when no
+file is configured or found (the policy is then **empty** and no application
+holds any capability), or `grants-invalid{reason}` followed by
+`ferrix-appd-failed` when the file exists but does not parse. At launch the
+service computes `granted = declared ∩ granted-by-policy` and
+`denied_capabilities = declared \ granted`, hands the effective set to the
+runtime (`LaunchContext.granted`), stores it on the instance, and records both
+in `app-started`. Trust rings never bypass the file.
+
+`Request::Identify{pid}` (roles `service`, `tool`) resolves a kernel pid to
+the running instance it belongs to and answers
+`{"reply":"identity","schema_version":1,"app":"org.ferrix.terminal","trust":"untrusted","granted":["shell","background"]}`;
+an unknown pid, or one whose instance has crashed or exited, answers
+`{"reply":"identity","schema_version":1,"app":null,"trust":null,"granted":[]}`.
+Daemons call this for their own peers before the first non-hello request and
+enforce capabilities per operation. `appd-identify{pid,app|null,granted_count}`
+is recorded once per pid per connection.
 
 ## Surface association
 
@@ -101,7 +127,10 @@ One JSON line per record on stdout, `evidence` first (`QEMU` in the guest,
 `mock` with `--nested`):
 
 `ferrix-appd-ready{socket,apps,home}`, `ferrix-appd-failed{reason}`,
-`app-launching{app,instance}`, `app-started{app,instance,pid,isolation}`,
+`grants-loaded{apps,path}`, `grants-missing`, `grants-invalid{reason}`,
+`appd-identify{pid,app,granted_count}`,
+`app-launching{app,instance}`,
+`app-started{app,instance,pid,granted,denied_capabilities,runtime_diagnostics}`,
 `app-launch-failed{app,error,reason}`, `app-surface{app,pid,app_id,title}`,
 `app-surface-unknown{pid,app_id}`, `app-id-mismatch{app,pid,reported}`,
 `app-foreground{app}`, `app-background{app}`, `app-terminating{app,instance}`,
@@ -113,16 +142,24 @@ One JSON line per record on stdout, `evidence` first (`QEMU` in the guest,
 ## Running
 
 ```text
-ferrix-appd [--socket PATH] [--app-dir DIR]... [--nested] [--no-autostart] [--sandbox PATH]
+ferrix-appd [--socket PATH] [--app-dir DIR]... [--grants PATH] [--nested] [--no-autostart] [--sandbox PATH]
 ```
 
-Environment: `FERRIX_APPD_SOCKET`, `FERRIX_APP_DIR`, `FERRIX_SANDBOX_BIN`.
+Environment: `FERRIX_APPD_SOCKET`, `FERRIX_APP_DIR`, `FERRIX_APP_GRANTS`,
+`FERRIX_SANDBOX_BIN`.
 The default descriptor directory is `/usr/share/ferrix/apps` when it exists,
-else `apps`. The socket is bound before `ferrix-appd-ready` is printed; then the
+else `apps`; the default grants file is `grants.json` in the first descriptor
+directory. The socket is bound before `ferrix-appd-ready` is printed; then the
 home surface and every `autostart: true` descriptor are launched (unless
 `--no-autostart`), and the socket is served until the process is stopped.
 Launched apps inherit `ferrix-appd`'s environment plus `FERRIX_APP_ID`,
 `FERRIX_APP_INSTANCE`, and `FERRIX_APPD_SOCKET`.
 
 Tests: `cargo test -p ferrix-appd` runs on macOS and Linux; `tests/socket.rs` drives
-a real Unix socket with `ferrix_app_protocol::Client` and the fake runtime.
+a real Unix socket with `ferrix_app_protocol::Client` and the fake runtime,
+including a `service`-role client identifying a launched pid. Negative tests
+cover: unknown pid → unknown identity; declared-but-not-granted excluded and
+reported; `application`/`home`/`compositor` cannot `Identify`; `service`
+cannot `Launch`/`Activate`/`Terminate`/`Home` or report; a launched app
+cannot `Hello` as `service` or `tool`; identity after a crash is unknown; the
+repository `grants.json` parses and grants `shell` to the Terminal only.

@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "contacts": [
+    {
+      "id": "c_0000000000000001",
+      "display_name": "Test Contact 01",
+      "given": "Test",
+      "family": "Contact 01",
+      "numbers": [
+        {
+          "label": "mobile",
+          "raw": "+1 555 010 0001",
+          "e164": "+15550100001"
+        }
+      ],
+      "created_ms": 1700000000001,
+      "updated_ms": 1700000000001
+    },
+    {
+      "id": "c_0000000000000002",
+      "display_name": "Test Contact 02",
+      "given": "Test",
+      "family": "Contact 02",
+      "numbers": [
+        {
+          "label": "home",
+          "raw": "+1 555 010 0002",
+          "e164": "+15550100002"
+        }
+      ],
+      "created_ms": 1700000000002,
+      "updated_ms": 1700000000002
+    },
+    {
+      "id": "c_0000000000000003",
+      "display_name": "Test Contact 03",
+      "given": "Test",
+      "family": "Contact 03",
+      "numbers": [
+        {
+          "label": "work",
+          "raw": "+1 555 010 0003",
+          "e164": "+15550100003"
+        }
+      ],
+      "created_ms": 1700000000003,
+      "updated_ms": 1700000000003
+    },
+    {
+      "id": "c_0000000000000004",
+      "display_name": "Test Contact 04",
+      "given": "Test",
+      "family": "Contact 04",
+      "numbers": [
+        {
+          "label": "other",
+          "raw": "+1 555 010 0004",
+          "e164": "+15550100004"
+        }
+      ],
+      "created_ms": 1700000000004,
+      "updated_ms": 1700000000004
+    },
+    {
+      "id": "c_0000000000000005",
+      "display_name": "Test Contact 05",
+      "given": "Test",
+      "family": "Contact 05",
+      "numbers": [
+        {
+          "label": "mobile",
+          "raw": "+1 555 010 0005",
+          "e164": "+15550100005"
+        }
+      ],
+      "created_ms": 1700000000005,
+      "updated_ms": 1700000000005
+    },
+    {
+      "id": "c_0000000000000006",
+      "display_name": "Test Contact 06",
+      "given": "Test",
+      "family": "Contact 06",
+      "numbers": [
+        {
+          "label": "home",
+          "raw": "+1 555 010 0006",
+          "e164": "+15550100006"
+        }
+      ],
+      "created_ms": 1700000000006,
+      "updated_ms": 1700000000006
+    },
+    {
+      "id": "c_0000000000000007",
+      "display_name": "Test Contact 07",
+      "given": "Test",
+      "family": "Contact 07",
+      "numbers": [
+        {
+          "label": "work",
+          "raw": "+1 555 010 0007",
+          "e164": "+15550100007"
+        }
+      ],
+      "created_ms": 1700000000007,
+      "updated_ms": 1700000000007
+    },
+    {
+      "id": "c_0000000000000008",
+      "display_name": "Test Contact 08",
+      "given": "Test",
+      "family": "Contact 08",
+      "numbers": [
+        {
+          "label": "other",
+          "raw": "+1 555 010 0008",
+          "e164": "+15550100008"
+        }
+      ],
+      "created_ms": 1700000000008,
+      "updated_ms": 1700000000008
+    }
+  ]
+}

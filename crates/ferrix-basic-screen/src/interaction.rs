@@ -5,6 +5,7 @@ use ferrix_app_api::AppId;
 use ferrix_ui::draw::Rect;
 
 use crate::catalog::Tile;
+use crate::status::{NetworkSummary, TelephonySummary};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -54,12 +55,54 @@ pub enum SystemAction {
     Brightness(u8),
 }
 
-/// A low-noise notice shown above the grid after an application crashed.
+/// Why an application notice is shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NoticeKind {
+    /// The process died (signal or non-zero exit).
+    #[default]
+    Crashed,
+    /// `ferrix-appd` refused or failed the launch (typed `AppError`).
+    LaunchFailed,
+}
+
+/// A low-noise notice shown above the grid after an application crashed or
+/// could not start. Dismissed by the next tap or by a successful relaunch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrashNotice {
     pub app: AppId,
     pub name: String,
     pub reason: String,
+    pub kind: NoticeKind,
+}
+
+impl CrashNotice {
+    pub fn crashed(app: AppId, name: String, reason: String) -> Self {
+        Self {
+            app,
+            name,
+            reason,
+            kind: NoticeKind::Crashed,
+        }
+    }
+
+    pub fn launch_failed(app: AppId, name: String, reason: String) -> Self {
+        Self {
+            app,
+            name,
+            reason,
+            kind: NoticeKind::LaunchFailed,
+        }
+    }
+
+    /// The one line the banner shows: name the thing, then the state.
+    pub fn text(&self) -> String {
+        match self.kind {
+            NoticeKind::Crashed => format!("{} \u{b7} crashed \u{b7} {}", self.name, self.reason),
+            NoticeKind::LaunchFailed => {
+                format!("{} could not start \u{b7} {}", self.name, self.reason)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +117,9 @@ pub struct UiState {
     /// owner sets the target it actually connected to.
     pub identity: String,
     pub tiles: Vec<Tile>,
+    /// Status-bar summaries with their source (service or hardware-api).
+    pub tele: TelephonySummary,
+    pub net: NetworkSummary,
     /// Launch requests for launchable tiles; the session owner drains these
     /// after input and sends them to `ferrix_appd`.
     pub pending_launch: Vec<AppId>,
@@ -93,6 +139,8 @@ impl UiState {
             notification_visible: true,
             identity: crate::screen::identity_line(ferrix_session::DEFAULT_TARGET_ID),
             tiles,
+            tele: TelephonySummary::default(),
+            net: NetworkSummary::default(),
             pending_launch: Vec::new(),
             pending_system: Vec::new(),
             crash_notice: None,
@@ -404,28 +452,42 @@ mod tests {
     fn launchable_tiles_queue_a_launch_and_reference_tiles_open_pages() {
         let mut state = state();
         let mut input = Input::default();
-        let terminal = state.tile_index(&AppId::new("org.ferrix.terminal").unwrap());
-        assert_eq!(terminal, Some(0), "launchable apps come first");
+        let terminal = state
+            .tile_index(&AppId::new("org.ferrix.terminal").unwrap())
+            .expect("terminal tile");
+        assert!(
+            state.tiles[..=terminal].iter().all(|t| t.launchable),
+            "launchable apps come first"
+        );
         let n = state.tiles.len();
-        assert!(input.down(0, tile_center(SIZE, n, 0), &mut state, SIZE));
-        assert_eq!(state.pressed, Some(Target::App(0)));
+        assert!(input.down(0, tile_center(SIZE, n, terminal), &mut state, SIZE));
+        assert_eq!(state.pressed, Some(Target::App(terminal)));
         assert!(input.up(0, &mut state, SIZE));
         assert_eq!(state.page, Page::Launcher, "launching leaves the launcher");
         assert_eq!(
             state.pending_launch,
             vec![AppId::new("org.ferrix.terminal").unwrap()]
         );
-        assert!(state.tiles[0].starting);
+        assert!(state.tiles[terminal].starting);
 
+        // Settings is a real app now: its tile launches instead of opening a page.
         let settings = state
             .tile_index(&AppId::new("org.ferrix.settings").unwrap())
             .expect("settings tile");
+        assert!(state.tiles[settings].launchable);
         input.down(0, tile_center(SIZE, n, settings), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
-        assert_eq!(state.page, Page::Reference(settings));
+        assert_eq!(state.page, Page::Launcher);
+        assert_eq!(state.pending_launch.len(), 2);
+        let camera = state
+            .tile_index(&AppId::new("org.ferrix.camera").unwrap())
+            .expect("camera tile");
+        input.down(0, tile_center(SIZE, n, camera), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.page, Page::Reference(camera));
         assert_eq!(
             state.pending_launch.len(),
-            1,
+            2,
             "reference pages do not launch"
         );
     }
@@ -533,16 +595,43 @@ mod tests {
     #[test]
     fn a_tap_anywhere_dismisses_the_crash_notice() {
         let mut state = state();
-        state.crash_notice = Some(CrashNotice {
-            app: AppId::new("org.ferrix.terminal").unwrap(),
-            name: "Terminal".to_owned(),
-            reason: "signal 11".to_owned(),
-        });
+        state.crash_notice = Some(CrashNotice::crashed(
+            AppId::new("org.ferrix.terminal").unwrap(),
+            "Terminal".to_owned(),
+            "signal 11".to_owned(),
+        ));
         let mut input = Input::default();
         input.down(0, (540.0, 1000.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
         assert_eq!(state.crash_notice, None);
         assert_eq!(state.page, Page::Launcher);
+    }
+
+    #[test]
+    fn notices_name_the_app_then_the_state() {
+        let app = AppId::new("org.ferrix.browser").unwrap();
+        let failed = CrashNotice::launch_failed(
+            app.clone(),
+            "Brave".to_owned(),
+            "no android runtime is available".to_owned(),
+        );
+        assert_eq!(
+            failed.text(),
+            "Brave could not start \u{b7} no android runtime is available"
+        );
+        let crashed = CrashNotice::crashed(app, "Brave".to_owned(), "signal 11".to_owned());
+        assert_eq!(crashed.text(), "Brave \u{b7} crashed \u{b7} signal 11");
+        // A failed launch never leaves a tile stuck in `starting`.
+        let mut state = state();
+        let index = state
+            .tile_index(&AppId::new("org.ferrix.terminal").unwrap())
+            .unwrap();
+        state.tiles[index].starting = true;
+        state.crash_notice = Some(failed);
+        assert_eq!(
+            state.crash_notice.as_ref().map(|n| n.kind),
+            Some(NoticeKind::LaunchFailed)
+        );
     }
 
     #[test]

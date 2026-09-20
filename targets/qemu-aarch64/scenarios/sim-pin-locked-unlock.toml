@@ -1,0 +1,51 @@
+schema_version = 1
+name = "sim-pin-locked-unlock"
+description = "SIM locked with a PIN: a wrong PIN decrements attempts, the synthetic profile PIN 0000 unlocks, then registration proceeds."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "locked", attempts_left = 3 }
+expect = [ { event = "telephony-event", kind = "sim-changed", sim = { state = "locked", lock = "pin", attempts_left = 3 } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "enter-pin", pin = "1234" }
+expect = [ { event = "telephony-event", kind = "sim-changed", sim = { state = "locked", attempts_left = 2 } } ]
+expect_ack_error = true
+note = "client verb; the wrong synthetic PIN is a typed sim-locked error and attempts decrement"
+
+[[step]]
+service = "telephony"
+command = { cmd = "enter-pin", pin = "0000" }
+expect = [ { event = "telephony-event", kind = "sim-changed", sim = { state = "ready" } } ]
+note = "profile sim_pin"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "registered" }, access = "lte" } ]

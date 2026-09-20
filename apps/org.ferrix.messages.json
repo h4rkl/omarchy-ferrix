@@ -7,5 +7,21 @@
     "glyph": "✉",
     "tone": "blue"
   },
-  "launchable": false
+  "launchable": true,
+  "capabilities": [
+    "telephony-state",
+    "telephony-sms",
+    "contacts-read",
+    "background"
+  ],
+  "launch": {
+    "exec": [
+      "ferrix-messages"
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
+  }
 }

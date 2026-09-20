@@ -1,0 +1,69 @@
+schema_version = 1
+name = "registration-search-deny-register-roam-loss-recover"
+description = "Registration lifecycle: searching, denied, registered (home), roaming, loss of service, and recovery."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "searching" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "searching" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "denied" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "denied" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "registered", roaming = false }, access = "lte" } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = true, operator = "Ferrix Roam", access = "umts" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "registered", roaming = true }, access = "umts" } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 0 }
+expect = [ { event = "telephony-event", kind = "signal-changed", signal = { bars = 0 } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "unknown", access = "none" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "unknown" }, access = "none" } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "registered" }, access = "lte" } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 2 }
+expect = [ { event = "telephony-event", kind = "signal-changed", signal = { bars = 2 } } ]
+note = "re-registration may already restore 3 bars; 2 keeps the transition observable"

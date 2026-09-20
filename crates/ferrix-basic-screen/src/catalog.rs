@@ -87,9 +87,14 @@ pub fn load_descriptor_dir(dir: &Path) -> Result<(Vec<AppDescriptor>, Vec<String
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut apps = Vec::new();
     let mut errors = Vec::new();
+    // The grants policy (ADR-004) lives beside the descriptors and is not
+    // one; `ferrix-appd` reads it, the launcher skips it.
     let mut paths: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
+        .filter(|path| {
+            path.file_name().and_then(|n| n.to_str()) != Some(ferrix_app_api::GRANTS_FILE_NAME)
+        })
         .collect();
     paths.sort();
     for path in paths {
@@ -161,15 +166,34 @@ mod tests {
 
     #[test]
     fn checked_in_descriptors_become_ordered_tiles() {
-        let tiles = tiles_from_catalog(&repo_apps(), &[]);
-        // Six tiles: the home surface itself is never listed.
-        assert_eq!(tiles.len(), 6);
+        let apps = repo_apps();
+        let tiles = tiles_from_catalog(&apps, &[]);
+        // Every descriptor but the home surface itself becomes a tile.
+        assert_eq!(tiles.len(), apps.len() - 1);
         assert!(tiles.iter().all(|t| t.kind() != "home"));
-        assert_eq!(tiles[0].kind(), "terminal");
-        assert!(tiles[0].launchable);
-        let rest: Vec<&str> = tiles[1..].iter().map(Tile::kind).collect();
-        assert_eq!(rest, ["camera", "dialer", "files", "messages", "settings"]);
-        assert!(tiles[1..].iter().all(|t| !t.launchable));
+        // Launchable apps first, then reference entries, each group by name.
+        let first_reference = tiles
+            .iter()
+            .position(|t| !t.launchable)
+            .unwrap_or(tiles.len());
+        assert!(tiles[..first_reference].iter().all(|t| t.launchable));
+        assert!(tiles[first_reference..].iter().all(|t| !t.launchable));
+        for group in [&tiles[..first_reference], &tiles[first_reference..]] {
+            let names: Vec<String> = group.iter().map(|t| t.name.to_lowercase()).collect();
+            let mut sorted = names.clone();
+            sorted.sort();
+            assert_eq!(names, sorted);
+        }
+        let launchable: Vec<&str> = tiles[..first_reference].iter().map(Tile::kind).collect();
+        for kind in ["contacts", "messages", "phone", "settings", "terminal"] {
+            assert!(launchable.contains(&kind), "{kind} is a launchable app");
+        }
+        let reference: Vec<&str> = tiles[first_reference..].iter().map(Tile::kind).collect();
+        assert_eq!(reference, ["camera", "files"]);
+        assert!(
+            !launchable.contains(&"dialer"),
+            "the illustrative dialer entry is gone"
+        );
         assert!(tiles.iter().all(|t| !t.running && !t.starting));
     }
 
@@ -177,6 +201,10 @@ mod tests {
     fn instances_mark_running_and_starting_tiles() {
         let apps = repo_apps();
         let terminal = AppId::new("org.ferrix.terminal").unwrap();
+        let index = tiles_from_catalog(&apps, &[])
+            .iter()
+            .position(|t| t.id == terminal)
+            .expect("terminal tile");
         let instance = |state, exit| AppInstance {
             app: terminal.clone(),
             runtime: RuntimeKind::Native,
@@ -188,9 +216,9 @@ mod tests {
             surface_mapped: false,
         };
         let tiles = tiles_from_catalog(&apps, &[instance(LifecycleState::Foreground, None)]);
-        assert!(tiles[0].running && !tiles[0].starting);
+        assert!(tiles[index].running && !tiles[index].starting);
         let tiles = tiles_from_catalog(&apps, &[instance(LifecycleState::Starting, None)]);
-        assert!(tiles[0].running && tiles[0].starting);
+        assert!(tiles[index].running && tiles[index].starting);
         let tiles = tiles_from_catalog(
             &apps,
             &[instance(
@@ -198,14 +226,14 @@ mod tests {
                 Some(ExitReason::Signaled { signal: 11 }),
             )],
         );
-        assert!(!tiles[0].running && !tiles[0].starting);
+        assert!(!tiles[index].running && !tiles[index].starting);
     }
 
     #[test]
     fn descriptor_fallback_finds_the_repository_copy() {
         let (dir, tiles) = load_descriptor_tiles().expect("descriptors");
         assert!(dir.ends_with("apps"), "{}", dir.display());
-        assert_eq!(tiles.len(), 6);
+        assert_eq!(tiles.len(), repo_apps().len() - 1);
     }
 
     #[test]
@@ -237,6 +265,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ferrix-catalog-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("bad.json"), "{").unwrap();
+        std::fs::write(
+            dir.join(ferrix_app_api::GRANTS_FILE_NAME),
+            "{\"schema_version\":1,\"grants\":{}}",
+        )
+        .unwrap();
         std::fs::write(
             dir.join("org.example.one.json"),
             r#"{"schema_version":1,"id":"org.example.one","runtime":"native","name":"One","launchable":false}"#,

@@ -11,6 +11,7 @@
 //! on the host for tests (`FakeRuntime`, `FakeProcessTree`).
 
 pub mod catalog;
+pub mod grants;
 pub mod lifecycle;
 pub mod process_tree;
 pub mod records;
@@ -19,6 +20,7 @@ pub mod service;
 pub mod testing;
 
 pub use catalog::Catalog;
+pub use grants::{GrantsSource, load_grants, resolve_grants_path};
 pub use lifecycle::{HomeRestartConfig, HomeRestartTracker, RestartDecision};
 pub use process_tree::{ProcTree, ProcessTree};
 pub use records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder, emit};

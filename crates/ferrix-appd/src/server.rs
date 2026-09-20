@@ -4,6 +4,7 @@
 //! Mirrors `ferrix-core`'s server. The dispatch step is a pure function over
 //! a [`Connection`] so gating is unit-tested without sockets.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -16,12 +17,15 @@ use ferrix_app_protocol::{ClientRole, Inbound, Reply, Report, Request};
 use crate::service::Service;
 
 /// Per-connection protocol state.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Connection {
     pub role: Option<ClientRole>,
     pub subscribed: bool,
     /// Kernel-reported peer pid when available (Linux/QEMU).
     pub peer_pid: Option<u32>,
+    /// Pids this connection already identified; the `appd-identify` record
+    /// is emitted once per pid per connection.
+    pub identified: BTreeSet<u32>,
 }
 
 /// What the connection thread does with a parsed line.
@@ -41,12 +45,14 @@ pub fn role_name(role: ClientRole) -> &'static str {
         ClientRole::Home => "home",
         ClientRole::Application => "application",
         ClientRole::Tool => "tool",
+        ClientRole::Service => "service",
     }
 }
 
 pub fn message_name(inbound: &Inbound) -> &'static str {
     match inbound {
         Inbound::Request(Request::Hello { .. }) => "hello",
+        Inbound::Request(Request::Identify { .. }) => "identify",
         Inbound::Request(Request::Catalog) => "catalog",
         Inbound::Request(Request::Instances) => "instances",
         Inbound::Request(Request::Launch { .. }) => "launch",
@@ -63,12 +69,25 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
 }
 
 /// The trust-ring table: which role may send which message (after hello).
+///
+/// | message | roles |
+/// |---|---|
+/// | `Catalog`, `Instances`, `Subscribe` | any |
+/// | `Home` | `compositor`, `home`, `application`, `tool` |
+/// | `Identify` | `service`, `tool` |
+/// | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
+/// | surface/focus/gesture reports | `compositor` |
+/// | `YieldForeground` | `application`, `home` |
+///
+/// A `service` resolves identities and observes; it never steers the shell
+/// or launches anything.
 pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
     use ClientRole::*;
     match inbound {
         Inbound::Request(Request::Hello { .. }) => true,
         Inbound::Request(Request::Catalog | Request::Instances | Request::Subscribe) => true,
-        Inbound::Request(Request::Home) => true,
+        Inbound::Request(Request::Home) => role != Service,
+        Inbound::Request(Request::Identify { .. }) => matches!(role, Service | Tool),
         Inbound::Request(
             Request::Launch { .. } | Request::Activate { .. } | Request::Terminate { .. },
         ) => {
@@ -145,6 +164,20 @@ fn handle_request(
 ) -> Outcome {
     let reply = match request {
         Request::Hello { .. } => unreachable!("handled by dispatch"),
+        Request::Identify { pid } => {
+            let identity = service.identify(pid);
+            if connection.identified.insert(pid) {
+                service.recorder().appd_identify(
+                    pid,
+                    identity.app.as_ref(),
+                    identity.granted.len(),
+                );
+            }
+            Reply::Identity {
+                schema_version: SCHEMA_VERSION,
+                identity,
+            }
+        }
         Request::Catalog => Reply::Catalog {
             schema_version: SCHEMA_VERSION,
             apps: service.catalog().descriptors(),
@@ -337,10 +370,12 @@ mod tests {
     use crate::testing::{FakeProcessTree, FakeRuntime};
     use ferrix_app_api::{AppId, LifecycleState};
 
+    /// The repository catalog and the repository grants policy.
     fn service() -> (Arc<Service>, FakeRuntime, crate::records::Captured) {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
         let runtime = FakeRuntime::native();
         let (recorder, records) = Recorder::capturing("mock");
+        let (grants, _) = crate::grants::load_grants(None, std::slice::from_ref(&dir)).unwrap();
         let service = Service::new(
             Catalog::load_dir(&dir).unwrap(),
             vec![Box::new(runtime.clone())],
@@ -348,6 +383,7 @@ mod tests {
             recorder,
             ServiceOptions {
                 poll_interval: std::time::Duration::from_millis(1),
+                grants,
                 ..ServiceOptions::default()
             },
         );
@@ -557,8 +593,233 @@ mod tests {
         assert!(captured_events(&records).contains(&"ferrix-appd-request-rejected".to_owned()));
     }
 
+    fn hello(service: &Arc<Service>, conn: &mut Connection, role: ClientRole) {
+        assert!(matches!(
+            dispatch(service, conn, Inbound::Request(Request::Hello { role })),
+            Outcome::Reply(Reply::Hello { .. })
+        ));
+    }
+
+    fn identify(service: &Arc<Service>, conn: &mut Connection, pid: u32) -> Outcome {
+        dispatch(service, conn, Inbound::Request(Request::Identify { pid }))
+    }
+
+    #[test]
+    fn service_role_identifies_but_never_launches_or_steers() {
+        let (service, runtime, records) = service();
+        let mut conn = Connection::default();
+        hello(&service, &mut conn, ClientRole::Service);
+
+        // Unknown pid: a well-formed identity with nothing in it.
+        assert_eq!(
+            identify(&service, &mut conn, 4242),
+            Outcome::Reply(Reply::Identity {
+                schema_version: SCHEMA_VERSION,
+                identity: ferrix_app_api::AppIdentity::unknown(),
+            })
+        );
+
+        for refused in [
+            Inbound::Request(Request::Launch { id: terminal() }),
+            Inbound::Request(Request::Activate { id: terminal() }),
+            Inbound::Request(Request::Terminate { id: terminal() }),
+            Inbound::Request(Request::Home),
+        ] {
+            let name = message_name(&refused);
+            assert!(
+                matches!(
+                    dispatch(&service, &mut conn, refused),
+                    Outcome::Reply(Reply::ProtocolError { reason }) if reason.contains("service")
+                ),
+                "{name} must be refused for a service"
+            );
+        }
+        assert_eq!(
+            dispatch(&service, &mut conn, Inbound::Report(Report::HomeGesture)),
+            Outcome::Silent
+        );
+        assert_eq!(
+            dispatch(
+                &service,
+                &mut conn,
+                Inbound::Report(Report::YieldForeground)
+            ),
+            Outcome::Silent
+        );
+        assert_eq!(runtime.launch_count(), 0, "nothing was launched");
+
+        // Reading and subscribing stay available to services.
+        assert!(matches!(
+            dispatch(&service, &mut conn, Inbound::Request(Request::Catalog)),
+            Outcome::Reply(Reply::Catalog { .. })
+        ));
+        assert!(matches!(
+            dispatch(&service, &mut conn, Inbound::Request(Request::Instances)),
+            Outcome::Reply(Reply::Instances { .. })
+        ));
+        assert_eq!(
+            dispatch(&service, &mut conn, Inbound::Request(Request::Subscribe)),
+            Outcome::Subscribe
+        );
+        let rejected = captured_events(&records)
+            .iter()
+            .filter(|e| *e == "ferrix-appd-request-rejected")
+            .count();
+        assert_eq!(rejected, 6);
+    }
+
+    #[test]
+    fn identify_resolves_running_apps_once_per_connection() {
+        let (service, runtime, records) = service();
+        let instance = service.launch(&terminal()).unwrap().instance;
+        let sandbox_pid = instance.pid.unwrap();
+        let mut conn = Connection::default();
+        hello(&service, &mut conn, ClientRole::Service);
+
+        // The repository grants give the Terminal `shell` and `background`,
+        // which its descriptor also declares.
+        let Outcome::Reply(Reply::Identity { identity, .. }) =
+            identify(&service, &mut conn, sandbox_pid)
+        else {
+            panic!("expected an identity reply");
+        };
+        assert_eq!(identity.app, Some(terminal()));
+        assert_eq!(identity.trust, Some(ferrix_app_api::TrustLevel::Untrusted));
+        assert_eq!(
+            identity.granted,
+            [
+                ferrix_app_api::AppCapability::Shell,
+                ferrix_app_api::AppCapability::Background
+            ]
+            .into_iter()
+            .collect()
+        );
+
+        // Repeats do not spam the log; a second pid is recorded once too.
+        identify(&service, &mut conn, sandbox_pid);
+        identify(&service, &mut conn, 4242);
+        identify(&service, &mut conn, 4242);
+        let identify_records: Vec<_> = records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r["event"] == "appd-identify")
+            .cloned()
+            .collect();
+        assert_eq!(identify_records.len(), 2, "{identify_records:?}");
+        assert_eq!(identify_records[0]["pid"], sandbox_pid);
+        assert_eq!(identify_records[0]["app"], "org.ferrix.terminal");
+        assert_eq!(identify_records[0]["granted_count"], 2);
+        assert_eq!(identify_records[1]["pid"], 4242);
+        assert!(identify_records[1]["app"].is_null());
+        assert_eq!(identify_records[1]["granted_count"], 0);
+
+        // Once the instance has crashed the identity is gone.
+        assert!(runtime.exit(
+            &terminal(),
+            ferrix_app_api::ExitReason::Signaled { signal: 9 }
+        ));
+        assert!(crate::testing::wait_for(
+            std::time::Duration::from_secs(5),
+            || service
+                .instance(&terminal())
+                .is_some_and(|i| i.state == LifecycleState::Crashed)
+        ));
+        assert_eq!(
+            identify(&service, &mut conn, sandbox_pid),
+            Outcome::Reply(Reply::Identity {
+                schema_version: SCHEMA_VERSION,
+                identity: ferrix_app_api::AppIdentity::unknown(),
+            })
+        );
+    }
+
+    #[test]
+    fn application_and_home_roles_cannot_identify() {
+        let (service, _, records) = service();
+        for role in [
+            ClientRole::Application,
+            ClientRole::Home,
+            ClientRole::Compositor,
+        ] {
+            let mut conn = Connection::default();
+            hello(&service, &mut conn, role);
+            assert!(
+                matches!(
+                    identify(&service, &mut conn, 1),
+                    Outcome::Reply(Reply::ProtocolError { reason }) if reason.contains(role_name(role))
+                ),
+                "{} must not identify",
+                role_name(role)
+            );
+        }
+        let mut tool = Connection::default();
+        hello(&service, &mut tool, ClientRole::Tool);
+        assert!(matches!(
+            identify(&service, &mut tool, 1),
+            Outcome::Reply(Reply::Identity { .. })
+        ));
+        assert_eq!(
+            captured_events(&records)
+                .iter()
+                .filter(|e| *e == "ferrix-appd-request-rejected")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn launched_app_cannot_hello_as_a_service() {
+        let (service, _, records) = service();
+        let pid = service.launch(&terminal()).unwrap().instance.pid.unwrap();
+        let mut forged = Connection {
+            peer_pid: Some(pid),
+            ..Connection::default()
+        };
+        assert!(matches!(
+            dispatch(
+                &service,
+                &mut forged,
+                Inbound::Request(Request::Hello {
+                    role: ClientRole::Service
+                })
+            ),
+            Outcome::Reply(Reply::ProtocolError { reason }) if reason.contains("application, not service")
+        ));
+        assert_eq!(forged.role, None);
+        // Nothing after a refused hello works either.
+        assert!(matches!(
+            identify(&service, &mut forged, pid),
+            Outcome::Reply(Reply::ProtocolError { .. })
+        ));
+        assert!(captured_events(&records).contains(&"ferrix-appd-request-rejected".to_owned()));
+    }
+
     #[test]
     fn gating_table_is_explicit() {
+        let identify = Inbound::Request(Request::Identify { pid: 1 });
+        assert!(allowed(ClientRole::Service, &identify));
+        assert!(allowed(ClientRole::Tool, &identify));
+        assert!(!allowed(ClientRole::Home, &identify));
+        assert!(!allowed(ClientRole::Application, &identify));
+        assert!(!allowed(ClientRole::Compositor, &identify));
+        assert!(!allowed(
+            ClientRole::Service,
+            &Inbound::Request(Request::Home)
+        ));
+        assert!(!allowed(
+            ClientRole::Service,
+            &Inbound::Report(Report::YieldForeground)
+        ));
+        assert!(!allowed(
+            ClientRole::Service,
+            &Inbound::Report(Report::HomeGesture)
+        ));
+        assert!(allowed(
+            ClientRole::Service,
+            &Inbound::Request(Request::Subscribe)
+        ));
+
         let launch = Inbound::Request(Request::Launch { id: terminal() });
         let mapped = Inbound::Report(Report::SurfaceMapped {
             pid: 1,

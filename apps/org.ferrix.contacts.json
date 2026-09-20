@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.contacts",
+  "runtime": "native",
+  "name": "Contacts",
+  "icon": {
+    "glyph": "▣",
+    "tone": "blue"
+  },
+  "launchable": true,
+  "capabilities": [
+    "contacts-read",
+    "contacts-write"
+  ],
+  "launch": {
+    "exec": [
+      "ferrix-contacts"
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+[package]
+name = "ferrix-network-adapter-api"
+description = "Internal replaceable contract between ferrix-networkd and network backend adapters (mock, NetworkManager)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-network-api = { path = "../ferrix-network-api" }
+
+[lints]
+workspace = true

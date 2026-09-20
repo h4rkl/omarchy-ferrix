@@ -1,10 +1,16 @@
 # Linux CI for the emulator-first project (see AGENTS.md and plans/baseline.md).
 #
-# Two jobs:
-#   rust        - host toolchain checks (fmt, clippy, test) on ubuntu-latest.
-#   qemu-check  - the SAME headless contract used locally: `just qemu-build`
-#                 followed by `just qemu-check`, run under TCG with no display,
-#                 no KVM, no physical device. Evidence label: QEMU.
+# Three jobs:
+#   rust                - host toolchain checks (fmt, clippy, test) on ubuntu-latest.
+#   qemu-check          - the SAME headless contract used locally: `just qemu-build`
+#                         followed by `just qemu-check`, run under TCG with no display,
+#                         no KVM, no physical device. Evidence label: QEMU.
+#   qemu-scenario-check - every checked-in telephony/network scenario
+#                         (ADR-006) against the guest built by qemu-check, in
+#                         a headless TCG agent session. Runs on pushes and
+#                         manual dispatch; on pull requests only when the PR
+#                         carries the `scenarios` label, so the PR gate keeps
+#                         qemu-check's cost.
 #
 # Runner choice for qemu-check: GitHub's arm64 hosted runner
 # (`ubuntu-24.04-arm`, free for public repositories). qemu-build.sh runs
@@ -174,5 +180,78 @@ jobs:
           path: |
             out/qemu-aarch64/serial.log
             out/qemu-aarch64/manifest.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Hand the built guest to the scenario job so it builds nothing for
+      # the guest (short retention: it is an intermediate, not evidence).
+      - name: Upload guest artifacts for the scenario job
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qemu-aarch64-guest-${{ runner.arch }}
+          path: |
+            out/qemu-aarch64/Image
+            out/qemu-aarch64/initramfs.cpio.gz
+            out/qemu-aarch64/manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
+  qemu-scenario-check:
+    name: QEMU scenarios (TCG, headless)
+    needs: qemu-check
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'scenarios')
+    runs-on: ${{ inputs.qemu_runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 45
+    env:
+      FERRIX_QEMU_ACCEL: tcg
+      FERRIX_QEMU_GRAPHICS: none
+      # Whole-run ceiling for the scenario set (readiness wait + every scenario).
+      FERRIX_QEMU_SCENARIO_TIMEOUT: "1200"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install host prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm
+
+      - name: Install just
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: just@1.58.0
+
+      # The host runner binary (ferrix-scenario) is the only thing compiled
+      # here; the toolchain comes from rust-toolchain.toml.
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustup show
+
+      - name: Cache cargo registry and target directory
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Download guest artifacts from qemu-check
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v5.0.0
+        with:
+          name: qemu-aarch64-guest-${{ runner.arch }}
+          path: out/qemu-aarch64
+
+      - name: just qemu-scenario-check
+        run: just qemu-scenario-check
+
+      # One result.json plus log excerpt per scenario, pass or fail, and the
+      # session's serial log.
+      - name: Upload scenario evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qemu-aarch64-scenarios-${{ runner.arch }}
+          path: |
+            out/qemu-aarch64/scenarios/**/result.json
+            out/qemu-aarch64/scenarios/**/log-excerpt.log
+            out/qemu-aarch64/agent/serial.log
           if-no-files-found: warn
           retention-days: 14

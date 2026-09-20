@@ -1,0 +1,15 @@
+[package]
+name = "ferrix-runtime-android"
+description = "Private Android compatibility runtime adapter for ferrix-appd: wraps a maintained Android-on-Linux runtime behind ferrix-app-runtime-api; Android package/activity ids stay runtime-private"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-runtime-api = { path = "../ferrix-app-runtime-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }

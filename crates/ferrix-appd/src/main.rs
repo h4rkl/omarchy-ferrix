@@ -1,33 +1,38 @@
-//! `ferrix_appd` binary: composes the native runtime with the service and serves
+//! `ferrix_appd` binary: composes the native and Android runtimes with the service and serves
 //! the socket.
 //!
 //! 1. loads the catalog from every `--app-dir` (default
 //!    `/usr/share/ferrix/apps` if it exists, else `apps`);
-//! 2. binds the socket (`--socket`, `FERRIX_APPD_SOCKET`, default
-//!    `/run/ferrix/ferrix_appd.sock`) and only then prints `ferrix_appd-ready`;
-//! 3. autostarts the home surface and every `autostart` app;
-//! 4. serves connections forever.
+//! 2. loads the grants policy (`--grants`, `FERRIX_APP_GRANTS`, default
+//!    `<first app dir>/grants.json`; absent means the empty policy);
+//! 3. binds the socket (`--socket`, `FERRIX_APPD_SOCKET`, default
+//!    `/run/ferrix/ferrix-appd.sock`) and only then prints `ferrix-appd-ready`;
+//! 4. autostarts the home surface and every `autostart` app;
+//! 5. serves connections forever.
 //!
-//! Any startup failure prints `ferrix_appd-failed` and exits non-zero. This is the
+//! Any startup failure prints `ferrix-appd-failed` and exits non-zero. This is the
 //! only place that names a runtime implementation.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use ferrix_app_api::{DEFAULT_APPD_SOCKET, GUEST_APP_DIR, REPO_APP_DIR};
+use ferrix_app_api::{DEFAULT_APPD_SOCKET, GRANTS_PATH_ENV, GUEST_APP_DIR, REPO_APP_DIR};
 use ferrix_app_runtime_api::Runtime;
 use ferrix_appd::process_tree::ProcTree;
 use ferrix_appd::records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder};
-use ferrix_appd::{Catalog, Server, Service, ServiceOptions};
+use ferrix_appd::{Catalog, GrantsSource, Server, Service, ServiceOptions, load_grants};
+use ferrix_runtime_android::{AndroidRuntime, AndroidRuntimeOptions, WaydroidCli, WaydroidOptions};
 use ferrix_runtime_native::{NativeRuntime, NativeRuntimeOptions};
 
 const USAGE: &str =
-    "usage: ferrix-appd [--socket PATH] [--app-dir DIR]... [--nested] [--no-autostart] [--sandbox PATH]
+    "usage: ferrix-appd [--socket PATH] [--app-dir DIR]... [--grants PATH] [--nested] [--no-autostart] [--sandbox PATH]
 
-  --socket PATH    socket to serve (env FERRIX_APPD_SOCKET, default /run/ferrix/ferrix_appd.sock)
+  --socket PATH    socket to serve (env FERRIX_APPD_SOCKET, default /run/ferrix/ferrix-appd.sock)
   --app-dir DIR    descriptor directory, repeatable (env FERRIX_APP_DIR;
                    default /usr/share/ferrix/apps if present, else apps)
+  --grants PATH    grants policy (env FERRIX_APP_GRANTS; default <first app dir>/grants.json
+                   when present, else the empty policy: no app holds any capability)
   --nested         nested host run: records carry evidence \"mock\" instead of \"QEMU\"
   --no-autostart   do not launch the home surface or autostart apps
   --sandbox PATH   ferrix-sandbox binary (env FERRIX_SANDBOX_BIN, default PATH lookup)";
@@ -35,6 +40,7 @@ const USAGE: &str =
 struct Args {
     socket: PathBuf,
     app_dirs: Vec<PathBuf>,
+    grants: Option<PathBuf>,
     nested: bool,
     autostart: bool,
     sandbox: Option<PathBuf>,
@@ -53,6 +59,7 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Parsed, String> 
             .map(PathBuf::from)
             .into_iter()
             .collect(),
+        grants: env(GRANTS_PATH_ENV).map(PathBuf::from),
         nested: false,
         autostart: true,
         sandbox: env("FERRIX_SANDBOX_BIN").map(PathBuf::from),
@@ -70,6 +77,9 @@ fn parse_args(argv: impl IntoIterator<Item = String>) -> Result<Parsed, String> 
                 args.app_dirs.push(PathBuf::from(
                     it.next().ok_or("--app-dir needs a directory")?,
                 ));
+            }
+            "--grants" => {
+                args.grants = Some(PathBuf::from(it.next().ok_or("--grants needs a path")?))
             }
             "--nested" => args.nested = true,
             "--no-autostart" => args.autostart = false,
@@ -111,20 +121,48 @@ fn run(args: Args, recorder: Recorder) -> Result<(), String> {
         ));
     }
 
-    // Composition point: the only place a runtime implementation is named.
+    // Authorization policy. A present-but-invalid file is fatal; an absent
+    // default is the empty policy and is recorded as such.
+    let (grants, source) = match load_grants(args.grants.as_deref(), &args.app_dirs) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            recorder.grants_invalid(&error.to_string());
+            return Err(error.to_string());
+        }
+    };
+    match &source {
+        GrantsSource::File(path) => recorder.grants_loaded(grants.len(), path),
+        GrantsSource::Missing => recorder.grants_missing(),
+    }
+
+    // Composition point: the only place runtime implementations are named.
+    // Further runtimes (`Box<dyn Runtime>`) are pushed into this vector.
     let native: Box<dyn Runtime> = Box::new(NativeRuntime::new(NativeRuntimeOptions {
         sandbox_bin: args.sandbox.clone(),
         evidence: recorder.evidence().to_owned(),
     }));
+    // Android compatibility runtime (ADR-005): a private adapter over the
+    // maintained Waydroid CLI. Nothing is probed here; an Android launch on a
+    // guest without the runtime yields a typed `RuntimeUnsupported` with the
+    // reason in the launch record, never a silent success.
+    let android: Box<dyn Runtime> = Box::new(AndroidRuntime::new(
+        Arc::new(WaydroidCli::new(WaydroidOptions::default())),
+        AndroidRuntimeOptions {
+            evidence: recorder.evidence().to_owned(),
+            ..AndroidRuntimeOptions::default()
+        },
+    ));
+    let runtimes: Vec<Box<dyn Runtime>> = vec![native, android];
 
     let listener = Server::bind(&args.socket)?;
     let options = ServiceOptions {
         socket: args.socket.clone(),
+        grants,
         ..ServiceOptions::default()
     };
     let service = Arc::new(Service::new(
         catalog,
-        vec![native],
+        runtimes,
         Box::new(ProcTree::new()),
         recorder.clone(),
         options,

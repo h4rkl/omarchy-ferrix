@@ -25,9 +25,11 @@ ferrix-appd -> ferrix-sandbox (stage 1) -> ferrix-sandbox --init (stage 2, PID 1
   drained from the main thread (SIGCHLD wakes the final wait).
 - Stage 2 is PID 1 of the new PID namespace: it makes mount propagation
   private, mounts a fresh `/proc` and (with `private_tmp`) a tmpfs on `/tmp`,
-  sets `no_new_privs`, runs the application, forwards TERM/INT/HUP to it, reaps
-  zombies, and exits with the application's shell status (`128 + signal` on a
-  signal death). PID 1 exiting kills everything left in the namespace.
+  builds the socket-directory view (below) when `run_dir.mode` is not
+  `inherit`, sets `no_new_privs`, runs the application, forwards TERM/INT/HUP
+  to it, reaps zombies, and exits with the application's shell status
+  (`128 + signal` on a signal death). PID 1 exiting kills everything left in
+  the namespace.
 - The runtime maps the forwarded status back to `ExitReason`, so `ferrix-appd`
   classifies crashes exactly.
 
@@ -37,6 +39,57 @@ platform processes, and all its descendants die with it. **Mount** – a private
 System V / POSIX message queue access. **UTS** – its own hostname (the app id).
 **User** – lets an unprivileged launcher create the others; `Auto` uses it only
 when the launcher is not root (with one retry if a root launcher is denied).
+
+## Socket-directory view (`run_dir`, ADR-004 §4)
+
+`IsolationPolicy.run_dir` (`#[serde(default)]`, so old manifests are
+unchanged):
+
+```json
+"isolation": { "run_dir": { "mode": "inherit" | "private" | "private-run", "sockets": ["ferrix-appd.sock"] } }
+```
+
+- `inherit` (default): the platform socket directory stays shared; nothing
+  is filtered.
+- `private`: stage 2 replaces `/run/ferrix` (or `FERRIX_RUN_DIR`) with a
+  private tmpfs that holds only the listed socket files.
+- `private-run`: a private tmpfs replaces all of `/run`; the filtered socket
+  directory is put back at its path and `/run/user` (Wayland,
+  `XDG_RUNTIME_DIR`) is bind-mounted back recursively. Everything else under
+  `/run` — including `/run/dbus/system_bus_socket` — is gone from the
+  application's view. Requires the socket directory to be under `/run`.
+
+Under `ferrix-appd` the `sockets` list is **derived from the effective grants**
+in `LaunchContext.granted` by `with_granted_sockets` (`sockets_for_grants`):
+always `ferrix-appd.sock`; `core-state|core-control` → `core.sock`;
+`telephony-*` → `telephonyd.sock`; `network-*` → `networkd.sock`;
+`contacts-*` → `contactsd.sock`. A list written into a manifest is replaced,
+so a descriptor cannot widen its own view. The names are constants in
+`src/sockets.rs` and nowhere else.
+
+Mechanism (safe Rust over `rustix::mount`): bind-mounting a socket by path
+needs the source to stay visible, so the view is assembled on a tmpfs
+mounted at a staging directory (`/tmp/.ferrix-run-<pid>`, which is the
+application's own private tmpfs when `private_tmp` is on; a sibling of the
+socket directory is the fallback for `private`). For each listed name the
+original `<run_dir>/<name>` is bind-mounted over an empty file created in the
+staging tree (`/run/user` recursively, under `private-run`); then one
+`mount(MS_MOVE)` places the staging tree over the target and the empty
+staging directory is removed. Nothing is opened or held open, and
+propagation is already `rprivate` (stage 2 begins with that), which `MS_MOVE`
+requires. Socket names must be bare file names (no `/`, not `.`/`..`). A
+listed socket that does not exist yet (daemon not started) is reported in
+`missing`, not bound, and is not a failure.
+
+Outcome and failure: `sandbox-ready` gains `run_dir: {mode, sockets:
+[names]}` (`missing` when non-empty); `mode` is what was actually applied
+(`inherit` when nothing was mounted). Under `IsolationMode::Required` a view
+that cannot be built (`sandbox-mount-failed{target,error}`) makes stage 2
+exit 126 before starting the application and stage 1 forward that as
+`sandbox-failed` → `AppError::IsolationUnavailable`; under `BestEffort` the
+application starts with the inherited directory and the report is
+`degraded` with a `run_dir:` reason. On macOS the policy parses and the
+report says `inherit` (not enforced).
 
 ## Readiness and records
 
@@ -50,7 +103,8 @@ assumed.
 
 Records (one JSON line on stdout, `evidence` first): `sandbox-ready`
 (`app`, `init_pid`, `namespaces{pid,mount,ipc,uts,user}`, `private_tmp`,
-`no_new_privs`, `degraded`, `reason`), `sandbox-failed{app,reason}`,
+`no_new_privs`, `run_dir{mode,sockets,missing?}`, `degraded`, `reason`),
+`sandbox-failed{app,reason}`,
 `sandbox-mount-failed{app,target,error}`, `sandbox-degraded{app,feature,error}`,
 `sandbox-exec-failed{app,program,error}`, `sandbox-app-exited{app,exit}`,
 `sandbox-probe{applied,degraded,reason}`.
@@ -81,14 +135,23 @@ what could be established, or the reason it could not; tests skip with a
 
 No uid change (the application keeps the launcher's identity, mapped 1:1 in a
 user namespace), no seccomp filter, no cgroups (no memory/CPU limits, no
-freezing), no network namespace, no filesystem view restriction (the
-application sees the same root filesystem apart from `/proc` and `/tmp`), and
-no capability dropping beyond `no_new_privs`. Sandbox `isolation()` is only as
-truthful as the readiness report; the `sandbox-ready` record on the log is the
-evidence of record.
+freezing), no network namespace, no filesystem view restriction beyond
+`/proc`, `/tmp`, and the socket directory (with `run_dir: private` the rest of
+`/run`, including the D-Bus system bus socket, stays visible; `private-run`
+hides it), and no capability dropping beyond `no_new_privs`. Socket
+visibility is enforced only when the manifest sets `run_dir.mode`; the
+services enforce capabilities per request regardless (ADR-004 §3). Sandbox
+`isolation()` is only as truthful as the readiness report; the `sandbox-ready`
+record on the log is the evidence of record.
 
 ## Validation
 
 macOS host: `cargo test -p ferrix-runtime-native` (library and pure planning tests).
 Linux: `just linux-check test -p ferrix-runtime-native` runs `tests/sandbox.rs` inside
-the privileged pinned arm64 Alpine Rust container (mock evidence, not QEMU).
+the privileged pinned arm64 Alpine Rust container (mock evidence, not QEMU),
+including the socket-visibility tests: a policy listing only `a.sock` shows
+`a.sock` and not `b.sock` (via `FERRIX_RUN_DIR` on a temp directory); through
+`NativeRuntime`, a launch without a telephony grant cannot see
+`telephonyd.sock` while one with `telephony-state` can; a missing socket
+directory is `IsolationUnavailable` under `required` and degraded under
+`best-effort`; `private-run` hides a marker file placed in `/run`.

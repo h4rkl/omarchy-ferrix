@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use ferrix_app_api::{AppDescriptor, AppError, AppId, AppRole};
+use ferrix_app_api::{AppDescriptor, AppError, AppId, AppRole, GRANTS_FILE_NAME};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -58,7 +58,9 @@ impl Catalog {
     }
 
     /// Adds every `*.json` descriptor in `dir`; returns how many were added.
-    /// Files are visited in name order so failures are deterministic.
+    /// Files are visited in name order so failures are deterministic. The
+    /// grants policy (`grants.json`) lives in the same directory and is
+    /// skipped here; `grants::load_grants` reads it.
     pub fn extend_from_dir(&mut self, dir: &Path) -> Result<usize, AppError> {
         let entries = std::fs::read_dir(dir).map_err(|e| AppError::Io {
             reason: format!("cannot read app directory {}: {e}", dir.display()),
@@ -66,7 +68,10 @@ impl Catalog {
         let mut paths: Vec<_> = entries
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
+            .filter(|path| {
+                path.extension().and_then(|e| e.to_str()) == Some("json")
+                    && path.file_name().and_then(|n| n.to_str()) != Some(GRANTS_FILE_NAME)
+            })
             .collect();
         paths.sort();
         let mut added = 0;
@@ -209,6 +214,16 @@ mod tests {
                 .iter()
                 .any(|d| d.id.as_str() == "org.ferrix.terminal" && d.launchable)
         );
+        for entry in catalog.apps.values().filter(|entry| {
+            entry.descriptor.launchable && entry.descriptor.runtime == RuntimeKind::Native
+        }) {
+            assert_eq!(
+                entry.launch.pointer("/isolation/run_dir/mode"),
+                Some(&Value::String("private-run".to_owned())),
+                "{} must hide the system D-Bus socket and unrelated /run state",
+                entry.descriptor.id
+            );
+        }
         // Home is autostarted by the service, never listed twice.
         assert!(catalog.autostart().all(|d| d.role != AppRole::Home));
     }

@@ -12,7 +12,7 @@
 //! or web engine. The internal adapter contract lives in `ferrix-app-runtime-api` and
 //! is composed only in `ferrix_appd`'s bootstrap code.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -38,6 +38,11 @@ pub const DEFAULT_APPD_SOCKET: &str = "/run/ferrix/ferrix-appd.sock";
 pub const GUEST_APP_DIR: &str = "/usr/share/ferrix/apps";
 /// Directory of application descriptors when run from the repository root.
 pub const REPO_APP_DIR: &str = "apps";
+/// File name of the grants policy that lives beside the descriptors
+/// ([`GrantsPolicy`]). Descriptor loaders must skip it.
+pub const GRANTS_FILE_NAME: &str = "grants.json";
+/// Environment variable overriding the grants policy path.
+pub const GRANTS_PATH_ENV: &str = "FERRIX_APP_GRANTS";
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -186,9 +191,15 @@ pub enum TrustLevel {
     Untrusted,
 }
 
-/// Capabilities an application declares. Declaration is a contract for
-/// discovery and future permission enforcement; it does not grant anything by
-/// itself.
+/// Capabilities an application can declare and be granted.
+///
+/// **Declaration is discovery, grant is authorization.** A descriptor's
+/// `capabilities` set says what the application *wants*; it grants nothing.
+/// The checked-in [`GrantsPolicy`] says what each application *may* have. The
+/// effective set an application actually receives is the intersection of the
+/// two ([`GrantsPolicy::effective`]); services check that effective set per
+/// operation after resolving the caller through the application service
+/// ([`AppIdentity`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AppCapability {
@@ -200,6 +211,75 @@ pub enum AppCapability {
     Shell,
     /// Keep running while not in the foreground.
     Background,
+    /// Read the telephony snapshot and subscribe to its events; party
+    /// numbers are redacted to display form.
+    TelephonyState,
+    /// Place, answer, and control voice calls.
+    TelephonyCall,
+    /// Send, list, and manage text messages.
+    TelephonySms,
+    /// Read, search, and export contacts.
+    ContactsRead,
+    /// Create, update, delete, and import contacts.
+    ContactsWrite,
+    /// Read the network snapshot and subscribe to its events.
+    NetworkState,
+    /// Control radios, scan, and manage connections and profiles.
+    NetworkControl,
+}
+
+impl AppCapability {
+    /// Every capability, in declaration order.
+    pub const ALL: [AppCapability; 11] = [
+        AppCapability::CoreState,
+        AppCapability::CoreControl,
+        AppCapability::Shell,
+        AppCapability::Background,
+        AppCapability::TelephonyState,
+        AppCapability::TelephonyCall,
+        AppCapability::TelephonySms,
+        AppCapability::ContactsRead,
+        AppCapability::ContactsWrite,
+        AppCapability::NetworkState,
+        AppCapability::NetworkControl,
+    ];
+
+    /// The kebab-case wire name (`telephony-call`).
+    pub fn name(self) -> &'static str {
+        match self {
+            AppCapability::CoreState => "core-state",
+            AppCapability::CoreControl => "core-control",
+            AppCapability::Shell => "shell",
+            AppCapability::Background => "background",
+            AppCapability::TelephonyState => "telephony-state",
+            AppCapability::TelephonyCall => "telephony-call",
+            AppCapability::TelephonySms => "telephony-sms",
+            AppCapability::ContactsRead => "contacts-read",
+            AppCapability::ContactsWrite => "contacts-write",
+            AppCapability::NetworkState => "network-state",
+            AppCapability::NetworkControl => "network-control",
+        }
+    }
+}
+
+impl fmt::Display for AppCapability {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl FromStr for AppCapability {
+    type Err = AppError;
+
+    /// Parses a kebab-case wire name; unknown names are typed errors.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        AppCapability::ALL
+            .into_iter()
+            .find(|capability| capability.name() == s)
+            .ok_or_else(|| AppError::InvalidGrants {
+                reason: format!("unknown capability {s:?}"),
+            })
+    }
 }
 
 /// Visual tone of a launcher icon, mapped to the product palette by the home
@@ -297,6 +377,158 @@ impl AppDescriptor {
             return Err(invalid("the home surface must be launchable".to_owned()));
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identity and grants
+// ---------------------------------------------------------------------------
+
+/// Who a process is, as resolved by the application service from a kernel
+/// pid: the application it belongs to, that application's trust ring, and the
+/// capabilities it was **granted** (declared *and* allowed by the
+/// [`GrantsPolicy`]). Services treat this as the only source of caller
+/// identity; anything a client claims about itself in a payload is ignored.
+///
+/// A pid that belongs to no running application resolves to
+/// [`AppIdentity::unknown`]: no app, no trust, no capabilities.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppIdentity {
+    pub app: Option<AppId>,
+    pub trust: Option<TrustLevel>,
+    #[serde(default)]
+    pub granted: BTreeSet<AppCapability>,
+}
+
+impl AppIdentity {
+    /// The identity of a process the application service did not launch or
+    /// that has already exited.
+    pub fn unknown() -> Self {
+        Self::default()
+    }
+
+    pub fn is_known(&self) -> bool {
+        self.app.is_some()
+    }
+
+    pub fn has(&self, capability: AppCapability) -> bool {
+        self.granted.contains(&capability)
+    }
+}
+
+/// The checked-in authorization policy: which capabilities each application
+/// **may** hold. It is loaded beside the descriptors and is separate from
+/// them on purpose:
+///
+/// - a descriptor *declares* capabilities (discovery: the launcher and the
+///   user can see what an application asks for);
+/// - this policy *grants* them (authorization: what services enforce).
+///
+/// An application's effective capabilities are `declared ∩ granted`. A
+/// capability declared but not granted is *denied* and reported at launch.
+/// Trust rings never bypass the file: a `system` or `privileged` application
+/// is simply a documented row in it. An application without a row has no
+/// effective capabilities at all.
+///
+/// JSON form (schema 1, unknown fields rejected):
+///
+/// ```json
+/// { "schema_version": 1,
+///   "grants": { "org.ferrix.phone": ["telephony-state", "telephony-call"] } }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantsPolicy {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub grants: BTreeMap<AppId, BTreeSet<AppCapability>>,
+}
+
+impl Default for GrantsPolicy {
+    /// The empty policy: every application has zero effective capabilities.
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            grants: BTreeMap::new(),
+        }
+    }
+}
+
+impl GrantsPolicy {
+    /// The empty policy (see [`GrantsPolicy::default`]).
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Parses strictly: unknown fields, unknown capability names, invalid
+    /// ids, and a foreign schema version are all typed errors.
+    pub fn from_json(text: &str) -> Result<Self, AppError> {
+        let policy: Self = serde_json::from_str(text).map_err(|e| AppError::InvalidGrants {
+            reason: e.to_string(),
+        })?;
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default()
+    }
+
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(AppError::InvalidGrants {
+                reason: format!(
+                    "schema_version {} is not {SCHEMA_VERSION}",
+                    self.schema_version
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Number of applications with a row.
+    pub fn len(&self) -> usize {
+        self.grants.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.grants.is_empty()
+    }
+
+    /// What the policy allows `id` to hold, regardless of what it declares.
+    pub fn granted(&self, id: &AppId) -> BTreeSet<AppCapability> {
+        self.grants.get(id).cloned().unwrap_or_default()
+    }
+
+    /// `declared ∩ granted`: the capabilities the application actually gets.
+    pub fn effective(&self, descriptor: &AppDescriptor) -> BTreeSet<AppCapability> {
+        match self.grants.get(&descriptor.id) {
+            Some(granted) => descriptor
+                .capabilities
+                .intersection(granted)
+                .copied()
+                .collect(),
+            None => BTreeSet::new(),
+        }
+    }
+
+    /// `declared \ granted`: declared capabilities the policy withholds.
+    pub fn denied(&self, descriptor: &AppDescriptor) -> BTreeSet<AppCapability> {
+        let effective = self.effective(descriptor);
+        descriptor
+            .capabilities
+            .difference(&effective)
+            .copied()
+            .collect()
+    }
+
+    /// The identity a running instance of `descriptor` presents to services.
+    pub fn identity(&self, descriptor: &AppDescriptor) -> AppIdentity {
+        AppIdentity {
+            app: Some(descriptor.id.clone()),
+            trust: Some(descriptor.trust),
+            granted: self.effective(descriptor),
+        }
     }
 }
 
@@ -518,6 +750,10 @@ pub enum AppError {
         id: AppId,
         reason: String,
     },
+    /// The grants policy file could not be parsed or fails validation.
+    InvalidGrants {
+        reason: String,
+    },
     Io {
         reason: String,
     },
@@ -553,6 +789,7 @@ impl fmt::Display for AppError {
             AppError::IsolationUnavailable { id, reason } => {
                 write!(f, "required isolation for {id} unavailable: {reason}")
             }
+            AppError::InvalidGrants { reason } => write!(f, "invalid grants policy: {reason}"),
             AppError::Io { reason } => write!(f, "i/o error: {reason}"),
         }
     }
@@ -700,6 +937,168 @@ mod tests {
             r#"{"kind":"signaled","signal":11}"#
         );
     }
+
+    #[test]
+    fn capabilities_have_stable_kebab_case_names() {
+        let expected = [
+            "core-state",
+            "core-control",
+            "shell",
+            "background",
+            "telephony-state",
+            "telephony-call",
+            "telephony-sms",
+            "contacts-read",
+            "contacts-write",
+            "network-state",
+            "network-control",
+        ];
+        assert_eq!(AppCapability::ALL.len(), expected.len());
+        for (capability, name) in AppCapability::ALL.into_iter().zip(expected) {
+            assert_eq!(capability.name(), name);
+            assert_eq!(capability.to_string(), name);
+            assert_eq!(
+                serde_json::to_string(&capability).unwrap(),
+                format!("\"{name}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<AppCapability>(&format!("\"{name}\"")).unwrap(),
+                capability
+            );
+            assert_eq!(name.parse::<AppCapability>().unwrap(), capability);
+        }
+        assert!(matches!(
+            "telephony".parse::<AppCapability>(),
+            Err(AppError::InvalidGrants { .. })
+        ));
+        assert!(serde_json::from_str::<AppCapability>("\"TelephonyCall\"").is_err());
+    }
+
+    #[test]
+    fn identity_wire_form_is_flat_and_unknown_is_empty() {
+        let unknown = AppIdentity::unknown();
+        assert!(!unknown.is_known());
+        assert_eq!(
+            serde_json::to_string(&unknown).unwrap(),
+            r#"{"app":null,"trust":null,"granted":[]}"#
+        );
+        let known = AppIdentity {
+            app: Some(AppId::new("org.ferrix.phone").unwrap()),
+            trust: Some(TrustLevel::Untrusted),
+            granted: [AppCapability::TelephonyCall, AppCapability::TelephonyState]
+                .into_iter()
+                .collect(),
+        };
+        let text = serde_json::to_string(&known).unwrap();
+        assert_eq!(
+            text,
+            r#"{"app":"org.ferrix.phone","trust":"untrusted","granted":["telephony-state","telephony-call"]}"#
+        );
+        assert_eq!(serde_json::from_str::<AppIdentity>(&text).unwrap(), known);
+        assert!(known.has(AppCapability::TelephonyCall));
+        assert!(!known.has(AppCapability::TelephonySms));
+        // A reply without `granted` still parses (empty set).
+        let sparse: AppIdentity = serde_json::from_str(r#"{"app":null,"trust":null}"#).unwrap();
+        assert_eq!(sparse, unknown);
+    }
+
+    #[test]
+    fn grants_policy_parses_strictly() {
+        let text = r#"{
+            "schema_version": 1,
+            "grants": {
+                "org.ferrix.phone": ["telephony-state", "telephony-call", "contacts-read"],
+                "org.ferrix.terminal": ["shell", "background"]
+            }
+        }"#;
+        let policy = GrantsPolicy::from_json(text).unwrap();
+        assert_eq!(policy.len(), 2);
+        assert_eq!(
+            policy.granted(&AppId::new("org.ferrix.terminal").unwrap()),
+            [AppCapability::Shell, AppCapability::Background]
+                .into_iter()
+                .collect()
+        );
+        assert!(
+            policy
+                .granted(&AppId::new("org.ferrix.nope").unwrap())
+                .is_empty()
+        );
+        let round = GrantsPolicy::from_json(&policy.to_json()).unwrap();
+        assert_eq!(round, policy);
+
+        for (bad, why) in [
+            (r#"{"schema_version": 2, "grants": {}}"#, "schema"),
+            (
+                r#"{"schema_version": 1, "grants": {"org.ferrix.x": ["telephony"]}}"#,
+                "unknown capability",
+            ),
+            (
+                r#"{"schema_version": 1, "grants": {"Terminal": ["shell"]}}"#,
+                "invalid id",
+            ),
+            (
+                r#"{"schema_version": 1, "grants": {}, "extra": 1}"#,
+                "unknown field",
+            ),
+            (r#"{"grants": {}}"#, "missing schema"),
+            ("{", "malformed"),
+        ] {
+            assert!(
+                matches!(
+                    GrantsPolicy::from_json(bad),
+                    Err(AppError::InvalidGrants { .. })
+                ),
+                "{why}: {bad}"
+            );
+        }
+        let empty = GrantsPolicy::from_json(r#"{"schema_version": 1}"#).unwrap();
+        assert!(empty.is_empty());
+        assert_eq!(empty, GrantsPolicy::empty());
+    }
+
+    #[test]
+    fn effective_is_declared_intersect_granted_and_denied_is_the_rest() {
+        let mut terminal = descriptor();
+        terminal.capabilities = [
+            AppCapability::Shell,
+            AppCapability::Background,
+            AppCapability::TelephonySms,
+        ]
+        .into_iter()
+        .collect();
+
+        // No row: nothing effective, everything declared is denied.
+        let empty = GrantsPolicy::empty();
+        assert!(empty.effective(&terminal).is_empty());
+        assert_eq!(empty.denied(&terminal), terminal.capabilities);
+        let identity = empty.identity(&terminal);
+        assert_eq!(identity.app.as_ref(), Some(&terminal.id));
+        assert_eq!(identity.trust, Some(TrustLevel::Untrusted));
+        assert!(identity.granted.is_empty());
+
+        // A row grants more than is declared: the surplus grants nothing.
+        let policy = GrantsPolicy::from_json(
+            r#"{"schema_version":1,"grants":{"org.ferrix.terminal":["shell","background","network-control"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            policy.effective(&terminal),
+            [AppCapability::Shell, AppCapability::Background]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            policy.denied(&terminal),
+            [AppCapability::TelephonySms].into_iter().collect()
+        );
+        assert!(
+            !policy
+                .identity(&terminal)
+                .has(AppCapability::NetworkControl)
+        );
+        assert!(policy.identity(&terminal).has(AppCapability::Shell));
+    }
 }
 
 #[cfg(test)]
@@ -714,7 +1113,9 @@ mod repo_descriptors {
         let mut homes = 0;
         for entry in std::fs::read_dir(&dir).expect("apps dir") {
             let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            if path.extension().and_then(|e| e.to_str()) != Some("json")
+                || path.file_name().and_then(|n| n.to_str()) == Some(GRANTS_FILE_NAME)
+            {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
@@ -736,5 +1137,18 @@ mod repo_descriptors {
         }
         assert!(ids.len() >= 2, "expected at least home and terminal");
         assert_eq!(homes, 1, "exactly one home surface");
+    }
+
+    /// The checked-in grants policy beside the descriptors must parse
+    /// strictly (valid ids, known capability names, schema 1).
+    #[test]
+    fn checked_in_grants_policy_is_valid() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../apps")
+            .join(GRANTS_FILE_NAME);
+        let text = std::fs::read_to_string(&path).expect("apps/grants.json");
+        let policy = GrantsPolicy::from_json(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(policy.schema_version, SCHEMA_VERSION);
+        assert!(!policy.is_empty());
     }
 }

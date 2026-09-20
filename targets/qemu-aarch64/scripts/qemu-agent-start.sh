@@ -29,17 +29,26 @@ for _ in $(seq 1 100); do
   sleep 0.1
 done
 [ -S "$runtime/qmp.sock" ] || { echo "QMP socket did not become ready" >&2; exit 1; }
-printf 'QEMU control ready (pid %s); waiting for rendered client\n' "$pid"
+printf 'QEMU control ready (pid %s); waiting for rendered client and hit-testable launcher\n' "$pid"
 # Weston advertises its pointer seat after the first tablet event. Move to a
 # non-actionable launcher coordinate so input readiness is observable without
 # activating UI.
 width=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
 height=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
+# Readiness is three records: wayland-ready (compositor + home surface
+# committed), input-ready pointer (seat announced), and home-ready (the
+# launcher's catalog is loaded and hit-testable), so the first `just qemu-tap`
+# after this script returns lands on a live tile instead of an early frame.
 for _ in $(seq 1 450); do
   if [ -f "$runtime/serial.log" ] \
     && grep -q '"event":"wayland-ready"' "$runtime/serial.log" \
-    && grep -q '"event":"input-ready".*"capability":"pointer".*"status":"ok"' "$runtime/serial.log"; then
-    printf 'QEMU graphical session ready (pid %s)\n' "$pid"
+    && grep -q '"event":"input-ready".*"capability":"pointer".*"status":"ok"' "$runtime/serial.log" \
+    && grep -qE 'home-ready[^"]*".*"tiles":[0-9]+' "$runtime/serial.log"; then
+    # Several guest processes write records to the serial console, so a line
+    # can be interleaved with another writer's text (observed:
+    # `"event":"home-ready/bin/sh: ","tiles":8,...`). Match the record's
+    # name plus its `tiles` field rather than the exact JSON prefix.
+    printf 'QEMU graphical session ready (pid %s): %s\n' "$pid" "$(grep -m1 -E 'home-ready[^"]*".*"tiles":[0-9]+' "$runtime/serial.log")"
     exit 0
   fi
   if [ -f "$runtime/serial.log" ] && grep -q '"event":"wayland-ready"' "$runtime/serial.log"; then
@@ -55,5 +64,5 @@ for _ in $(seq 1 450); do
 done
 python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" quit 2>/dev/null || kill "$pid" 2>/dev/null || true
 rm -f "$pid_file" "$runtime/qmp.sock"
-echo "timed out waiting for QEMU graphical readiness" >&2
+echo "timed out waiting for QEMU graphical readiness (wayland-ready + input-ready pointer + home-ready)" >&2
 exit 1

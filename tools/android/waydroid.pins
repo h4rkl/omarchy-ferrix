@@ -1,0 +1,17 @@
+# Pinned Waydroid (LineageOS-based Android 13) container images for the
+# OPT-IN Android compatibility runtime on the postmarketOS QEMU route
+# (FERRIX_PMOS_ANDROID=1). Read by tools/android/waydroid-images-fetch.sh;
+# never sourced as shell. Source: docs/android-runtime.md §6.3 (OTA index
+# fetched 2026-09-21; channel waydroid_arm64_only, build 2026-04-03).
+# Nothing here auto-updates: moving to a new build means editing every value
+# together and re-running `just waydroid-images-fetch`.
+WAYDROID_CHANNEL=waydroid_arm64_only
+WAYDROID_BUILD=20260403
+WAYDROID_SYSTEM_FILE=lineage-20.0-20260403-VANILLA-waydroid_arm64_only-system.zip
+WAYDROID_SYSTEM_URL=https://sourceforge.net/projects/waydroid/files/images/system/lineage/waydroid_arm64_only/lineage-20.0-20260403-VANILLA-waydroid_arm64_only-system.zip/download
+WAYDROID_SYSTEM_SIZE=728517282
+WAYDROID_SYSTEM_SHA256=c3cf6ab5ded7496761bae4a49fe1a6f691923c5b84818755790f3ae4e239127b
+WAYDROID_VENDOR_FILE=lineage-20.0-20260403-MAINLINE-waydroid_arm64_only-vendor.zip
+WAYDROID_VENDOR_URL=https://sourceforge.net/projects/waydroid/files/images/vendor/waydroid_arm64_only/lineage-20.0-20260403-MAINLINE-waydroid_arm64_only-vendor.zip/download
+WAYDROID_VENDOR_SIZE=77349347
+WAYDROID_VENDOR_SHA256=bad5e84a2a47b877d8a85f6a212720f5562e3eeb26696bfd0e2de50dab1ec3ba

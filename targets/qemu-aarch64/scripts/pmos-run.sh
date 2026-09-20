@@ -5,6 +5,10 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/pmos
+# OPT-IN Android runtime image lives beside the default one (pmos-build.sh).
+android=${FERRIX_PMOS_ANDROID:-0}
+case "$android" in 0|1) ;; *) echo "invalid FERRIX_PMOS_ANDROID: $android (0|1)" >&2; exit 2 ;; esac
+[ "$android" != 1 ] || out="$out-android"
 accel=${FERRIX_QEMU_ACCEL:-auto}
 graphics=${FERRIX_QEMU_GRAPHICS:-off}
 mode=${FERRIX_QEMU_MODE:-run}

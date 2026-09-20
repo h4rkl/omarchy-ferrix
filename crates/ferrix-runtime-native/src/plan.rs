@@ -8,7 +8,7 @@ use std::process::ExitStatus;
 use ferrix_app_api::{AppId, ExitReason};
 use serde::{Deserialize, Serialize};
 
-use crate::{AppliedIsolation, IsolationPolicy, UserNamespace};
+use crate::{AppliedIsolation, IsolationPolicy, RunDirOutcome, UserNamespace};
 
 /// Name of the sandbox supervisor binary, resolved through `PATH`.
 pub const SANDBOX_BIN: &str = "ferrix-sandbox";
@@ -67,7 +67,12 @@ impl NamespaceSet {
     }
 
     /// Combines the namespace outcome with the init-stage outcome.
-    pub fn applied(self, private_tmp: bool, no_new_privs: bool) -> AppliedIsolation {
+    pub fn applied(
+        self,
+        private_tmp: bool,
+        no_new_privs: bool,
+        run_dir: RunDirOutcome,
+    ) -> AppliedIsolation {
         AppliedIsolation {
             pid_namespace: self.pid,
             mount_namespace: self.mount,
@@ -76,6 +81,7 @@ impl NamespaceSet {
             user_namespace: self.user,
             private_tmp,
             no_new_privs,
+            run_dir,
         }
     }
 }
@@ -105,7 +111,10 @@ pub fn select_namespaces(policy: &IsolationPolicy, is_root: bool) -> NamespaceSe
 /// Whether the policy needs the sandbox at all. Without it the application
 /// is still a separate supervised process, just spawned directly.
 pub fn needs_sandbox(policy: &IsolationPolicy) -> bool {
-    policy.requests_any_namespace() || policy.private_tmp || policy.no_new_privs
+    policy.requests_any_namespace()
+        || policy.private_tmp
+        || policy.no_new_privs
+        || policy.run_dir.is_private()
 }
 
 /// Serializes a policy for the `--policy` argument.
@@ -377,9 +386,55 @@ mod tests {
         };
         assert_eq!(got.missing_from(wanted), vec!["mount", "user"]);
         assert!(wanted.missing_from(wanted).is_empty());
-        let applied = got.applied(false, true);
+        let applied = got.applied(false, true, RunDirOutcome::default());
         assert!(applied.pid_namespace && !applied.mount_namespace);
         assert!(!applied.private_tmp && applied.no_new_privs);
+        assert_eq!(applied.run_dir.mode, crate::RunDirMode::Inherit);
+    }
+
+    #[test]
+    fn run_dir_policy_parses_with_defaults_and_rejects_unknown_fields() {
+        use crate::{RunDirMode, RunDirPolicy};
+        // Older manifests without `run_dir` keep working.
+        let parsed: IsolationPolicy = serde_json::from_str(r#"{"private_tmp":false}"#).unwrap();
+        assert_eq!(parsed.run_dir, RunDirPolicy::default());
+        assert_eq!(parsed.run_dir.mode, RunDirMode::Inherit);
+        assert!(!parsed.run_dir.is_private());
+
+        let parsed: IsolationPolicy = serde_json::from_str(
+            r#"{"run_dir":{"mode":"private","sockets":["ferrix-appd.sock","core.sock"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.run_dir.mode, RunDirMode::Private);
+        assert_eq!(parsed.run_dir.sockets, ["ferrix-appd.sock", "core.sock"]);
+        assert!(parsed.run_dir.is_private());
+        assert!(needs_sandbox(&IsolationPolicy {
+            run_dir: parsed.run_dir.clone(),
+            ..IsolationPolicy::none()
+        }));
+
+        let parsed: IsolationPolicy =
+            serde_json::from_str(r#"{"run_dir":{"mode":"private-run"}}"#).unwrap();
+        assert_eq!(parsed.run_dir.mode, RunDirMode::PrivateRun);
+        assert!(parsed.run_dir.sockets.is_empty());
+
+        assert!(
+            serde_json::from_str::<IsolationPolicy>(r#"{"run_dir":{"mode":"shared"}}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<IsolationPolicy>(r#"{"run_dir":{"paths":["/run"]}}"#).is_err()
+        );
+
+        // The default policy round-trips with the new field present.
+        let text = policy_json(&IsolationPolicy::default());
+        assert!(
+            text.contains(r#""run_dir":{"mode":"inherit","sockets":[]}"#),
+            "{text}"
+        );
+        assert_eq!(
+            serde_json::from_str::<IsolationPolicy>(&text).unwrap(),
+            IsolationPolicy::default()
+        );
     }
 
     #[cfg(unix)]

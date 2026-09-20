@@ -7,6 +7,7 @@
 //! out-of-range values are all hard errors. Values describe emulator-test
 //! configuration, not physical-hardware facts.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
@@ -26,6 +27,14 @@ pub struct Profile {
     pub power: PowerSection,
     pub connectivity: ConnectivitySection,
     pub audio: AudioSection,
+    /// Detailed mock telephony state (ADR-006). Absent in older profiles;
+    /// [`Profile::telephony_section`] derives one from `[connectivity]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telephony: Option<TelephonySection>,
+    /// Detailed mock network state (ADR-006). Absent in older profiles;
+    /// [`Profile::network_section`] derives one from `[connectivity]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkSection>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,6 +73,270 @@ pub struct ConnectivitySection {
 #[serde(deny_unknown_fields)]
 pub struct AudioSection {
     pub route: AudioRoute,
+}
+
+/// Mock modem lifecycle state at boot (`[telephony] modem`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileModemState {
+    Absent,
+    Disabled,
+    Initializing,
+    Ready,
+    Failed,
+}
+
+/// Mock SIM state at boot (`[telephony] sim`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileSimState {
+    Absent,
+    Locked,
+    Blocked,
+    Ready,
+}
+
+/// Radio access technology reported by the mock (`[telephony] access`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileAccessTechnology {
+    None,
+    Gsm,
+    Umts,
+    Lte,
+    Nr,
+}
+
+/// Telephony features the mock advertises (`[telephony] features`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileTelephonyFeature {
+    Voice,
+    Sms,
+    MultipartSms,
+    DeliveryReports,
+    Dtmf,
+    Hold,
+    Data,
+    AudioRoute,
+    SimPin,
+    RadioPower,
+}
+
+impl ProfileTelephonyFeature {
+    /// Every feature the mock adapter can emulate.
+    pub const ALL: [ProfileTelephonyFeature; 10] = [
+        ProfileTelephonyFeature::Voice,
+        ProfileTelephonyFeature::Sms,
+        ProfileTelephonyFeature::MultipartSms,
+        ProfileTelephonyFeature::DeliveryReports,
+        ProfileTelephonyFeature::Dtmf,
+        ProfileTelephonyFeature::Hold,
+        ProfileTelephonyFeature::Data,
+        ProfileTelephonyFeature::AudioRoute,
+        ProfileTelephonyFeature::SimPin,
+        ProfileTelephonyFeature::RadioPower,
+    ];
+}
+
+/// Optional `[telephony]` section: the mock modem's boot state. Values are
+/// synthetic emulator configuration, never carrier or device facts.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TelephonySection {
+    pub modem: ProfileModemState,
+    pub sim: ProfileSimState,
+    /// Synthetic PIN; only meaningful when `sim = "locked"`.
+    pub sim_pin: String,
+    pub operator: String,
+    pub access: ProfileAccessTechnology,
+    /// Signal bars, `0..=4`.
+    pub signal_bars: u8,
+    pub roaming: bool,
+    pub features: BTreeSet<ProfileTelephonyFeature>,
+}
+
+impl Default for TelephonySection {
+    fn default() -> Self {
+        TelephonySection {
+            modem: ProfileModemState::Ready,
+            sim: ProfileSimState::Ready,
+            sim_pin: "0000".to_owned(),
+            operator: "Ferrix Mock".to_owned(),
+            access: ProfileAccessTechnology::Lte,
+            signal_bars: 3,
+            roaming: false,
+            features: ProfileTelephonyFeature::ALL.into_iter().collect(),
+        }
+    }
+}
+
+impl TelephonySection {
+    /// The section an older profile without `[telephony]` implies, derived
+    /// from the coarse `[connectivity]` summary.
+    pub fn derived_from(connectivity: &ConnectivitySection) -> Self {
+        let sim = match connectivity.sim {
+            SimState::Present => ProfileSimState::Ready,
+            SimState::Absent => ProfileSimState::Absent,
+            SimState::Locked => ProfileSimState::Locked,
+        };
+        let (signal_bars, access) = match connectivity.modem {
+            ModemRegistration::Registered => (3, ProfileAccessTechnology::Lte),
+            ModemRegistration::Searching | ModemRegistration::Denied => {
+                (0, ProfileAccessTechnology::Lte)
+            }
+            ModemRegistration::Unregistered => (0, ProfileAccessTechnology::None),
+        };
+        TelephonySection {
+            sim,
+            signal_bars,
+            access,
+            ..TelephonySection::default()
+        }
+    }
+
+    fn validate(&self) -> Result<(), ProfileError> {
+        if self.signal_bars > 4 {
+            return Err(ProfileError::Invalid(format!(
+                "telephony.signal_bars must be 0..=4 (got {})",
+                self.signal_bars
+            )));
+        }
+        if self.operator.trim().is_empty() {
+            return Err(ProfileError::Invalid(
+                "telephony.operator must not be empty".to_owned(),
+            ));
+        }
+        if self.sim == ProfileSimState::Locked
+            && (self.sim_pin.len() < 4
+                || self.sim_pin.len() > 8
+                || !self.sim_pin.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return Err(ProfileError::Invalid(
+                "telephony.sim_pin must be 4..=8 digits when sim = \"locked\"".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Mock Wi-Fi adapter presence (`[network] adapter`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileAdapterPresence {
+    Absent,
+    Present,
+}
+
+/// Mock Wi-Fi radio state (`[network] radio`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileRadioState {
+    Enabled,
+    Disabled,
+}
+
+/// Security type of a synthetic access point.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileSecurityType {
+    Open,
+    Wep,
+    WpaPsk,
+    Wpa2Psk,
+    Wpa3Sae,
+    Enterprise,
+}
+
+/// One synthetic access point the mock network adapter advertises.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileAccessPoint {
+    pub ssid: String,
+    pub security: ProfileSecurityType,
+    /// Signal strength, `0..=100`.
+    pub signal_percent: u8,
+    /// Synthetic passphrase; mock only, never a real secret.
+    #[serde(default)]
+    pub passphrase: String,
+}
+
+/// Optional `[network]` section: the mock Wi-Fi adapter's boot state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct NetworkSection {
+    pub adapter: ProfileAdapterPresence,
+    pub radio: ProfileRadioState,
+    /// SSID of the access point connected at boot, or `""` for none. Must
+    /// name one of `access_points`.
+    pub connected: String,
+    pub access_points: Vec<ProfileAccessPoint>,
+}
+
+impl Default for NetworkSection {
+    fn default() -> Self {
+        NetworkSection {
+            adapter: ProfileAdapterPresence::Present,
+            radio: ProfileRadioState::Enabled,
+            connected: String::new(),
+            access_points: Vec::new(),
+        }
+    }
+}
+
+impl NetworkSection {
+    /// The section an older profile without `[network]` implies, derived
+    /// from the coarse `[connectivity] wifi` summary. A connected summary
+    /// yields one synthetic open access point so `connected` stays valid.
+    pub fn derived_from(connectivity: &ConnectivitySection) -> Self {
+        match connectivity.wifi {
+            WifiState::Connected => NetworkSection {
+                connected: "ferrix-mock".to_owned(),
+                access_points: vec![ProfileAccessPoint {
+                    ssid: "ferrix-mock".to_owned(),
+                    security: ProfileSecurityType::Open,
+                    signal_percent: 70,
+                    passphrase: String::new(),
+                }],
+                ..NetworkSection::default()
+            },
+            WifiState::Disconnected => NetworkSection::default(),
+            WifiState::Disabled => NetworkSection {
+                radio: ProfileRadioState::Disabled,
+                ..NetworkSection::default()
+            },
+        }
+    }
+
+    fn validate(&self) -> Result<(), ProfileError> {
+        let mut seen = BTreeSet::new();
+        for ap in &self.access_points {
+            if ap.ssid.trim().is_empty() {
+                return Err(ProfileError::Invalid(
+                    "network.access_points[].ssid must not be empty".to_owned(),
+                ));
+            }
+            if ap.signal_percent > 100 {
+                return Err(ProfileError::Invalid(format!(
+                    "network.access_points[].signal_percent must be 0..=100 (got {} for ssid {:?})",
+                    ap.signal_percent, ap.ssid
+                )));
+            }
+            if !seen.insert(ap.ssid.as_str()) {
+                return Err(ProfileError::Invalid(format!(
+                    "network.access_points lists ssid {:?} twice",
+                    ap.ssid
+                )));
+            }
+        }
+        if !self.connected.is_empty() && !seen.contains(self.connected.as_str()) {
+            return Err(ProfileError::Invalid(format!(
+                "network.connected names ssid {:?}, which is not in network.access_points",
+                self.connected
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,7 +410,29 @@ impl Profile {
                 self.power.battery_percent
             )));
         }
+        if let Some(telephony) = &self.telephony {
+            telephony.validate()?;
+        }
+        if let Some(network) = &self.network {
+            network.validate()?;
+        }
         Ok(())
+    }
+
+    /// The `[telephony]` section, or the one `[connectivity]` implies when
+    /// the profile predates it. Mock adapters read this, never the field.
+    pub fn telephony_section(&self) -> TelephonySection {
+        self.telephony
+            .clone()
+            .unwrap_or_else(|| TelephonySection::derived_from(&self.connectivity))
+    }
+
+    /// The `[network]` section, or the one `[connectivity]` implies when the
+    /// profile predates it.
+    pub fn network_section(&self) -> NetworkSection {
+        self.network
+            .clone()
+            .unwrap_or_else(|| NetworkSection::derived_from(&self.connectivity))
     }
 }
 
@@ -245,5 +540,196 @@ route = "speaker"
         let text = FIXTURE.replace("width = 1080", "width = 0");
         let err = Profile::parse(&text).expect_err("zero width must fail");
         assert!(err.to_string().contains("> 0"), "{err}");
+    }
+
+    const SERVICE_SECTIONS: &str = r#"
+[telephony]
+modem = "ready"
+sim = "locked"
+sim_pin = "0000"
+operator = "Ferrix Mock"
+access = "lte"
+signal_bars = 3
+roaming = false
+features = ["voice", "sms", "sim-pin"]
+
+[network]
+adapter = "present"
+radio = "enabled"
+connected = "ferrix-lab"
+
+[[network.access_points]]
+ssid = "ferrix-lab"
+security = "wpa2-psk"
+signal_percent = 78
+passphrase = "mock-passphrase"
+
+[[network.access_points]]
+ssid = "ferrix-guest"
+security = "open"
+signal_percent = 41
+"#;
+
+    fn with_services() -> String {
+        format!("{FIXTURE}{SERVICE_SECTIONS}")
+    }
+
+    #[test]
+    fn service_sections_absent_derive_from_connectivity() {
+        let p = Profile::parse(FIXTURE).expect("fixture parses");
+        assert!(p.telephony.is_none() && p.network.is_none());
+        let telephony = p.telephony_section();
+        assert_eq!(telephony.modem, ProfileModemState::Ready);
+        assert_eq!(telephony.sim, ProfileSimState::Ready);
+        assert_eq!(telephony.signal_bars, 3);
+        assert_eq!(telephony.features.len(), ProfileTelephonyFeature::ALL.len());
+        let network = p.network_section();
+        assert_eq!(network.adapter, ProfileAdapterPresence::Present);
+        assert_eq!(network.radio, ProfileRadioState::Enabled);
+        assert_eq!(network.connected, "ferrix-mock");
+        assert_eq!(network.access_points.len(), 1);
+        network.validate().expect("derived section is valid");
+
+        let text = FIXTURE
+            .replace("wifi = \"connected\"", "wifi = \"disabled\"")
+            .replace("modem = \"registered\"", "modem = \"unregistered\"")
+            .replace("sim = \"present\"", "sim = \"absent\"");
+        let p = Profile::parse(&text).expect("parses");
+        assert_eq!(p.network_section().radio, ProfileRadioState::Disabled);
+        assert_eq!(p.network_section().connected, "");
+        assert_eq!(p.telephony_section().sim, ProfileSimState::Absent);
+        assert_eq!(p.telephony_section().access, ProfileAccessTechnology::None);
+        assert_eq!(p.telephony_section().signal_bars, 0);
+    }
+
+    #[test]
+    fn service_sections_parse() {
+        let p = Profile::parse(&with_services()).expect("service sections parse");
+        let telephony = p.telephony.as_ref().expect("telephony present");
+        assert_eq!(telephony.sim, ProfileSimState::Locked);
+        assert_eq!(telephony.sim_pin, "0000");
+        assert_eq!(telephony.operator, "Ferrix Mock");
+        assert_eq!(telephony.access, ProfileAccessTechnology::Lte);
+        assert_eq!(telephony.features.len(), 3);
+        assert!(
+            telephony
+                .features
+                .contains(&ProfileTelephonyFeature::SimPin)
+        );
+        let network = p.network.as_ref().expect("network present");
+        assert_eq!(network.connected, "ferrix-lab");
+        assert_eq!(
+            network.access_points[0].security,
+            ProfileSecurityType::Wpa2Psk
+        );
+        assert_eq!(network.access_points[1].passphrase, "");
+        assert_eq!(p.telephony_section(), *telephony);
+        assert_eq!(p.network_section(), *network);
+    }
+
+    #[test]
+    fn partial_service_sections_fill_defaults() {
+        let text = format!(
+            "{FIXTURE}\n[telephony]\nsim = \"absent\"\n\n[network]\nradio = \"disabled\"\n"
+        );
+        let p = Profile::parse(&text).expect("partial sections parse");
+        let telephony = p.telephony.expect("telephony present");
+        assert_eq!(telephony.sim, ProfileSimState::Absent);
+        assert_eq!(telephony.modem, ProfileModemState::Ready);
+        assert_eq!(telephony.operator, "Ferrix Mock");
+        let network = p.network.expect("network present");
+        assert_eq!(network.radio, ProfileRadioState::Disabled);
+        assert_eq!(network.adapter, ProfileAdapterPresence::Present);
+        assert!(network.access_points.is_empty());
+    }
+
+    #[test]
+    fn unknown_key_in_service_sections_is_rejected() {
+        let text = with_services().replace("roaming = false", "roaming = false\nimsi = \"1\"");
+        let err = Profile::parse(&text).expect_err("unknown telephony key must fail");
+        assert!(matches!(err, ProfileError::Schema(_)), "{err}");
+        assert!(err.to_string().contains("imsi"), "{err}");
+
+        let text =
+            with_services().replace("signal_percent = 41", "signal_percent = 41\nbssid = \"x\"");
+        let err = Profile::parse(&text).expect_err("unknown access point key must fail");
+        assert!(matches!(err, ProfileError::Schema(_)), "{err}");
+        assert!(err.to_string().contains("bssid"), "{err}");
+    }
+
+    #[test]
+    fn unknown_service_enum_values_are_rejected() {
+        for (from, to) in [
+            ("modem = \"ready\"", "modem = \"maybe\""),
+            ("sim = \"locked\"", "sim = \"puk\""),
+            ("access = \"lte\"", "access = \"6g\""),
+            ("\"sim-pin\"", "\"teleport\""),
+            ("adapter = \"present\"", "adapter = \"broken\""),
+            ("security = \"open\"", "security = \"wpa9\""),
+        ] {
+            let text = with_services().replace(from, to);
+            let err = Profile::parse(&text).expect_err(to);
+            assert!(matches!(err, ProfileError::Schema(_)), "{to}: {err}");
+        }
+    }
+
+    #[test]
+    fn bad_signal_bars_are_rejected() {
+        let text = with_services().replace("signal_bars = 3", "signal_bars = 5");
+        let err = Profile::parse(&text).expect_err("5 bars must fail");
+        assert!(
+            err.to_string().contains("signal_bars must be 0..=4"),
+            "{err}"
+        );
+        let text = with_services().replace("signal_bars = 3", "signal_bars = -1");
+        assert!(Profile::parse(&text).is_err());
+    }
+
+    #[test]
+    fn bad_sim_pin_is_rejected_only_when_locked() {
+        let text = with_services().replace("sim_pin = \"0000\"", "sim_pin = \"12ab\"");
+        let err = Profile::parse(&text).expect_err("non-digit pin on a locked sim must fail");
+        assert!(err.to_string().contains("sim_pin"), "{err}");
+        let text = text.replace("sim = \"locked\"", "sim = \"ready\"");
+        Profile::parse(&text).expect("pin is irrelevant when the sim is ready");
+    }
+
+    #[test]
+    fn connected_to_unknown_ssid_is_rejected() {
+        let text =
+            with_services().replace("connected = \"ferrix-lab\"", "connected = \"elsewhere\"");
+        let err = Profile::parse(&text).expect_err("connected to an unlisted ssid must fail");
+        assert!(matches!(err, ProfileError::Invalid(_)), "{err}");
+        assert!(err.to_string().contains("elsewhere"), "{err}");
+        let text = with_services().replace("connected = \"ferrix-lab\"", "connected = \"\"");
+        Profile::parse(&text).expect("empty connected means none");
+    }
+
+    #[test]
+    fn access_point_constraints_are_enforced() {
+        let text = with_services().replace("ssid = \"ferrix-guest\"", "ssid = \" \"");
+        let err = Profile::parse(&text).expect_err("blank ssid must fail");
+        assert!(err.to_string().contains("ssid must not be empty"), "{err}");
+        let text = with_services().replace("signal_percent = 41", "signal_percent = 101");
+        let err = Profile::parse(&text).expect_err("101% must fail");
+        assert!(err.to_string().contains("signal_percent"), "{err}");
+        let text = with_services().replace("ssid = \"ferrix-guest\"", "ssid = \"ferrix-lab\"");
+        let err = Profile::parse(&text).expect_err("duplicate ssid must fail");
+        assert!(err.to_string().contains("twice"), "{err}");
+    }
+
+    #[test]
+    fn checked_in_profile_has_service_sections() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../targets/qemu-aarch64/profile.toml"
+        );
+        let p = Profile::load(path).expect("checked-in profile parses");
+        let telephony = p.telephony.expect("[telephony] present");
+        assert_eq!(telephony.operator, "Ferrix Mock");
+        assert_eq!(telephony.sim_pin, "0000");
+        let network = p.network.expect("[network] present");
+        assert_eq!(network.connected, "ferrix-lab");
+        assert_eq!(network.access_points.len(), 2);
     }
 }

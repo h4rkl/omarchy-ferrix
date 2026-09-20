@@ -1,0 +1,13 @@
+[package]
+name = "ferrix-telephony-adapter-api"
+description = "Internal replaceable contract between ferrix-telephonyd and modem backend adapters (mock, ModemManager)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

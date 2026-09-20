@@ -10,12 +10,15 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferrix_app_api::{
-    AppDescriptor, AppId, AppRole, ExitReason, IconRef, RuntimeKind, SCHEMA_VERSION, TrustLevel,
+    AppCapability, AppDescriptor, AppId, AppRole, ExitReason, IconRef, RuntimeKind, SCHEMA_VERSION,
+    TrustLevel,
 };
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use ferrix_runtime_native::{
-    IsolationPolicy, NativeLaunch, NativeRuntime, NativeRuntimeOptions, SandboxReady,
-    UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan, skipped_record,
+    APPD_SOCKET_FILE, IsolationMode, IsolationPolicy, NativeLaunch, NativeRuntime,
+    NativeRuntimeOptions, RUN_DIR_ENV, RunDirMode, RunDirPolicy, SandboxReady,
+    TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan,
+    skipped_record,
 };
 
 const SANDBOX: &str = env!("CARGO_BIN_EXE_ferrix-sandbox");
@@ -45,6 +48,7 @@ fn context() -> LaunchContext {
         instance: 1,
         env: vec![("FERRIX_APP_ID".to_owned(), "org.ferrix.test".to_owned())],
         evidence: EVIDENCE.to_owned(),
+        granted: Default::default(),
     }
 }
 
@@ -67,13 +71,21 @@ fn available(policy: &IsolationPolicy) -> bool {
 }
 
 fn launch(exec: &[&str], policy: IsolationPolicy) -> Box<dyn RunningApp> {
+    launch_with(exec, policy, &context())
+}
+
+fn launch_with(
+    exec: &[&str],
+    policy: IsolationPolicy,
+    context: &LaunchContext,
+) -> Box<dyn RunningApp> {
     let config = serde_json::to_value(NativeLaunch {
         exec: exec.iter().map(|s| (*s).to_owned()).collect(),
         isolation: policy,
     })
     .unwrap();
     runtime()
-        .launch(&descriptor(), &config, &context())
+        .launch(&descriptor(), &config, context)
         .expect("launch")
 }
 
@@ -253,4 +265,237 @@ fn missing_program_exits_127() {
         run(&["/nonexistent/ferrix-program"]),
         ExitReason::Exited { code: 127 }
     );
+}
+
+// ---------------------------------------------------------------------------
+// Socket-directory visibility (ADR-004 §4)
+// ---------------------------------------------------------------------------
+
+/// A scratch directory outside `/tmp`: the sandbox mounts a private tmpfs
+/// over `/tmp`, so a socket directory placed there would not exist inside
+/// the application's mount namespace.
+fn scratch(prefix: &str) -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(unique(prefix))
+}
+
+/// A throwaway socket directory (stands in for `/run/ferrix` through
+/// `FERRIX_RUN_DIR`) holding listening sockets with the given names.
+struct SocketDir {
+    dir: PathBuf,
+    _listeners: Vec<std::os::unix::net::UnixListener>,
+}
+
+impl SocketDir {
+    fn new(names: &[&str]) -> Self {
+        Self::at(scratch("ferrix-run"), names)
+    }
+
+    fn at(dir: PathBuf, names: &[&str]) -> Self {
+        std::fs::create_dir_all(&dir).unwrap();
+        let listeners = names
+            .iter()
+            .map(|name| std::os::unix::net::UnixListener::bind(dir.join(name)).unwrap())
+            .collect();
+        Self {
+            dir,
+            _listeners: listeners,
+        }
+    }
+
+    fn path(&self) -> String {
+        self.dir.display().to_string()
+    }
+
+    fn context(&self, granted: &[AppCapability]) -> LaunchContext {
+        let mut context = context();
+        context.env.push((RUN_DIR_ENV.to_owned(), self.path()));
+        context.granted = granted.iter().copied().collect();
+        context
+    }
+}
+
+impl Drop for SocketDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn private_run_dir(mode: RunDirMode, sockets: &[&str]) -> IsolationPolicy {
+    IsolationPolicy {
+        run_dir: RunDirPolicy {
+            mode,
+            sockets: sockets.iter().map(|s| (*s).to_owned()).collect(),
+        },
+        ..IsolationPolicy::default()
+    }
+}
+
+/// The sandbox binary directly: the policy lists `a.sock` only, so the
+/// application sees `a.sock` and not `b.sock`, and the `sandbox-ready`
+/// record says exactly that.
+#[test]
+fn private_run_dir_shows_only_the_listed_sockets() {
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let sockets = SocketDir::new(&["a.sock", "b.sock"]);
+    let dir = sockets.path();
+    let probe = format!("test -S {dir}/a.sock && ! test -e {dir}/b.sock");
+    let exec: Vec<String> = ["sh", "-c", probe.as_str()]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let policy = private_run_dir(RunDirMode::Private, &["a.sock", "missing.sock"]);
+    let output = Command::new(SANDBOX)
+        .args(sandbox_plan(&policy, &app_id(), EVIDENCE, &exec))
+        .env(RUN_DIR_ENV, &dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .output()
+        .expect("run ferrix-sandbox");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    let ready = find_record(&stdout, "sandbox-ready").unwrap_or_else(|| panic!("{stdout}"));
+    assert_eq!(
+        ready["run_dir"],
+        serde_json::json!({"mode": "private", "sockets": ["a.sock"], "missing": ["missing.sock"]}),
+        "{stdout}"
+    );
+    let ready: SandboxReady = serde_json::from_value(ready).unwrap();
+    assert!(!ready.degraded, "{ready:?}");
+    // The host's view is untouched: both sockets still exist here.
+    assert!(sockets.dir.join("a.sock").exists() && sockets.dir.join("b.sock").exists());
+}
+
+/// Through `NativeRuntime`: grants decide the list. Without a telephony
+/// grant the telephony socket cannot even be seen (so `connect()` fails
+/// with ENOENT); with one it can.
+#[test]
+fn grants_decide_which_daemon_sockets_an_application_can_reach() {
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let sockets = SocketDir::new(&[APPD_SOCKET_FILE, TELEPHONYD_SOCKET_FILE]);
+    let dir = sockets.path();
+    let policy = private_run_dir(RunDirMode::Private, &[]);
+
+    let denied = format!(
+        "test -S {dir}/{APPD_SOCKET_FILE} && ! test -e {dir}/{TELEPHONYD_SOCKET_FILE} && ! ls {dir} | grep -q telephonyd"
+    );
+    let mut running = launch_with(
+        &["sh", "-c", &denied],
+        policy.clone(),
+        &sockets.context(&[AppCapability::Shell, AppCapability::Background]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.run_dir.mode,
+        RunDirMode::Private,
+        "{report:?}"
+    );
+    assert_eq!(report.applied.run_dir.sockets, [APPD_SOCKET_FILE]);
+    assert!(!report.degraded, "{report:?}");
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+
+    let allowed =
+        format!("test -S {dir}/{APPD_SOCKET_FILE} && test -S {dir}/{TELEPHONYD_SOCKET_FILE}");
+    let mut running = launch_with(
+        &["sh", "-c", &allowed],
+        policy,
+        &sockets.context(&[AppCapability::TelephonyState]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.run_dir.sockets,
+        [APPD_SOCKET_FILE, TELEPHONYD_SOCKET_FILE]
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+/// A Required policy whose socket directory does not exist refuses to start
+/// the application (exit 126 -> `IsolationUnavailable`); BestEffort starts
+/// it and reports the degraded view.
+#[test]
+fn missing_run_dir_is_fatal_under_required_and_degraded_under_best_effort() {
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let missing = scratch("ferrix-run-missing");
+    let mut context = context();
+    context
+        .env
+        .push((RUN_DIR_ENV.to_owned(), missing.display().to_string()));
+    let config = serde_json::to_value(NativeLaunch {
+        exec: vec!["sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()],
+        isolation: private_run_dir(RunDirMode::Private, &[]),
+    })
+    .unwrap();
+    assert!(matches!(
+        runtime().launch(&descriptor(), &config, &context),
+        Err(ferrix_app_api::AppError::IsolationUnavailable { .. })
+    ));
+
+    let best_effort = IsolationPolicy {
+        mode: IsolationMode::BestEffort,
+        ..private_run_dir(RunDirMode::Private, &[])
+    };
+    let mut running = launch_with(&["sh", "-c", "exit 0"], best_effort, &context);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(report.degraded, "{report:?}");
+    assert_eq!(report.applied.run_dir.mode, RunDirMode::Inherit);
+    assert!(
+        report
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("run_dir")),
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+/// `private-run`: all of `/run` is replaced; the socket directory (filtered)
+/// and `/run/user` come back, nothing else does. Needs a socket directory
+/// under `/run`, so it creates one (root in the privileged container) and
+/// skips when it cannot.
+#[test]
+fn private_run_hides_everything_else_under_run() {
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let dir = Path::new("/run").join(unique("ferrix-test"));
+    if std::fs::create_dir_all(&dir).is_err() {
+        emit(&skipped_record(
+            EVIDENCE,
+            "cannot create a socket directory under /run",
+        ));
+        return;
+    }
+    let marker = Path::new("/run").join(unique("ferrix-marker"));
+    std::fs::write(&marker, "x").unwrap();
+    let sockets = SocketDir::at(dir, &[APPD_SOCKET_FILE, TELEPHONYD_SOCKET_FILE]);
+    let dir = sockets.path();
+    let probe = format!(
+        "test -S {dir}/{APPD_SOCKET_FILE} && ! test -e {dir}/{TELEPHONYD_SOCKET_FILE} && ! test -e {} && ! test -e /run/dbus/system_bus_socket && [ \"$(ls /run | wc -l)\" -le 2 ]",
+        marker.display()
+    );
+    let mut running = launch_with(
+        &["sh", "-c", &probe],
+        private_run_dir(RunDirMode::PrivateRun, &[]),
+        &sockets.context(&[]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.run_dir.mode,
+        RunDirMode::PrivateRun,
+        "{report:?}"
+    );
+    assert_eq!(report.applied.run_dir.sockets, [APPD_SOCKET_FILE]);
+    assert!(!report.degraded, "{report:?}");
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    assert!(marker.exists(), "the host's /run is untouched");
+    let _ = std::fs::remove_file(&marker);
 }

@@ -1,0 +1,16 @@
+[package]
+name = "ferrix-contacts"
+description = "Omarchy Ferrix Contacts: independent software-rendered Wayland client over ferrix-contactsd (app id org.ferrix.contacts)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-protocol = { path = "../ferrix-app-protocol" }
+ferrix-contacts-api = { path = "../ferrix-contacts-api" }
+ferrix-contacts-protocol = { path = "../ferrix-contacts-protocol" }
+ferrix-ui = { path = "../ferrix-ui" }
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "ferrix-scenario"
+description = "Host-side deterministic scenario runner: replays checked-in telephony/network scenario files over the mock-control channels and asserts machine-readable evidence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-mock-control = { path = "../ferrix-mock-control" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+# The scenario file schema (ADR-006). This is the one TOML schema besides the
+# target profile and the theme file; ferrix-scenario is a host tool, never a
+# product crate, so the architecture guard's product-crate rule does not
+# cover it (see crates/ferrix-session/tests/architecture.rs).
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+[lints]
+workspace = true

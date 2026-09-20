@@ -1,0 +1,57 @@
+schema_version = 1
+name = "modem-init-failure-recovery"
+description = "Modem initialization fails, is retried, and recovers to ready with registration restored."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-signal", bars = 3 }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "initializing" }
+expect = [ { event = "telephony-event", kind = "modem-changed", modem = { state = "initializing" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "failed" }
+expect = [ { event = "telephony-event", kind = "modem-changed", modem = { state = "failed" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "tick", ms = 2000 }
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "recovering" }
+expect = [ { event = "telephony-event", kind = "modem-changed", modem = { state = "recovering" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+expect = [ { event = "telephony-event", kind = "modem-changed", modem = { state = "ready" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+expect = [ { event = "telephony-event", kind = "registration-changed", registration = { state = "registered" }, access = "lte" } ]

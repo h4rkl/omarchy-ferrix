@@ -47,13 +47,18 @@ just qemu-check
 `qemu-check` uses portable TCG and is the CI contract (`.github/workflows/ci.yml`
 runs it unchanged on a Linux arm64 runner). It waits for the persistent
 `ferrix-core` daemon's `boot-health` record and init's `QEMU`-labelled
-`boot-health` that may only follow it, asserts the mock is still unplugged,
+`boot-health` that may only follow it, then for the `telephonyd-ready` and
+`networkd-ready` records of the two mock-backed service daemons (ADR-006),
+asserts the mock is still unplugged,
 sends `set-power charging=true` over the real host-to-guest mock-control
 channel, waits for the `power-changed` event the core emits, then sends
 `shutdown` and requires a clean QEMU exit. Every failure is a machine-readable
 `check-failed` record; there is no fallback that prints success. Inspect the
 captured serial output at `out/qemu-aarch64/serial.log`.
 `FERRIX_QEMU_CHECK_TIMEOUT` (seconds, default 90) bounds the whole check.
+`FERRIX_QEMU_REQUIRE_SERVICES=0` drops the two daemon assertions (the
+`check-passed` record then says `"services":"optional"`); it exists for
+integration work while a daemon is still a skeleton and is not the CI setting.
 
 ### Guest services and the mock-control channel
 
@@ -98,6 +103,228 @@ Invalid or unknown commands are rejected with `"status":"error"`; they never
 succeed silently. The client is `scripts/mock_control.py` (python3 standard
 library only). This drives *mock* state in the virtual phone and is never a
 product interface or a physical-device control.
+
+### Telephony and network services in the guest
+
+After the core's `boot-health`, init starts three service daemons (ADR-001,
+002, 003), each under a small shell supervisor (`supervise NAME CMD...` in
+`initramfs/init`: restart on non-zero exit with 1/2/4/8 s backoff and a
+`daemon-restarted {name, exit, backoff_s}` record; a missing binary is a
+`service-missing {name}` record, never a boot failure):
+
+| Daemon | Command line in the smoke guest | Socket | Ready record |
+| --- | --- | --- | --- |
+| `ferrix-telephonyd` | `--backend mock --profile /etc/ferrix/profile.toml --mock-control auto --appd /run/ferrix/ferrix-appd.sock --data-dir /var/lib/ferrix/telephony` | `/run/ferrix/telephonyd.sock` | `telephonyd-ready` |
+| `ferrix-networkd` | `--backend mock --profile /etc/ferrix/profile.toml --mock-control auto --appd /run/ferrix/ferrix-appd.sock` | `/run/ferrix/networkd.sock` | `networkd-ready` |
+| `ferrix-contactsd` | `--data-dir /var/lib/ferrix/contacts --appd /run/ferrix/ferrix-appd.sock [--fixtures /usr/share/ferrix/contacts/mock-contacts.json]` | `/run/ferrix/contactsd.sock` | `contactsd-ready` |
+
+Start order and identity: the daemons start **before** `ferrix-appd` and
+resolve client identity (ADR-004) lazily at a client's first request, so
+`ferrix-appd` may appear later. Headless sessions (`qemu-check`, `-nographic`)
+then start `ferrix-appd --no-autostart` as the identity authority and grants
+holder (`/usr/share/ferrix/apps/grants.json`, staged from `apps/grants.json`)
+without a home surface; graphical sessions start it once, after the
+compositor, with autostart on, exactly as before. The mock backends take their
+boot state from the profile's `[telephony]` and `[network]` sections (below).
+Init records `services-ready {telephony, network, contacts, persistent:false}`
+once the three sockets exist; `boot-health` keeps its core-only meaning.
+The daemons write their JSON records straight to the serial console.
+
+`/var/lib/ferrix/{telephony,contacts}` are on the initramfs tmpfs: stores
+survive a daemon restart, not a guest reboot. Persistence across boots is a
+property of the postmarketOS route, where the same directories live on the
+real root filesystem (`product-services-ready` reports `"persistent":true`).
+
+The guest binaries added by `qemu-build` are `ferrix-telephonyd`,
+`ferrix-networkd`, `ferrix-contactsd`, `ferrix-phone`, `ferrix-messages`,
+`ferrix-contacts`, and `ferrix-settings` (hashes `ferrix_<name>_sha256` in
+`manifest.json`, plus `grants_sha256`, `contacts_fixtures_sha256` and the
+`mock_control_ports` list).
+
+#### Profile sections `[telephony]` and `[network]`
+
+`profile.toml` (schema 1, strict) carries two optional sections parsed by
+`ferrix-target-profile` (`Profile::telephony_section()` /
+`network_section()` return them or derive them from `[connectivity]` for an
+older profile). Every value is synthetic emulator configuration:
+
+```toml
+[telephony]
+modem = "ready"            # absent | disabled | initializing | ready | failed
+sim = "ready"              # absent | locked | blocked | ready
+sim_pin = "0000"           # synthetic; only meaningful when sim = "locked"
+operator = "Ferrix Mock"
+access = "lte"             # none | gsm | umts | lte | nr
+signal_bars = 3            # 0..=4
+roaming = false
+features = ["voice", "sms", "multipart-sms", "delivery-reports", "dtmf", "hold", "audio-route", "sim-pin", "radio-power"]
+
+[network]
+adapter = "present"        # absent | present
+radio = "enabled"          # enabled | disabled
+connected = "ferrix-lab"   # ssid of the AP joined at boot, or ""; must be listed below
+[[network.access_points]]
+ssid = "ferrix-lab"
+security = "wpa2-psk"      # open | wep | wpa-psk | wpa2-psk | wpa3-sae | enterprise
+signal_percent = 78
+passphrase = "mock-passphrase"
+```
+
+Unknown keys, unknown enum values, `signal_bars > 4`, `signal_percent > 100`,
+duplicate or blank SSIDs, and `connected` naming an unlisted SSID are hard
+errors.
+
+### Mock-control channels
+
+Each mocked daemon owns one host-only channel (ADR-006); there is no
+cross-daemon forwarding and no application API for mutations. `qemu-run.sh`
+attaches all three virtio-serial ports to every session:
+
+| Daemon | QEMU virtio-serial port | Host socket (`out/qemu-aarch64/[agent/]`) | Nested host path |
+| --- | --- | --- | --- |
+| `ferrix-core` | `ferrix.control` | `control.sock` | `--control none` (or `--control PATH`) |
+| `ferrix-telephonyd` | `ferrix.telephony` | `telephony-control.sock` | `--mock-control out/qemu-aarch64/telephony-control.sock` |
+| `ferrix-networkd` | `ferrix.network` | `network-control.sock` | `--mock-control out/qemu-aarch64/network-control.sock` |
+
+`FERRIX_QEMU_TELEPHONY_SOCKET` / `FERRIX_QEMU_NETWORK_SOCKET` override the
+host paths (Unix socket paths must stay short: macOS limits them to about
+100 bytes). The wire form is the same everywhere: one JSON command per line
+in, one `{"status":"ok"|"error",...}` ack per line out; unknown commands and
+unknown fields are rejected. Drive them from the host:
+
+```sh
+just qemu-mock --service telephony incoming-call number=+15550100042
+just qemu-mock --service telephony remote-hangup
+just qemu-mock --service telephony set-sim state=locked attempts_left=3
+just qemu-mock --service network set-radio enabled=false
+just qemu-mock --service network set-connectivity connectivity=portal url=http://portal.ferrix.invalid/login
+just qemu-mock --service telephony '{"cmd":"tick","ms":5000}'
+just qemu-mock set-power charging=true          # --service core is the default
+```
+
+Telephony commands: `state`, `set-modem {state}`, `set-sim {state,
+attempts_left?}`, `set-registration {registration, roaming?, operator?,
+access?}`, `set-signal {bars}`, `incoming-call {number}`, `remote-answer`,
+`remote-hangup`, `remote-busy`, `remote-reject`, `outgoing-timeout`,
+`incoming-sms {number, body}`, `incoming-sms-multipart {number, ref_id,
+parts}`, `incoming-sms-part {number, ref_id, index (1-based), count, text}`,
+`deliver-sms`, `fail-sms {reason}`, `set-outgoing-result {connected | busy |
+rejected | timeout | no-service}`, `set-sms-result {sent | failed |
+delayed-delivery}`, `set-radio {power}`, `set-audio-available {routes}`,
+`tick {ms}`, `crash-backend`. Network commands: `state`, `set-adapter
+{present}`, `set-radio {enabled}`, `set-access-points {access_points}`,
+`scan-result {outcome, reason?}`, `set-connect-result {connected |
+auth-failed | dhcp-failed | dns-failed | timeout}`, `set-connectivity
+{connectivity, url?}`, `disconnect {reason}`, `set-ip {...}`, `tick {ms}`,
+`crash-backend`. Time inside the mocks advances only on `tick`, never on the
+wall clock. Numbers in commands are synthetic (`+1555010xxxx`); the daemons'
+records carry ids and states only.
+
+### Scenarios
+
+`targets/qemu-aarch64/scenarios/<name>.toml` are deterministic scripts over
+the mock-control channels, run by the host binary `ferrix-scenario`
+(crate `crates/ferrix-scenario`). Schema (strict; unknown keys, unknown
+services, `schema_version != 1`, a command without `cmd`, a zero timeout, or
+a datetime are errors; the file stem must equal `name`):
+
+```toml
+schema_version = 1
+name = "incoming-call-answer-route-remote-hangup"
+description = "..."
+
+[[step]]
+service = "telephony"                    # telephony | network | core
+command = { cmd = "incoming-call", number = "+15550100042" }
+expect = [ { event = "telephony-event", event_name = "call-changed", state = "ringing" } ]
+timeout_ms = 5000                        # bound only; default 5000; never asserted
+ack = { status = "ok" }                  # optional JSON subset of the ack
+expect_ack_error = false                 # true when the command must be rejected
+note = "free text carried into result.json"
+```
+
+Each step sends the command, requires a `"status":"ok"` ack (or an error when
+`expect_ack_error = true`, or the `ack` subset), then waits at most
+`timeout_ms` for every `expect` entry, **in order**, among records appended
+*after* the command was sent. Matching is a JSON subset: expected keys must be
+present and equal (nested objects recurse, arrays match element-wise and may
+be longer in the record, a number never equals a string), so extra fields in
+a record are fine and field names live only in the scenario files. Mock state
+persists across scenarios within one session, so every checked-in scenario
+starts with setup steps that restore the profile boot state.
+
+```sh
+just qemu-scenario-list                                     # names
+just qemu-scenario-validate                                 # schema only, no QEMU
+just qemu-agent-start                                       # or qemu-run in another terminal
+just qemu-scenario incoming-call-answer-route-remote-hangup # one scenario, guest mode
+just qemu-scenario wifi-captive --frame                     # plus a framebuffer capture
+just qemu-scenario-check                                    # all of them, fresh headless TCG session
+```
+
+Guest mode (default when `out/qemu-aarch64/agent/serial.log` exists, else
+the plain session directory) sends to `control.sock`, `telephony-control.sock`
+and `network-control.sock` and matches the serial log; evidence is `QEMU`.
+Nested mode (`ferrix-scenario --nested --log PATH --sockets DIR FILE...`)
+sends to the daemons' Unix sockets and matches their combined stdout log;
+evidence is `mock`. The runner prints one record per scenario,
+`{"evidence":"QEMU"|"mock","event":"scenario-passed"|"scenario-failed","name":...,"step":N,"reason":...}`,
+and writes `out/qemu-aarch64/scenarios/<name>/result.json` (per-step acks,
+matched records, status), `log-excerpt.log` (every log line from the first
+command to the end), and `frame.png` with `--frame` (through `scripts/qmp.py`
+on the agent session's QMP socket). Exit status 0/1/2 = all passed / some
+failed / setup error.
+
+`just qemu-scenario-check` requires `just qemu-build` artifacts, compiles
+only the host runner, validates every file, starts a headless TCG agent
+session (`FERRIX_QEMU_GRAPHICS=none`), waits for `telephonyd-ready` and
+`networkd-ready`, runs every checked-in scenario, stops the session, and
+emits `{"evidence":"QEMU","event":"scenario-check-passed"|"scenario-check-failed","passed":N,"failed":M,"failed_names":[...],"seconds":S}`.
+`FERRIX_QEMU_SCENARIO_TIMEOUT` (default 600 s) bounds the whole run;
+`FERRIX_QEMU_SCENARIO_FRAME=1` captures a framebuffer per scenario. It needs
+no network. CI runs it as the third job (`qemu-scenario-check`) on pushes
+and manual dispatch, and on pull requests only when the PR carries the
+`scenarios` label; `qemu-check` itself is unchanged in cost.
+
+The checked-in set is ADR-006's required list (25 files): `no-modem`,
+`modem-init-failure-recovery`, `sim-absent`, `sim-pin-locked-unlock`,
+`sim-ready`, `registration-search-deny-register-roam-loss-recover`,
+`incoming-call-answer-route-remote-hangup`, `outgoing-call-connected`,
+`outgoing-call-busy`, `outgoing-call-rejected`, `outgoing-call-timeout`,
+`outgoing-call-no-service`, `call-interrupted-by-modem-loss`,
+`sms-incoming-single`, `sms-incoming-multipart`, `sms-outgoing-success`,
+`sms-outgoing-failed`, `sms-delayed-delivery-report`, `radios-disabled`,
+`wifi-disabled-scan-connect`, `wifi-auth-failed`, `wifi-dhcp-failed`,
+`wifi-captive`, `wifi-offline-recovered`, `service-crash-restart-reconcile`.
+Scenarios that need a *local* action (dial, answer, hangup, send an SMS,
+enter a PIN, change the audio route, scan, connect) express it as a
+mock-control command of that name (`note = "client-side ... emulated over
+mock-control"`), because the runner only speaks the host channels and no
+protocol client can reach `/run/ferrix/*.sock` from the host; until a mock
+accepts that command the scenario stops with an honest `ack-error: unknown
+variant` at that step.
+
+**Limitation (daemon process restart):** `service-crash-restart-reconcile`
+exercises backend loss and reconciliation *inside* each daemon
+(`crash-backend` → `telephony-backend-lost` / `network-backend-lost`, tick-driven
+recovery, `service-restarted` snapshot). It does not kill a daemon process.
+Process restart is handled by init's `supervise` loop in the guest
+(`daemon-restarted` record), but there is no host-to-guest path to kill a
+guest process from CI (typing a shell command over the virtual keyboard into
+the Terminal app is not acceptable evidence), so process restart is
+demonstrated only nested on a Linux host and is not asserted by any QEMU
+scenario.
+
+### Alpine smoke guest stays offline (decision)
+
+The smoke guest has no NIC on purpose (ADR-006). Its job is the bounded,
+offline CI contract: boot, core, mock daemons, one deterministic transition,
+clean poweroff. Real IP connectivity (DHCP, DNS, TLS, browser evidence)
+belongs to the postmarketOS route, which already has user-mode `virtio-net`
+as `ethernet-like` transport; no QEMU route may claim 802.11 scanning,
+association, or radio behavior. Adding a NIC here would widen the CI surface
+without a fit reason, so `qemu-check` and `qemu-scenario-check` need no
+network and never assert wall-clock timing or DNS.
 
 `ferrix-basic-screen` subscribes to the core instead of reading power,
 network, or modem state from the profile itself, redraws on each event, and
@@ -254,7 +481,7 @@ repository file, so the nested `mock` session reports `theme-loaded` with that
 path; set it to another `colors.toml` to preview a different palette on the
 host.
 
-`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`), the catalog hash (`apps_sha256`), and the theme file hash (`colors_sha256`, with its source path as `colors`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs. The initramfs is first written to a temporary sibling, checked with `gzip -t`, and atomically moved into place, so an interrupted or corrupt archive cannot replace the last usable guest artifact or receive a manifest hash.
+`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`, `ferrix_telephonyd_sha256`, `ferrix_networkd_sha256`, `ferrix_contactsd_sha256`, `ferrix_phone_sha256`, `ferrix_messages_sha256`, `ferrix_contacts_sha256`, `ferrix_settings_sha256`), the catalog hash (`apps_sha256`) and grants hash (`grants_sha256`), the contacts fixtures hash (`contacts_fixtures_sha256`, empty when the fixture file is absent), and the theme file hash (`colors_sha256`, with its source path as `colors`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs. The initramfs is first written to a temporary sibling, checked with `gzip -t`, and atomically moved into place, so an interrupted or corrupt archive cannot replace the last usable guest artifact or receive a manifest hash.
 
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. This smoke-test image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the postmarketOS/pmbootstrap guest (below) is the full mobile-image route.
 
@@ -273,6 +500,12 @@ just qemu-agent-start
 just qemu-frame
 ```
 
+`qemu-agent-start` returns only after three serial records: `wayland-ready`
+(compositor and home surface committed), `input-ready` for the pointer
+(seat announced), and `home-ready {tiles, catalog, width, height}` (the
+launcher's catalog is loaded and hit-testable), so the first `just qemu-tap`
+lands on a live tile; the pmOS graphical start waits for `home-ready` as
+well and prints `product-home-not-ready` when it never arrives.
 `qemu-frame` produces `out/qemu-aarch64/agent/frame.png`: the rendered QEMU
 framebuffer. Inspect that exact PNG after the guest has reported
 `wayland-ready` in `out/qemu-aarch64/agent/serial.log`. A running QEMU
@@ -363,7 +596,10 @@ Inspect session state with `just qemu-agent-status`, and end it cleanly with
 
 ```text
 out/qemu-aarch64/agent/qmp.sock      # local QMP control socket
-out/qemu-aarch64/agent/control.sock  # mock-control channel (just qemu-mock)
+out/qemu-aarch64/agent/control.sock            # ferrix-core mock-control (just qemu-mock)
+out/qemu-aarch64/agent/telephony-control.sock  # ferrix-telephonyd mock-control (--service telephony)
+out/qemu-aarch64/agent/network-control.sock    # ferrix-networkd mock-control (--service network)
+out/qemu-aarch64/scenarios/<name>/             # ferrix-scenario evidence (result.json, log excerpt, frame)
 out/qemu-aarch64/agent/serial.log    # mandatory serial evidence
 out/qemu-aarch64/agent/frame.png     # latest rendered framebuffer
 out/qemu-aarch64/agent/launch.log    # resolved QEMU command and host errors
@@ -545,6 +781,83 @@ are reported as `{"evidence":"QEMU","event":"pmos-check-failed","reason":…}`
 with the serial log retained. Observed on this Apple Silicon host (QEMU 11.1.1,
 label QEMU): the TCG check passes in about 40 s from launch to `reboot: Power
 down`; under HVF `pmos-run` reaches the `ferrix login:` prompt in about 15 s.
+
+### Service daemons and backend selection on the pmOS route
+
+`finalize-in-container.sh` installs the same binaries as the smoke guest
+(`ferrix-telephonyd`, `ferrix-networkd`, `ferrix-contactsd`, `ferrix-phone`,
+`ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, the catalog with
+`grants.json`, the contacts fixtures when present) and creates
+`/var/lib/ferrix/{telephony,contacts}` on the root filesystem, so stores
+persist across guest reboots. `00-ferrix-product.start` starts the daemons
+after `product-core-ready`, supervised (`daemon-restarted` records), with
+`--mock-control none` (this route attaches no virtio-serial mock ports), and
+reports `product-service-started {name, backend}`,
+`product-service-missing`, and `product-services-ready {telephony, network,
+contacts, telephony_backend, network_backend, persistent:true}`. Headless
+boots start `ferrix-appd --no-autostart` as the identity authority.
+
+Backend selection is a bootstrap decision, never an app's: the kernel command
+line `ferrix.telephony=mock|modemmanager` and `ferrix.network=mock|networkmanager`
+win, then `FERRIX_TELEPHONY_BACKEND` / `FERRIX_NETWORK_BACKEND` from
+`/etc/ferrix/backends.env` if that file exists, otherwise **`mock`** — the
+default for this milestone. The image's `image-facts.json`/`manifest.json`
+record whether `networkmanager` and `modemmanager` are installed
+(`networkmanager_installed`, `modemmanager_installed`; the pmOS base image
+ships NetworkManager, ModemManager is not requested by `pmbootstrap.cfg`).
+Flipping to a production backend requires the daemons built with the
+`production` feature, the D-Bus service running on the system bus, and a
+recorded `pmos-check` with that command line; until then the flip is wired
+but not exercised, and no evidence claims it.
+
+### Opt-in Android compatibility runtime (Waydroid) — QEMU evidence only, claim level none
+
+`FERRIX_PMOS_ANDROID=1` (recipes `just waydroid-images-fetch`,
+`pmos-android-build`, `pmos-android-run`, `pmos-android-check`) builds a
+**separate** image under `out/qemu-aarch64/pmos-android/` from
+`pmos/pmbootstrap-android.cfg` (identical to `pmbootstrap.cfg` plus
+`waydroid, waydroid-openrc, waydroid-nftrules, nftables, lxc, dnsmasq,
+pulseaudio, dbus` from the pinned Alpine community mirror; inputs from
+`docs/android-runtime.md` §6). The default `pmos-build`, `pmos-check`, and
+CI never read that file. Steps:
+
+1. `just waydroid-images-fetch` downloads the pinned LineageOS 20 images
+   (`tools/android/waydroid.pins`: channel `waydroid_arm64_only`, build
+   20260403, system zip 728,517,282 bytes, vendor zip 77,349,347 bytes, SHA-256
+   verified; allow-listed hosts `sourceforge.net` and `*.dl.sourceforge.net`)
+   into ignored `out/android/waydroid/<build>/`, unpacks `system.img` /
+   `vendor.img`, writes `images.json`, and points `out/android/waydroid/current`
+   at the directory. `--verify-only` re-checks without network.
+2. `just pmos-android-build` mounts those images read-only into the finalize
+   step, which installs them to `/etc/waydroid-extra/images/`, writes
+   `/etc/ferrix/waydroid-properties.ini` (`ro.hardware.gralloc=default`,
+   `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=false`),
+   links `51_waydroid.nft` into `/etc/nftables.d/`, enables `cgroups` and
+   `dbus` in the default runlevel, installs
+   `/etc/local.d/00-ferrix-android.start`, and stages
+   `/usr/share/ferrix/android/brave.apk` only when
+   `out/android/brave/<tag>/BraveMonoarm64.apk` exists and passes
+   `tools/android/brave-verify.sh` (otherwise `android-brave-absent`). Every
+   hash lands in `image-facts.json` / `manifest.json` under `guest.android`
+   (`waydroid_version`, image hashes, properties and init-script hashes,
+   `brave_apk_sha256`, `nftables_rule_linked`).
+3. At first boot `00-ferrix-android.start` (before `00-ferrix-product.start`)
+   records `android-binder-devices {binder, hwbinder, vndbinder, psi}`, runs
+   `waydroid init -f -i /etc/waydroid-extra/images` offline (`waydroid-init
+   {status}`; the kernel `linux-postmarketos-stable` already provides the
+   Binder devices, no kernel change), appends the properties
+   (`waydroid-properties`), and starts `waydroid-container`
+   (`waydroid-container {status}`). The Waydroid *session* is started only by
+   `ferrix-appd`'s Android adapter on demand, never by init and never via sudo.
+4. `just pmos-android-check` additionally requires the
+   `android-binder-devices` and `waydroid-init` records and reprints them.
+
+Status: packaging implemented and syntax-checked; the image has **not** been
+built or booted on this host (the images and the larger rootfs did not fit the
+remaining disk), so no record above has been observed and the claim level is
+none. `waydroid init` inside a loop-mounted rootfs was deliberately not
+attempted (it needs the guest's dbus/lxc environment); first boot is the
+documented init point.
 
 ### Limitations
 

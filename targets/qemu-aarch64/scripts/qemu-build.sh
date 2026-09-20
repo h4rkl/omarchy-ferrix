@@ -15,16 +15,18 @@ command -v cpio >/dev/null || { echo "missing cpio" >&2; exit 2; }
 mkdir -p "$out" "$out/product" "$cache/cargo-registry" "$cache/guest-target"
 
 # Statically linked guest binaries (musl): the core, the application service
-# and its namespace sandbox, the home surface, and the Terminal app. One list
-# drives the build, the install, the product copy, and the manifest hashes.
-static_bins="ferrix-core ferrix-appd ferrix-sandbox ferrix-basic-screen ferrix-terminal"
+# and its namespace sandbox, the home surface, the Terminal app, the service
+# daemons (telephony, network, contacts; ADR-001..003) and the Phone,
+# Messages, Contacts, and Settings apps. One list drives the build, the
+# install, the product copy, and the manifest hashes.
+static_bins="ferrix-core ferrix-appd ferrix-sandbox ferrix-basic-screen ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings"
 printf 'building %s (aarch64 musl, pinned rust builder)\n' "$static_bins"
 docker run --rm --platform linux/arm64 \
   -v "$root":/src \
   -v "$cache/cargo-registry":/usr/local/cargo/registry \
   -v "$cache/guest-target":/build \
   -w /src -e CARGO_TARGET_DIR=/build -e "RUSTUP_TOOLCHAIN=$rust_toolchain" \
-  "$rust_image" sh -ec 'apk add --no-cache gcc musl-dev >/dev/null; cargo build --release --locked -p ferrix-core -p ferrix-appd -p ferrix-runtime-native -p ferrix-basic-screen -p ferrix-terminal'
+  "$rust_image" sh -ec 'apk add --no-cache gcc musl-dev >/dev/null; cargo build --release --locked -p ferrix-core -p ferrix-appd -p ferrix-runtime-native -p ferrix-basic-screen -p ferrix-terminal -p ferrix-telephonyd -p ferrix-networkd -p ferrix-contactsd -p ferrix-phone -p ferrix-messages -p ferrix-contacts -p ferrix-settings'
 for bin in $static_bins; do
   [ -x "$cache/guest-target/release/$bin" ] || { echo "guest $bin build failed" >&2; exit 1; }
 done
@@ -70,11 +72,24 @@ cp "${FERRIX_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$stage/pro
 # in another colors.toml at build time.
 cp "${FERRIX_QEMU_COLORS:-$root/themes/ferrix/colors.toml}" "$stage/colors.toml"
 chmod 0755 "$stage/init" "$stage/usr/bin/ferrix-shell"
-# Application catalog: one JSON descriptor per app (crates/ferrix-app-api schema).
+# Application catalog: one JSON descriptor per app (crates/ferrix-app-api schema)
+# plus the grants policy apps/grants.json (ADR-004), which ferrix-appd loads
+# from <app dir>/grants.json by default.
 mkdir -p "$stage/usr/share/ferrix/apps" "$out/product/apps"
 rm -f "$out/product/apps"/*.json
 cp "$root"/apps/*.json "$stage/usr/share/ferrix/apps/"
 cp "$root"/apps/*.json "$out/product/apps/"
+[ -f "$root/apps/grants.json" ] || { echo "missing apps/grants.json (ADR-004 grants policy)" >&2; exit 1; }
+# Synthetic contacts fixtures for ferrix-contactsd (deterministic, mock only).
+contacts_fixtures="$root/crates/ferrix-contactsd/fixtures/mock-contacts.json"
+contacts_fixtures_hash=""
+rm -rf "$out/product/contacts"
+if [ -f "$contacts_fixtures" ]; then
+  mkdir -p "$stage/usr/share/ferrix/contacts" "$out/product/contacts"
+  cp "$contacts_fixtures" "$stage/usr/share/ferrix/contacts/mock-contacts.json"
+  cp "$contacts_fixtures" "$out/product/contacts/mock-contacts.json"
+  contacts_fixtures_hash=$(shasum -a 256 "$contacts_fixtures" | awk '{print $1}')
+fi
 cp "$cache/guest-target/ferrix-shell/release/ferrix-shell" "$out/product/ferrix-shell"
 cp "${FERRIX_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$out/product/profile.toml"
 cp "${FERRIX_QEMU_COLORS:-$root/themes/ferrix/colors.toml}" "$out/product/colors.toml"
@@ -89,10 +104,18 @@ shell_hash=$(shasum -a 256 "$cache/guest-target/ferrix-shell/release/ferrix-shel
 appd_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-appd" | awk '{print $1}')
 sandbox_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-sandbox" | awk '{print $1}')
 terminal_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-terminal" | awk '{print $1}')
+# Service daemons and apps: "<name with _>_sha256" for each, from one list.
+service_hashes=""
+for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do
+  key=$(printf '%s' "$bin" | tr '-' '_')
+  hash=$(shasum -a 256 "$cache/guest-target/release/$bin" | awk '{print $1}')
+  service_hashes="$service_hashes\"${key}_sha256\":\"$hash\","
+done
+grants_hash=$(shasum -a 256 "$root/apps/grants.json" | awk '{print $1}')
 # Catalog hash: sorted descriptor file names and contents, so a changed or
 # added app changes the manifest.
 apps_hash=$(cd "$root/apps" && for f in $(ls *.json | sort); do printf '%s\n' "$f"; cat "$f"; done | shasum -a 256 | awk '{print $1}')
 # Theme hash: the exact colors.toml shipped as /etc/ferrix/colors.toml.
 colors_hash=$(shasum -a 256 "$out/product/colors.toml" | awk '{print $1}')
-printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s","apps_sha256":"%s","colors_sha256":"%s","profile":"%s","colors":"%s"}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$apps_hash" "$colors_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
+printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s",%s"apps_sha256":"%s","grants_sha256":"%s","contacts_fixtures_sha256":"%s","colors_sha256":"%s","profile":"%s","colors":"%s","mock_control_ports":["ferrix.control","ferrix.telephony","ferrix.network"]}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$service_hashes" "$apps_hash" "$grants_hash" "$contacts_fixtures_hash" "$colors_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
 printf 'built: %s/Image and %s/initramfs.cpio.gz\n' "$out" "$out"

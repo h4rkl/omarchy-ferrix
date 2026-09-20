@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "contacts": [
+    {
+      "id": "c_0000000000000001",
+      "display_name": "Test Contact 01",
+      "given": "Test",
+      "family": "Contact",
+      "numbers": [
+        { "label": "mobile", "raw": "+1 555 010 0001", "e164": "+15550100001" }
+      ],
+      "created_ms": 1700000000000,
+      "updated_ms": 1700000000000
+    },
+    {
+      "id": "c_0000000000000002",
+      "display_name": "Test Contact 02",
+      "numbers": [
+        { "label": "work", "raw": "(555) 010-0002", "e164": "+15550100002" },
+        { "label": "other", "raw": "ext 4242" }
+      ],
+      "created_ms": 1700000000001,
+      "updated_ms": 1700000000002
+    }
+  ]
+}

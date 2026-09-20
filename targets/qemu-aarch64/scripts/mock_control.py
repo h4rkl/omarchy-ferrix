@@ -23,10 +23,11 @@ def parse_value(text):
         return True
     if text == "false":
         return False
-    try:
+    # Plain decimal integers only; a leading "+" keeps E.164 numbers such as
+    # +15550100042 as strings.
+    if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
         return int(text)
-    except ValueError:
-        return text
+    return text
 
 
 def build_command(words):

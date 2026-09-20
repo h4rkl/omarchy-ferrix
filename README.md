@@ -47,6 +47,19 @@ UI prototype:
 - `ferrix-terminal` is the first independent application: a separate Wayland
   client in its own PID/mount/IPC/UTS namespaces. Crashing it leaves the
   compositor, core, service, and home surface running.
+- `ferrix-telephonyd`, `ferrix-networkd`, and `ferrix-contactsd` are typed,
+  schema-versioned services (ADR-001..003) with deterministic mock backends in
+  QEMU and ModemManager/NetworkManager adapters for postmarketOS. Phone,
+  Messages, Contacts, and Settings are independent supervised applications
+  over those services; capabilities are enforced per operation through
+  `ferrix-appd` grants (ADR-004), not merely declared.
+- Twenty-five checked-in radio/network scenarios run deterministically in the
+  QEMU guest (`just qemu-scenario-check`) through host-only mock-control
+  channels; none of it is a radio, SIM, carrier, or Wi-Fi hardware claim.
+- The Android compatibility runtime is evaluated (`docs/android-runtime.md`),
+  `RuntimeKind::Android` has a private Waydroid-based adapter, and Brave
+  (an Android application in that runtime) has a pinned, verified acquisition
+  workflow. No Android claim level has been demonstrated in QEMU yet.
 - Orientation events travel from the hardware adapter through the core to both
   compositor and client. Portrait and landscape output have been inspected in
   the actual QEMU framebuffer.
@@ -71,6 +84,12 @@ apps / shell ──▶ ferrix-protocol ──▶ ferrix-core ──▶ ferrix-ha
                                                │
                                       ferrix-hardware-emulator
                                       (QEMU mock adapter)
+
+phone / messages / settings ──▶ ferrix-telephony-protocol ──▶ ferrix-telephonyd ──▶ ModemBackend ──▶ mock | ModemManager (zbus)
+settings / home             ──▶ ferrix-network-protocol   ──▶ ferrix-networkd   ──▶ NetworkBackend ──▶ mock | NetworkManager (zbus)
+phone / messages / contacts ──▶ ferrix-contacts-protocol  ──▶ ferrix-contactsd  ──▶ atomic versioned JSON store
+        every daemon ──▶ ferrix-app-protocol identify{pid} ──▶ ferrix-appd (SO_PEERCRED + apps/grants.json)
+        host tests   ──▶ ferrix-mock-control (virtio-serial ferrix.telephony / ferrix.network) ──▶ mock backends only
 ```
 
 | Crate | Role |
@@ -90,6 +109,15 @@ apps / shell ──▶ ferrix-protocol ──▶ ferrix-core ──▶ ferrix-ha
 | `crates/ferrix-ui` | Shared software-rendering toolkit (tiny-skia, fontdue, the Ferrix slate/steel/rust palette loaded from `themes/ferrix/colors.toml` or `/etc/ferrix/colors.toml`, on-screen keyboard layout, keymap) and the fullscreen Wayland client runner used by first-party surfaces. See `docs/design.md`. A library, not an ABI. |
 | `crates/ferrix-basic-screen` | The home surface: catalog-driven launcher grid, status bar, connected quick settings, notifications, crash notices, portrait/landscape layouts. Launchable tiles go through `ferrix-appd`; reference entries keep illustrative in-process pages. |
 | `crates/ferrix-terminal` | The Terminal application as an independent Wayland client (alacritty VT layer on a PTY, touch-first on-screen keyboard), launched and isolated by `ferrix-appd`. |
+| `crates/ferrix-telephony-api`, `-protocol` | Target-neutral telephony contract (modem, SIM, registration, calls, SMS incl. multipart, data bearer, audio route, radio power, feature discovery, typed errors) and its schema-versioned socket protocol with a reconnecting client. Numbers are redacted for `telephony-state`-only clients; emergency numbers are rejected as unsupported. |
+| `crates/ferrix-telephony-adapter-api`, `-mock`, `-mm`, `ferrix-telephonyd` | Internal backend trait; the deterministic mock backend (profile `[telephony]`, tick-driven clock); the ModemManager adapter over `zbus` (feature `production`, never QMI/MBIM/QRTR/AT); and the privileged daemon that owns call/SMS identity, multipart assembly, an atomic fail-closed SMS store, per-operation authorization, and the host-only mock-control channel. |
+| `crates/ferrix-network-api`, `-protocol` | Networking contract (adapter presence incl. `ethernet-like` for virtio-net, radio, scans, hashed access points, profiles, IP config, connectivity, captive portal, typed errors) and its protocol/client. |
+| `crates/ferrix-network-adapter-api`, `-mock`, `-nm`, `ferrix-networkd` | Backend trait; synthetic-AP mock backend; NetworkManager adapter over `zbus` (feature `production`); the daemon with authorization and mock-control. |
+| `crates/ferrix-contacts-api`, `-protocol`, `ferrix-contactsd` | Radio-independent contacts contract (stable ids, E.164 normalization via `phonenumber`, search/lookup, vCard export/import) and the service with an atomic versioned JSON store, migrations, corruption handling, and synthetic fixtures. |
+| `crates/ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings` | Independent software-rendered applications (`org.ferrix.phone`, `.messages`, `.contacts`, `.settings`) launched only by `ferrix-appd`; each has a host `--preview` mode and pure, tested state machines. |
+| `crates/ferrix-mock-control` | Host/test-only line-JSON control channel (virtio-serial port or Unix socket) shared by mocked daemons; never an application API. |
+| `crates/ferrix-scenario` | Host runner for the strict checked-in scenario files under `targets/qemu-aarch64/scenarios/`, matching machine-readable records as JSON subsets and writing per-scenario evidence. |
+| `crates/ferrix-runtime-android` | Private Android compatibility runtime adapter (Waydroid CLI behind `ferrix-app-runtime-api`); Android package/activity ids stay runtime-private. See `docs/android-runtime.md`. |
 
 Targets and tooling live under `targets/qemu-aarch64/` (see its README for
 every command and its limitations) and `containers/guest-builder/` (the
@@ -100,7 +128,8 @@ pinned pmbootstrap builder). Generated artifacts stay under the ignored `out/`.
 ```sh
 just host-check          # reports prerequisites; installs nothing
 just qemu-build          # pinned containers build the guest kernel/initramfs and Rust binaries
-just qemu-check          # headless TCG contract test: boot, mock transition, clean poweroff
+just qemu-check          # headless TCG contract test: boot, mock transition, services ready, clean poweroff
+just qemu-scenario-check # headless TCG run of every checked-in telephony/network scenario
 just qemu-agent-start    # headless graphical session driven over QMP
 just qemu-frame          # capture the real framebuffer to out/qemu-aarch64/agent/frame.png
 just qemu-mock set-power charging=true   # host -> guest mock-control command
@@ -186,7 +215,12 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
   board details. Target selection lives in `ferrix-session`.
 - Linux services (NetworkManager, UPower, PipeWire, ModemManager, sensors) go
   behind typed project-owned adapters when they are integrated; their
-  protocols are not reimplemented.
+  protocols are not reimplemented. ModemManager and NetworkManager are
+  consumed through their maintained D-Bus APIs in `ferrix-telephony-mm` and
+  `ferrix-network-nm`; launchable native applications' private `/run` views
+  do not expose the system D-Bus socket.
+- Architecture decisions for the connectivity programme live in `docs/adr/`
+  and are subordinate to `plans/baseline.md`.
 - Weston is a diagnostic fallback and `ferrix-basic-screen` is a reference
   home surface. The product compositor is `ferrix-shell`: minimal,
   portrait-first, touch-first, rotation-aware, and software-rendered by default.
@@ -201,11 +235,20 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
 - App pages beyond the Terminal and system controls are still illustrative
   reference pages inside the home surface.
 - Isolation is process and namespace based (PID, mount, IPC, UTS, private
-  `/proc` and `/tmp`, `no_new_privs`). Applications still run as the session
-  user with access to the shared filesystem and sockets; portals, permission
-  enforcement, seccomp, and cgroup limits are not implemented yet.
-- Production adapters for NetworkManager, UPower, PipeWire, ModemManager, and
-  sensors are not implemented yet; QEMU uses deterministic mock adapters.
+  `/proc` and `/tmp`, `no_new_privs`) plus a private `/run/ferrix` view that
+  exposes only the sockets an app's grants allow. Services authorize every
+  operation by kernel-verified `AppId` and `apps/grants.json`. Applications
+  still share the session uid; seccomp and cgroup limits are not implemented.
+- The ModemManager and NetworkManager adapters compile (feature `production`)
+  with unit-tested mapping tables but have not been run against a live
+  ModemManager or NetworkManager; QEMU uses the deterministic mock backends.
+  UPower, PipeWire, and sensor adapters are not implemented.
+- Telephony audio routing on the production adapter is `unsupported` until an
+  audio service exists. Emergency calling is not supported anywhere.
+- The Android runtime adapter is host-tested only; Waydroid is not yet in the
+  guest image, so Brave has demonstrated no claim level in QEMU.
+- Brave acquisition requires Android SDK Build-Tools `apksigner` (or an
+  explicit `APKSIGNER` path); host tooling is checked but never installed.
 - Crash recovery covers applications (a crashed app returns focus to the home
   surface, which `ferrix-appd` restarts if it crashes itself); supervision of the
   core and compositor, and native postmarketOS packaging, remain future work.

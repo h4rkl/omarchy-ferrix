@@ -12,7 +12,7 @@ use crate::IsolationMode;
 use crate::{
     AppliedIsolation, ISOLATION_UNAVAILABLE_STATUS, IsolationPolicy, IsolationReport, NativeLaunch,
     SANDBOX_BIN, SANDBOX_BIN_ENV, exit_reason_from_status, needs_sandbox, parse_probe_output,
-    policy_json,
+    policy_json, sockets_for_grants,
 };
 
 /// How long a launch waits for the sandbox's readiness report before giving
@@ -64,8 +64,20 @@ pub fn expected_isolation(policy: &IsolationPolicy) -> IsolationReport {
     #[cfg(target_os = "linux")]
     {
         let namespaces = crate::select_namespaces(policy, launcher_is_root());
-        let applied =
-            namespaces.applied(policy.private_tmp && namespaces.mount, policy.no_new_privs);
+        let run_dir = if namespaces.mount {
+            crate::RunDirOutcome {
+                mode: policy.run_dir.mode,
+                sockets: policy.run_dir.sockets.clone(),
+                missing: Vec::new(),
+            }
+        } else {
+            crate::RunDirOutcome::default()
+        };
+        let applied = namespaces.applied(
+            policy.private_tmp && namespaces.mount,
+            policy.no_new_privs,
+            run_dir,
+        );
         IsolationReport {
             requested: policy.clone(),
             applied,
@@ -269,6 +281,18 @@ impl Runtime for NativeRuntime {
                 reason: "private_tmp requires mount_namespace".to_owned(),
             });
         }
+        if launch.isolation.run_dir.is_private() && !launch.isolation.mount_namespace {
+            return Err(AppError::InvalidDescriptor {
+                id: Some(app.id.clone()),
+                reason: "run_dir.mode private requires mount_namespace".to_owned(),
+            });
+        }
+        // Socket visibility follows the effective grants `ferrix_appd`
+        // computed, never a list written into the manifest.
+        let launch = NativeLaunch {
+            exec: launch.exec,
+            isolation: with_granted_sockets(launch.isolation, context),
+        };
         if !needs_sandbox(&launch.isolation) {
             return self.spawn_direct(app, &launch, context, "not requested");
         }
@@ -287,6 +311,22 @@ impl Runtime for NativeRuntime {
             }
         }
     }
+}
+
+/// The policy the sandbox actually receives: with a private socket
+/// directory, the visible sockets are exactly those the effective grants
+/// imply ([`sockets_for_grants`]); under `inherit` the list is irrelevant and
+/// cleared so the record never suggests a filter that was not applied.
+pub fn with_granted_sockets(
+    mut policy: IsolationPolicy,
+    context: &LaunchContext,
+) -> IsolationPolicy {
+    policy.run_dir.sockets = if policy.run_dir.is_private() {
+        sockets_for_grants(&context.granted)
+    } else {
+        Vec::new()
+    };
+    policy
 }
 
 /// Spawns with the launch environment, its own process group, and inherited
@@ -439,7 +479,57 @@ mod tests {
             instance: 1,
             env: vec![("FERRIX_APP_ID".to_owned(), "org.ferrix.test".to_owned())],
             evidence: "mock".to_owned(),
+            granted: Default::default(),
         }
+    }
+
+    #[test]
+    fn socket_list_follows_grants_and_a_manifest_list_is_replaced() {
+        use crate::{RunDirMode, RunDirPolicy};
+        use ferrix_app_api::AppCapability;
+        let manifest = IsolationPolicy {
+            run_dir: RunDirPolicy {
+                mode: RunDirMode::Private,
+                // A descriptor trying to see the telephony socket without a grant.
+                sockets: vec!["telephonyd.sock".to_owned()],
+            },
+            ..IsolationPolicy::default()
+        };
+        let none = with_granted_sockets(manifest.clone(), &context());
+        assert_eq!(none.run_dir.sockets, ["ferrix-appd.sock"]);
+
+        let mut granted = context();
+        granted.granted = [AppCapability::NetworkState, AppCapability::CoreState]
+            .into_iter()
+            .collect();
+        let some = with_granted_sockets(manifest, &granted);
+        assert_eq!(
+            some.run_dir.sockets,
+            ["ferrix-appd.sock", "core.sock", "networkd.sock"]
+        );
+
+        // Inherit: nothing is filtered, so nothing is listed.
+        let inherit = with_granted_sockets(IsolationPolicy::default(), &granted);
+        assert!(inherit.run_dir.sockets.is_empty());
+        assert_eq!(inherit.run_dir.mode, RunDirMode::Inherit);
+    }
+
+    #[test]
+    fn private_run_dir_requires_the_mount_namespace() {
+        use crate::{RunDirMode, RunDirPolicy};
+        let app = descriptor();
+        let policy = IsolationPolicy {
+            run_dir: RunDirPolicy {
+                mode: RunDirMode::Private,
+                sockets: Vec::new(),
+            },
+            ..IsolationPolicy::none()
+        };
+        let config = launch_value(&["sh", "-c", "exit 0"], policy);
+        assert!(matches!(
+            runtime().launch(&app, &config, &context()),
+            Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("run_dir")
+        ));
     }
 
     fn runtime() -> NativeRuntime {

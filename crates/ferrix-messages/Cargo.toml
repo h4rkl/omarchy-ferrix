@@ -1,0 +1,18 @@
+[package]
+name = "ferrix-messages"
+description = "Omarchy Ferrix Messages: independent software-rendered Wayland client for SMS conversations (app id org.ferrix.messages)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-protocol = { path = "../ferrix-app-protocol" }
+ferrix-contacts-api = { path = "../ferrix-contacts-api" }
+ferrix-contacts-protocol = { path = "../ferrix-contacts-protocol" }
+ferrix-telephony-api = { path = "../ferrix-telephony-api" }
+ferrix-telephony-protocol = { path = "../ferrix-telephony-protocol" }
+ferrix-ui = { path = "../ferrix-ui" }
+
+[lints]
+workspace = true

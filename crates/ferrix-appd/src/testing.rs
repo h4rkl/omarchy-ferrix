@@ -66,6 +66,12 @@ impl FakeRuntime {
         lock(&self.0.launches).len()
     }
 
+    /// Forces the pid assigned by the next launch. Used to exercise the
+    /// service's duplicate surface/runtime pid guard.
+    pub fn set_next_pid(&self, pid: u32) {
+        self.0.next_pid.store(pid, Ordering::SeqCst);
+    }
+
     /// Snapshot of `(app, instance, pid)` for every launch, in order.
     pub fn launches(&self) -> Vec<(AppId, u32, u32)> {
         lock(&self.0.launches)
@@ -81,6 +87,18 @@ impl FakeRuntime {
             .rev()
             .find(|l| &l.app == app)
             .map(|l| l.context.env.clone())
+    }
+
+    /// Effective capabilities handed to the most recent launch of `app`.
+    pub fn last_granted(
+        &self,
+        app: &AppId,
+    ) -> Option<std::collections::BTreeSet<ferrix_app_api::AppCapability>> {
+        lock(&self.0.launches)
+            .iter()
+            .rev()
+            .find(|l| &l.app == app)
+            .map(|l| l.context.granted.clone())
     }
 
     /// Pid of the most recent launch of `app`.

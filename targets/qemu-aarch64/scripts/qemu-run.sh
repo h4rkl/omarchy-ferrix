@@ -49,10 +49,22 @@ if [ "$agent" = 1 ]; then
 else
   control_socket=${FERRIX_QEMU_CONTROL_SOCKET:-"$out/control.sock"}
 fi
-mkdir -p "$(dirname "$control_socket")"
-rm -f "$control_socket"
-set -- "$@" -device virtio-serial-pci -chardev "socket,id=omctl,path=$control_socket,server=on,wait=off" -device virtserialport,chardev=omctl,name=ferrix.control
+# Per-daemon mock-control channels (ADR-006): ferrix-telephonyd reads
+# ferrix.telephony, ferrix-networkd reads ferrix.network. Same virtio-serial
+# bus, one host socket each, no cross-daemon forwarding. `just qemu-mock
+# --service telephony|network ...` and `ferrix-scenario` drive them.
+session_dir=$(dirname "$control_socket")
+telephony_socket=${FERRIX_QEMU_TELEPHONY_SOCKET:-"$session_dir/telephony-control.sock"}
+network_socket=${FERRIX_QEMU_NETWORK_SOCKET:-"$session_dir/network-control.sock"}
+mkdir -p "$session_dir" "$(dirname "$telephony_socket")" "$(dirname "$network_socket")"
+rm -f "$control_socket" "$telephony_socket" "$network_socket"
+set -- "$@" -device virtio-serial-pci \
+  -chardev "socket,id=omctl,path=$control_socket,server=on,wait=off" -device virtserialport,chardev=omctl,name=ferrix.control \
+  -chardev "socket,id=omtel,path=$telephony_socket,server=on,wait=off" -device virtserialport,chardev=omtel,name=ferrix.telephony \
+  -chardev "socket,id=omnet,path=$network_socket,server=on,wait=off" -device virtserialport,chardev=omnet,name=ferrix.network
 printf 'mock-control socket: %s\n' "$control_socket"
+printf 'telephony mock-control socket: %s\n' "$telephony_socket"
+printf 'network mock-control socket: %s\n' "$network_socket"
 if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   width=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
   height=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
