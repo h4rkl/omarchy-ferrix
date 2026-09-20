@@ -2,12 +2,14 @@
 
 use crate::config::DisplayGeometry;
 
-pub const USAGE: &str = "usage: mobile-shell [--nested] [--display WxH] [--socket NAME] [--core PATH] [--cmdline PATH|--no-cmdline] [--print-config] [PROFILE]\n\
+pub const USAGE: &str = "usage: mobile-shell [--nested] [--display WxH] [--socket NAME] [--core PATH] [--appd PATH|--no-appd] [--cmdline PATH|--no-cmdline] [--print-config] [PROFILE]\n\
   PROFILE defaults to /etc/ferrix/profile.toml\n\
   --nested        run in a host window (Linux host with a Wayland/X11 session); implies --no-cmdline and mock evidence\n\
   --display WxH   pin the output geometry (overridden by ferrix.display= on the kernel command line)\n\
   --socket NAME   Wayland socket name under XDG_RUNTIME_DIR (default wayland-0)\n\
   --core PATH     mobile-core state/command socket (default /run/ferrix/core.sock)\n\
+  --appd PATH     appd application-service socket (default $FERRIX_APPD_SOCKET or /run/ferrix/appd.sock); connected with retries, never required\n\
+  --no-appd       do not link to appd (home gesture then raises the oldest mapped window)\n\
   --cmdline PATH  kernel command line to read ferrix.display= from (default /proc/cmdline)\n\
   --print-config  print the resolved configuration as a JSON record and exit";
 
@@ -18,6 +20,8 @@ pub struct Args {
     pub display: Option<DisplayGeometry>,
     pub socket: Option<String>,
     pub core_socket: String,
+    /// `appd` socket to link to; `None` after `--no-appd`.
+    pub appd_socket: Option<String>,
     pub cmdline_path: Option<String>,
     pub print_config: bool,
     pub help: bool,
@@ -34,6 +38,12 @@ impl Default for Args {
                 .ok()
                 .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| mobile_protocol::DEFAULT_SOCKET.to_owned()),
+            appd_socket: Some(
+                std::env::var(app_api::APPD_SOCKET_ENV)
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| app_protocol::DEFAULT_SOCKET.to_owned()),
+            ),
             cmdline_path: Some("/proc/cmdline".to_owned()),
             print_config: false,
             help: false,
@@ -72,6 +82,14 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
                 }
                 out.core_socket = value;
             }
+            "--appd" => {
+                let value = it.next().ok_or("--appd requires a path")?;
+                if value.is_empty() {
+                    return Err("--appd path must not be empty".to_owned());
+                }
+                out.appd_socket = Some(value);
+            }
+            "--no-appd" => out.appd_socket = None,
             "--cmdline" => {
                 let value = it.next().ok_or("--cmdline requires a path")?;
                 if !out.nested {
@@ -108,6 +126,23 @@ mod tests {
         assert!(!args.nested);
         assert_eq!(args.cmdline_path.as_deref(), Some("/proc/cmdline"));
         assert!(!args.core_socket.is_empty());
+        assert!(
+            args.appd_socket.is_some_and(|s| !s.is_empty()),
+            "appd is linked by default"
+        );
+    }
+
+    #[test]
+    fn appd_socket_can_be_set_or_disabled() {
+        let args = parse_str("--appd /tmp/appd.sock").unwrap();
+        assert_eq!(args.appd_socket.as_deref(), Some("/tmp/appd.sock"));
+        let args = parse_str("--no-appd").unwrap();
+        assert_eq!(args.appd_socket, None);
+        let args = parse_str("--no-appd --appd /tmp/late.sock").unwrap();
+        assert_eq!(args.appd_socket.as_deref(), Some("/tmp/late.sock"));
+        assert!(parse_str("--appd").is_err());
+        assert!(parse(vec!["--appd".to_owned(), String::new()]).is_err());
+        assert!(USAGE.contains("--appd PATH") && USAGE.contains("--no-appd"));
     }
 
     #[test]

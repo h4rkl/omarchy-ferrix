@@ -72,7 +72,14 @@ install -Dm755 "$product_src" "$mnt$product_dst"
 install -Dm755 /product/mobile-core "$mnt/usr/bin/mobile-core"
 install -Dm755 /product/mobile-shell "$mnt/usr/bin/mobile-shell"
 install -Dm755 /product/mobile-basic-screen "$mnt/usr/bin/mobile-basic-screen"
+install -Dm755 /product/appd "$mnt/usr/bin/appd"
+install -Dm755 /product/ferrix-sandbox "$mnt/usr/bin/ferrix-sandbox"
+install -Dm755 /product/ferrum-terminal "$mnt/usr/bin/ferrum-terminal"
 install -Dm644 /product/profile.toml "$mnt/etc/ferrix/profile.toml"
+mkdir -p "$mnt/usr/share/ferrix/apps"
+for descriptor in /product/apps/*.json; do
+  install -Dm644 "$descriptor" "$mnt/usr/share/ferrix/apps/$(basename "$descriptor")"
+done
 local_enabled=true
 # -L as well as -e: the runlevel entry is a symlink to /etc/init.d/local that
 # dangles when resolved against the container's own root.
@@ -138,6 +145,9 @@ product_marker_sha=$(sha256sum "$mnt$product_dst" | cut -d' ' -f1)
 core_sha=$(sha256sum "$mnt/usr/bin/mobile-core" | cut -d' ' -f1)
 shell_sha=$(sha256sum "$mnt/usr/bin/mobile-shell" | cut -d' ' -f1)
 screen_sha=$(sha256sum "$mnt/usr/bin/mobile-basic-screen" | cut -d' ' -f1)
+appd_sha=$(sha256sum "$mnt/usr/bin/appd" | cut -d' ' -f1)
+sandbox_sha=$(sha256sum "$mnt/usr/bin/ferrix-sandbox" | cut -d' ' -f1)
+terminal_sha=$(sha256sum "$mnt/usr/bin/ferrum-terminal" | cut -d' ' -f1)
 cat > "$out/image-facts.json" <<JSON
 {
   "os_release": {"pretty_name": "$os_release", "version_id": "$os_version"},
@@ -146,7 +156,7 @@ cat > "$out/image-facts.json" <<JSON
   "kernel_cmdline_source": "$cmdline_source",
   "partitions": [$partitions],
   "readiness_marker": {"path": "$marker_dst", "sha256": "$marker_sha", "service": "openrc local", "local_service_was_enabled": $local_enabled},
-  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "mobile_core_sha256": "$core_sha", "mobile_shell_sha256": "$shell_sha", "mobile_basic_screen_sha256": "$screen_sha"},
+  "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "mobile_core_sha256": "$core_sha", "mobile_shell_sha256": "$shell_sha", "mobile_basic_screen_sha256": "$screen_sha", "appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrum_terminal_sha256": "$terminal_sha"},
   "exported": [$exported,"qemu-aarch64.img"]
 }
 JSON

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.dialer",
+  "runtime": "native",
+  "name": "Dialer",
+  "icon": {
+    "glyph": "☎",
+    "tone": "cyan"
+  },
+  "launchable": false
+}

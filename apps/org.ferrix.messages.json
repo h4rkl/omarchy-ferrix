@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.messages",
+  "runtime": "native",
+  "name": "Messages",
+  "icon": {
+    "glyph": "✉",
+    "tone": "green"
+  },
+  "launchable": false
+}

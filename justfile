@@ -66,6 +66,12 @@ qemu-mock +args:
 arch-check:
     @cargo test -p mobile-session --test architecture
 
+# Cargo for the Linux guest architecture inside the pinned arm64 Rust builder
+# (host convenience for Linux-only crates; defaults to `test --workspace`).
+[positional-arguments]
+linux-check *args:
+    @"{{root}}/targets/qemu-aarch64/scripts/linux-check.sh" "$@"
+
 test:
     @cargo test --workspace
 

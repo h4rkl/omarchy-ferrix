@@ -1,5 +1,11 @@
 [workspace]
 members = [
+    "crates/app-api",
+    "crates/app-protocol",
+    "crates/app-runtime-api",
+    "crates/appd",
+    "crates/ferrum-terminal",
+    "crates/ferrum-ui",
     "crates/hardware-api",
     "crates/hardware-emulator",
     "crates/mobile-basic-screen",
@@ -7,6 +13,7 @@ members = [
     "crates/mobile-protocol",
     "crates/mobile-session",
     "crates/mobile-shell",
+    "crates/runtime-native",
     "crates/target-profile",
 ]
 resolver = "2"

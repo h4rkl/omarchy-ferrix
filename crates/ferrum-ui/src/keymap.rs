@@ -5,8 +5,6 @@
 //! linking libxkbcommon (which `smithay-client-toolkit`'s `xkbcommon` feature
 //! requires) is impractical, and the touch keyboard is the primary phone input.
 //! A US layout table covers the QEMU agent workflow and host-window typing.
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
-
 use crate::osk::{self, Key};
 
 /// Modifier state from `wl_keyboard.modifiers`, interpreted with the default

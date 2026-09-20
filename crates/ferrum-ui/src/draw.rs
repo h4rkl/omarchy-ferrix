@@ -68,7 +68,8 @@ impl Canvas {
         self.pm.height() as i32
     }
 
-    #[cfg(test)]
+    /// Packed 0xRRGGBB at a pixel, or 0 outside the canvas. Used by tests and
+    /// by preview inspection.
     pub fn get(&self, x: i32, y: i32) -> u32 {
         if x < 0 || y < 0 || x >= self.width() || y >= self.height() {
             return 0;
@@ -156,7 +157,6 @@ impl Canvas {
     }
 
     /// Little-endian XRGB8888 bytes as expected by `wl_shm` format `xrgb8888`.
-    #[cfg(any(test, target_os = "linux"))]
     pub fn xrgb_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.pm.data().len());
         for px in self.pm.data().as_chunks::<4>().0 {
@@ -254,6 +254,12 @@ impl Type {
         let glyph = Rc::new(Glyph { metrics, coverage });
         self.cache.borrow_mut().insert(key, Rc::clone(&glyph));
         glyph
+    }
+
+    /// Whether every character of `text` has a real glyph in the face (not
+    /// the .notdef box). Lets callers fall back before drawing tofu.
+    pub fn has_glyphs(&self, weight: Weight, text: &str) -> bool {
+        !text.is_empty() && text.chars().all(|ch| self.font(weight).has_glyph(ch))
     }
 
     pub fn width(&self, style: Style, text: &str) -> i32 {

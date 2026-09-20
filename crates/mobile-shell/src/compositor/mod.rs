@@ -5,7 +5,13 @@
 //! data device) to that policy: the newest mapped toplevel is fullscreen and
 //! focused, layer surfaces are reserved for status/launcher chrome, and every
 //! input event is routed through one `wl_seat` (keyboard + pointer + touch).
+//!
+//! Each toplevel is tagged with its client's kernel-reported pid so the
+//! application service (`appd`, see `appd_link`) can associate surfaces with
+//! the processes it supervises; the bottom-edge home gesture (`gesture`) is
+//! recognised before input reaches any client.
 
+pub mod appd_link;
 pub mod input;
 pub mod render;
 #[cfg(feature = "udev")]
@@ -14,6 +20,7 @@ pub mod udev;
 pub mod winit;
 
 use std::{
+    path::Path,
     sync::{
         Arc, Mutex,
         mpsc::{Receiver, TryRecvError},
@@ -25,7 +32,10 @@ use hardware_api::{HardwareEvent, HardwareState};
 use mobile_protocol::Subscription;
 
 use smithay::{
-    backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
+    backend::{
+        input::TouchSlot,
+        renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
+    },
     delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
     delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::{
@@ -78,10 +88,30 @@ use smithay::{
 
 use crate::{
     Failure,
+    appd_link::AppdLink,
     config::ShellConfig,
     evidence::{self, Evidence, Value},
+    gesture::EdgeGesture,
     layout::{OutputLayout, Rotation, WindowStack},
 };
+
+/// Which contact currently owns the grabbed home gesture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GestureSource {
+    /// Pointer left button (virtio-tablet in QEMU, mouse when nested).
+    Pointer,
+    /// One touch slot; other slots keep reaching clients.
+    Touch(TouchSlot),
+}
+
+impl GestureSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            GestureSource::Pointer => "pointer",
+            GestureSource::Touch(_) => "touch",
+        }
+    }
+}
 
 pub fn run_udev(
     config: ShellConfig,
@@ -166,6 +196,11 @@ pub struct Shell {
     hardware: HardwareState,
     hardware_events: Receiver<HardwareEvent>,
     core_lost_reported: bool,
+    /// Link to the application service; `None` with `--no-appd`.
+    appd: Option<AppdLink>,
+    /// Bottom-edge home gesture recogniser and the contact that owns it.
+    pub gesture: EdgeGesture,
+    pub gesture_source: Option<GestureSource>,
 
     pub windows: WindowStack<Window>,
     pub popups: PopupManager,
@@ -190,6 +225,7 @@ impl Shell {
     /// Create the globals, the listening socket and the seat. The caller has
     /// already created the `Output` (the backend knows the connector) and is
     /// responsible for its mode; `Shell::new` publishes its global.
+    #[allow(clippy::too_many_arguments)] // one call site per backend; a builder would only hide the wiring
     pub fn new(
         display: &mut Display<Shell>,
         event_loop: &EventLoop<'static, Shell>,
@@ -250,12 +286,28 @@ impl Shell {
             )
             .map_err(|e| ("display", format!("event loop: {e}")))?;
 
-        let hardware = core.state.clone();
+        let hardware = core.state;
         let (core_ping, core_source) = make_ping().map_err(|e| ("core", e.to_string()))?;
         loop_handle
             .insert_source(core_source, |_, _, shell| shell.hardware_wake())
             .map_err(|e| ("core", format!("event source: {e}")))?;
         let hardware_events = core.spawn(Arc::new(move || core_ping.ping()));
+
+        // appd may start later or restart; the link retries in the background
+        // and wakes the loop through its own ping. Nothing here waits for it.
+        let appd = match &config.appd_socket {
+            Some(path) => {
+                let (appd_ping, appd_source) = make_ping().map_err(|e| ("appd", e.to_string()))?;
+                loop_handle
+                    .insert_source(appd_source, |_, _, shell| shell.appd_wake())
+                    .map_err(|e| ("appd", format!("event source: {e}")))?;
+                Some(AppdLink::start(
+                    Path::new(path),
+                    Arc::new(move || appd_ping.ping()),
+                ))
+            }
+            None => None,
+        };
 
         Ok(Self {
             display_handle: dh,
@@ -270,6 +322,9 @@ impl Shell {
             hardware,
             hardware_events,
             core_lost_reported: false,
+            appd,
+            gesture: EdgeGesture::new(),
+            gesture_source: None,
             windows: WindowStack::new(),
             popups: PopupManager::default(),
             cursor_status: CursorImageStatus::default_named(),
@@ -443,6 +498,10 @@ impl Shell {
         layer_hit(&[Layer::Bottom, Layer::Background])
     }
 
+    /// Point keyboard focus (and the pointer's surface) at the focused
+    /// toplevel, activate it, and tell `appd` when the focused pid changed.
+    /// Safe to call when the previously focused client is already gone: the
+    /// stack no longer contains it, so focus moves to the next mapped window.
     fn refocus(&mut self) {
         let focused = self.windows.focused().cloned();
         for window in self.windows.iter() {
@@ -458,40 +517,35 @@ impl Shell {
         if let Some(keyboard) = self.seat.get_keyboard() {
             keyboard.set_focus(self, target, SERIAL_COUNTER.next_serial());
         }
+        self.sync_pointer_focus();
+        self.report_focus();
         self.request_redraw();
     }
 
     fn on_window_mapped(&mut self, window: &Window) {
         self.mapped_clients += 1;
-        let surface = window.toplevel().map(|t| t.wl_surface().clone());
-        let (app_id, title) = surface
-            .as_ref()
-            .map(|s| {
-                with_states(s, |states| {
-                    states
-                        .data_map
-                        .get::<XdgToplevelSurfaceData>()
-                        .map(|data| {
-                            let data = data.lock().unwrap();
-                            (
-                                data.app_id.clone().unwrap_or_default(),
-                                data.title.clone().unwrap_or_default(),
-                            )
-                        })
-                        .unwrap_or_default()
-                })
-            })
-            .unwrap_or_default();
+        let (app_id, title) = appd_link::toplevel_meta(window);
+        self.windows.set_app_id(window, app_id.clone());
         let size = window.geometry().size;
         evidence::emit(&evidence::client_mapped(
             self.evidence,
-            &app_id,
-            &title,
+            self.windows.pid_of(window),
+            app_id.as_deref().unwrap_or_default(),
+            title.as_deref().unwrap_or_default(),
             size.w,
             size.h,
             self.windows.mapped_count(),
         ));
+        self.report_surface_mapped(window);
         self.refocus();
+    }
+
+    /// Kernel-reported pid of the client owning `surface`; `None` when the
+    /// client is already gone or the credentials are unavailable.
+    fn client_pid(&self, surface: &WlSurface) -> Option<u32> {
+        let client = surface.client()?;
+        let credentials = client.get_credentials(&self.display_handle).ok()?;
+        u32::try_from(credentials.pid).ok().filter(|pid| *pid > 0)
     }
 
     fn handle_toplevel_commit(&mut self, surface: &WlSurface) {
@@ -651,8 +705,9 @@ impl XdgShellHandler for Shell {
             state.states.set(xdg_toplevel::State::Fullscreen);
             state.size = Some(size);
         });
+        let pid = self.client_pid(surface.wl_surface());
         let window = Window::new_wayland_window(surface);
-        self.windows.push(window);
+        self.windows.push_with_pid(window, pid);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
@@ -705,15 +760,38 @@ impl XdgShellHandler for Shell {
         self.fullscreen_request(surface, None);
     }
 
+    /// Called for a graceful `xdg_toplevel.destroy` and, through resource
+    /// cleanup, when a client disconnects or crashes. Either way the window
+    /// leaves the stack and focus moves to the next mapped toplevel, so a
+    /// crashing foreground app reveals the window below it (home).
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         if let Some(window) = self.window_for_surface(surface.wl_surface()) {
             let was_mapped = self.windows.is_mapped(&window);
+            let pid = self.windows.pid_of(&window);
+            let app_id = self
+                .windows
+                .app_id_of(&window)
+                .unwrap_or_default()
+                .to_owned();
             self.windows.remove(&window);
             if was_mapped {
+                let toplevels = self.windows.mapped_count();
                 self.emit(
                     "client-unmapped",
-                    &[("toplevels", Value::Int(self.windows.mapped_count() as i64))],
+                    &[("toplevels", Value::Int(toplevels as i64))],
                 );
+                let client_gone = pid.is_none_or(|pid| self.windows.mapped_count_for_pid(pid) == 0);
+                if client_gone {
+                    evidence::emit(&evidence::client_gone(
+                        self.evidence,
+                        pid,
+                        &app_id,
+                        toplevels,
+                    ));
+                    if let Some(pid) = pid {
+                        self.report_surface_unmapped(pid);
+                    }
+                }
             }
         }
         self.refocus();

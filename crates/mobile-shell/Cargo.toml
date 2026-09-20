@@ -27,9 +27,15 @@ udev = [
 nested = ["smithay/backend_winit", "smithay/renderer_gl"]
 
 [dependencies]
+app-api = { path = "../app-api" }
+app-protocol = { path = "../app-protocol" }
 hardware-api = { path = "../hardware-api" }
 mobile-protocol = { path = "../mobile-protocol" }
 target-profile = { path = "../target-profile" }
+
+[dev-dependencies]
+# Only the fake-appd test speaks the wire format directly.
+serde_json = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 smithay = { version = "0.7", default-features = false, features = ["desktop", "wayland_frontend"] }

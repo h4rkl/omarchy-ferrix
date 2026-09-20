@@ -131,10 +131,57 @@ line; the guest init defaults to `mobile-shell`. Readiness stays observable:
 `mobile-shell` prints `compositor-ready` only once the Wayland socket is
 listening and the DRM output is configured, `client-mapped` when a toplevel
 commits its first buffer, and `compositor-failed` (non-zero exit) on errors;
-init still prints `wayland-ready` only after the socket exists and
-`mobile-basic-screen` reported a committed frame, otherwise `wayland-failed`
-with a reason and the compositor log. The Catacomb evaluation that led to the
-Smithay decision is `crates/mobile-shell/EVALUATION.md`.
+init then starts the application service `appd` and prints `wayland-ready`
+only after `appd-ready` (socket bound, catalog loaded) and the home surface's
+committed `basic-screen-frame` both appeared in `/run/appd.log`, otherwise
+`wayland-failed` with a reason (`appd-missing`, `appd-exited`,
+`appd-not-ready`, `home-not-ready`, ...) and the logs. The Catacomb evaluation
+that led to the Smithay decision is `crates/mobile-shell/EVALUATION.md`.
+
+### Application service, namespaces, and crash isolation
+
+`appd` (crate `crates/appd`) is the only process that starts applications. It
+loads one JSON descriptor per app from `/usr/share/ferrix/apps/` (checked in
+under `apps/`, schema in `crates/app-api`), auto-starts the home surface
+(`org.ferrix.home`, `mobile-basic-screen`), and serves a schema-versioned
+line-delimited JSON protocol on `/run/ferrix/appd.sock` (`crates/app-protocol`).
+The home surface asks it to launch (`{"request":"launch","id":"org.ferrix.terminal"}`);
+the compositor reports surfaces and focus to it by kernel-reported client pid
+and obeys its `activate` notifications; applications may only yield the
+foreground. Roles are declared at `hello` and gate what each connection may do.
+
+Every native application runs as `appd -> ferrix-sandbox -> init -> app`. The
+sandbox (crate `crates/runtime-native`, safe Rust on `rustix`/`signal-hook`)
+unshares PID, mount, IPC, and UTS namespaces (plus a user namespace when it is
+not root), gives the app a private `/proc` and tmpfs `/tmp`, sets the UTS
+hostname to the app id, sets `no_new_privs`, and runs a tiny PID 1 that
+forwards signals, reaps zombies, and exits with the app's exact status. A crash
+therefore kills one process tree only: `mobile-shell` refocuses the home
+surface and records `client-gone`, `appd` records `app-crashed` and publishes
+the lifecycle event, and the home surface shows a crash notice. If the home
+surface itself crashes, `appd` restarts it with backoff (`home-restarting`).
+
+Records to look for on serial: `appd-ready`, `app-launching`, `app-started`
+(with the isolation report), `sandbox-ready` (per-namespace proof from
+`/proc/self/ns`), `app-surface`, `app-foreground`/`app-background`,
+`app-exited`/`app-crashed`, `home-gesture`, `client-activated`, `client-gone`,
+`home-launch`, `home-crash-notice`. `docs/app-platform.md` is the contract.
+
+Deterministic crash demonstration from the host (agent session):
+
+```sh
+just qemu-tap 180 1236                 # Terminal tile: appd launches ferrum-terminal
+just qemu-frame                        # Terminal surface, prompt root@org.ferrix.terminal
+just qemu-type 'kill -SEGV $PPID'      # the shell's parent is the Terminal app
+just qemu-key ret                      # app dies with SIGSEGV inside its namespaces
+just qemu-frame                        # home surface again, with the crash notice
+just qemu-tap 180 1236                 # relaunch: a fresh instance, new pid
+just qemu-swipe 540 2290 540 1900      # compositor home gesture; Terminal keeps running
+```
+
+Signals sent to PID 1 of a namespace from inside it are ignored unless a
+handler exists, which is why the demo signals the Terminal (PID 2 in its
+namespace, child of the sandbox init) rather than the init.
 
 `mobile-shell` runs nested on a Linux host session from the same mock profile
 (`just shell-nested`, with `just shell-compositor-nested` retained as an alias;
@@ -162,13 +209,13 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `mobile-basic-screen`, a fullscreen Rust Wayland client (crate `crates/mobile-basic-screen`) that software-renders a Ferrum-styled basic screen — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, launcher grid, and gesture pill — from the emulator profile's battery, network, and display state. It is built on `smithay-client-toolkit`, `tiny-skia`, and `fontdue`, and is intentionally a reference surface, not the final Rust shell or compositor. Preview it on any host without QEMU:
+The first visible surface is `mobile-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/mobile-basic-screen`, built on the shared `crates/ferrum-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders a Ferrum-styled launcher — Tokyo Night palette, JetBrains Mono type, GrapheneOS-style status bar, a grid of tiles from the `appd` catalog, and the gesture pill — with battery, network, and display state from `mobile-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `appd` is reachable):
 
 ```sh
 cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
 ```
 
-`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, and the binary hashes (`mobile_basic_screen_sha256`, `mobile_core_sha256`, `mobile_shell_sha256`) are recorded in `out/qemu-aarch64/manifest.json`. `mobile-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs.
+`qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`mobile_basic_screen_sha256`, `mobile_core_sha256`, `mobile_shell_sha256`, `appd_sha256`, `ferrix_sandbox_sha256`, `ferrum_terminal_sha256`), and the catalog hash (`apps_sha256`) are recorded in `out/qemu-aarch64/manifest.json`. `mobile-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs.
 
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. This smoke-test image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the postmarketOS/pmbootstrap guest (below) is the full mobile-image route.
 
@@ -223,35 +270,42 @@ reference surface rather than the final product compositor or mobile shell.
 
 ### Terminal app
 
-The Terminal tile opens a working shell inside the reference surface: the
-client spawns BusyBox `/bin/sh` on a PTY and renders it through
-`alacritty_terminal` (Alacritty's VT parser and grid, Apache-2.0) with the
-same software renderer as the rest of the screen. Input comes from the
+The Terminal tile asks `appd` to launch `ferrum-terminal` (crate
+`crates/ferrum-terminal`, app id `org.ferrix.terminal`), an independent
+Wayland client in its own Linux namespaces: it spawns BusyBox `/bin/sh` on a
+PTY and renders it through `alacritty_terminal` (Alacritty's VT parser and
+grid, Apache-2.0) with the shared `ferrum-ui` software renderer. Because the
+sandbox sets the UTS hostname, the prompt reads `root@org.ferrix.terminal`,
+and `cat /proc/1/comm` shows `ferrix-sandbox`: the app sees only its own
+process tree. Input comes from the
 touch keyboard drawn below the grid (letters, `?123` symbols, shift within
 symbols for the remaining punctuation, plus an `esc tab ctrl ` \ | ← ↓ ↑ →`
 accessory row; shift and ctrl are sticky for one key) or from the virtual
 keyboard QEMU attaches as `virtio-keyboard-pci`, so typing in the Cocoa
 window works as well. Dragging inside the grid scrolls history. The session
-keeps running while you navigate Home and back; when the shell exits, tapping
-Enter restarts it. Serial evidence records are `terminal-spawned`,
+keeps running while you go Home (compositor bottom-edge gesture) and come
+back (tap the tile again: `appd` activates the running instance instead of
+starting a second one); the header arrow yields the foreground to the home
+surface. When the shell exits, tapping Enter restarts it. Serial evidence
+records are `app-context`, `terminal-frame`, `terminal-spawned`,
 `terminal-ready` (first line the shell wrote), `keyboard-input`, and
 `terminal-exited`.
 
 Drive it deterministically from the host:
 
 ```sh
-just qemu-tap 852 1236            # open the Terminal tile
+just qemu-tap 180 1236            # open the Terminal tile (first tile: launchable apps sort first)
 just qemu-type 'uname -a'         # virtual keyboard, US layout; \n sends Enter
 just qemu-key ret
 just qemu-frame                   # inspect out/qemu-aarch64/agent/frame.png
 ```
 
 Touch-keyboard taps use the same coordinates the client hit-tests; the unit
-tests in `crates/mobile-basic-screen/src/osk.rs` pin the layout. Preview the
-page on any host without QEMU (canned transcript, no PTY):
+tests in `crates/ferrum-ui/src/osk.rs` pin the layout. Preview the app on any
+host without QEMU (canned transcript, no PTY):
 
 ```sh
-cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/terminal.ppm --page terminal
+cargo run -p ferrum-terminal -- --preview out/terminal.ppm
 ```
 
 The physical-keyboard path is a small hand-rolled US evdev table because the

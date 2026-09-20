@@ -1,0 +1,15 @@
+[package]
+name = "ferrum-terminal"
+description = "Ferrum Terminal: an independent software-rendered Wayland client running a real shell on a PTY (xdg app_id org.ferrix.terminal)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+alacritty_terminal = { version = "0.26", default-features = false }
+app-api = { path = "../app-api" }
+app-protocol = { path = "../app-protocol" }
+ferrum-ui = { path = "../ferrum-ui" }

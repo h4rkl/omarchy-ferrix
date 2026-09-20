@@ -1,328 +1,188 @@
-//! Guest-side Wayland client built on smithay-client-toolkit: a fullscreen
-//! xdg-toplevel with a software-rendered wl_shm buffer. Emits a
-//! machine-readable record only after the first frame is actually attached and
-//! committed, per the evidence rules.
+//! Guest-side home surface: the [`ClientHandler`] that folds mobile-core
+//! hardware events and `appd` lifecycle notifications into the launcher,
+//! sends hardware commands and launch requests, and shows crash notices.
 //!
-//! The client runs on calloop (Smithay's event loop) so the Terminal app's PTY
-//! reader thread can wake the UI through a ping source instead of polling.
-//! Keyboard input arrives as raw `wl_keyboard` evdev codes; see `keymap` for
-//! why libxkbcommon is not linked into this static guest binary.
+//! Both background sources (the core event reader and the `appd`
+//! notification reader) wake the UI through the runner's single [`Wake`]
+//! handle; `wake` drains whichever channel has data. When `appd` is not
+//! reachable the catalog comes from the descriptor directory and a thread
+//! keeps retrying every second, so the launcher is never blank and starts
+//! launching as soon as the service appears.
 
-use std::io::Write as _;
-use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::Duration;
 
-use smithay_client_toolkit::reexports::calloop::EventLoop;
-use smithay_client_toolkit::reexports::calloop::ping::make_ping;
-use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
-use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
-use smithay_client_toolkit::reexports::client::protocol::{
-    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface, wl_touch,
-};
-use smithay_client_toolkit::reexports::client::{Connection, Dispatch, QueueHandle, WEnum};
-use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_output, delegate_pointer, delegate_registry, delegate_seat,
-    delegate_shm, delegate_touch, delegate_xdg_shell, delegate_xdg_window,
-    output::{OutputHandler, OutputState},
-    registry::{ProvidesRegistryState, RegistryState},
-    registry_handlers,
-    seat::{
-        Capability, SeatHandler, SeatState,
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
-        touch::TouchHandler,
-    },
-    shell::WaylandSurface,
-    shell::xdg::XdgShell,
-    shell::xdg::window::{Window, WindowConfigure, WindowDecorations, WindowHandler},
-    shm::slot::{Buffer, SlotPool},
-    shm::{Shm, ShmHandler},
-};
-
+use app_api::{AppEvent, AppId, LifecycleState};
+use app_protocol::{Client, ClientRole, Notification, Subscription};
+use ferrum_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrum_ui::draw::{Canvas, Type};
+use ferrum_ui::evidence::{emit, json_escape};
+use ferrum_ui::keymap::Modifiers;
 use hardware_api::{HardwareCommand, HardwareEvent, HardwareState, WifiState};
-use mobile_protocol::Subscription;
 use target_profile::Profile;
 
-use crate::draw::Type;
-use crate::interaction::{AppId, Input, Page, SystemAction, TermAction, UiState};
-use crate::keymap;
+use crate::EVIDENCE;
+use crate::catalog::{self, tiles_from_catalog};
+use crate::interaction::{CrashNotice, Input, SystemAction, UiState};
 use crate::screen;
-use crate::terminal::{Geometry, Session, Snapshot};
 
-/// The guest shell. BusyBox `sh` in the Alpine smoke-test guest; `HOME`,
-/// `USER`, and `SHELL` come from the init environment.
-const SHELL: &str = "/bin/sh";
+pub const APP_ID: &str = "org.ferrix.home";
+const TITLE: &str = "Ferrum home";
+const APPD_TIMEOUT: Duration = Duration::from_secs(1);
+const APPD_RETRY: Duration = Duration::from_secs(1);
 
-struct App {
-    registry_state: RegistryState,
-    compositor_state: CompositorState,
-    output_state: OutputState,
-    seat_state: SeatState,
-    shm: Shm,
-    pool: SlotPool,
-    window: Window,
-    profile: Profile,
-    /// Live hardware state as reported by mobile-core (adapter -> core -> UI).
+/// State of the link to `appd`.
+enum AppdLink {
+    /// A background thread is retrying; it delivers the subscription here.
+    Connecting(Receiver<Subscription>),
+    /// Subscribed: lifecycle notifications arrive here.
+    Connected(Receiver<Notification>),
+}
+
+struct Home {
+    ty: Type,
+    minute: u32,
     hw: HardwareState,
     hw_events: Receiver<HardwareEvent>,
     core_socket: PathBuf,
     core_lost_reported: bool,
-    ty: Type,
-    minute: u32,
-    size: (u32, u32),
-    first_frame_reported: bool,
-    running: bool,
-    error: Option<String>,
-    pointer: Option<wl_pointer::WlPointer>,
-    cursor_surface: Option<wl_surface::WlSurface>,
-    cursor_buffer: Option<Buffer>,
-    touch: Option<wl_touch::WlTouch>,
-    keyboard: Option<wl_keyboard::WlKeyboard>,
-    mods: keymap::Modifiers,
-    keyboard_reported: bool,
-    input: Input,
     ui: UiState,
-    session: Option<Session>,
-    session_error: Option<String>,
-    wake: Arc<dyn Fn() + Send + Sync>,
-    terminal_ready_reported: bool,
-    terminal_exit_reported: bool,
+    input: Input,
+    wake: Wake,
+    appd_socket: PathBuf,
+    appd: AppdLink,
+    appd_unavailable_reported: bool,
+    /// Request/reply connection for launches (Home role), opened lazily.
+    launcher: Option<Client>,
 }
 
-fn emit(record: String) {
-    println!("{record}");
-    let _ = std::io::stdout().flush();
+fn connect_subscription(socket: &Path) -> Result<Subscription, String> {
+    Client::connect(socket, ClientRole::Home, APPD_TIMEOUT)?.subscribe()
 }
 
-fn json_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-pub fn run(profile: &Profile, core: Subscription, minute: u32) -> Result<(), String> {
-    let ty = Type::load()?;
-    let conn = Connection::connect_to_env().map_err(|e| format!("wayland connect: {e}"))?;
-    let (globals, event_queue) =
-        registry_queue_init(&conn).map_err(|e| format!("wayland registry: {e}"))?;
-    let qh = event_queue.handle();
-
-    let compositor =
-        CompositorState::bind(&globals, &qh).map_err(|e| format!("wl_compositor: {e}"))?;
-    let xdg_shell = XdgShell::bind(&globals, &qh).map_err(|e| format!("xdg_wm_base: {e}"))?;
-    let shm = Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm: {e}"))?;
-
-    let surface = compositor.create_surface(&qh);
-    let window = xdg_shell.create_window(surface, WindowDecorations::RequestServer, &qh);
-    window.set_app_id("org.ferrix.mobile-basic-screen");
-    window.set_title("Ferrum basic screen (QEMU reference)");
-    window.set_fullscreen(None);
-    window.commit();
-
-    let initial = (profile.display.width, profile.display.height);
-    let pool = SlotPool::new((initial.0 * initial.1 * 4) as usize, &shm)
-        .map_err(|e| format!("shm pool: {e}"))?;
-
-    let mut event_loop: EventLoop<App> =
-        EventLoop::try_new().map_err(|e| format!("event loop: {e}"))?;
-    let handle = event_loop.handle();
-    WaylandSource::new(conn.clone(), event_queue)
-        .insert(handle.clone())
-        .map_err(|e| format!("wayland event source: {e}"))?;
-    let (ping, ping_source) = make_ping().map_err(|e| format!("terminal wake: {e}"))?;
-    handle
-        .insert_source(ping_source, |_, _, app: &mut App| app.terminal_wake())
-        .map_err(|e| format!("terminal wake source: {e}"))?;
-    let (hw_ping, hw_ping_source) = make_ping().map_err(|e| format!("core wake: {e}"))?;
-    handle
-        .insert_source(hw_ping_source, |_, _, app: &mut App| app.hardware_wake())
-        .map_err(|e| format!("core wake source: {e}"))?;
-    let core_socket = core.socket().to_owned();
-    let hw = core.state.clone();
-    let hw_events = core.spawn(Arc::new(move || hw_ping.ping()));
-    let (wifi_on, bt_on) = crate::ui_toggles(&hw);
-    let mut ui = UiState::new(wifi_on, bt_on);
-    ui.brightness = hw.display.brightness_percent;
-
-    let mut app = App {
-        registry_state: RegistryState::new(&globals),
-        compositor_state: compositor,
-        output_state: OutputState::new(&globals, &qh),
-        seat_state: SeatState::new(&globals, &qh),
-        shm,
-        pool,
-        window,
-        profile: profile.clone(),
-        hw,
-        hw_events,
-        core_socket,
-        core_lost_reported: false,
-        ty,
-        minute,
-        size: initial,
-        first_frame_reported: false,
-        running: true,
-        error: None,
-        pointer: None,
-        cursor_surface: None,
-        cursor_buffer: None,
-        touch: None,
-        keyboard: None,
-        mods: keymap::Modifiers::default(),
-        keyboard_reported: false,
-        input: Input::default(),
-        ui,
-        session: None,
-        session_error: None,
-        wake: Arc::new(move || ping.ping()),
-        terminal_ready_reported: false,
-        terminal_exit_reported: false,
-    };
-
-    while app.running {
-        event_loop
-            .dispatch(None, &mut app)
-            .map_err(|e| format!("event loop dispatch: {e}"))?;
-        if let Some(err) = app.error.take() {
-            return Err(err);
-        }
-    }
-    Ok(())
-}
-
-impl App {
-    const CURSOR_SIZE: i32 = 32;
-
-    fn install_touch_cursor(&mut self, qh: &QueueHandle<Self>) -> Result<(), String> {
-        let surface = self.compositor_state.create_surface(qh);
-        let stride = Self::CURSOR_SIZE * 4;
-        let (buffer, pixels) = self
-            .pool
-            .create_buffer(
-                Self::CURSOR_SIZE,
-                Self::CURSOR_SIZE,
-                stride,
-                wl_shm::Format::Argb8888,
-            )
-            .map_err(|error| format!("touch cursor buffer: {error}"))?;
-        pixels.fill(0);
-
-        // Little-endian premultiplied ARGB8888: a transparent center with a
-        // crisp Tokyo Night blue ring, faint outer halo, and exact hotspot dot.
-        let center = (Self::CURSOR_SIZE as f32 - 1.0) / 2.0;
-        for y in 0..Self::CURSOR_SIZE {
-            for x in 0..Self::CURSOR_SIZE {
-                let distance = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
-                let alpha = if distance <= 2.25 {
-                    255_u8
-                } else if (11.0..=13.5).contains(&distance) {
-                    230_u8
-                } else if (10.0..=14.5).contains(&distance) {
-                    72_u8
-                } else {
-                    continue;
-                };
-                let offset = ((y * Self::CURSOR_SIZE + x) * 4) as usize;
-                let premultiply = |channel: u8| (u16::from(channel) * u16::from(alpha) / 255) as u8;
-                pixels[offset] = premultiply(0xf7);
-                pixels[offset + 1] = premultiply(0xa2);
-                pixels[offset + 2] = premultiply(0x7a);
-                pixels[offset + 3] = alpha;
+/// Retries the subscription every second until it succeeds or the receiver
+/// is dropped, then wakes the UI.
+fn start_connecting(socket: PathBuf, wake: Wake) -> Receiver<Subscription> {
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("appd-connect".to_owned())
+        .spawn(move || {
+            loop {
+                match connect_subscription(&socket) {
+                    Ok(subscription) => {
+                        if tx.send(subscription).is_ok() {
+                            wake();
+                        }
+                        return;
+                    }
+                    Err(_) => thread::sleep(APPD_RETRY),
+                }
             }
-        }
+        })
+        .expect("spawn appd connect thread");
+    rx
+}
 
-        surface.damage_buffer(0, 0, Self::CURSOR_SIZE, Self::CURSOR_SIZE);
-        buffer
-            .attach_to(&surface)
-            .map_err(|error| format!("touch cursor attach: {error}"))?;
-        surface.commit();
-        self.cursor_surface = Some(surface);
-        self.cursor_buffer = Some(buffer);
-        Ok(())
-    }
+pub fn run(
+    profile: &Profile,
+    core: mobile_protocol::Subscription,
+    appd_socket: &Path,
+    minute: u32,
+) -> Result<(), String> {
+    let config = ClientConfig {
+        app_id: APP_ID.to_owned(),
+        title: TITLE.to_owned(),
+        initial_size: (profile.display.width, profile.display.height),
+        evidence: EVIDENCE.to_owned(),
+        first_frame_event: "basic-screen-frame".to_owned(),
+        first_frame_extra: vec![("profile".to_owned(), profile.name.clone())],
+    };
+    let appd_socket = appd_socket.to_path_buf();
+    ferrum_ui::client::run(config, move |wake| {
+        let ty = Type::load()?;
+        let core_socket = core.socket().to_owned();
+        let hw = core.state;
+        let hw_events = core.spawn(Arc::clone(&wake));
+        let (wifi_on, bt_on) = crate::ui_toggles(&hw);
 
-    fn on_terminal(&self) -> bool {
-        self.ui.page == Page::App(AppId::Terminal)
-    }
-
-    fn geometry(&self) -> Geometry {
-        let m = screen::terminal_metrics(&self.ty, self.size.0, self.size.1);
-        let clamp = |v: usize| u16::try_from(v).unwrap_or(u16::MAX);
-        let clamp_px = |v: i32| u16::try_from(v.max(1)).unwrap_or(u16::MAX);
-        Geometry {
-            cols: clamp(m.cols),
-            rows: clamp(m.rows),
-            cell_w: clamp_px(m.cell_w),
-            cell_h: clamp_px(m.cell_h),
-        }
-    }
-
-    fn open_session(&mut self) {
-        let geometry = self.geometry();
-        self.terminal_ready_reported = false;
-        self.terminal_exit_reported = false;
-        match Session::spawn(SHELL, &[], geometry, Arc::clone(&self.wake)) {
-            Ok(session) => {
-                emit(format!(
-                    "{{\"evidence\":\"QEMU\",\"event\":\"terminal-spawned\",\"shell\":\"{}\",\"cols\":{},\"rows\":{}}}",
-                    session.program(),
-                    geometry.cols,
-                    geometry.rows
-                ));
-                self.session = Some(session);
-                self.session_error = None;
+        // Catalog: appd when reachable, else descriptors plus a retry loop.
+        let mut appd_unavailable_reported = false;
+        let (tiles, appd) = match connect_subscription(&appd_socket) {
+            Ok(subscription) => {
+                let tiles = tiles_from_catalog(&subscription.apps, &subscription.instances);
+                emit(appd_connected_record(&appd_socket, tiles.len()));
+                let (notifications, _reporter) = subscription.spawn(Arc::clone(&wake));
+                (tiles, AppdLink::Connected(notifications))
             }
             Err(error) => {
+                appd_unavailable_reported = true;
                 emit(format!(
-                    "{{\"evidence\":\"QEMU\",\"event\":\"terminal-error\",\"shell\":\"{SHELL}\",\"error\":\"{}\"}}",
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-unavailable\",\"socket\":\"{}\",\"reason\":\"{}\",\"fallback\":\"descriptors\"}}",
+                    json_escape(&appd_socket.display().to_string()),
                     json_escape(&error)
                 ));
-                self.session_error = Some(error);
+                let tiles = match catalog::load_descriptor_tiles() {
+                    Ok((dir, tiles)) => {
+                        emit(format!(
+                            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"catalog-loaded\",\"source\":\"descriptors\",\"dir\":\"{}\",\"apps\":{}}}",
+                            json_escape(&dir.display().to_string()),
+                            tiles.len()
+                        ));
+                        tiles
+                    }
+                    Err(error) => {
+                        emit(format!(
+                            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"catalog-empty\",\"reason\":\"{}\"}}",
+                            json_escape(&error)
+                        ));
+                        Vec::new()
+                    }
+                };
+                let rx = start_connecting(appd_socket.clone(), Arc::clone(&wake));
+                (tiles, AppdLink::Connecting(rx))
             }
-        }
+        };
+        let mut ui = UiState::new(wifi_on, bt_on, tiles);
+        ui.brightness = hw.display.brightness_percent;
+
+        Ok(Home {
+            ty,
+            minute,
+            hw,
+            hw_events,
+            core_socket,
+            core_lost_reported: false,
+            ui,
+            input: Input::default(),
+            wake,
+            appd_socket,
+            appd,
+            appd_unavailable_reported,
+            launcher: None,
+        })
+    })
+}
+
+fn appd_connected_record(socket: &Path, apps: usize) -> String {
+    format!(
+        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-connected\",\"socket\":\"{}\",\"apps\":{apps}}}",
+        json_escape(&socket.display().to_string())
+    )
+}
+
+impl Home {
+    fn sync_controls(&mut self) {
+        self.ui.wifi_on = self.hw.network.wifi != WifiState::Disabled;
+        self.ui.bluetooth_on = self.hw.bluetooth.enabled;
+        self.ui.brightness = self.hw.display.brightness_percent;
     }
 
-    /// Runs after every UI change: starts the shell when the Terminal app is
-    /// first opened and forwards queued terminal actions to the session. The
-    /// session outlives navigation, like a backgrounded phone app; Enter on an
-    /// exited shell restarts it.
+    /// Runs after every UI change: forwards queued hardware requests to the
+    /// core and launch requests to `appd`.
     fn after_input(&mut self) {
-        if self.on_terminal() && self.session.is_none() && self.session_error.is_none() {
-            self.open_session();
-        }
-        for action in std::mem::take(&mut self.ui.pending) {
-            match action {
-                TermAction::Input(bytes) => {
-                    let live = self
-                        .session
-                        .as_ref()
-                        .is_some_and(|session| session.exited().is_none());
-                    if live {
-                        if let Some(session) = &self.session {
-                            session.write(bytes);
-                        }
-                    } else if bytes == b"\r" {
-                        self.session = None;
-                        self.session_error = None;
-                        self.open_session();
-                    }
-                }
-                TermAction::Scroll(lines) => {
-                    if let Some(session) = &self.session {
-                        session.scroll(lines);
-                    }
-                }
-            }
-        }
         for action in std::mem::take(&mut self.ui.pending_system) {
             let command = match action {
                 SystemAction::WifiEnabled(enabled) => HardwareCommand::SetWifiEnabled { enabled },
@@ -331,11 +191,7 @@ impl App {
                 }
                 SystemAction::Brightness(percent) => HardwareCommand::SetBrightness { percent },
             };
-            match mobile_protocol::command(
-                &self.core_socket,
-                command,
-                std::time::Duration::from_secs(2),
-            ) {
+            match mobile_protocol::command(&self.core_socket, command, Duration::from_secs(2)) {
                 Ok(state) => {
                     self.hw = state;
                     self.sync_controls();
@@ -343,23 +199,209 @@ impl App {
                 Err(error) => {
                     self.sync_controls();
                     emit(format!(
-                        "{{\"evidence\":\"QEMU\",\"event\":\"ui-command-failed\",\"error\":\"{}\"}}",
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ui-command-failed\",\"error\":\"{}\"}}",
                         json_escape(&error)
                     ));
                 }
             }
         }
+        for id in std::mem::take(&mut self.ui.pending_launch) {
+            self.launch(&id);
+        }
     }
 
-    fn sync_controls(&mut self) {
-        self.ui.wifi_on = self.hw.network.wifi != WifiState::Disabled;
-        self.ui.bluetooth_on = self.hw.bluetooth.enabled;
-        self.ui.brightness = self.hw.display.brightness_percent;
+    fn launcher(&mut self) -> Option<&mut Client> {
+        if self.launcher.is_none() {
+            match Client::connect(&self.appd_socket, ClientRole::Home, APPD_TIMEOUT) {
+                Ok(client) => self.launcher = Some(client),
+                Err(error) => {
+                    self.report_appd_unavailable(&error);
+                    return None;
+                }
+            }
+        }
+        self.launcher.as_mut()
     }
 
-    /// Ping handler: mobile-core delivered hardware events (or went away).
-    /// Every event is folded into the live state, reported, and redrawn.
-    fn hardware_wake(&mut self) {
+    fn report_appd_unavailable(&mut self, reason: &str) {
+        if self.appd_unavailable_reported {
+            return;
+        }
+        self.appd_unavailable_reported = true;
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-unavailable\",\"socket\":\"{}\",\"reason\":\"{}\"}}",
+            json_escape(&self.appd_socket.display().to_string()),
+            json_escape(reason)
+        ));
+    }
+
+    fn set_starting(&mut self, id: &AppId, starting: bool) {
+        if let Some(index) = self.ui.tile_index(id) {
+            self.ui.tiles[index].starting = starting;
+        }
+    }
+
+    /// Sends `Request::Launch`; the tile stays in its starting state until a
+    /// lifecycle notification reports the instance, or is cleared on failure.
+    fn launch(&mut self, id: &AppId) {
+        let outcome = match self.launcher() {
+            Some(client) => client.launch(id),
+            None => Err(Err("appd unavailable".to_owned())),
+        };
+        match outcome {
+            Ok((instance, activated_existing)) => {
+                emit(format!(
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-launch\",\"app\":\"{id}\",\"status\":\"ok\",\"activated_existing\":{activated_existing},\"instance\":{},\"state\":\"{}\"}}",
+                    instance.instance, instance.state
+                ));
+                if let Some(index) = self.ui.tile_index(id) {
+                    let tile = &mut self.ui.tiles[index];
+                    tile.running = instance.state.is_running();
+                    tile.starting = instance.state == LifecycleState::Starting;
+                }
+                self.ui.crash_notice.take_if(|notice| notice.app == *id);
+            }
+            Err(Ok(error)) => {
+                emit(format!(
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-launch\",\"app\":\"{id}\",\"status\":\"error\",\"activated_existing\":false,\"error\":\"{}\"}}",
+                    json_escape(&error.to_string())
+                ));
+                self.set_starting(id, false);
+            }
+            Err(Err(transport)) => {
+                // The connection is gone; the next launch reconnects.
+                self.launcher = None;
+                emit(format!(
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-launch\",\"app\":\"{id}\",\"status\":\"appd-unavailable\",\"activated_existing\":false,\"error\":\"{}\"}}",
+                    json_escape(&transport)
+                ));
+                self.set_starting(id, false);
+            }
+        }
+    }
+
+    /// Folds one `appd` notification into the tiles. Returns whether the
+    /// launcher changed.
+    fn apply_notification(&mut self, notification: Notification) -> bool {
+        let Notification::App {
+            event: AppEvent::Lifecycle { instance },
+        } = notification
+        else {
+            // `Activate` is a compositor directive; `CatalogChanged` would need
+            // a fresh request connection and is not needed for the reference
+            // catalog.
+            return false;
+        };
+        let Some(index) = self.ui.tile_index(&instance.app) else {
+            return false;
+        };
+        let tile = &mut self.ui.tiles[index];
+        tile.running = instance.state.is_running();
+        tile.starting = instance.state == LifecycleState::Starting;
+        let name = tile.name.clone();
+        match instance.state {
+            LifecycleState::Crashed => {
+                let reason = instance
+                    .exit
+                    .map_or_else(|| "unknown reason".to_owned(), |exit| exit.to_string());
+                emit(format!(
+                    "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-crash-notice\",\"app\":\"{}\",\"reason\":\"{}\"}}",
+                    instance.app,
+                    json_escape(&reason)
+                ));
+                self.ui.crash_notice = Some(CrashNotice {
+                    app: instance.app,
+                    name,
+                    reason,
+                });
+            }
+            LifecycleState::Starting | LifecycleState::Foreground | LifecycleState::Background => {
+                // A relaunch of the crashed app retires its notice.
+                self.ui
+                    .crash_notice
+                    .take_if(|notice| notice.app == instance.app);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// Drains the `appd` link: a fresh subscription from the retry thread,
+    /// or notifications (and the loss of the stream). The channel is read
+    /// first and the launcher mutated afterwards.
+    fn appd_wake(&mut self) -> bool {
+        enum Step {
+            Idle,
+            Subscribed(Subscription),
+            RetryThreadGone,
+            Notifications(Vec<Notification>, bool),
+        }
+        let step = match &self.appd {
+            AppdLink::Connecting(incoming) => match incoming.try_recv() {
+                Ok(subscription) => Step::Subscribed(subscription),
+                Err(TryRecvError::Empty) => Step::Idle,
+                Err(TryRecvError::Disconnected) => Step::RetryThreadGone,
+            },
+            AppdLink::Connected(notifications) => {
+                let mut batch = Vec::new();
+                let mut lost = false;
+                loop {
+                    match notifications.try_recv() {
+                        Ok(notification) => batch.push(notification),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            lost = true;
+                            break;
+                        }
+                    }
+                }
+                Step::Notifications(batch, lost)
+            }
+        };
+        match step {
+            Step::Idle => false,
+            Step::Subscribed(subscription) => {
+                let tiles = tiles_from_catalog(&subscription.apps, &subscription.instances);
+                emit(appd_connected_record(&self.appd_socket, tiles.len()));
+                self.ui.set_tiles(tiles);
+                let (notifications, _reporter) = subscription.spawn(Arc::clone(&self.wake));
+                self.appd = AppdLink::Connected(notifications);
+                self.appd_unavailable_reported = false;
+                true
+            }
+            Step::RetryThreadGone => {
+                // The retry thread cannot end without delivering; restart it
+                // defensively.
+                let rx = start_connecting(self.appd_socket.clone(), Arc::clone(&self.wake));
+                self.appd = AppdLink::Connecting(rx);
+                false
+            }
+            Step::Notifications(batch, lost) => {
+                let mut changed = false;
+                for notification in batch {
+                    changed |= self.apply_notification(notification);
+                }
+                if lost {
+                    emit(format!(
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"appd-disconnected\",\"status\":\"stale-catalog\"}}"
+                    ));
+                    self.launcher = None;
+                    for tile in &mut self.ui.tiles {
+                        tile.running = false;
+                        tile.starting = false;
+                    }
+                    let rx = start_connecting(self.appd_socket.clone(), Arc::clone(&self.wake));
+                    self.appd = AppdLink::Connecting(rx);
+                    changed = true;
+                }
+                changed
+            }
+        }
+    }
+
+    /// Drains mobile-core hardware events (or notices it went away). Every
+    /// event is folded into the live state and reported.
+    fn hardware_wake(&mut self) -> bool {
         let mut changed = false;
         loop {
             match self.hw_events.try_recv() {
@@ -368,7 +410,7 @@ impl App {
                     self.sync_controls();
                     changed = true;
                     emit(format!(
-                        "{{\"evidence\":\"QEMU\",\"event\":\"ui-state\",\"source\":\"{}\",\"battery_percent\":{},\"charging\":{},\"wifi\":\"{}\",\"modem\":\"{}\",\"sim\":\"{}\",\"orientation\":\"{}\",\"brightness_percent\":{}}}",
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ui-state\",\"source\":\"{}\",\"battery_percent\":{},\"charging\":{},\"wifi\":\"{}\",\"modem\":\"{}\",\"sim\":\"{}\",\"orientation\":\"{}\",\"brightness_percent\":{}}}",
                         event.name(),
                         self.hw.power.battery_percent,
                         self.hw.power.charging,
@@ -383,475 +425,92 @@ impl App {
                 Err(TryRecvError::Disconnected) => {
                     if !self.core_lost_reported {
                         self.core_lost_reported = true;
-                        emit(
-                            "{\"evidence\":\"QEMU\",\"event\":\"core-disconnected\",\"status\":\"stale-state\"}"
-                                .to_owned(),
-                        );
+                        emit(format!(
+                            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"core-disconnected\",\"status\":\"stale-state\"}}"
+                        ));
                     }
                     break;
                 }
             }
         }
-        if changed {
-            self.draw();
-        }
-    }
-
-    /// Ping handler: the PTY reader produced output or the shell exited.
-    fn terminal_wake(&mut self) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        session.pump();
-        let exited = session.exited().map(str::to_owned);
-        let first_line = (!self.terminal_ready_reported)
-            .then(|| session.snapshot().first_text_line())
-            .flatten();
-        if let Some(reason) = exited
-            && !self.terminal_exit_reported
-        {
-            self.terminal_exit_reported = true;
-            emit(format!(
-                "{{\"evidence\":\"QEMU\",\"event\":\"terminal-exited\",\"reason\":\"{}\"}}",
-                json_escape(&reason)
-            ));
-        }
-        if let Some(line) = first_line {
-            self.terminal_ready_reported = true;
-            emit(format!(
-                "{{\"evidence\":\"QEMU\",\"event\":\"terminal-ready\",\"shell\":\"{SHELL}\",\"line\":\"{}\"}}",
-                json_escape(&line)
-            ));
-        }
-        if self.on_terminal() {
-            self.draw();
-        }
-    }
-
-    fn key_pressed(&mut self, code: u32) {
-        if !self.on_terminal() {
-            return;
-        }
-        let Some(bytes) = keymap::bytes(code, self.mods, self.ui.term_app_cursor) else {
-            return;
-        };
-        if !self.keyboard_reported {
-            self.keyboard_reported = true;
-            emit(format!(
-                "{{\"evidence\":\"QEMU\",\"event\":\"keyboard-input\",\"code\":{code},\"bytes\":{}}}",
-                bytes.len()
-            ));
-        }
-        self.ui.pending.push(TermAction::Input(bytes));
-        self.after_input();
-    }
-
-    fn draw(&mut self) {
-        let (w, h) = self.size;
-        let stride = w as i32 * 4;
-        let snapshot = if self.on_terminal() {
-            match (&self.session, &self.session_error) {
-                (Some(session), _) => Some(session.snapshot()),
-                (None, Some(error)) => Some(Snapshot::failed(error.clone())),
-                (None, None) => None,
-            }
-        } else {
-            None
-        };
-        if let Some(snapshot) = &snapshot {
-            self.ui.term_app_cursor = snapshot.app_cursor;
-        }
-        let (buffer, canvas_bytes) =
-            match self
-                .pool
-                .create_buffer(w as i32, h as i32, stride, wl_shm::Format::Xrgb8888)
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    self.error = Some(format!("shm buffer {w}x{h}: {e}"));
-                    self.running = false;
-                    return;
-                }
-            };
-        let frame = screen::compose(
-            &self.hw,
-            self.minute,
-            &self.ty,
-            w,
-            h,
-            &self.ui,
-            snapshot.as_ref(),
-        );
-        canvas_bytes.copy_from_slice(&frame.xrgb_bytes());
-        self.window
-            .wl_surface()
-            .damage_buffer(0, 0, w as i32, h as i32);
-        if let Err(e) = buffer.attach_to(self.window.wl_surface()) {
-            self.error = Some(format!("buffer attach: {e}"));
-            self.running = false;
-            return;
-        }
-        self.window.commit();
-        if !self.first_frame_reported {
-            self.first_frame_reported = true;
-            emit(format!(
-                "{{\"evidence\":\"QEMU\",\"event\":\"basic-screen-frame\",\"status\":\"committed\",\"width\":{w},\"height\":{h},\"profile\":\"{}\"}}",
-                self.profile.name
-            ));
-        }
+        changed
     }
 }
 
-impl WindowHandler for App {
-    fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &Window) {
-        self.running = false;
+impl ClientHandler for Home {
+    fn draw(&mut self, size: (u32, u32)) -> Canvas {
+        screen::compose(&self.hw, self.minute, &self.ty, size.0, size.1, &self.ui)
     }
 
-    fn configure(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &Window,
-        configure: WindowConfigure,
-        _serial: u32,
-    ) {
-        let w = configure
-            .new_size
-            .0
-            .map(NonZeroU32::get)
-            .unwrap_or(self.size.0);
-        let h = configure
-            .new_size
-            .1
-            .map(NonZeroU32::get)
-            .unwrap_or(self.size.1);
-        self.size = (w, h);
-        let geometry = self.geometry();
-        if let Some(session) = self.session.as_mut() {
-            session.resize(geometry);
-        }
-        self.draw();
-    }
-}
-
-impl CompositorHandler for App {
-    fn scale_factor_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: i32,
-    ) {
-    }
-
-    fn transform_changed(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: wl_output::Transform,
-    ) {
-    }
-
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
-
-    fn surface_enter(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-
-    fn surface_leave(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
-    ) {
-    }
-}
-
-impl OutputHandler for App {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.output_state
-    }
-
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-}
-
-impl ShmHandler for App {
-    fn shm_state(&mut self) -> &mut Shm {
-        &mut self.shm
-    }
-}
-
-impl SeatHandler for App {
-    fn seat_state(&mut self) -> &mut SeatState {
-        &mut self.seat_state
-    }
-
-    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-
-    fn new_capability(
-        &mut self,
-        _: &Connection,
-        qh: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
-        capability: Capability,
-    ) {
-        match capability {
-            Capability::Pointer if self.pointer.is_none() => {
-                self.pointer = self.seat_state.get_pointer(qh, &seat).ok();
-                let cursor_ready = self.pointer.is_some() && self.install_touch_cursor(qh).is_ok();
-                emit(format!(
-                    "{{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"pointer\",\"status\":\"{}\"}}",
-                    if cursor_ready { "ok" } else { "failed" }
-                ));
-            }
-            Capability::Touch if self.touch.is_none() => {
-                self.touch = self.seat_state.get_touch(qh, &seat).ok();
-                emit(format!(
-                    "{{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"touch\",\"status\":\"{}\"}}",
-                    if self.touch.is_some() { "ok" } else { "failed" }
-                ));
-            }
-            Capability::Keyboard if self.keyboard.is_none() => {
-                self.keyboard = Some(seat.get_keyboard(qh, ()));
-                emit(
-                    "{\"evidence\":\"QEMU\",\"event\":\"input-ready\",\"capability\":\"keyboard\",\"status\":\"ok\"}"
-                        .to_owned(),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    fn remove_capability(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: wl_seat::WlSeat,
-        capability: Capability,
-    ) {
-        match capability {
-            Capability::Pointer => {
-                if let Some(pointer) = self.pointer.take() {
-                    pointer.release();
-                }
-                self.cursor_buffer = None;
-                if let Some(surface) = self.cursor_surface.take() {
-                    surface.destroy();
-                }
-            }
-            Capability::Touch => {
-                if let Some(touch) = self.touch.take() {
-                    touch.release();
-                }
-            }
-            Capability::Keyboard => {
-                if let Some(keyboard) = self.keyboard.take() {
-                    keyboard.release();
-                }
-                self.mods = keymap::Modifiers::default();
-            }
-            _ => {}
-        }
-    }
-
-    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
-}
-
-impl Dispatch<wl_keyboard::WlKeyboard, ()> for App {
-    fn event(
-        app: &mut Self,
-        _: &wl_keyboard::WlKeyboard,
-        event: wl_keyboard::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        match event {
-            wl_keyboard::Event::Modifiers {
-                mods_depressed,
-                mods_locked,
-                ..
-            } => app.mods = keymap::Modifiers::from_xkb(mods_depressed, mods_locked),
-            wl_keyboard::Event::Key {
-                key,
-                state: WEnum::Value(wl_keyboard::KeyState::Pressed),
-                ..
-            } => {
-                app.key_pressed(key);
-                if app.on_terminal() {
-                    app.draw();
-                }
-            }
-            wl_keyboard::Event::Leave { .. } => app.mods = keymap::Modifiers::default(),
-            _ => {}
-        }
-    }
-}
-
-impl PointerHandler for App {
-    fn pointer_frame(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        pointer: &wl_pointer::WlPointer,
-        events: &[PointerEvent],
-    ) {
-        let mut redraw = false;
-        for event in events {
-            if &event.surface != self.window.wl_surface() {
-                continue;
-            }
-            match event.kind {
-                PointerEventKind::Enter { serial } => {
-                    if let Some(surface) = self.cursor_surface.as_ref() {
-                        let hotspot = Self::CURSOR_SIZE / 2;
-                        pointer.set_cursor(serial, Some(surface), hotspot, hotspot);
-                        emit(format!(
-                            "{{\"evidence\":\"QEMU\",\"event\":\"cursor-ready\",\"style\":\"transparent-ring\",\"size\":{}}}",
-                            Self::CURSOR_SIZE
-                        ));
-                    }
-                    redraw |= self
-                        .input
-                        .motion(0, event.position, &mut self.ui, self.size);
-                }
-                PointerEventKind::Motion { .. } => {
-                    redraw |= self
-                        .input
-                        .motion(0, event.position, &mut self.ui, self.size);
-                }
-                PointerEventKind::Leave { .. } => {
-                    redraw |= self.input.cancel(&mut self.ui);
-                }
-                PointerEventKind::Press { button: 0x110, .. } => {
-                    redraw |= self.input.down(0, event.position, &mut self.ui, self.size);
-                    emit(format!(
-                        "{{\"evidence\":\"QEMU\",\"event\":\"input-press\",\"x\":{},\"y\":{}}}",
-                        event.position.0, event.position.1
-                    ));
-                }
-                PointerEventKind::Release { button: 0x110, .. } => {
-                    redraw |= self
-                        .input
-                        .motion(0, event.position, &mut self.ui, self.size);
-                    redraw |= self.input.up(0, &mut self.ui, self.size);
-                    emit(format!(
-                        "{{\"evidence\":\"QEMU\",\"event\":\"input-release\",\"page\":\"{:?}\"}}",
-                        self.ui.page
-                    ));
-                }
-                _ => {}
-            }
-        }
+    fn pointer_down(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
+        let redraw = self.input.down(0, position, &mut self.ui, size);
         if redraw {
             self.after_input();
-            self.draw();
         }
+        redraw
+    }
+
+    fn pointer_motion(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
+        let redraw = self.input.motion(0, position, &mut self.ui, size);
+        if redraw {
+            self.after_input();
+        }
+        redraw
+    }
+
+    fn pointer_up(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
+        let mut redraw = self.input.motion(0, position, &mut self.ui, size);
+        redraw |= self.input.up(0, &mut self.ui, size);
+        if redraw {
+            self.after_input();
+        }
+        redraw
+    }
+
+    fn pointer_leave(&mut self) -> bool {
+        self.input.cancel(&mut self.ui)
+    }
+
+    fn touch_down(&mut self, id: i32, position: (f64, f64), size: (u32, u32)) -> bool {
+        let redraw = self.input.down(id, position, &mut self.ui, size);
+        if redraw {
+            self.after_input();
+        }
+        redraw
+    }
+
+    fn touch_motion(&mut self, id: i32, position: (f64, f64), size: (u32, u32)) -> bool {
+        let redraw = self.input.motion(id, position, &mut self.ui, size);
+        if redraw {
+            self.after_input();
+        }
+        redraw
+    }
+
+    fn touch_up(&mut self, id: i32, size: (u32, u32)) -> bool {
+        let redraw = self.input.up(id, &mut self.ui, size);
+        if redraw {
+            self.after_input();
+        }
+        redraw
+    }
+
+    fn touch_cancel(&mut self) -> bool {
+        self.input.cancel(&mut self.ui)
+    }
+
+    fn key(&mut self, _code: u32, _mods: Modifiers) -> bool {
+        // The launcher has no text input; hardware keys go to the focused app.
+        false
+    }
+
+    fn wake(&mut self) -> bool {
+        let hardware = self.hardware_wake();
+        let appd = self.appd_wake();
+        hardware || appd
+    }
+
+    fn page_name(&self) -> String {
+        self.ui.page.name()
     }
 }
-
-impl TouchHandler for App {
-    fn down(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_touch::WlTouch,
-        _: u32,
-        _: u32,
-        surface: wl_surface::WlSurface,
-        id: i32,
-        position: (f64, f64),
-    ) {
-        if surface == *self.window.wl_surface()
-            && self.input.down(id, position, &mut self.ui, self.size)
-        {
-            self.after_input();
-            self.draw();
-        }
-    }
-
-    fn up(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_touch::WlTouch,
-        _: u32,
-        _: u32,
-        id: i32,
-    ) {
-        if self.input.up(id, &mut self.ui, self.size) {
-            self.after_input();
-            self.draw();
-        }
-    }
-
-    fn motion(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_touch::WlTouch,
-        _: u32,
-        id: i32,
-        position: (f64, f64),
-    ) {
-        if self.input.motion(id, position, &mut self.ui, self.size) {
-            self.after_input();
-            self.draw();
-        }
-    }
-
-    fn shape(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_touch::WlTouch,
-        _: i32,
-        _: f64,
-        _: f64,
-    ) {
-    }
-
-    fn orientation(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        _: &wl_touch::WlTouch,
-        _: i32,
-        _: f64,
-    ) {
-    }
-
-    fn cancel(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_touch::WlTouch) {
-        if self.input.cancel(&mut self.ui) {
-            self.draw();
-        }
-    }
-}
-
-impl ProvidesRegistryState for App {
-    fn registry(&mut self) -> &mut RegistryState {
-        &mut self.registry_state
-    }
-    registry_handlers![OutputState, SeatState];
-}
-
-delegate_compositor!(App);
-delegate_output!(App);
-delegate_pointer!(App);
-delegate_shm!(App);
-delegate_seat!(App);
-delegate_touch!(App);
-delegate_xdg_shell!(App);
-delegate_xdg_window!(App);
-delegate_registry!(App);

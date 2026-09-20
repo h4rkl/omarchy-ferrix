@@ -1,6 +1,6 @@
 [package]
 name = "mobile-basic-screen"
-description = "Ferrum-styled QEMU reference basic screen: a software-rendered Wayland client, not the product shell"
+description = "Ferrum-styled QEMU reference home surface: a software-rendered Wayland launcher driven by the appd catalog, not the product shell"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,13 +9,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-alacritty_terminal = { version = "0.26", default-features = false }
-fontdue = "0.9"
+app-api = { path = "../app-api" }
+app-protocol = { path = "../app-protocol" }
+ferrum-ui = { path = "../ferrum-ui" }
 hardware-api = { path = "../hardware-api" }
 mobile-protocol = { path = "../mobile-protocol" }
 mobile-session = { path = "../mobile-session" }
 target-profile = { path = "../target-profile" }
-tiny-skia = "0.11"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }

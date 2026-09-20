@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.settings",
+  "runtime": "native",
+  "name": "Settings",
+  "icon": {
+    "glyph": "⚙",
+    "tone": "blue"
+  },
+  "launchable": false
+}

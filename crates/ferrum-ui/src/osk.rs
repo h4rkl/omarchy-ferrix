@@ -6,8 +6,6 @@
 //! shifted symbol row) from the GrapheneOS fallback reference; the accessory
 //! row adds the keys a shell needs (esc, tab, ctrl, backtick, backslash, pipe,
 //! arrows). Shift and ctrl are sticky for one key, as on a phone keyboard.
-#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
-
 use crate::draw::Rect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -1,0 +1,29 @@
+[package]
+name = "runtime-native"
+description = "Native application runtime: launches applications as supervised Linux processes in their own namespaces through the ferrix-sandbox supervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+app-api = { path = "../app-api" }
+app-runtime-api = { path = "../app-runtime-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# Signal delivery for `terminate` works on every Unix host (macOS host tests
+# included); the namespace, mount, and hostname APIs are Linux only. Cargo
+# unifies the feature sets when both tables apply.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["process", "thread", "mount", "system", "fs"] }
+signal-hook = "0.4"
+
+[[bin]]
+name = "ferrix-sandbox"
+path = "src/bin/ferrix-sandbox.rs"

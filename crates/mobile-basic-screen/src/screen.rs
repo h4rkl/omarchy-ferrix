@@ -4,12 +4,12 @@
 //! This is a QEMU reference surface rendered from the mock profile, not the
 //! product shell.
 
-use crate::draw::{Canvas, Rect, Style, Type};
-use crate::interaction::{AppId, Page, Target, UiState};
-use crate::osk::{self, Key};
-use crate::terminal::Snapshot;
-use crate::theme;
+use ferrum_ui::draw::{Canvas, Rect, Style, Type, Weight};
+use ferrum_ui::theme;
 use hardware_api::{HardwareState, ModemRegistration, WifiState};
+
+use crate::catalog::{Tile, tone_color};
+use crate::interaction::{Page, Target, UiState, tile_rects};
 
 /// Scale a 1080-wide design length. Multiply first: `width / 1080` truncates
 /// to 0 on the 830-wide QEMU panel and used to jump the status bar.
@@ -30,7 +30,6 @@ pub fn compose(
     width: u32,
     height: u32,
     state: &UiState,
-    term: Option<&Snapshot>,
 ) -> Canvas {
     let w = width as i32;
     let h = height as i32;
@@ -41,7 +40,7 @@ pub fn compose(
     let clock = format!("{:02}:{:02}", hour, minute_of_day % 60);
 
     if state.page != Page::Launcher {
-        shell_page(&mut c, p, ty, &clock, state, term);
+        shell_page(&mut c, p, ty, &clock, state);
         gesture_pill(&mut c, state);
         return c;
     }
@@ -97,7 +96,21 @@ pub fn compose(
         state.pressed == Some(Target::Network),
     );
 
-    launcher_grid(&mut c, ty, margin, gap, s(1080), state);
+    if let Some(notice) = &state.crash_notice {
+        crash_banner(
+            &mut c,
+            ty,
+            Rect {
+                x: margin,
+                y: s(944),
+                w: w - 2 * margin,
+                h: s(112),
+            },
+            &notice.name,
+            &notice.reason,
+        );
+    }
+    launcher_grid(&mut c, ty, state);
 
     // Honest footer label and GrapheneOS-style gesture pill.
     let caption = "QEMU reference surface - Rust basic screen";
@@ -154,62 +167,22 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
         },
         state.pressed == Some(Target::Network),
     );
-    launcher_grid_landscape(c, ty, state);
-    gesture_pill(c, state);
-}
-
-fn launcher_grid_landscape(c: &mut Canvas, ty: &Type, state: &UiState) {
-    let basis = design_width(c);
-    let s = |v: i32| scale(v, basis);
-    let apps: [(AppId, u32); 6] = [
-        (AppId::Settings, theme::BLUE),
-        (AppId::Messages, theme::GREEN),
-        (AppId::Terminal, theme::PURPLE),
-        (AppId::Dialer, theme::CYAN),
-        (AppId::Camera, theme::YELLOW),
-        (AppId::Files, theme::ORANGE),
-    ];
-    let gap = s(24);
-    let left = s(940);
-    let top = s(120);
-    let tile = ((c.width() - left - s(40) - 2 * gap) / 3).min((c.height() - top - s(90) - gap) / 2);
-    for (index, (app, accent)) in apps.into_iter().enumerate() {
-        let col = (index % 3) as i32;
-        let row = (index / 3) as i32;
-        let rect = Rect {
-            x: left + col * (tile + gap),
-            y: top + row * (tile + gap),
-            w: tile,
-            h: tile,
-        };
-        let pressed = state.pressed == Some(Target::App(app));
-        c.fill_rounded(
-            rect,
-            s(28),
-            if pressed {
-                theme::SURFACE_HI
-            } else {
-                theme::SURFACE
-            },
-        );
-        c.stroke_rounded(
-            rect,
-            s(28),
-            if pressed { s(5) } else { 2 },
-            if pressed { accent } else { theme::BORDER },
-        );
-        let center_x = rect.x + rect.w / 2;
-        app_icon(c, ty, app.label(), accent, center_x, rect.y + s(105));
-        let label_style = Style::regular(s(28) as f32, theme::FG);
-        let label_width = ty.width(label_style, app.label());
-        ty.text(
+    if let Some(notice) = &state.crash_notice {
+        crash_banner(
             c,
-            label_style,
-            app.label(),
-            center_x - label_width / 2,
-            rect.y + rect.h - s(38),
+            ty,
+            Rect {
+                x: s(40),
+                y: s(720),
+                w: s(820),
+                h: s(96),
+            },
+            &notice.name,
+            &notice.reason,
         );
     }
+    launcher_grid(c, ty, state);
+    gesture_pill(c, state);
 }
 
 fn gesture_pill(c: &mut Canvas, state: &UiState) {
@@ -578,29 +551,26 @@ fn network_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
     );
 }
 
-fn launcher_grid(c: &mut Canvas, ty: &Type, margin: i32, gap: i32, top: i32, state: &UiState) {
+/// The launcher grid: three columns, rows growing with the catalog. Tiles
+/// share their rectangles with the hit test. A launched app shows a small
+/// accent dot while it runs and a dimmed "Starting..." label until `appd`
+/// reports it in the foreground or background.
+fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
-    let apps: [(AppId, u32); 6] = [
-        (AppId::Settings, theme::BLUE),
-        (AppId::Messages, theme::GREEN),
-        (AppId::Terminal, theme::PURPLE),
-        (AppId::Dialer, theme::CYAN),
-        (AppId::Camera, theme::YELLOW),
-        (AppId::Files, theme::ORANGE),
-    ];
-    let tile = (c.width() - 2 * margin - 2 * gap) / 3;
-    for (i, (app, accent)) in apps.into_iter().enumerate() {
-        let label = app.label();
-        let col = (i % 3) as i32;
-        let row = (i / 3) as i32;
-        let r = Rect {
-            x: margin + col * (tile + gap),
-            y: top + row * (tile + gap),
-            w: tile,
-            h: tile,
-        };
-        let pressed = state.pressed == Some(Target::App(app));
+    let size = (c.width() as u32, c.height() as u32);
+    let landscape = c.width() > c.height();
+    for (index, (tile, r)) in state
+        .tiles
+        .iter()
+        .zip(tile_rects(size, state.tiles.len()))
+        .enumerate()
+    {
+        if r.y >= c.height() {
+            break;
+        }
+        let accent = tone_color(tile.icon.tone);
+        let pressed = state.pressed == Some(Target::App(index));
         c.fill_rounded(
             r,
             s(28),
@@ -617,19 +587,36 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, margin: i32, gap: i32, top: i32, sta
             if pressed { accent } else { theme::BORDER },
         );
         let icx = r.x + r.w / 2;
-        let icy = r.y + s(118);
-        app_icon(c, ty, label, accent, icx, icy);
-        let label_style = Style::regular(s(30) as f32, theme::FG);
-        let lw = ty.width(label_style, label);
-        ty.text(c, label_style, label, icx - lw / 2, r.y + r.h - s(44));
+        let icy = r.y + s(if landscape { 105 } else { 118 });
+        app_icon(c, ty, tile, accent, icx, icy);
+        let (label, color) = if tile.starting {
+            ("Starting...".to_owned(), theme::FG_DIM)
+        } else {
+            (tile.name.clone(), theme::FG)
+        };
+        let label_style = Style::regular(s(if landscape { 28 } else { 30 }) as f32, color);
+        let lw = ty.width(label_style, &label);
+        ty.text(
+            c,
+            label_style,
+            &label,
+            icx - lw / 2,
+            r.y + r.h - s(if landscape { 38 } else { 44 }),
+        );
+        if tile.running {
+            c.fill_circle(r.x + r.w - s(34), r.y + s(34), s(9), accent);
+        }
     }
 }
 
-fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i32) {
+/// Tile artwork. The reference entries keep their drawn icons; any other
+/// app shows its descriptor glyph when the face has it, else the first
+/// letter of its name (never a tofu box).
+fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32) {
     let width = design_width(c);
     let u = |v: i32| scale(v, width);
-    match label {
-        "Settings" => {
+    match tile.kind() {
+        "settings" => {
             // Sliders: three rails with offset knobs.
             for (i, knob) in [-u(24), u(20), -u(4)].into_iter().enumerate() {
                 let y = cy - u(28) + i as i32 * u(28);
@@ -646,7 +633,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i3
                 c.fill_circle(cx + knob, y, u(12), accent);
             }
         }
-        "Messages" => {
+        "messages" => {
             c.fill_rounded(
                 Rect {
                     x: cx - u(44),
@@ -670,7 +657,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i3
                 );
             }
         }
-        "Terminal" => {
+        "terminal" => {
             c.stroke_rounded(
                 Rect {
                     x: cx - u(46),
@@ -690,7 +677,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i3
                 cy + u(14),
             );
         }
-        "Dialer" => {
+        "dialer" => {
             for row in 0..3 {
                 for col in 0..3 {
                     c.fill_circle(
@@ -702,7 +689,7 @@ fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i3
                 }
             }
         }
-        "Camera" => {
+        "camera" => {
             c.stroke_rounded(
                 Rect {
                     x: cx - u(46),
@@ -717,8 +704,8 @@ fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i3
             c.fill_circle(cx, cy, u(18), accent);
             c.fill_circle(cx + u(30), cy - u(20), u(4), accent);
         }
-        _ => {
-            // Files: folder body with tab.
+        "files" => {
+            // Folder body with tab.
             c.fill_rounded(
                 Rect {
                     x: cx - u(44),
@@ -740,24 +727,66 @@ fn app_icon(c: &mut Canvas, ty: &Type, label: &str, accent: u32, cx: i32, cy: i3
                 accent,
             );
         }
+        _ => {
+            let glyph = tile_glyph(ty, tile);
+            let style = Style::bold(
+                u(if glyph.chars().count() > 1 { 40 } else { 56 }) as f32,
+                accent,
+            );
+            let gw = ty.width(style, &glyph);
+            ty.text(c, style, &glyph, cx - gw / 2, cy + u(20));
+        }
     }
 }
 
-fn shell_page(
-    c: &mut Canvas,
-    p: &HardwareState,
-    ty: &Type,
-    clock: &str,
-    state: &UiState,
-    term: Option<&Snapshot>,
-) {
+/// The descriptor glyph when every character exists in the bold face, else
+/// the first letter of the name.
+pub fn tile_glyph(ty: &Type, tile: &Tile) -> String {
+    let glyph = tile.icon.glyph.trim();
+    if ty.has_glyphs(Weight::Bold, glyph) {
+        return glyph.to_owned();
+    }
+    tile.name
+        .chars()
+        .next()
+        .map(|ch| ch.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_owned())
+}
+
+/// Restrained crash notice: a flat surface with a red accent bar and one
+/// line of text. Dismissed by the next tap or by relaunching the app.
+fn crash_banner(c: &mut Canvas, ty: &Type, r: Rect, name: &str, reason: &str) {
+    let width = design_width(c);
+    let s = |v: i32| scale(v, width);
+    c.fill_rounded(r, s(20), theme::SURFACE);
+    c.stroke_rounded(r, s(20), 2, theme::BORDER);
+    c.fill_rounded(
+        Rect {
+            x: r.x + s(18),
+            y: r.y + s(22),
+            w: s(8),
+            h: r.h - s(44),
+        },
+        s(4),
+        theme::RED,
+    );
+    let text = format!("{name} stopped unexpectedly \u{b7} {reason}");
+    let mut style = Style::regular(s(28) as f32, theme::FG);
+    let max = r.w - s(72);
+    while ty.width(style, &text) > max && style.px > 12.0 {
+        style.px -= 2.0;
+    }
+    let baseline = r.y + r.h / 2 + (style.px * 0.36) as i32;
+    ty.text(c, style, &text, r.x + s(48), baseline);
+}
+
+fn shell_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: &UiState) {
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     status_bar(c, p, ty, clock, s(72), s(40), state);
     match state.page {
         Page::Launcher => {}
-        Page::App(AppId::Terminal) => terminal_page(c, ty, state, term),
-        Page::App(app) => app_page(c, ty, app, state),
+        Page::Reference(index) => reference_page(c, ty, state.tiles.get(index), state),
         Page::QuickSettings => quick_settings(c, ty, state),
         Page::Notifications => notifications(c, ty, state),
     }
@@ -800,46 +829,50 @@ fn page_header(c: &mut Canvas, ty: &Type, title: &str, state: &UiState) {
     );
 }
 
-fn app_page(c: &mut Canvas, ty: &Type, app: AppId, state: &UiState) {
+/// Illustrative content of a non-launchable catalog entry, keyed by the id's
+/// last segment. Unknown entries get a generic "not installed" page.
+fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiState) {
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
-    page_header(c, ty, app.label(), state);
-    let (accent, eyebrow, title, detail) = match app {
-        AppId::Settings => (
+    let name = tile.map_or("Unknown", |t| t.name.as_str());
+    page_header(c, ty, name, state);
+    let fallback_title = format!("{name} is not installed");
+    let (accent, eyebrow, title, detail) = match tile.map_or("", Tile::kind) {
+        "settings" => (
             theme::BLUE,
             "DEVICE",
             "Settings are ready",
             "Display, sound, connectivity, and privacy controls use mock state in QEMU.",
         ),
-        AppId::Messages => (
+        "messages" => (
             theme::GREEN,
             "INBOX",
             "No conversations",
             "New messages will appear here when the messaging service is connected.",
         ),
-        AppId::Terminal => (
-            theme::PURPLE,
-            "SHELL",
-            "guest@ferrix:~$",
-            "The mandatory serial console remains available in the host terminal.",
-        ),
-        AppId::Dialer => (
+        "dialer" => (
             theme::CYAN,
             "CALLS",
             "Mock modem registered",
             "Calling is unavailable in this generic QEMU target.",
         ),
-        AppId::Camera => (
+        "camera" => (
             theme::YELLOW,
             "CAMERA",
             "No camera device",
             "The generic QEMU target does not claim camera hardware support.",
         ),
-        AppId::Files => (
+        "files" => (
             theme::ORANGE,
             "FILES",
             "Temporary guest session",
             "Generated artifacts stay on the host under out/qemu-aarch64.",
+        ),
+        _ => (
+            tile.map_or(theme::FG_DIM, |t| tone_color(t.icon.tone)),
+            "APP",
+            fallback_title.as_str(),
+            "No runtime provides this application yet. The catalog entry is a placeholder.",
         ),
     };
     c.fill_rounded(
@@ -885,205 +918,6 @@ fn app_page(c: &mut Canvas, ty: &Type, app: AppId, state: &UiState) {
         s(120),
         s(850),
     );
-}
-
-/// Terminal grid geometry derived from the panel size and the monospace face.
-pub struct TermMetrics {
-    pub area: Rect,
-    pub origin: (i32, i32),
-    pub px: f32,
-    pub cell_w: i32,
-    pub cell_h: i32,
-    pub cols: usize,
-    pub rows: usize,
-}
-
-pub fn terminal_metrics(ty: &Type, width: u32, height: u32) -> TermMetrics {
-    let w = width as i32;
-    let area = osk::terminal_area((width, height));
-    let px = (scale(30, w) as f32).max(12.0);
-    let style = Style::regular(px, theme::FG);
-    let cell_w = (ty.advance(style, 'M').round() as i32).max(1);
-    let cell_h = ty.line_height(style).max(1);
-    let pad = scale(16, w);
-    let cols = ((area.w - 2 * pad) / cell_w).max(2) as usize;
-    let rows = ((area.h - 2 * pad) / cell_h).max(1) as usize;
-    TermMetrics {
-        area,
-        origin: (area.x + pad, area.y + pad),
-        px,
-        cell_w,
-        cell_h,
-        cols,
-        rows,
-    }
-}
-
-/// The Terminal app: a real shell's grid above the touch keyboard. Flat
-/// Ferrum surfaces, the launcher tile's purple as the single accent.
-fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snapshot>) {
-    let width = design_width(c);
-    let s = |v: i32| scale(v, width);
-    page_header(c, ty, "Terminal", state);
-    let m = terminal_metrics(ty, c.width() as u32, c.height() as u32);
-    c.fill_rounded(m.area, s(16), theme::BG_DARK);
-    c.stroke_rounded(m.area, s(16), s(2).max(1), theme::BORDER);
-    let regular = Style::regular(m.px, theme::FG);
-    let ascent = ty.ascent(regular);
-    let cell_rect = |col: usize, row: usize| Rect {
-        x: m.origin.0 + col as i32 * m.cell_w,
-        y: m.origin.1 + row as i32 * m.cell_h,
-        w: m.cell_w,
-        h: m.cell_h,
-    };
-    match term {
-        None => {
-            let style = Style::regular(s(30) as f32, theme::FG_DIM);
-            let msg = "Starting shell...";
-            ty.text(
-                c,
-                style,
-                msg,
-                m.area.x + (m.area.w - ty.width(style, msg)) / 2,
-                m.area.y + m.area.h / 2,
-            );
-        }
-        Some(snap) => {
-            let cols = snap.cols.min(m.cols);
-            let rows = snap.rows.min(m.rows);
-            for row in 0..rows {
-                for col in 0..cols {
-                    let Some(cell) = snap.cell(col, row) else {
-                        continue;
-                    };
-                    let r = cell_rect(col, row);
-                    if let Some(bg) = cell.bg {
-                        c.fill_rect(r, bg);
-                    }
-                    if cell.c != ' ' {
-                        let style = if cell.bold {
-                            Style::bold(m.px, cell.fg)
-                        } else {
-                            Style::regular(m.px, cell.fg)
-                        };
-                        ty.char(c, style, cell.c, r.x, r.y + ascent);
-                    }
-                }
-            }
-            if let Some((col, row)) = snap.cursor
-                && col < cols
-                && row < rows
-            {
-                let r = cell_rect(col, row);
-                let color = if snap.exited.is_some() {
-                    theme::FG_DIM
-                } else {
-                    theme::PURPLE
-                };
-                c.fill_rect(r, color);
-                if let Some(cell) = snap.cell(col, row)
-                    && cell.c != ' '
-                {
-                    ty.char(
-                        c,
-                        Style::regular(m.px, theme::BG_DARK),
-                        cell.c,
-                        r.x,
-                        r.y + ascent,
-                    );
-                }
-            }
-            if snap.scrollback > 0 {
-                let badge = format!("{} lines up", snap.scrollback);
-                let style = Style::bold(s(24) as f32, theme::FG_DIM);
-                ty.text(
-                    c,
-                    style,
-                    &badge,
-                    m.area.x + m.area.w - ty.width(style, &badge) - s(24),
-                    m.area.y + s(40),
-                );
-            }
-            if let Some(reason) = &snap.exited {
-                let note = format!("[shell {reason}]  tap \u{23ce} to restart");
-                let style = Style::bold(s(26) as f32, theme::YELLOW);
-                ty.text(
-                    c,
-                    style,
-                    &note,
-                    m.area.x + s(24),
-                    m.area.y + m.area.h - s(24),
-                );
-            }
-        }
-    }
-    keyboard(c, ty, state);
-}
-
-fn keyboard(c: &mut Canvas, ty: &Type, state: &UiState) {
-    let width = design_width(c);
-    let s = |v: i32| scale(v, width);
-    let size = (c.width() as u32, c.height() as u32);
-    let (top, bottom) = osk::extent(size);
-    let tray_top = top - s(12);
-    c.fill_rect(
-        Rect {
-            x: 0,
-            y: tray_top,
-            w: width,
-            h: bottom - tray_top,
-        },
-        theme::BG_DARK,
-    );
-    c.fill_rect(
-        Rect {
-            x: 0,
-            y: tray_top,
-            w: width,
-            h: s(2).max(1),
-        },
-        theme::BORDER,
-    );
-    for (r, key) in osk::keys(size, &state.osk) {
-        let pressed = state.pressed == Some(Target::Key(key));
-        let active = (key == Key::Shift && state.osk.shift) || (key == Key::Ctrl && state.osk.ctrl);
-        let function = osk::is_function(key);
-        let fill = if pressed {
-            theme::SURFACE_HI
-        } else if active {
-            theme::PURPLE
-        } else if function {
-            theme::BG
-        } else {
-            theme::SURFACE
-        };
-        c.fill_rounded(r, s(14), fill);
-        if pressed {
-            c.stroke_rounded(r, s(14), s(3), theme::PURPLE);
-        }
-        let label = osk::label(key, &state.osk);
-        if label.is_empty() {
-            continue;
-        }
-        let color = if active {
-            theme::BG_DARK
-        } else if key == Key::Enter {
-            theme::PURPLE
-        } else if function {
-            theme::FG_DIM
-        } else {
-            theme::FG
-        };
-        let px = s(if label.chars().count() > 1 { 26 } else { 40 }) as f32;
-        let style = if function {
-            Style::bold(px, color)
-        } else {
-            Style::regular(px, color)
-        };
-        let lw = ty.width(style, &label);
-        let baseline = r.y + r.h / 2 + (px * 0.36) as i32;
-        ty.text(c, style, &label, r.x + (r.w - lw) / 2, baseline);
-    }
 }
 
 fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
@@ -1291,6 +1125,8 @@ fn wrap_text(c: &mut Canvas, ty: &Type, text: &str, x: i32, y: i32, max_width: i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interaction::CrashNotice;
+    use crate::test_tiles;
 
     /// The checked-in profile's initial hardware state, as the core would
     /// report it (mock values, not hardware facts).
@@ -1298,14 +1134,18 @@ mod tests {
         crate::test_state()
     }
 
+    fn state() -> UiState {
+        UiState::new(true, true, test_tiles())
+    }
+
     #[test]
     fn charging_changes_the_battery_indicator() {
         let ty = Type::load().expect("embedded fonts load");
         let mut p = profile();
-        let state = UiState::new(true, true);
-        let before = compose(&p, 600, &ty, 1080, 2340, &state, None);
+        let state = state();
+        let before = compose(&p, 600, &ty, 1080, 2340, &state);
         p.power.charging = true;
-        let after = compose(&p, 600, &ty, 1080, 2340, &state, None);
+        let after = compose(&p, 600, &ty, 1080, 2340, &state);
         // The status-bar battery fill turns green and gains a bolt; the card
         // headline turns green too. Compare the card headline region.
         let card_y = scale(620, 1080) + scale(160, 1080) - scale(40, 1080);
@@ -1331,10 +1171,11 @@ mod tests {
     }
 
     #[test]
-    fn composes_non_blank_portrait_surface() {
+    fn composes_non_blank_portrait_surface_with_catalog_tiles() {
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
-        let state = UiState::new(true, true);
+        let state = state();
+        assert_eq!(state.tiles.len(), 6);
         let c = compose(
             &p,
             9 * 60 + 41,
@@ -1342,12 +1183,15 @@ mod tests {
             p.display.width,
             p.display.height,
             &state,
-            None,
         );
         assert_eq!((c.width(), c.height()), (1080, 2340));
         // Status bar background and main background are themed.
         assert_eq!(c.get(540, 10), theme::BG_DARK);
         assert_eq!(c.get(540, 600), theme::BG);
+        // Every tile has its surface drawn.
+        for r in tile_rects((1080, 2340), state.tiles.len()) {
+            assert_eq!(c.get(r.x + r.w / 2, r.y + 12), theme::SURFACE, "{r:?}");
+        }
         // The rendered frame is not blank: some pixel differs from the ground.
         let bytes = c.xrgb_bytes();
         assert!(bytes.chunks(4).any(|q| {
@@ -1359,15 +1203,7 @@ mod tests {
     #[test]
     fn landscape_launcher_uses_the_full_logical_surface() {
         let ty = Type::load().expect("embedded fonts load");
-        let canvas = compose(
-            &profile(),
-            9 * 60 + 41,
-            &ty,
-            2340,
-            1080,
-            &UiState::new(true, true),
-            None,
-        );
+        let canvas = compose(&profile(), 9 * 60 + 41, &ty, 2340, 1080, &state());
         assert_eq!((canvas.width(), canvas.height()), (2340, 1080));
         assert_eq!(canvas.get(1170, 10), theme::BG_DARK);
         assert_ne!(
@@ -1375,71 +1211,89 @@ mod tests {
             theme::BG,
             "right-side app grid must be visible"
         );
+        for r in tile_rects((2340, 1080), state().tiles.len()) {
+            assert_eq!(canvas.get(r.x + r.w / 2, r.y + 8), theme::SURFACE, "{r:?}");
+        }
     }
 
     #[test]
     fn every_interactive_page_renders() {
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
-        for page in [
-            Page::App(AppId::Settings),
-            Page::App(AppId::Messages),
-            Page::App(AppId::Terminal),
-            Page::App(AppId::Dialer),
-            Page::App(AppId::Camera),
-            Page::App(AppId::Files),
-            Page::QuickSettings,
-            Page::Notifications,
-        ] {
-            let mut state = UiState::new(true, true);
+        let base = state();
+        let reference_pages = (0..base.tiles.len())
+            .filter(|i| !base.tiles[*i].launchable)
+            .map(Page::Reference);
+        for page in reference_pages.chain([Page::QuickSettings, Page::Notifications]) {
+            let mut state = base.clone();
             state.page = page;
-            let c = compose(&p, 600, &ty, 1080, 2340, &state, None);
+            let c = compose(&p, 600, &ty, 1080, 2340, &state);
             assert_eq!((c.width(), c.height()), (1080, 2340));
-            assert_ne!(c.get(300, 500), theme::BG);
+            assert_ne!(c.get(300, 500), theme::BG, "{page:?}");
         }
+        // An unknown or out-of-range reference index renders the generic page.
+        let mut state = base.clone();
+        state.page = Page::Reference(99);
+        let c = compose(&p, 600, &ty, 1080, 2340, &state);
+        assert_ne!(c.get(300, 500), theme::BG);
     }
 
     #[test]
-    fn terminal_page_renders_grid_cursor_and_keyboard() {
+    fn running_starting_and_crashed_states_are_visible() {
         let ty = Type::load().expect("embedded fonts load");
         let p = profile();
-        let mut state = UiState::new(true, true);
-        state.page = Page::App(AppId::Terminal);
-        let m = terminal_metrics(&ty, 1080, 2340);
-        assert!(m.cols >= 50 && m.rows >= 25, "{}x{}", m.cols, m.rows);
-        let snap = Snapshot::from_bytes(m.cols, m.rows, b"root@ferrix:~# \x1b[42m  \x1b[0m");
-        let c = compose(&p, 600, &ty, 1080, 2340, &state, Some(&snap));
-        // Grid panel background, a green cell background, and the block cursor.
-        let blank = (
-            m.origin.0 + 30 * m.cell_w + 2,
-            m.origin.1 + 5 * m.cell_h + 2,
-        );
-        assert_eq!(c.get(blank.0, blank.1), theme::BG_DARK);
-        let green = (m.origin.0 + 16 * m.cell_w + 2, m.origin.1 + 2);
-        assert_eq!(c.get(green.0, green.1), 0x9ece6a);
-        let cursor = snap.cursor.expect("cursor visible");
-        let cx = m.origin.0 + cursor.0 as i32 * m.cell_w + 2;
-        let cy = m.origin.1 + cursor.1 as i32 * m.cell_h + 2;
-        assert_eq!(c.get(cx, cy), theme::PURPLE);
-        // Prompt glyphs leave non-background pixels in the first cell row.
-        let first_row = (0..m.cell_w * 16).any(|dx| {
-            (0..m.cell_h).any(|dy| {
-                let v = c.get(m.origin.0 + dx, m.origin.1 + dy);
-                v != theme::BG_DARK
-            })
-        });
-        assert!(first_row, "prompt text rendered");
-        // Keys are drawn on the keyboard tray with the standard surface.
-        let keys = osk::keys((1080, 2340), &state.osk);
-        let (q, _) = keys.iter().find(|(_, k)| *k == Key::Char('q')).unwrap();
-        assert_eq!(c.get(q.x + 6, q.y + 6), theme::SURFACE);
-        let (enter, _) = keys.iter().find(|(_, k)| *k == Key::Enter).unwrap();
-        assert_eq!(c.get(enter.x + 6, enter.y + 6), theme::BG);
+        let mut state = state();
+        let plain = compose(&p, 600, &ty, 1080, 2340, &state);
+        let r = tile_rects((1080, 2340), 7)[0];
+        let dot = (r.x + r.w - scale(34, 1080), r.y + scale(34, 1080));
+        assert_eq!(plain.get(dot.0, dot.1), theme::SURFACE);
 
-        // A failed session renders its reason instead of a grid.
-        let failed = Snapshot::failed("pty: denied".to_owned());
-        let c = compose(&p, 600, &ty, 1080, 2340, &state, Some(&failed));
-        assert_eq!(c.get(blank.0, blank.1), theme::BG_DARK);
+        state.tiles[0].running = true;
+        let running = compose(&p, 600, &ty, 1080, 2340, &state);
+        assert_eq!(
+            running.get(dot.0, dot.1),
+            tone_color(state.tiles[0].icon.tone),
+            "running dot in the tile's accent"
+        );
+
+        state.tiles[0].starting = true;
+        let starting = compose(&p, 600, &ty, 1080, 2340, &state);
+        let label_y = r.y + r.h - scale(44, 1080) - 10;
+        let label_differs =
+            (r.x..r.x + r.w).any(|x| starting.get(x, label_y) != running.get(x, label_y));
+        assert!(label_differs, "starting label replaces the name");
+
+        state.crash_notice = Some(CrashNotice {
+            app: state.tiles[0].id.clone(),
+            name: state.tiles[0].name.clone(),
+            reason: "signal 11".to_owned(),
+        });
+        let crashed = compose(&p, 600, &ty, 1080, 2340, &state);
+        let banner_y = scale(944, 1080) + scale(56, 1080);
+        assert_eq!(crashed.get(540, banner_y - scale(40, 1080)), theme::SURFACE);
+        assert_eq!(
+            crashed.get(scale(48, 1080) + scale(22, 1080), banner_y),
+            theme::RED,
+            "red accent bar"
+        );
+        assert_eq!(
+            plain.get(540, banner_y),
+            theme::BG,
+            "no banner without a crash"
+        );
+    }
+
+    #[test]
+    fn glyph_falls_back_to_the_first_letter_when_the_face_lacks_it() {
+        let ty = Type::load().expect("embedded fonts load");
+        let mut tile = test_tiles().remove(0);
+        tile.icon.glyph = ">_".to_owned();
+        assert_eq!(tile_glyph(&ty, &tile), ">_");
+        tile.icon.glyph = "\u{1f4de}".to_owned();
+        tile.name = "phone".to_owned();
+        assert_eq!(tile_glyph(&ty, &tile), "P");
+        tile.icon.glyph = String::new();
+        assert_eq!(tile_glyph(&ty, &tile), "P");
     }
 
     #[test]
@@ -1450,13 +1304,13 @@ mod tests {
         // and jumped the bar from 55px on the launcher to 72px on notifications.
         for width in [830_u32, 1080, 1200] {
             let height = width * 2340 / 1080;
-            let launcher = compose(&p, 600, &ty, width, height, &UiState::new(true, true), None);
-            let mut shade_state = UiState::new(true, true);
+            let launcher = compose(&p, 600, &ty, width, height, &state());
+            let mut shade_state = state();
             shade_state.page = Page::Notifications;
-            let shade = compose(&p, 600, &ty, width, height, &shade_state, None);
-            let mut quick_state = UiState::new(true, true);
+            let shade = compose(&p, 600, &ty, width, height, &shade_state);
+            let mut quick_state = state();
             quick_state.page = Page::QuickSettings;
-            let quick = compose(&p, 600, &ty, width, height, &quick_state, None);
+            let quick = compose(&p, 600, &ty, width, height, &quick_state);
 
             let bar_h = scale(72, width as i32);
             let x = width as i32 / 2;

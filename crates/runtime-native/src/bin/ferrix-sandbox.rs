@@ -1,0 +1,738 @@
+//! `ferrix-sandbox`: the namespace supervisor for native applications.
+//!
+//! ```text
+//! ferrix-sandbox --policy JSON --app-id ID [--evidence LABEL] [--report NAME] -- PROGRAM [ARGS...]
+//! ferrix-sandbox --probe [--policy JSON]
+//! ```
+//!
+//! Stage 1 (this invocation) unshares the namespaces the policy asks for,
+//! sets up the user-namespace mappings and hostname, and starts itself again
+//! as `--init`, which becomes PID 1 of the new PID namespace. Stage 2 makes
+//! the mount namespace private, mounts a fresh `/proc` and (optionally) a
+//! private `/tmp`, sets `no_new_privs`, runs the application, reaps zombies,
+//! forwards TERM/INT/HUP, and exits with the application's shell status. Stage
+//! 1 forwards that status upward, so the launcher classifies the exit exactly.
+//!
+//! All records are single JSON lines on stdout with the evidence label first:
+//! `sandbox-ready`, `sandbox-failed`, `sandbox-mount-failed`,
+//! `sandbox-degraded`, `sandbox-exec-failed`, `sandbox-app-exited`,
+//! `sandbox-probe`. Everything is safe Rust (`unsafe_code` is forbidden
+//! workspace-wide).
+
+use std::process::ExitCode;
+
+use runtime_native::{SandboxArgs, SandboxMode, USAGE_STATUS, emit, record};
+use serde_json::json;
+
+fn exit_code(status: i32) -> ExitCode {
+    ExitCode::from(u8::try_from(status).unwrap_or(1))
+}
+
+fn evidence_from_argv() -> String {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    args.windows(2)
+        .find(|pair| pair[0] == "--evidence")
+        .map(|pair| pair[1].clone())
+        .unwrap_or_else(|| "QEMU".to_owned())
+}
+
+fn main() -> ExitCode {
+    let args = match SandboxArgs::parse(std::env::args().skip(1)) {
+        Ok(args) => args,
+        Err(reason) => {
+            emit(&record(
+                &evidence_from_argv(),
+                "sandbox-failed",
+                json!({ "reason": reason }),
+            ));
+            return exit_code(USAGE_STATUS);
+        }
+    };
+    #[cfg(target_os = "linux")]
+    {
+        match args.mode {
+            SandboxMode::Launch => linux::launch(&args),
+            SandboxMode::Init => linux::init(&args),
+            SandboxMode::Probe => linux::probe(&args),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = SandboxMode::Launch;
+        emit(&record(
+            &args.evidence,
+            "sandbox-failed",
+            json!({ "app": args.app_id, "reason": "not linux" }),
+        ));
+        exit_code(runtime_native::ISOLATION_UNAVAILABLE_STATUS)
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::ffi::CStr;
+    use std::path::PathBuf;
+    use std::process::{Child, Command, ExitCode, ExitStatus};
+    use std::thread;
+    use std::time::Duration;
+
+    use app_api::ExitReason;
+    use runtime_native::channel::{ReportListener, WaitOutcome, send_line};
+    use runtime_native::{
+        EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport, IsolationMode,
+        IsolationPolicy, NamespaceSet, ProbeReport, SANDBOX_INTERNAL_STATUS, SandboxArgs,
+        SandboxReady, UserNamespace, emit, record, select_namespaces, shell_status_of,
+    };
+    use rustix::io::Errno;
+    use rustix::mount::{MountFlags, MountPropagationFlags, mount, mount_change};
+    use rustix::process::{
+        Pid, Signal, WaitOptions, getegid, geteuid, kill_process, set_parent_process_death_signal,
+        waitpid,
+    };
+    use rustix::thread::{UnshareFlags, set_no_new_privs};
+    use serde_json::json;
+    use signal_hook::consts::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
+    use signal_hook::iterator::Signals;
+
+    /// How long stage 1 waits for stage 2's report (shorter than the
+    /// runtime's wait so a `sandbox-ready` record always reaches the log).
+    const INIT_REPORT_TIMEOUT: Duration = Duration::from_secs(8);
+
+    fn exit_code(status: i32) -> ExitCode {
+        ExitCode::from(u8::try_from(status).unwrap_or(1))
+    }
+
+    fn pdeathsig_kill(evidence: &str, app: &str) {
+        if let Err(e) = set_parent_process_death_signal(Some(Signal::KILL)) {
+            emit(&record(
+                evidence,
+                "sandbox-degraded",
+                json!({ "app": app, "feature": "pdeathsig", "error": e.to_string() }),
+            ));
+        }
+    }
+
+    /// Namespace identities from `/proc/self/ns`; a namespace is proven new
+    /// when its link target changes across `unshare`.
+    #[derive(Default)]
+    struct NsLinks {
+        pid_for_children: Option<PathBuf>,
+        mnt: Option<PathBuf>,
+        ipc: Option<PathBuf>,
+        uts: Option<PathBuf>,
+        user: Option<PathBuf>,
+    }
+
+    impl NsLinks {
+        fn read() -> Self {
+            let link = |name: &str| std::fs::read_link(format!("/proc/self/ns/{name}")).ok();
+            Self {
+                pid_for_children: link("pid_for_children"),
+                mnt: link("mnt"),
+                ipc: link("ipc"),
+                uts: link("uts"),
+                user: link("user"),
+            }
+        }
+
+        /// Namespaces whose identity changed (and was readable both times).
+        fn changed_since(&self, before: &NsLinks) -> NamespaceSet {
+            NamespaceSet {
+                pid: pid_namespace_changed(&before.pid_for_children, &self.pid_for_children),
+                mount: link_differs(&self.mnt, &before.mnt),
+                ipc: link_differs(&self.ipc, &before.ipc),
+                uts: link_differs(&self.uts, &before.uts),
+                user: link_differs(&self.user, &before.user),
+            }
+        }
+    }
+
+    fn link_differs(a: &Option<PathBuf>, b: &Option<PathBuf>) -> bool {
+        matches!((a, b), (Some(a), Some(b)) if a != b)
+    }
+
+    /// `pid_for_children` is special (namespaces(7)): after `unshare` it is
+    /// unreadable (ENOENT) until the first child exists in the new namespace,
+    /// so "readable before, gone after" is the new namespace too. Once a child
+    /// exists the link resolves again and must differ from the old one.
+    fn pid_namespace_changed(before: &Option<PathBuf>, after: &Option<PathBuf>) -> bool {
+        match (before, after) {
+            (Some(a), Some(b)) => a != b,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
+    /// Launcher identity captured before `unshare`: inside a fresh user
+    /// namespace `geteuid` reports the overflow id until a map is written.
+    #[derive(Clone, Copy)]
+    struct Identity {
+        uid: u32,
+        gid: u32,
+    }
+
+    impl Identity {
+        fn current() -> Self {
+            Self {
+                uid: geteuid().as_raw(),
+                gid: getegid().as_raw(),
+            }
+        }
+    }
+
+    /// Namespace-only `unshare`. rustix deprecates the safe `unshare` because
+    /// `UnshareFlags::FILES` can strand file descriptors across threads; the
+    /// sandbox never unshares the descriptor table (the workspace forbids the
+    /// `unsafe` replacement), so the safe call is sound for these flags.
+    #[allow(deprecated)]
+    fn unshare_namespaces(flags: UnshareFlags) -> rustix::io::Result<()> {
+        debug_assert!(!flags.contains(UnshareFlags::FILES));
+        rustix::thread::unshare(flags)
+    }
+
+    fn unshare_flags(wanted: NamespaceSet) -> UnshareFlags {
+        let mut flags = UnshareFlags::empty();
+        if wanted.user {
+            flags |= UnshareFlags::NEWUSER;
+        }
+        if wanted.pid {
+            flags |= UnshareFlags::NEWPID;
+        }
+        if wanted.mount {
+            flags |= UnshareFlags::NEWNS;
+        }
+        if wanted.ipc {
+            flags |= UnshareFlags::NEWIPC;
+        }
+        if wanted.uts {
+            flags |= UnshareFlags::NEWUTS;
+        }
+        flags
+    }
+
+    /// Outcome of the namespace step.
+    struct Unshared {
+        wanted: NamespaceSet,
+        applied: NamespaceSet,
+        notes: Vec<String>,
+        identity: Identity,
+        /// `pid_for_children` before `unshare`, to re-confirm the PID
+        /// namespace once the first child exists.
+        pid_link_before: Option<PathBuf>,
+    }
+
+    /// Creates the requested namespaces in one `unshare` call (so the user
+    /// namespace, when present, owns the others). Under `Auto` a root
+    /// launcher that still lacks the privilege (an unprivileged container)
+    /// gets one retry with a user namespace.
+    fn unshare_for(policy: &IsolationPolicy) -> Result<Unshared, (NamespaceSet, String)> {
+        let identity = Identity::current();
+        let mut wanted = select_namespaces(policy, identity.uid == 0);
+        let mut notes = Vec::new();
+        let before = NsLinks::read();
+        if !wanted.any() {
+            return Ok(Unshared {
+                wanted,
+                applied: NamespaceSet::default(),
+                notes,
+                identity,
+                pid_link_before: before.pid_for_children,
+            });
+        }
+        let mut result = unshare_namespaces(unshare_flags(wanted));
+        if let Err(Errno::PERM) = result
+            && !wanted.user
+            && policy.user_namespace == UserNamespace::Auto
+        {
+            let retry = NamespaceSet {
+                user: true,
+                ..wanted
+            };
+            result = unshare_namespaces(unshare_flags(retry));
+            if result.is_ok() {
+                notes.push("unshare without a user namespace was denied; used one".to_owned());
+                wanted = retry;
+            }
+        }
+        match result {
+            Ok(()) => {
+                let applied = NsLinks::read().changed_since(&before);
+                let missing = applied.missing_from(wanted);
+                if !missing.is_empty() {
+                    notes.push(format!(
+                        "unshare succeeded but /proc/self/ns did not change for {}",
+                        missing.join(",")
+                    ));
+                }
+                Ok(Unshared {
+                    wanted,
+                    applied,
+                    notes,
+                    identity,
+                    pid_link_before: before.pid_for_children,
+                })
+            }
+            Err(e) => Err((wanted, format!("unshare({:?}): {e}", unshare_flags(wanted)))),
+        }
+    }
+
+    /// Identity uid/gid mapping for a fresh user namespace: full capabilities
+    /// inside it, the launcher's own identity outside.
+    fn map_identity(identity: Identity) -> Vec<String> {
+        let mut errors = Vec::new();
+        let Identity { uid, gid } = identity;
+        for (path, content) in [
+            ("/proc/self/setgroups", "deny".to_owned()),
+            ("/proc/self/uid_map", format!("{uid} {uid} 1")),
+            ("/proc/self/gid_map", format!("{gid} {gid} 1")),
+        ] {
+            if let Err(e) = std::fs::write(path, content) {
+                errors.push(format!("{path}: {e}"));
+            }
+        }
+        errors
+    }
+
+    fn child_pid(child: &Child) -> Pid {
+        Pid::from_child(child)
+    }
+
+    /// Forwards TERM/INT/HUP to `target` from a helper thread. Signals are
+    /// registered before the target exists so none are lost in between.
+    fn forward_signals(mut signals: Signals, target: Pid) {
+        thread::Builder::new()
+            .name("signal-forward".to_owned())
+            .spawn(move || {
+                for signal in signals.forever() {
+                    if let Some(signal) = Signal::from_named_raw(signal) {
+                        let _ = kill_process(target, signal);
+                    }
+                }
+            })
+            .ok();
+    }
+
+    fn wait_status(child: &mut Child) -> ExitStatus {
+        loop {
+            match child.wait() {
+                Ok(status) => return status,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return ExitStatus::default(),
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage 1
+    // -----------------------------------------------------------------------
+
+    pub fn launch(args: &SandboxArgs) -> ExitCode {
+        let evidence = args.evidence.as_str();
+        let app = args.app_id.as_str();
+        pdeathsig_kill(evidence, app);
+        // Resolve before unshare: the mount namespace is a copy, but do not
+        // rely on `/proc/self/exe` after changing namespaces.
+        let exe = match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                return fail(
+                    evidence,
+                    app,
+                    format!("current_exe: {e}"),
+                    SANDBOX_INTERNAL_STATUS,
+                );
+            }
+        };
+
+        let mut notes = Vec::new();
+        let unshared = match unshare_for(&args.policy) {
+            Ok(unshared) => unshared,
+            Err((wanted, reason)) => {
+                if args.policy.mode == IsolationMode::Required {
+                    return fail(evidence, app, reason, ISOLATION_UNAVAILABLE_STATUS);
+                }
+                notes.push(reason);
+                Unshared {
+                    wanted,
+                    applied: NamespaceSet::default(),
+                    notes: Vec::new(),
+                    identity: Identity::current(),
+                    pid_link_before: None,
+                }
+            }
+        };
+        notes.extend(unshared.notes);
+        let mut applied = unshared.applied;
+
+        if applied.user {
+            for error in map_identity(unshared.identity) {
+                emit(&record(
+                    evidence,
+                    "sandbox-degraded",
+                    json!({ "app": app, "feature": "uid_map", "error": error }),
+                ));
+                notes.push(format!("uid_map: {error}"));
+            }
+        }
+        if applied.uts
+            && let Err(e) = rustix::system::sethostname(app.as_bytes())
+        {
+            emit(&record(
+                evidence,
+                "sandbox-degraded",
+                json!({ "app": app, "feature": "hostname", "error": e.to_string() }),
+            ));
+            notes.push(format!("sethostname: {e}"));
+        }
+
+        // Stage 1 must stay single-threaded: after `unshare(NEWPID)` the
+        // kernel refuses new threads (they cannot straddle the pending PID
+        // namespace). Signals are therefore registered here, before the
+        // child exists, and drained from the main thread; SIGCHLD wakes the
+        // final wait when stage 2 ends.
+        let mut signals = match Signals::new([SIGTERM, SIGINT, SIGHUP, SIGCHLD]) {
+            Ok(signals) => Some(signals),
+            Err(e) => {
+                notes.push(format!("signal forwarding unavailable: {e}"));
+                None
+            }
+        };
+        let listener = ReportListener::bind("ferrix-init").ok();
+
+        let mut command = Command::new(&exe);
+        command
+            .arg("--init")
+            .arg("--policy")
+            .arg(serde_json::to_string(&args.policy).unwrap_or_default())
+            .arg("--app-id")
+            .arg(app)
+            .arg("--evidence")
+            .arg(evidence)
+            .arg("--applied")
+            .arg(serde_json::to_string(&applied).unwrap_or_default());
+        if let Some(listener) = &listener {
+            command.arg("--report").arg(listener.name());
+        }
+        command.arg("--").args(&args.exec);
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return fail(
+                    evidence,
+                    app,
+                    format!("cannot start init stage {}: {e}", exe.display()),
+                    SANDBOX_INTERNAL_STATUS,
+                );
+            }
+        };
+        let init_pid = child.id();
+        let init = child_pid(&child);
+        // Definitive PID-namespace proof: the link resolves again now that
+        // the namespace has a member, and must differ from the old one.
+        let pid_link_after = NsLinks::read().pid_for_children;
+        if unshared.wanted.pid {
+            applied.pid = pid_namespace_changed(&unshared.pid_link_before, &pid_link_after);
+        }
+        let missing = applied.missing_from(unshared.wanted);
+        if !missing.is_empty() {
+            notes.push(format!("namespaces not established: {}", missing.join(",")));
+        }
+        let mut forward_pending = || {
+            if let Some(signals) = &mut signals {
+                for signal in signals.pending() {
+                    forward_one(signal, init);
+                }
+            }
+        };
+
+        let mut private_tmp = false;
+        let mut no_new_privs = false;
+        match listener
+            .map(|l| l.wait_for_line(&mut child, INIT_REPORT_TIMEOUT, &mut forward_pending))
+        {
+            Some(Ok(line)) => match serde_json::from_str::<InitReport>(&line) {
+                Ok(report) => {
+                    private_tmp = report.private_tmp;
+                    no_new_privs = report.no_new_privs;
+                    notes.extend(report.reasons);
+                }
+                Err(e) => notes.push(format!("unreadable init report: {e}")),
+            },
+            Some(Err(WaitOutcome::ChildExited(status))) => {
+                notes.push(format!(
+                    "init stage exited with status {} before reporting",
+                    shell_status_of(status)
+                ));
+            }
+            Some(Err(WaitOutcome::TimedOut)) => {
+                notes.push("init stage did not report in time".to_owned())
+            }
+            Some(Err(WaitOutcome::Io(e))) => notes.push(format!("init report channel: {e}")),
+            None => notes.push("init report channel unavailable".to_owned()),
+        }
+        let degraded = !missing.is_empty()
+            || (args.policy.private_tmp && !private_tmp)
+            || (args.policy.no_new_privs && !no_new_privs)
+            || !notes.is_empty();
+        let ready = SandboxReady {
+            app: app.to_owned(),
+            init_pid,
+            namespaces: applied,
+            private_tmp,
+            no_new_privs,
+            degraded,
+            reason: (!notes.is_empty()).then(|| notes.join("; ")),
+        };
+        emit(&record(
+            evidence,
+            "sandbox-ready",
+            serde_json::to_value(&ready).unwrap_or_default(),
+        ));
+        if let Some(name) = &args.report {
+            let _ = send_line(name, &serde_json::to_string(&ready).unwrap_or_default());
+        }
+
+        // Forward until stage 2 ends; SIGCHLD (registered before the spawn,
+        // so never missed) wakes the blocking wait.
+        let status = match signals {
+            Some(mut signals) => loop {
+                if let Ok(Some(status)) = child.try_wait() {
+                    break status;
+                }
+                for signal in signals.wait() {
+                    forward_one(signal, init);
+                }
+            },
+            None => wait_status(&mut child),
+        };
+        exit_code(shell_status_of(status))
+    }
+
+    /// Forwards one received signal to `target`; SIGCHLD is ours, not theirs.
+    fn forward_one(signal: i32, target: Pid) {
+        if signal == SIGCHLD {
+            return;
+        }
+        if let Some(signal) = Signal::from_named_raw(signal) {
+            let _ = kill_process(target, signal);
+        }
+    }
+
+    fn fail(evidence: &str, app: &str, reason: String, status: i32) -> ExitCode {
+        emit(&record(
+            evidence,
+            "sandbox-failed",
+            json!({ "app": app, "reason": reason }),
+        ));
+        exit_code(status)
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage 2: PID 1 of the new PID namespace
+    // -----------------------------------------------------------------------
+
+    /// Mounts for the private mount namespace. Failures degrade; they never
+    /// abort the launch (the namespace itself was stage 1's Required gate).
+    fn setup_mounts(
+        evidence: &str,
+        app: &str,
+        policy: &IsolationPolicy,
+        reasons: &mut Vec<String>,
+    ) -> bool {
+        let mut mount_failed = |target: &str, error: String| {
+            emit(&record(
+                evidence,
+                "sandbox-mount-failed",
+                json!({ "app": app, "target": target, "error": error }),
+            ));
+            reasons.push(format!("mount {target}: {error}"));
+        };
+        if let Err(e) = mount_change(
+            "/",
+            MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+        ) {
+            mount_failed("/", e.to_string());
+        }
+        if let Err(e) = mount(
+            "proc",
+            "/proc",
+            "proc",
+            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+            None::<&CStr>,
+        ) {
+            mount_failed("/proc", e.to_string());
+        }
+        if !policy.private_tmp {
+            return false;
+        }
+        match mount(
+            "tmpfs",
+            "/tmp",
+            "tmpfs",
+            MountFlags::NOSUID | MountFlags::NODEV,
+            c"mode=1777,size=64m",
+        ) {
+            Ok(()) => true,
+            Err(e) => {
+                mount_failed("/tmp", e.to_string());
+                false
+            }
+        }
+    }
+
+    fn apply_no_new_privs(evidence: &str, app: &str, reasons: &mut Vec<String>) -> bool {
+        match set_no_new_privs(true) {
+            Ok(()) => true,
+            Err(e) => {
+                emit(&record(
+                    evidence,
+                    "sandbox-degraded",
+                    json!({ "app": app, "feature": "no_new_privs", "error": e.to_string() }),
+                ));
+                reasons.push(format!("no_new_privs: {e}"));
+                false
+            }
+        }
+    }
+
+    pub fn init(args: &SandboxArgs) -> ExitCode {
+        let evidence = args.evidence.as_str();
+        let app = args.app_id.as_str();
+        pdeathsig_kill(evidence, app);
+        let applied = args.applied.unwrap_or_default();
+        let mut reasons = Vec::new();
+
+        let private_tmp = if applied.mount {
+            setup_mounts(evidence, app, &args.policy, &mut reasons)
+        } else {
+            if args.policy.private_tmp {
+                reasons.push("private_tmp needs the mount namespace".to_owned());
+            }
+            false
+        };
+        let no_new_privs =
+            args.policy.no_new_privs && apply_no_new_privs(evidence, app, &mut reasons);
+
+        let signals = Signals::new([SIGTERM, SIGINT, SIGHUP]).ok();
+        if let Some(name) = &args.report {
+            let report = InitReport {
+                private_tmp,
+                no_new_privs,
+                reasons: reasons.clone(),
+            };
+            let _ = send_line(name, &serde_json::to_string(&report).unwrap_or_default());
+        }
+
+        let program = &args.exec[0];
+        let child = match Command::new(program).args(&args.exec[1..]).spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                emit(&record(
+                    evidence,
+                    "sandbox-exec-failed",
+                    json!({ "app": app, "program": program, "error": e.to_string() }),
+                ));
+                return exit_code(EXEC_FAILED_STATUS);
+            }
+        };
+        let app_pid = child_pid(&child);
+        if let Some(signals) = signals {
+            forward_signals(signals, app_pid);
+        }
+
+        // Mini init: reap everything; stop when the application itself ends.
+        // PID 1's exit then kills whatever else is left in the namespace.
+        let exit = loop {
+            match waitpid(None, WaitOptions::empty()) {
+                Ok(Some((pid, status))) if pid == app_pid => {
+                    break match (status.exit_status(), status.terminating_signal()) {
+                        (Some(code), _) => ExitReason::Exited { code },
+                        (None, Some(signal)) => ExitReason::Signaled { signal },
+                        (None, None) => ExitReason::Exited { code: 1 },
+                    };
+                }
+                Ok(_) => continue,
+                Err(Errno::INTR) => continue,
+                Err(e) => {
+                    emit(&record(
+                        evidence,
+                        "sandbox-degraded",
+                        json!({ "app": app, "feature": "reap", "error": e.to_string() }),
+                    ));
+                    break ExitReason::Exited { code: 1 };
+                }
+            }
+        };
+        emit(&record(
+            evidence,
+            "sandbox-app-exited",
+            json!({ "app": app, "exit": exit }),
+        ));
+        exit_code(exit.shell_status())
+    }
+
+    // -----------------------------------------------------------------------
+    // Probe
+    // -----------------------------------------------------------------------
+
+    /// Tries the policy in this throwaway process: unshare, mappings, and the
+    /// init-stage mounts inside the new (private) mount namespace.
+    pub fn probe(args: &SandboxArgs) -> ExitCode {
+        let evidence = args.evidence.as_str();
+        let policy = &args.policy;
+        let mut reasons = Vec::new();
+        let unshared = match unshare_for(policy) {
+            Ok(unshared) => unshared,
+            Err((_, reason)) => {
+                let report = ProbeReport {
+                    applied: Default::default(),
+                    degraded: true,
+                    reason: Some(reason),
+                };
+                emit(&record(
+                    evidence,
+                    "sandbox-probe",
+                    serde_json::to_value(&report).unwrap_or_default(),
+                ));
+                return exit_code(if policy.mode == IsolationMode::Required {
+                    ISOLATION_UNAVAILABLE_STATUS
+                } else {
+                    0
+                });
+            }
+        };
+        reasons.extend(unshared.notes);
+        let applied = unshared.applied;
+        let missing = applied.missing_from(unshared.wanted);
+        if !missing.is_empty() {
+            reasons.push(format!("namespaces not established: {}", missing.join(",")));
+        }
+        if applied.user {
+            reasons.extend(
+                map_identity(unshared.identity)
+                    .into_iter()
+                    .map(|e| format!("uid_map: {e}")),
+            );
+        }
+        let private_tmp = if applied.mount {
+            setup_mounts(evidence, "probe", policy, &mut reasons)
+        } else {
+            false
+        };
+        let no_new_privs =
+            policy.no_new_privs && apply_no_new_privs(evidence, "probe", &mut reasons);
+        let report = ProbeReport {
+            applied: applied.applied(private_tmp, no_new_privs),
+            degraded: !reasons.is_empty()
+                || (policy.private_tmp && !private_tmp)
+                || (policy.no_new_privs && !no_new_privs),
+            reason: (!reasons.is_empty()).then(|| reasons.join("; ")),
+        };
+        emit(&record(
+            evidence,
+            "sandbox-probe",
+            serde_json::to_value(&report).unwrap_or_default(),
+        ));
+        ExitCode::SUCCESS
+    }
+}

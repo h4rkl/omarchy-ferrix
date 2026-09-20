@@ -1,46 +1,30 @@
 //! Target-independent interaction model shared by pointer and touch input.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use crate::osk::{self, Key, OskState};
+use app_api::AppId;
+use ferrum_ui::draw::Rect;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AppId {
-    Settings,
-    Messages,
-    Terminal,
-    Dialer,
-    Camera,
-    Files,
-}
-
-impl AppId {
-    pub const ALL: [Self; 6] = [
-        Self::Settings,
-        Self::Messages,
-        Self::Terminal,
-        Self::Dialer,
-        Self::Camera,
-        Self::Files,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Settings => "Settings",
-            Self::Messages => "Messages",
-            Self::Terminal => "Terminal",
-            Self::Dialer => "Dialer",
-            Self::Camera => "Camera",
-            Self::Files => "Files",
-        }
-    }
-}
+use crate::catalog::Tile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Launcher,
-    App(AppId),
+    /// Illustrative in-process page of a non-launchable tile (by index).
+    Reference(usize),
     QuickSettings,
     Notifications,
+}
+
+impl Page {
+    /// Stable name for evidence records.
+    pub fn name(self) -> String {
+        match self {
+            Page::Launcher => "Launcher".to_owned(),
+            Page::Reference(index) => format!("Reference({index})"),
+            Page::QuickSettings => "QuickSettings".to_owned(),
+            Page::Notifications => "Notifications".to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,26 +32,16 @@ pub enum Target {
     Status,
     Battery,
     Network,
-    App(AppId),
+    /// A launcher tile by index into `UiState::tiles`.
+    App(usize),
     Back,
+    /// The bottom gesture zone. Drawn as the pill; the compositor owns the
+    /// gesture, so the launcher never acts on it.
     Home,
     Wifi,
     Bluetooth,
     Brightness,
     ClearNotifications,
-    /// An on-screen keyboard key on the Terminal page.
-    Key(Key),
-    /// The terminal grid itself: vertical drags scroll history.
-    TermArea,
-}
-
-/// Terminal work produced by the interaction model for the session owner.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TermAction {
-    /// Bytes for the shell's stdin.
-    Input(Vec<u8>),
-    /// Viewport scroll in lines; positive moves into history.
-    Scroll(i32),
 }
 
 /// Product hardware changes requested by the UI. The app sends these through
@@ -80,6 +54,14 @@ pub enum SystemAction {
     Brightness(u8),
 }
 
+/// A low-noise notice shown above the grid after an application crashed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CrashNotice {
+    pub app: AppId,
+    pub name: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiState {
     pub page: Page,
@@ -88,17 +70,17 @@ pub struct UiState {
     pub bluetooth_on: bool,
     pub brightness: u8,
     pub notification_visible: bool,
-    pub osk: OskState,
-    /// Queued terminal actions; the session owner drains these after input.
-    pub pending: Vec<TermAction>,
+    pub tiles: Vec<Tile>,
+    /// Launch requests for launchable tiles; the session owner drains these
+    /// after input and sends them to `appd`.
+    pub pending_launch: Vec<AppId>,
     /// Queued hardware requests; the session owner drains these after input.
     pub pending_system: Vec<SystemAction>,
-    /// Mirror of the terminal's DECCKM mode so arrows encode correctly.
-    pub term_app_cursor: bool,
+    pub crash_notice: Option<CrashNotice>,
 }
 
 impl UiState {
-    pub fn new(wifi_on: bool, bluetooth_on: bool) -> Self {
+    pub fn new(wifi_on: bool, bluetooth_on: bool, tiles: Vec<Tile>) -> Self {
         Self {
             page: Page::Launcher,
             pressed: None,
@@ -106,11 +88,25 @@ impl UiState {
             bluetooth_on,
             brightness: 72,
             notification_visible: true,
-            osk: OskState::default(),
-            pending: Vec::new(),
+            tiles,
+            pending_launch: Vec::new(),
             pending_system: Vec::new(),
-            term_app_cursor: false,
+            crash_notice: None,
         }
+    }
+
+    /// Replaces the catalog, keeping the current page valid.
+    pub fn set_tiles(&mut self, tiles: Vec<Tile>) {
+        self.tiles = tiles;
+        if let Page::Reference(index) = self.page
+            && index >= self.tiles.len()
+        {
+            self.page = Page::Launcher;
+        }
+    }
+
+    pub fn tile_index(&self, id: &AppId) -> Option<usize> {
+        self.tiles.iter().position(|tile| tile.id == *id)
     }
 
     fn home(&mut self) {
@@ -120,7 +116,7 @@ impl UiState {
     fn back(&mut self) {
         match self.page {
             Page::Launcher => {}
-            Page::App(_) | Page::QuickSettings | Page::Notifications => self.home(),
+            Page::Reference(_) | Page::QuickSettings | Page::Notifications => self.home(),
         }
     }
 
@@ -128,9 +124,18 @@ impl UiState {
         match target {
             Target::Status => self.page = Page::QuickSettings,
             Target::Battery | Target::Network => self.page = Page::QuickSettings,
-            Target::App(app) => self.page = Page::App(app),
+            Target::App(index) => {
+                if let Some(tile) = self.tiles.get_mut(index) {
+                    if tile.launchable {
+                        tile.starting = true;
+                        self.pending_launch.push(tile.id.clone());
+                    } else {
+                        self.page = Page::Reference(index);
+                    }
+                }
+            }
             Target::Back => self.back(),
-            Target::Home => self.home(),
+            Target::Home => {}
             Target::Wifi => {
                 self.wifi_on = !self.wifi_on;
                 self.pending_system
@@ -143,19 +148,8 @@ impl UiState {
             }
             Target::Brightness => {}
             Target::ClearNotifications => self.notification_visible = false,
-            Target::Key(key) => {
-                if let Some(bytes) = self.osk.press(key, self.term_app_cursor) {
-                    self.pending.push(TermAction::Input(bytes));
-                }
-            }
-            Target::TermArea => {}
         }
     }
-}
-
-/// Terminal scroll step in panel pixels: one text line on the 1080 panel.
-fn scroll_line(size: (u32, u32)) -> f64 {
-    f64::from(size.0) * 39.0 / 1080.0
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -163,8 +157,6 @@ struct Contact {
     id: i32,
     start: (f64, f64),
     current: (f64, f64),
-    /// Last position at which a scroll step was emitted.
-    anchor: (f64, f64),
     target: Option<Target>,
 }
 
@@ -189,11 +181,9 @@ impl Input {
             id,
             start: position,
             current: position,
-            anchor: position,
             target,
         });
-        // The grid itself has no press feedback; keys and controls do.
-        state.pressed = target.filter(|t| *t != Target::TermArea);
+        state.pressed = target;
         true
     }
 
@@ -212,17 +202,6 @@ impl Input {
             let old = state.brightness;
             state.brightness = brightness_at(position.0, size.0);
             return old != state.brightness;
-        }
-        if contact.target == Some(Target::TermArea) {
-            // Dragging down reveals history, one step per text line.
-            let step = scroll_line(size);
-            let lines = ((position.1 - contact.anchor.1) / step).trunc() as i32;
-            if lines != 0 {
-                contact.anchor.1 += f64::from(lines) * step;
-                state.pending.push(TermAction::Scroll(lines));
-                return true;
-            }
-            return false;
         }
         let target = hit_test(state, position, size);
         let pressed = if distance(contact.start, position) < tap_slop(size) {
@@ -256,13 +235,16 @@ impl Input {
             return true;
         }
 
+        let tap = distance(contact.start, contact.current) < tap_slop(size);
+        // Any tap dismisses a crash notice; the tap still acts normally.
+        if tap {
+            state.crash_notice = None;
+        }
         if contact.start.1 <= h * 0.08 && dy > swipe && dy.abs() > dx.abs() {
             state.page = Page::Notifications;
-        } else if contact.start.1 >= h * 0.90 && -dy > swipe && dy.abs() > dx.abs() {
-            state.home();
         } else if contact.start.0 <= w * 0.08 && dx > swipe && dx.abs() > dy.abs() {
             state.back();
-        } else if distance(contact.start, contact.current) < tap_slop(size)
+        } else if tap
             && let Some(target) = contact.target
             && hit_test(state, contact.current, size) == Some(target)
         {
@@ -272,7 +254,6 @@ impl Input {
         true
     }
 
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn cancel(&mut self, state: &mut UiState) -> bool {
         self.contact.take().is_some() || state.pressed.take().is_some()
     }
@@ -291,6 +272,54 @@ fn brightness_at(x: f64, width: u32) -> u8 {
     ((x.clamp(w * 0.12, w * 0.88) - w * 0.12) * 100.0 / (w * 0.76)).round() as u8
 }
 
+/// Scale a 1080-wide design length (multiply first so narrow panels never
+/// truncate to zero).
+fn scale(v: i32, basis: i32) -> i32 {
+    v * basis / 1080
+}
+
+/// Launcher tile rectangles, shared by rendering and hit testing. Three
+/// columns; rows grow with the catalog. Portrait keeps the original geometry
+/// (48px margin, 24px gap, grid top at one panel width); landscape places
+/// the grid right of the cards and fits the rows into the free height.
+pub fn tile_rects(size: (u32, u32), count: usize) -> Vec<Rect> {
+    let (w, h) = (size.0 as i32, size.1 as i32);
+    let basis = w.min(h);
+    let s = |v: i32| scale(v, basis);
+    let gap = s(24);
+    let rows = count.div_ceil(3).max(1) as i32;
+    let (left, top, tile) = if w > h {
+        let left = s(940);
+        let top = s(120);
+        let tile =
+            ((w - left - s(40) - 2 * gap) / 3).min((h - top - s(90) - (rows - 1) * gap) / rows);
+        (left, top, tile)
+    } else {
+        let margin = s(48);
+        (margin, w, (w - 2 * margin - 2 * gap) / 3)
+    };
+    (0..count)
+        .map(|index| {
+            let col = (index % 3) as i32;
+            let row = (index / 3) as i32;
+            Rect {
+                x: left + col * (tile + gap),
+                y: top + row * (tile + gap),
+                w: tile,
+                h: tile,
+            }
+        })
+        .collect()
+}
+
+fn contains(r: Rect, position: (f64, f64)) -> bool {
+    let (x, y) = position;
+    x >= f64::from(r.x)
+        && x <= f64::from(r.x + r.w)
+        && y >= f64::from(r.y)
+        && y <= f64::from(r.y + r.h)
+}
+
 pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Option<Target> {
     let (x, y) = position;
     let (w, h) = (f64::from(size.0), f64::from(size.1));
@@ -298,19 +327,6 @@ pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Opti
         return Some(Target::Home);
     }
     match state.page {
-        Page::App(AppId::Terminal) => {
-            let area = osk::terminal_area(size);
-            if x <= w * 0.22 && y < f64::from(area.y) {
-                return Some(Target::Back);
-            }
-            if let Some((_, key)) = osk::keys(size, &state.osk)
-                .into_iter()
-                .find(|(rect, _)| osk::contains(*rect, position))
-            {
-                return Some(Target::Key(key));
-            }
-            osk::contains(area, position).then_some(Target::TermArea)
-        }
         Page::Launcher => {
             if y <= h * 0.08 {
                 return Some(Target::Status);
@@ -325,23 +341,7 @@ pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Opti
                         return Some(Target::Network);
                     }
                 }
-                let gap = 24.0 * s;
-                let left = 940.0 * s;
-                let top = 120.0 * s;
-                let tile =
-                    ((w - left - 40.0 * s - 2.0 * gap) / 3.0).min((h - top - 90.0 * s - gap) / 2.0);
-                for (index, app) in AppId::ALL.into_iter().enumerate() {
-                    let col = (index % 3) as f64;
-                    let row = (index / 3) as f64;
-                    let tile_x = left + col * (tile + gap);
-                    let tile_y = top + row * (tile + gap);
-                    if x >= tile_x && x <= tile_x + tile && y >= tile_y && y <= tile_y + tile {
-                        return Some(Target::App(app));
-                    }
-                }
-                return None;
-            }
-            if y >= w * 620.0 / 1080.0 && y <= w * 920.0 / 1080.0 {
+            } else if y >= w * 620.0 / 1080.0 && y <= w * 920.0 / 1080.0 {
                 if x >= w * 48.0 / 1080.0 && x <= w * 528.0 / 1080.0 {
                     return Some(Target::Battery);
                 }
@@ -349,22 +349,12 @@ pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Opti
                     return Some(Target::Network);
                 }
             }
-            let margin = w * 48.0 / 1080.0;
-            let gap = w * 24.0 / 1080.0;
-            let tile = (w - 2.0 * margin - 2.0 * gap) / 3.0;
-            let top = w;
-            for (index, app) in AppId::ALL.into_iter().enumerate() {
-                let col = (index % 3) as f64;
-                let row = (index / 3) as f64;
-                let left = margin + col * (tile + gap);
-                let upper = top + row * (tile + gap);
-                if x >= left && x <= left + tile && y >= upper && y <= upper + tile {
-                    return Some(Target::App(app));
-                }
-            }
-            None
+            tile_rects(size, state.tiles.len())
+                .into_iter()
+                .position(|rect| contains(rect, position))
+                .map(Target::App)
         }
-        Page::App(_) => (x <= w * 0.22 && y <= h * 0.12).then_some(Target::Back),
+        Page::Reference(_) => (x <= w * 0.22 && y <= h * 0.12).then_some(Target::Back),
         Page::QuickSettings => {
             if x <= w * 0.22 && y <= h * 0.12 {
                 Some(Target::Back)
@@ -393,25 +383,76 @@ pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_tiles;
 
     const SIZE: (u32, u32) = (1080, 2340);
 
+    fn state() -> UiState {
+        UiState::new(true, true, test_tiles())
+    }
+
+    fn tile_center(size: (u32, u32), count: usize, index: usize) -> (f64, f64) {
+        let r = tile_rects(size, count)[index];
+        (f64::from(r.x + r.w / 2), f64::from(r.y + r.h / 2))
+    }
+
     #[test]
-    fn launcher_tiles_open_and_home_gesture_returns() {
-        let mut state = UiState::new(true, true);
+    fn launchable_tiles_queue_a_launch_and_reference_tiles_open_pages() {
+        let mut state = state();
         let mut input = Input::default();
-        assert!(input.down(0, (180.0, 1230.0), &mut state, SIZE));
+        let terminal = state.tile_index(&AppId::new("org.ferrix.terminal").unwrap());
+        assert_eq!(terminal, Some(0), "launchable apps come first");
+        let n = state.tiles.len();
+        assert!(input.down(0, tile_center(SIZE, n, 0), &mut state, SIZE));
+        assert_eq!(state.pressed, Some(Target::App(0)));
         assert!(input.up(0, &mut state, SIZE));
-        assert_eq!(state.page, Page::App(AppId::Settings));
+        assert_eq!(state.page, Page::Launcher, "launching leaves the launcher");
+        assert_eq!(
+            state.pending_launch,
+            vec![AppId::new("org.ferrix.terminal").unwrap()]
+        );
+        assert!(state.tiles[0].starting);
+
+        let settings = state
+            .tile_index(&AppId::new("org.ferrix.settings").unwrap())
+            .expect("settings tile");
+        input.down(0, tile_center(SIZE, n, settings), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.page, Page::Reference(settings));
+        assert_eq!(
+            state.pending_launch.len(),
+            1,
+            "reference pages do not launch"
+        );
+    }
+
+    #[test]
+    fn seven_tiles_fill_three_rows_that_stay_above_the_footer() {
+        let rects = tile_rects(SIZE, 7);
+        assert_eq!(rects.len(), 7);
+        assert_eq!(rects[0].y, 1080);
+        assert_eq!(rects[3].y, rects[0].y + rects[0].h + 24);
+        assert_eq!(rects[6].x, rects[0].x);
+        assert!(rects[6].y + rects[6].h < 2340 - 150, "{:?}", rects[6]);
+        assert!(tile_rects(SIZE, 0).is_empty());
+    }
+
+    #[test]
+    fn bottom_zone_is_the_compositors_and_does_nothing_here() {
+        let mut state = state();
+        state.page = Page::QuickSettings;
+        let mut input = Input::default();
         input.down(0, (540.0, 2290.0), &mut state, SIZE);
+        assert_eq!(state.pressed, Some(Target::Home));
         input.motion(0, (540.0, 1900.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
-        assert_eq!(state.page, Page::Launcher);
+        assert_eq!(state.page, Page::QuickSettings, "no in-process home action");
+        assert_eq!(state.pressed, None);
     }
 
     #[test]
     fn top_gestures_and_quick_controls_are_interactive() {
-        let mut state = UiState::new(true, true);
+        let mut state = state();
         let mut input = Input::default();
         input.down(0, (500.0, 20.0), &mut state, SIZE);
         input.motion(0, (500.0, 400.0), &mut state, SIZE);
@@ -435,66 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn terminal_keys_queue_shell_input_and_drags_scroll_history() {
-        let mut state = UiState::new(true, true);
-        let mut input = Input::default();
-        // Tap the Terminal tile (third column of the first launcher row).
-        input.down(0, (852.0, 1236.0), &mut state, SIZE);
-        input.up(0, &mut state, SIZE);
-        assert_eq!(state.page, Page::App(AppId::Terminal));
-
-        let keys = osk::keys(SIZE, &state.osk);
-        let center = |wanted: Key| {
-            let (r, _) = keys
-                .iter()
-                .find(|(_, k)| *k == wanted)
-                .expect("key on layout");
-            (f64::from(r.x + r.w / 2), f64::from(r.y + r.h / 2))
-        };
-        for key in [Key::Char('l'), Key::Char('s'), Key::Enter] {
-            input.down(0, center(key), &mut state, SIZE);
-            assert_eq!(state.pressed, Some(Target::Key(key)));
-            input.up(0, &mut state, SIZE);
-        }
-        assert_eq!(
-            state.pending,
-            vec![
-                TermAction::Input(b"l".to_vec()),
-                TermAction::Input(b"s".to_vec()),
-                TermAction::Input(b"\r".to_vec()),
-            ]
-        );
-        state.pending.clear();
-
-        // Ctrl is sticky for one key: ctrl, c -> ETX.
-        input.down(0, center(Key::Ctrl), &mut state, SIZE);
-        input.up(0, &mut state, SIZE);
-        input.down(0, center(Key::Char('c')), &mut state, SIZE);
-        input.up(0, &mut state, SIZE);
-        assert_eq!(state.pending, vec![TermAction::Input(vec![0x03])]);
-        state.pending.clear();
-
-        // Dragging down inside the grid scrolls into history without pressing.
-        let area = osk::terminal_area(SIZE);
-        let x = f64::from(area.x + area.w / 2);
-        let y = f64::from(area.y + area.h / 2);
-        input.down(0, (x, y), &mut state, SIZE);
-        assert_eq!(state.pressed, None);
-        input.motion(0, (x, y + 200.0), &mut state, SIZE);
-        input.up(0, &mut state, SIZE);
-        assert_eq!(state.pending, vec![TermAction::Scroll(5)]);
-        assert_eq!(state.page, Page::App(AppId::Terminal));
-
-        // Back arrow in the header returns to the launcher; the shell keeps running.
-        input.down(0, (80.0, 160.0), &mut state, SIZE);
-        input.up(0, &mut state, SIZE);
-        assert_eq!(state.page, Page::Launcher);
-    }
-
-    #[test]
     fn left_edge_swipe_navigates_back() {
-        let mut state = UiState::new(true, true);
-        state.page = Page::App(AppId::Files);
+        let mut state = state();
+        state.page = Page::Reference(3);
         let mut input = Input::default();
         input.down(0, (20.0, 900.0), &mut state, SIZE);
         input.motion(0, (300.0, 900.0), &mut state, SIZE);
@@ -504,7 +488,7 @@ mod tests {
 
     #[test]
     fn cards_open_controls_and_notifications_clear_in_place() {
-        let mut state = UiState::new(true, true);
+        let mut state = state();
         let mut input = Input::default();
         input.down(0, (200.0, 700.0), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
@@ -519,11 +503,51 @@ mod tests {
 
     #[test]
     fn landscape_launcher_tiles_remain_interactive() {
-        let mut state = UiState::new(true, true);
+        let mut state = state();
         let mut input = Input::default();
         let landscape = (2340, 1080);
+        let rects = tile_rects(landscape, state.tiles.len());
+        assert!(rects.iter().all(|r| r.y + r.h <= 1080 - 90), "{rects:?}");
+        assert!(
+            contains(rects[0], (1150.0, 300.0)),
+            "first tile keeps its place: {:?}",
+            rects[0]
+        );
         input.down(0, (1150.0, 300.0), &mut state, landscape);
         input.up(0, &mut state, landscape);
-        assert_eq!(state.page, Page::App(AppId::Settings));
+        assert_eq!(state.pending_launch.len(), 1, "first tile is launchable");
+        let last = rects.len() - 1;
+        let center = (
+            f64::from(rects[last].x + rects[last].w / 2),
+            f64::from(rects[last].y + rects[last].h / 2),
+        );
+        input.down(0, center, &mut state, landscape);
+        input.up(0, &mut state, landscape);
+        assert_eq!(state.page, Page::Reference(last));
+    }
+
+    #[test]
+    fn a_tap_anywhere_dismisses_the_crash_notice() {
+        let mut state = state();
+        state.crash_notice = Some(CrashNotice {
+            app: AppId::new("org.ferrix.terminal").unwrap(),
+            name: "Terminal".to_owned(),
+            reason: "signal 11".to_owned(),
+        });
+        let mut input = Input::default();
+        input.down(0, (540.0, 1000.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.crash_notice, None);
+        assert_eq!(state.page, Page::Launcher);
+    }
+
+    #[test]
+    fn replacing_the_catalog_keeps_the_page_valid() {
+        let mut state = state();
+        state.page = Page::Reference(6);
+        let mut fewer = test_tiles();
+        fewer.truncate(2);
+        state.set_tiles(fewer);
+        assert_eq!(state.page, Page::Launcher);
     }
 }

@@ -73,6 +73,9 @@ pub struct ShellConfig {
     pub scale: f64,
     pub touch: bool,
     pub socket_name: String,
+    /// `appd` socket the compositor links to (with retries); `None` disables
+    /// the link and the home gesture falls back to the oldest mapped window.
+    pub appd_socket: Option<String>,
 }
 
 impl ShellConfig {
@@ -103,7 +106,19 @@ impl ShellConfig {
             scale: f64::from(profile.display.scale),
             touch: profile.input.touch,
             socket_name: socket_name.unwrap_or("wayland-0").to_owned(),
+            appd_socket: None,
         }
+    }
+
+    /// Set the `appd` socket to link to (`None` disables the link).
+    pub fn with_appd(mut self, appd_socket: Option<String>) -> Self {
+        self.appd_socket = appd_socket;
+        self
+    }
+
+    /// Value of the `appd` field in the `display-geometry` record.
+    pub fn appd_label(&self) -> &str {
+        self.appd_socket.as_deref().unwrap_or("disabled")
     }
 }
 
@@ -167,6 +182,10 @@ route = "speaker"
         );
         assert_eq!(config.geometry_source, GeometrySource::Profile);
         assert_eq!(config.socket_name, "wayland-0");
+        assert_eq!(config.appd_socket, None);
+        assert_eq!(config.appd_label(), "disabled");
+        let config = config.with_appd(Some("/run/ferrix/appd.sock".to_owned()));
+        assert_eq!(config.appd_label(), "/run/ferrix/appd.sock");
     }
 
     #[test]

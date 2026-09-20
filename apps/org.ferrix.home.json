@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.home",
+  "runtime": "native",
+  "name": "Home",
+  "icon": {
+    "glyph": "⌂",
+    "tone": "neutral"
+  },
+  "launchable": true,
+  "autostart": true,
+  "role": "home",
+  "trust": "privileged",
+  "capabilities": [
+    "core-state",
+    "core-control",
+    "background"
+  ],
+  "launch": {
+    "exec": [
+      "mobile-basic-screen"
+    ]
+  }
+}

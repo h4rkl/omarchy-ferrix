@@ -33,6 +33,13 @@ pub enum Value {
     Str(String),
     Int(i64),
     Bool(bool),
+    Null,
+}
+
+impl From<Option<u32>> for Value {
+    fn from(v: Option<u32>) -> Self {
+        v.map_or(Value::Null, Value::from)
+    }
 }
 
 impl From<&str> for Value {
@@ -111,6 +118,7 @@ pub fn record(evidence: Evidence, event: &str, fields: &[(&str, Value)]) -> Stri
             Value::Bool(b) => {
                 let _ = write!(out, "{b}");
             }
+            Value::Null => out.push_str("null"),
         }
     }
     out.push('}');
@@ -148,6 +156,7 @@ pub fn compositor_failed(evidence: Evidence, reason: &str, detail: &str) -> Stri
 
 pub fn client_mapped(
     evidence: Evidence,
+    pid: Option<u32>,
     app_id: &str,
     title: &str,
     width: i32,
@@ -158,6 +167,7 @@ pub fn client_mapped(
         evidence,
         "client-mapped",
         &[
+            ("pid", pid.into()),
             ("app_id", app_id.into()),
             ("title", title.into()),
             ("width", width.into()),
@@ -165,6 +175,59 @@ pub fn client_mapped(
             ("toplevels", Value::Int(clients as i64)),
         ],
     )
+}
+
+/// The last mapped toplevel of a client went away (exit or crash); the next
+/// window down the stack is focused now.
+pub fn client_gone(evidence: Evidence, pid: Option<u32>, app_id: &str, toplevels: usize) -> String {
+    record(
+        evidence,
+        "client-gone",
+        &[
+            ("pid", pid.into()),
+            ("app_id", app_id.into()),
+            ("toplevels", Value::Int(toplevels as i64)),
+        ],
+    )
+}
+
+/// `appd` asked to raise a client's toplevel; `raised` is false when that pid
+/// has no mapped toplevel yet.
+pub fn client_activated(evidence: Evidence, pid: u32, app_id: &str, raised: bool) -> String {
+    record(
+        evidence,
+        "client-activated",
+        &[
+            ("pid", pid.into()),
+            ("app_id", app_id.into()),
+            ("raised", Value::Bool(raised)),
+        ],
+    )
+}
+
+/// The compositor recognised the bottom-edge home gesture. `source` is
+/// `touch` or `pointer`; `linked` says whether `appd` received it (otherwise
+/// the compositor raised the oldest mapped window itself).
+pub fn home_gesture(evidence: Evidence, kind: &str, source: &str, linked: bool) -> String {
+    record(
+        evidence,
+        "home-gesture",
+        &[
+            ("kind", kind.into()),
+            ("source", source.into()),
+            ("linked", Value::Bool(linked)),
+        ],
+    )
+}
+
+/// Link status towards `appd`: `connected`, `lost`, or `retrying` (once per
+/// outage, with the reason).
+pub fn appd_link(evidence: Evidence, socket: &str, status: &str, reason: Option<&str>) -> String {
+    let mut fields: Vec<(&str, Value)> = vec![("socket", socket.into()), ("status", status.into())];
+    if let Some(reason) = reason {
+        fields.push(("reason", reason.into()));
+    }
+    record(evidence, "appd-link", &fields)
 }
 
 #[cfg(test)]
@@ -195,9 +258,46 @@ mod tests {
 
     #[test]
     fn client_mapped_carries_geometry_and_count() {
-        let line = client_mapped(Evidence::Qemu, "mobile-basic-screen", "", 1080, 2340, 1);
+        let line = client_mapped(
+            Evidence::Qemu,
+            Some(321),
+            "mobile-basic-screen",
+            "",
+            1080,
+            2340,
+            1,
+        );
         assert!(line.contains("\"event\":\"client-mapped\""));
-        assert!(line.contains("\"app_id\":\"mobile-basic-screen\""));
+        assert!(line.contains("\"pid\":321,\"app_id\":\"mobile-basic-screen\""));
         assert!(line.contains("\"width\":1080,\"height\":2340,\"toplevels\":1}"));
+        let line = client_mapped(Evidence::Qemu, None, "", "", 1, 1, 1);
+        assert!(line.contains("\"pid\":null"), "{line}");
+    }
+
+    #[test]
+    fn app_platform_records_match_contract() {
+        assert_eq!(
+            client_gone(Evidence::Qemu, Some(42), "org.ferrix.terminal", 1),
+            "{\"evidence\":\"QEMU\",\"event\":\"client-gone\",\"compositor\":\"mobile-shell\",\"pid\":42,\"app_id\":\"org.ferrix.terminal\",\"toplevels\":1}"
+        );
+        assert_eq!(
+            client_activated(Evidence::Qemu, 7, "org.ferrix.home", true),
+            "{\"evidence\":\"QEMU\",\"event\":\"client-activated\",\"compositor\":\"mobile-shell\",\"pid\":7,\"app_id\":\"org.ferrix.home\",\"raised\":true}"
+        );
+        assert_eq!(
+            home_gesture(Evidence::Mock, "swipe", "touch", false),
+            "{\"evidence\":\"mock\",\"event\":\"home-gesture\",\"compositor\":\"mobile-shell\",\"kind\":\"swipe\",\"source\":\"touch\",\"linked\":false}"
+        );
+        assert_eq!(
+            appd_link(Evidence::Qemu, "/run/ferrix/appd.sock", "connected", None),
+            "{\"evidence\":\"QEMU\",\"event\":\"appd-link\",\"compositor\":\"mobile-shell\",\"socket\":\"/run/ferrix/appd.sock\",\"status\":\"connected\"}"
+        );
+        let line = appd_link(
+            Evidence::Qemu,
+            "/run/x.sock",
+            "retrying",
+            Some("no such file"),
+        );
+        assert!(line.ends_with("\"status\":\"retrying\",\"reason\":\"no such file\"}"));
     }
 }

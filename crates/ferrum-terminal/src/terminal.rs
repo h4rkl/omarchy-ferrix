@@ -14,7 +14,7 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Term, TermMode, point_to_viewport, test::TermSize};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
-use crate::theme;
+use ferrum_ui::theme;
 
 /// Ferrum's Tokyo Night ANSI palette (normal 0-7, bright 8-15).
 const ANSI: [u32; 16] = [
@@ -251,7 +251,7 @@ mod session {
     use alacritty_terminal::tty;
 
     use super::{Snapshot, indexed_default, unpack};
-    use crate::theme;
+    use ferrum_ui::theme;
 
     /// Grid size in cells plus the cell size in pixels (reported to the PTY
     /// as the window size).

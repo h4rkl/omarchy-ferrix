@@ -24,9 +24,16 @@ UI prototype:
 - `mobile-core` owns persistent hardware state and portable product commands.
 - `mobile-shell` is the default QEMU Wayland compositor, using Smithay, DRM,
   libinput, and pixman software rendering.
-- `mobile-basic-screen` is a connected reference client. Its Wi-Fi, Bluetooth,
-  and brightness controls operate through `mobile-core`; state changes return
-  through the event subscription.
+- `appd` is the application service: it owns the catalog (`apps/*.json`),
+  launches every application as its own supervised process inside Linux
+  namespaces through `ferrix-sandbox`, tracks lifecycle and crashes, and
+  associates compositor surfaces with instances. See `docs/app-platform.md`.
+- `mobile-basic-screen` is the home surface: a catalog-driven launcher that
+  asks `appd` to start apps, plus connected quick settings whose Wi-Fi,
+  Bluetooth, and brightness controls operate through `mobile-core`.
+- `ferrum-terminal` is the first independent application: a separate Wayland
+  client in its own PID/mount/IPC/UTS namespaces. Crashing it leaves the
+  compositor, core, service, and home surface running.
 - Orientation events travel from the hardware adapter through the core to both
   compositor and client. Portrait and landscape output have been inspected in
   the actual QEMU framebuffer.
@@ -41,6 +48,10 @@ not a finished mobile OS or a physical-device port.
 ## Architecture
 
 ```
+home surface / apps ──▶ app-protocol ──▶ appd ──▶ app-runtime-api::Runtime ──▶ runtime-native ──▶ ferrix-sandbox ──▶ app
+        ▲                                 ▲
+  mobile-shell ── surfaces/focus/gesture ─┘
+
 apps / shell ──▶ mobile-protocol ──▶ mobile-core ──▶ hardware-api
                                                ▲              ▲
                                       mobile-session ──────────┘
@@ -58,7 +69,14 @@ apps / shell ──▶ mobile-protocol ──▶ mobile-core ──▶ hardware-
 | `crates/mobile-protocol` | Shared, schema-versioned Unix-socket contract and client for state snapshots, subscriptions, and portable product commands. It deliberately excludes host mock mutations. |
 | `crates/mobile-core` | Persistent daemon. Serves the shared protocol on `/run/ferrix/core.sock`, routes product commands through portable capability traits, applies mock-control commands only on the test channel, and prints machine-readable JSON records to serial. |
 | `crates/mobile-shell` | Default product compositor, built on Smithay 0.7: portrait-first, rotation-aware, fullscreen-only xdg-shell, one seat (keyboard, pointer, touch via libinput), and pixman software rendering into DRM dumb buffers on `virtio-gpu`. GL is optional and used only by nested host development. The Catacomb evaluation is in `crates/mobile-shell/EVALUATION.md`. |
-| `crates/mobile-basic-screen` | Ferrum-styled reference Wayland client with launcher, status bar, connected quick settings, notifications, responsive portrait/landscape layouts, and a working terminal with on-screen keyboard. It is a reference product client, not final compositor-owned shell chrome. |
+| `crates/app-api` | Stable public application contract: validated `AppId`s, `RuntimeKind` (`native`; `web` and `android` reserved), public JSON `AppDescriptor`s, lifecycle state, and typed errors. No target or implementation conditionals (enforced). |
+| `crates/app-runtime-api` | Internal, replaceable daemon-to-runtime traits and opaque launch-configuration boundary; never linked by applications or shells. |
+| `crates/app-protocol` | Schema-versioned line-delimited JSON protocol and client for `appd`: role-gated requests, no-reply compositor reports, and pushed notifications. |
+| `crates/appd` | Application service. Loads the catalog, enforces one instance per app, launches through `Runtime` adapters, records crashes, restarts the home surface with backoff, associates compositor surfaces with instances by kernel-reported pid, and publishes lifecycle events. |
+| `crates/runtime-native` | The native runtime adapter and the `ferrix-sandbox` binary: safe Rust (rustix, signal-hook) that starts an application inside its own PID, mount, IPC, and UTS namespaces (user namespace when unprivileged) with a private `/proc` and `/tmp`, `no_new_privs`, and a PID 1 that forwards signals and reports the exact exit reason. |
+| `crates/ferrum-ui` | Shared software-rendering toolkit (tiny-skia, fontdue, Tokyo Night theme, on-screen keyboard layout, keymap) and the fullscreen Wayland client runner used by first-party surfaces. A library, not an ABI. |
+| `crates/mobile-basic-screen` | The home surface: catalog-driven launcher grid, status bar, connected quick settings, notifications, crash notices, portrait/landscape layouts. Launchable tiles go through `appd`; reference entries keep illustrative in-process pages. |
+| `crates/ferrum-terminal` | The Terminal application as an independent Wayland client (alacritty VT layer on a PTY, touch-first on-screen keyboard), launched and isolated by `appd`. |
 
 Targets and tooling live under `targets/qemu-aarch64/` (see its README for
 every command and its limitations) and `containers/guest-builder/` (the
@@ -90,10 +108,15 @@ FERRIX_QEMU_GRAPHICS=cocoa just pmos-run  # graphical route (not yet validated h
 ```
 
 Host-side development without QEMU: `just shell-nested` builds and launches
-`mobile-core` plus the compositor together against the same mock profile in a
-Linux host session. `just shell-compositor-nested` is retained as an alias.
+`mobile-core`, `appd` (which starts the home surface and launches apps), and
+the compositor together against the same mock profile in a Linux host
+session. `just shell-compositor-nested` is retained as an alias.
 `cargo run -p mobile-basic-screen -- targets/qemu-aarch64/profile.toml
---preview out/preview.ppm` renders the reference surface to a file on any host.
+--preview out/preview.ppm` renders the home surface to a file on any host;
+`cargo run -p ferrum-terminal -- --preview out/terminal.ppm` does the same for
+the Terminal. `just linux-check [cargo args]` runs cargo inside the pinned
+arm64 Linux builder so Linux-only code (Smithay backends, the sandbox) can be
+compiled and unit-tested from macOS.
 
 ## The contract test
 
@@ -151,16 +174,26 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
   behind typed project-owned adapters when they are integrated; their
   protocols are not reimplemented.
 - Weston is a diagnostic fallback and `mobile-basic-screen` is a reference
-  client. The product compositor is `mobile-shell`: minimal, portrait-first,
-  touch-first, rotation-aware, and software-rendered by default.
+  home surface. The product compositor is `mobile-shell`: minimal,
+  portrait-first, touch-first, rotation-aware, and software-rendered by default.
+- Applications, shells, and the core depend on `app-api`/`app-protocol`, never
+  on `appd` itself or on a runtime implementation; only `appd`'s binary
+  composes `runtime-native`. `just arch-check` enforces this.
 
 ## Known gaps
 
 - The postmarketOS graphical route is installed but still needs captured and
   inspected framebuffer evidence.
-- App pages beyond the terminal and system controls are still illustrative.
+- App pages beyond the Terminal and system controls are still illustrative
+  reference pages inside the home surface.
+- Isolation is process and namespace based (PID, mount, IPC, UTS, private
+  `/proc` and `/tmp`, `no_new_privs`). Applications still run as the session
+  user with access to the shared filesystem and sockets; portals, permission
+  enforcement, seccomp, and cgroup limits are not implemented yet.
 - Production adapters for NetworkManager, UPower, PipeWire, ModemManager, and
   sensors are not implemented yet; QEMU uses deterministic mock adapters.
-- Crash recovery and native postmarketOS packaging remain future work.
+- Crash recovery covers applications (a crashed app returns focus to the home
+  surface, which `appd` restarts if it crashes itself); supervision of the
+  core and compositor, and native postmarketOS packaging, remain future work.
 
 License: MIT OR Apache-2.0.

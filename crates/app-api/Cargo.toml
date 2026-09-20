@@ -1,0 +1,13 @@
+[package]
+name = "app-api"
+description = "Stable application contract: app identities, runtime kinds, descriptors, lifecycle states, isolation policy, and typed errors shared by appd, shells, and applications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -94,6 +94,11 @@ impl OutputLayout {
 
 /// Fullscreen-only toplevel stack. Newest mapped window is focused and drawn;
 /// unmapped toplevels (no buffer yet) are tracked but never focused.
+///
+/// Every entry carries the owning client's process id (from the kernel via
+/// `SO_PEERCRED`, so it cannot be spoofed) and the last xdg `app_id` the
+/// client claimed (untrusted, evidence only). The pid is what links a window
+/// to an `appd` application instance.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WindowStack<T: PartialEq + Clone> {
     entries: Vec<Entry<T>>,
@@ -103,6 +108,8 @@ pub struct WindowStack<T: PartialEq + Clone> {
 struct Entry<T> {
     id: T,
     mapped: bool,
+    pid: Option<u32>,
+    app_id: Option<String>,
 }
 
 impl<T: PartialEq + Clone> WindowStack<T> {
@@ -112,10 +119,16 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         }
     }
 
-    /// Track a new (not yet mapped) toplevel.
-    pub fn push(&mut self, id: T) {
+    /// Track a new (not yet mapped) toplevel owned by the client with `pid`
+    /// (`None` when the kernel did not report credentials).
+    pub fn push_with_pid(&mut self, id: T, pid: Option<u32>) {
         if !self.contains(&id) {
-            self.entries.push(Entry { id, mapped: false });
+            self.entries.push(Entry {
+                id,
+                mapped: false,
+                pid,
+                app_id: None,
+            });
         }
     }
 
@@ -140,6 +153,32 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         !was_mapped
     }
 
+    /// Move a mapped toplevel to the top so [`WindowStack::focused`] returns
+    /// it. Returns `false` when the toplevel is unknown or not mapped yet.
+    pub fn raise(&mut self, id: &T) -> bool {
+        let Some(index) = self.entries.iter().position(|e| &e.id == id && e.mapped) else {
+            return false;
+        };
+        let entry = self.entries.remove(index);
+        self.entries.push(entry);
+        true
+    }
+
+    /// Raise the newest mapped toplevel of the client with `pid`. Returns
+    /// `false` when that client has no mapped toplevel.
+    pub fn raise_pid(&mut self, pid: u32) -> bool {
+        let Some(index) = self
+            .entries
+            .iter()
+            .rposition(|e| e.mapped && e.pid == Some(pid))
+        else {
+            return false;
+        };
+        let entry = self.entries.remove(index);
+        self.entries.push(entry);
+        true
+    }
+
     pub fn remove(&mut self, id: &T) -> bool {
         let before = self.entries.len();
         self.entries.retain(|e| &e.id != id);
@@ -151,13 +190,58 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         self.entries.iter().rev().find(|e| e.mapped).map(|e| &e.id)
     }
 
+    /// The mapped toplevel furthest down the stack: the fallback "home" when
+    /// no application service can say which window is home.
+    pub fn oldest_mapped(&self) -> Option<&T> {
+        self.entries.iter().find(|e| e.mapped).map(|e| &e.id)
+    }
+
     pub fn mapped_count(&self) -> usize {
         self.entries.iter().filter(|e| e.mapped).count()
+    }
+
+    /// Mapped toplevels owned by the client with `pid`.
+    pub fn mapped_count_for_pid(&self, pid: u32) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.mapped && e.pid == Some(pid))
+            .count()
+    }
+
+    /// Process id of the client owning `id`, when the kernel reported one.
+    pub fn pid_of(&self, id: &T) -> Option<u32> {
+        self.entries
+            .iter()
+            .find(|e| &e.id == id)
+            .and_then(|e| e.pid)
+    }
+
+    /// Last xdg `app_id` seen for `id` (client-claimed, untrusted).
+    pub fn app_id_of(&self, id: &T) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|e| &e.id == id)
+            .and_then(|e| e.app_id.as_deref())
+    }
+
+    /// Record the xdg `app_id` a client claimed for `id`.
+    pub fn set_app_id(&mut self, id: &T, app_id: Option<String>) {
+        if let Some(entry) = self.entries.iter_mut().find(|e| &e.id == id) {
+            entry.app_id = app_id;
+        }
     }
 
     /// All tracked toplevels, bottom to top.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.entries.iter().map(|e| &e.id)
+    }
+
+    /// Mapped toplevels with their pid and app id, bottom to top.
+    pub fn mapped(&self) -> impl Iterator<Item = (&T, Option<u32>, Option<&str>)> {
+        self.entries
+            .iter()
+            .filter(|e| e.mapped)
+            .map(|e| (&e.id, e.pid, e.app_id.as_deref()))
     }
 }
 
@@ -213,7 +297,7 @@ mod tests {
     fn newest_mapped_window_is_focused() {
         let mut stack: WindowStack<u32> = WindowStack::new();
         assert_eq!(stack.focused(), None);
-        stack.push(1);
+        stack.push_with_pid(1, None);
         assert_eq!(
             stack.focused(),
             None,
@@ -222,7 +306,7 @@ mod tests {
         assert!(stack.mark_mapped(&1));
         assert!(!stack.mark_mapped(&1), "mapping is reported once");
         assert_eq!(stack.focused(), Some(&1));
-        stack.push(2);
+        stack.push_with_pid(2, None);
         assert_eq!(stack.focused(), Some(&1));
         assert!(stack.mark_mapped(&2));
         assert_eq!(stack.focused(), Some(&2));
@@ -232,9 +316,9 @@ mod tests {
     #[test]
     fn removing_the_top_window_falls_back_to_previous() {
         let mut stack: WindowStack<&'static str> = WindowStack::new();
-        stack.push("launcher");
+        stack.push_with_pid("launcher", None);
         stack.mark_mapped(&"launcher");
-        stack.push("terminal");
+        stack.push_with_pid("terminal", None);
         stack.mark_mapped(&"terminal");
         assert!(stack.remove(&"terminal"));
         assert!(!stack.remove(&"terminal"));
@@ -247,9 +331,9 @@ mod tests {
     #[test]
     fn push_is_idempotent_and_keeps_order() {
         let mut stack: WindowStack<u8> = WindowStack::new();
-        stack.push(1);
-        stack.push(2);
-        stack.push(1);
+        stack.push_with_pid(1, None);
+        stack.push_with_pid(2, None);
+        stack.push_with_pid(1, None);
         assert_eq!(stack.iter().copied().collect::<Vec<_>>(), vec![1, 2]);
         stack.mark_mapped(&1);
         assert_eq!(
@@ -260,5 +344,101 @@ mod tests {
         assert!(stack.is_mapped(&1));
         assert!(!stack.is_mapped(&2));
         assert!(!stack.mark_mapped(&9), "unknown toplevels are ignored");
+    }
+
+    #[test]
+    fn windows_remember_their_client_pid_and_app_id() {
+        let mut stack: WindowStack<&'static str> = WindowStack::new();
+        stack.push_with_pid("home", Some(100));
+        stack.push_with_pid("terminal", Some(200));
+        stack.push_with_pid("anonymous", None);
+        assert_eq!(stack.pid_of(&"home"), Some(100));
+        assert_eq!(stack.pid_of(&"anonymous"), None);
+        assert_eq!(stack.pid_of(&"missing"), None);
+
+        assert_eq!(stack.app_id_of(&"home"), None);
+        stack.set_app_id(&"home", Some("org.ferrix.home".to_owned()));
+        assert_eq!(stack.app_id_of(&"home"), Some("org.ferrix.home"));
+        stack.set_app_id(&"missing", Some("ignored".to_owned()));
+
+        assert_eq!(
+            stack.mapped_count_for_pid(100),
+            0,
+            "unmapped does not count"
+        );
+        stack.mark_mapped(&"home");
+        stack.mark_mapped(&"terminal");
+        assert_eq!(stack.mapped_count_for_pid(100), 1);
+        assert_eq!(stack.mapped_count_for_pid(999), 0);
+        let mapped: Vec<_> = stack.mapped().collect();
+        assert_eq!(
+            mapped,
+            vec![
+                (&"home", Some(100), Some("org.ferrix.home")),
+                (&"terminal", Some(200), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn raise_moves_a_mapped_window_to_the_top() {
+        let mut stack: WindowStack<&'static str> = WindowStack::new();
+        stack.push_with_pid("home", Some(100));
+        stack.push_with_pid("terminal", Some(200));
+        stack.push_with_pid("pending", Some(300));
+        stack.mark_mapped(&"home");
+        stack.mark_mapped(&"terminal");
+        assert_eq!(stack.focused(), Some(&"terminal"));
+        assert_eq!(stack.oldest_mapped(), Some(&"home"));
+
+        assert!(stack.raise(&"home"));
+        assert_eq!(stack.focused(), Some(&"home"));
+        assert_eq!(stack.oldest_mapped(), Some(&"terminal"));
+        assert!(
+            !stack.raise(&"pending"),
+            "unmapped windows cannot be raised"
+        );
+        assert!(!stack.raise(&"missing"));
+        assert_eq!(stack.focused(), Some(&"home"));
+
+        assert!(stack.raise_pid(200));
+        assert_eq!(stack.focused(), Some(&"terminal"));
+        assert!(!stack.raise_pid(300), "pid with no mapped toplevel");
+        assert!(!stack.raise_pid(999));
+        assert_eq!(stack.focused(), Some(&"terminal"));
+        assert_eq!(
+            stack.iter().copied().collect::<Vec<_>>(),
+            vec!["pending", "home", "terminal"],
+            "raising keeps the unmapped entry in place"
+        );
+    }
+
+    #[test]
+    fn raise_pid_picks_the_newest_toplevel_of_that_client() {
+        let mut stack: WindowStack<u8> = WindowStack::new();
+        stack.push_with_pid(1, Some(7));
+        stack.push_with_pid(2, Some(7));
+        stack.push_with_pid(3, Some(8));
+        for id in 1..=3 {
+            stack.mark_mapped(&id);
+        }
+        assert!(stack.raise_pid(7));
+        assert_eq!(stack.focused(), Some(&2));
+        assert_eq!(stack.mapped_count_for_pid(7), 2);
+        stack.remove(&2);
+        assert_eq!(stack.mapped_count_for_pid(7), 1);
+        stack.remove(&1);
+        assert_eq!(stack.mapped_count_for_pid(7), 0);
+        assert_eq!(stack.oldest_mapped(), Some(&3));
+    }
+
+    #[test]
+    fn oldest_mapped_is_none_without_mapped_windows() {
+        let mut stack: WindowStack<u8> = WindowStack::new();
+        assert_eq!(stack.oldest_mapped(), None);
+        stack.push_with_pid(1, None);
+        assert_eq!(stack.oldest_mapped(), None);
+        stack.mark_mapped(&1);
+        assert_eq!(stack.oldest_mapped(), Some(&1));
     }
 }

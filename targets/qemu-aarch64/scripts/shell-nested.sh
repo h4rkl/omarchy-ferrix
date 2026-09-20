@@ -1,18 +1,27 @@
 #!/bin/sh
-# Run the complete nested product session: persistent core plus compositor.
+# Run the complete nested product session on a Linux host: persistent core,
+# the application service (which starts the home surface and launches apps in
+# their own namespaces), and the compositor in a host window. `mock` evidence.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
 profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
 socket=${FERRIX_CORE_SOCKET:-"$out/core.sock"}
+appd_socket=${FERRIX_APPD_SOCKET:-"$out/appd.sock"}
+# Nested compositor socket name; apps launched by appd inherit it.
+wayland_display=${FERRIX_NESTED_WAYLAND_DISPLAY:-ferrix-nested-0}
 mkdir -p "$out"
 
-cargo build --manifest-path "$root/Cargo.toml" -p mobile-core -p mobile-shell
+cargo build --manifest-path "$root/Cargo.toml" \
+  -p mobile-core -p mobile-shell -p appd -p runtime-native -p mobile-basic-screen -p ferrum-terminal
 FERRIX_CORE_SOCKET="$socket" "$root/target/debug/mobile-core" "$profile" --control none &
 core_pid=$!
+appd_pid=
 cleanup() {
+  [ -n "$appd_pid" ] && kill "$appd_pid" 2>/dev/null || true
   kill "$core_pid" 2>/dev/null || true
+  [ -n "$appd_pid" ] && wait "$appd_pid" 2>/dev/null || true
   wait "$core_pid" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -24,4 +33,16 @@ while [ ! -S "$socket" ] && [ "$remaining" -gt 0 ]; do
 done
 [ -S "$socket" ] || { echo "mobile-core did not create $socket" >&2; exit 1; }
 
-FERRIX_CORE_SOCKET="$socket" "$root/target/debug/mobile-shell" --nested --core "$socket" "$profile"
+# The compositor connects to appd lazily and retries, so appd may start after
+# it. Apps resolve their binaries through PATH: put the debug build first.
+export PATH="$root/target/debug:$PATH"
+export FERRIX_CORE_SOCKET="$socket"
+export FERRIX_APPD_SOCKET="$appd_socket"
+export FERRIX_QEMU_PROFILE="$profile"
+export FERRIX_APP_DIR="$root/apps"
+# Only appd (and therefore the apps) see the nested socket name; the nested
+# compositor itself is a client of the host session's WAYLAND_DISPLAY.
+WAYLAND_DISPLAY="$wayland_display" "$root/target/debug/appd" --nested --socket "$appd_socket" --app-dir "$root/apps" &
+appd_pid=$!
+
+"$root/target/debug/mobile-shell" --nested --core "$socket" --appd "$appd_socket" --socket "$wayland_display" "$profile"

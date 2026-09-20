@@ -7,14 +7,22 @@
 //! same versioned mock profile. Evidence is `QEMU` or `mock`, never a physical
 //! device claim.
 //!
+//! Applications are independent processes supervised by `appd`; the
+//! compositor links to it (`appd_link`) to report which client pid owns each
+//! mapped surface and holds focus, and obeys its activate directives. The
+//! trusted bottom-edge home gesture (`gesture`) is recognised here so no
+//! application can swallow it.
+//!
 //! Usage:
 //!   mobile-shell [/etc/ferrix/profile.toml]              # guest: DRM/libinput
 //!   mobile-shell --nested targets/qemu-aarch64/profile.toml # Linux host window
 //!   mobile-shell --print-config PROFILE                     # any host: resolved config
 
+mod appd_link;
 mod cli;
 mod config;
 mod evidence;
+mod gesture;
 mod layout;
 
 #[cfg(target_os = "linux")]
@@ -59,6 +67,7 @@ fn emit_geometry(evidence: Evidence, config: &config::ShellConfig, plan: layout:
             ("profile", config.profile_name.as_str().into()),
             ("socket", config.socket_name.as_str().into()),
             ("touch", Value::Bool(config.touch)),
+            ("appd", config.appd_label().into()),
         ],
     ));
 }
@@ -80,7 +89,8 @@ fn run(args: Vec<String>, evidence: Evidence) -> Result<(), Failure> {
         args.display,
         cmdline.as_deref(),
         args.socket.as_deref(),
-    );
+    )
+    .with_appd(args.appd_socket.clone());
     let mut plan = layout::OutputLayout::plan(
         config.geometry.width,
         config.geometry.height,

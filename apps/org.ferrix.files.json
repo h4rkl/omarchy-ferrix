@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.files",
+  "runtime": "native",
+  "name": "Files",
+  "icon": {
+    "glyph": "▤",
+    "tone": "orange"
+  },
+  "launchable": false
+}

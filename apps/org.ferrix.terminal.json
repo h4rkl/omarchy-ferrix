@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "org.ferrix.terminal",
+  "runtime": "native",
+  "name": "Terminal",
+  "icon": {
+    "glyph": ">_",
+    "tone": "purple"
+  },
+  "launchable": true,
+  "capabilities": [
+    "shell",
+    "background"
+  ],
+  "launch": {
+    "exec": [
+      "ferrum-terminal"
+    ]
+  }
+}

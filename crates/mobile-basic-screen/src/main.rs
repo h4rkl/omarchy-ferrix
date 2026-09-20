@@ -1,8 +1,12 @@
-//! Ferrum-styled QEMU reference basic screen.
+//! Ferrum home surface (QEMU reference launcher).
 //!
-//! A small software-rendered Wayland client that draws the first mobile
-//! surface from the versioned mock profile. It is QEMU/mock evidence for the
-//! graphics path, not the product shell and not a physical-device claim.
+//! A small software-rendered Wayland client (xdg app_id `org.ferrix.home`)
+//! that draws the status bar, the launcher grid from the application catalog,
+//! quick settings, and notifications. Applications are independent processes
+//! launched and tracked by `appd`; this surface only requests launches and
+//! shows their lifecycle (running dot, starting state, crash notice). It is
+//! QEMU/mock evidence for the graphics path, not the product shell and not a
+//! physical-device claim.
 //!
 //! Hardware state (battery, network, modem) comes from the persistent
 //! `mobile-core` over its state socket; the profile supplies only the panel
@@ -11,32 +15,34 @@
 //!
 //! Usage:
 //!   mobile-basic-screen [profile.toml] [--core /run/ferrix/core.sock]
-//!                                                  # guest: connect to Wayland
-//!   mobile-basic-screen [profile.toml] --preview p.ppm  # any host: render PPM
-//!   mobile-basic-screen [profile.toml] --preview p.ppm --page terminal
-//!                                                  # preview the Terminal app
-//!                                                  # with canned shell output
+//!                       [--appd /run/ferrix/appd.sock]   # guest: connect to Wayland
+//!   mobile-basic-screen [profile.toml] --preview p.ppm [--page launcher]
+//!                                                        # any host: render PPM
 //!
-//! The preview has no daemon, so it bootstraps a session in-process and
-//! renders that session's initial (mock) state.
+//! The profile defaults to the guest copy when present, else the repository
+//! copy, so the manifest's native launch command works in the
+//! guest and nested. The preview has no daemons, so it bootstraps a session
+//! in-process and loads the catalog from the descriptor directory.
 
-mod draw;
+mod catalog;
 mod interaction;
-mod keymap;
-mod osk;
 mod screen;
-mod terminal;
-mod theme;
 
 #[cfg(target_os = "linux")]
 mod app;
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use ferrum_ui::draw::Type;
+use ferrum_ui::evidence::{emit, json_escape};
 use hardware_api::{HardwareState, WifiState};
 use mobile_session::{BootstrapOptions, bootstrap};
 use target_profile::Profile;
+
+/// Evidence label for every record this binary emits in a session.
+const EVIDENCE: &str = "QEMU";
 
 /// Initial quick-settings toggles derived from live hardware state.
 fn ui_toggles(hw: &HardwareState) -> (bool, bool) {
@@ -55,74 +61,90 @@ pub(crate) fn test_state() -> HardwareState {
     .snapshot()
 }
 
-/// Canned shell transcript for the host preview; no PTY is involved.
-const PREVIEW_TRANSCRIPT: &[u8] = b"root@ferrix:~# uname -a\r\n\
-Linux ferrix 6.12.0-virt #1 SMP aarch64 Linux\r\n\
-root@ferrix:~# ls --color=always /\r\n\
-\x1b[1;34mbin\x1b[0m   \x1b[1;34mdev\x1b[0m   \x1b[1;34metc\x1b[0m   \x1b[1;34mproc\x1b[0m  \x1b[1;34mroot\x1b[0m  \x1b[1;34mrun\x1b[0m   \x1b[1;34msys\x1b[0m   \x1b[1;34musr\x1b[0m\r\n\
-root@ferrix:~# printf '\\033[32mok\\033[0m\\n'\r\n\
-\x1b[32mok\x1b[0m\r\n\
-root@ferrix:~# ";
+/// The checked-in descriptors as launcher tiles for unit tests.
+#[cfg(test)]
+pub(crate) fn test_tiles() -> Vec<catalog::Tile> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
+    let (apps, errors) = catalog::load_descriptor_dir(&dir).expect("apps dir");
+    assert!(errors.is_empty(), "{errors:?}");
+    catalog::tiles_from_catalog(&apps, &[])
+}
 
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!(
-                "{{\"evidence\":\"QEMU\",\"event\":\"basic-screen-error\",\"error\":\"{}\"}}",
-                err.replace('"', "'")
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"basic-screen-error\",\"error\":\"{}\"}}",
+                json_escape(&err)
             );
             ExitCode::FAILURE
         }
     }
 }
 
-fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut profile_path = mobile_session::GUEST_PROFILE_PATH.to_owned();
-    let mut core_socket = std::env::var("FERRIX_CORE_SOCKET")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| mobile_protocol::DEFAULT_SOCKET.to_owned());
-    let mut preview = None;
-    let mut page = "launcher".to_owned();
+struct Args {
+    profile_path: PathBuf,
+    core_socket: PathBuf,
+    appd_socket: PathBuf,
+    preview: Option<String>,
+    page: String,
+}
+
+fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
+    let env_path = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    let mut parsed = Args {
+        profile_path: mobile_session::default_profile_path(),
+        core_socket: env_path("FERRIX_CORE_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(mobile_protocol::DEFAULT_SOCKET)),
+        appd_socket: env_path(app_api::APPD_SOCKET_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(app_protocol::DEFAULT_SOCKET)),
+        preview: None,
+        page: "launcher".to_owned(),
+    };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
-        if arg == "--preview" {
-            preview = Some(it.next().ok_or("--preview requires an output path")?);
-        } else if arg == "--page" {
-            page = it.next().ok_or("--page requires launcher|terminal")?;
-        } else if arg == "--core" {
-            core_socket = it.next().ok_or("--core requires a socket path")?;
-        } else {
-            profile_path = arg;
+        match arg.as_str() {
+            "--preview" => {
+                parsed.preview = Some(it.next().ok_or("--preview requires an output path")?);
+            }
+            "--page" => parsed.page = it.next().ok_or("--page requires launcher")?,
+            "--core" => {
+                parsed.core_socket =
+                    PathBuf::from(it.next().ok_or("--core requires a socket path")?);
+            }
+            "--appd" => {
+                parsed.appd_socket =
+                    PathBuf::from(it.next().ok_or("--appd requires a socket path")?);
+            }
+            other if other.starts_with("--") => return Err(format!("unknown argument {other:?}")),
+            _ => parsed.profile_path = PathBuf::from(arg),
         }
     }
+    Ok(parsed)
+}
+
+fn run() -> Result<(), String> {
+    let args = parse_args(std::env::args().skip(1))?;
     let minute = utc_minute_of_day();
 
-    if let Some(path) = preview {
-        // No daemon on the host: bootstrap the same session the core would.
-        let session = bootstrap(BootstrapOptions::from_env().with_profile_path(&profile_path))
+    if let Some(path) = args.preview {
+        if args.page != "launcher" {
+            return Err(format!("unknown --page {}; use launcher", args.page));
+        }
+        // No daemons on the host: bootstrap the same session the core would
+        // and read the catalog straight from the descriptors.
+        let session = bootstrap(BootstrapOptions::from_env().with_profile_path(&args.profile_path))
             .map_err(|e| e.to_string())?;
         let profile = session.profile;
         let hw = session.services.snapshot();
-        let ty = draw::Type::load()?;
+        let ty = Type::load()?;
         let (wifi_on, bt_on) = ui_toggles(&hw);
-        let mut state = interaction::UiState::new(wifi_on, bt_on);
-        let snapshot = match page.as_str() {
-            "launcher" => None,
-            "terminal" => {
-                state.page = interaction::Page::App(interaction::AppId::Terminal);
-                let m =
-                    screen::terminal_metrics(&ty, profile.display.width, profile.display.height);
-                Some(terminal::Snapshot::from_bytes(
-                    m.cols,
-                    m.rows,
-                    PREVIEW_TRANSCRIPT,
-                ))
-            }
-            other => return Err(format!("unknown --page {other}; use launcher|terminal")),
-        };
+        let (app_dir, tiles) = catalog::load_descriptor_tiles()?;
+        let mut state = interaction::UiState::new(wifi_on, bt_on, tiles);
+        state.brightness = hw.display.brightness_percent;
         let canvas = screen::compose(
             &hw,
             minute,
@@ -130,32 +152,38 @@ fn run() -> Result<(), String> {
             profile.display.width,
             profile.display.height,
             &state,
-            snapshot.as_ref(),
         );
         std::fs::write(&path, canvas.ppm_bytes()).map_err(|e| e.to_string())?;
-        println!(
-            "{{\"evidence\":\"mock\",\"event\":\"basic-screen-preview\",\"page\":\"{page}\",\"path\":\"{path}\",\"width\":{},\"height\":{},\"charging\":{}}}",
-            profile.display.width, profile.display.height, hw.power.charging
-        );
+        emit(format!(
+            "{{\"evidence\":\"mock\",\"event\":\"basic-screen-preview\",\"page\":\"{}\",\"path\":\"{}\",\"width\":{},\"height\":{},\"charging\":{},\"tiles\":{},\"app_dir\":\"{}\"}}",
+            json_escape(&args.page),
+            json_escape(&path),
+            profile.display.width,
+            profile.display.height,
+            hw.power.charging,
+            state.tiles.len(),
+            json_escape(&app_dir.display().to_string())
+        ));
         return Ok(());
     }
 
     // Guest: geometry from the profile, state from the core.
-    let profile = Profile::load(&profile_path).map_err(|e| e.to_string())?;
-    let core =
-        mobile_protocol::subscribe(std::path::Path::new(&core_socket), Duration::from_secs(10))?;
-    println!(
-        "{{\"evidence\":\"QEMU\",\"event\":\"core-connected\",\"socket\":\"{core_socket}\",\"target\":\"{}\",\"charging\":{}}}",
-        core.target, core.state.power.charging
-    );
+    let profile = Profile::load(&args.profile_path).map_err(|e| e.to_string())?;
+    let core = mobile_protocol::subscribe(&args.core_socket, Duration::from_secs(10))?;
+    emit(format!(
+        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"core-connected\",\"socket\":\"{}\",\"target\":\"{}\",\"charging\":{}}}",
+        json_escape(&args.core_socket.display().to_string()),
+        json_escape(&core.target),
+        core.state.power.charging
+    ));
 
     #[cfg(target_os = "linux")]
     {
-        app::run(&profile, core, minute)
+        app::run(&profile, core, &args.appd_socket, minute)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (profile, core);
+        let _ = (profile, core, args.appd_socket);
         Err("the Wayland session is guest-only on this host; use --preview <out.ppm>".to_owned())
     }
 }
@@ -166,4 +194,37 @@ fn utc_minute_of_day() -> u32 {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     ((secs % 86_400) / 60) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arguments_parse_with_defaults_and_overrides() {
+        let args = parse_args(Vec::<String>::new()).unwrap();
+        assert!(args.profile_path.ends_with("profile.toml"));
+        assert!(args.preview.is_none());
+        assert_eq!(args.page, "launcher");
+
+        let args = parse_args(
+            [
+                "custom.toml",
+                "--preview",
+                "out.ppm",
+                "--core",
+                "/tmp/core.sock",
+                "--appd",
+                "/tmp/appd.sock",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(args.profile_path, PathBuf::from("custom.toml"));
+        assert_eq!(args.preview.as_deref(), Some("out.ppm"));
+        assert_eq!(args.core_socket, PathBuf::from("/tmp/core.sock"));
+        assert_eq!(args.appd_socket, PathBuf::from("/tmp/appd.sock"));
+        assert!(parse_args(["--bogus".to_owned()]).is_err());
+        assert!(parse_args(["--preview".to_owned()]).is_err());
+    }
 }

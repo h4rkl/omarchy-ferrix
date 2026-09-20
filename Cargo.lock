@@ -86,6 +86,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7eb209b1518d6bb87b283c20095f5228ecda460da70b44f0802523dea6da04"
 
 [[package]]
+name = "app-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "app-protocol"
+version = "0.1.0"
+dependencies = [
+ "app-api",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "app-runtime-api"
+version = "0.1.0"
+dependencies = [
+ "app-api",
+ "serde_json",
+]
+
+[[package]]
+name = "appd"
+version = "0.1.0"
+dependencies = [
+ "app-api",
+ "app-protocol",
+ "app-runtime-api",
+ "runtime-native",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "appendlist"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -503,6 +541,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "ferrum-terminal"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "app-api",
+ "app-protocol",
+ "ferrum-ui",
+]
+
+[[package]]
+name = "ferrum-ui"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+ "smithay-client-toolkit 0.20.0",
+ "tiny-skia",
 ]
 
 [[package]]
@@ -1015,14 +1072,13 @@ dependencies = [
 name = "mobile-basic-screen"
 version = "0.1.0"
 dependencies = [
- "alacritty_terminal",
- "fontdue",
+ "app-api",
+ "app-protocol",
+ "ferrum-ui",
  "hardware-api",
  "mobile-protocol",
  "mobile-session",
- "smithay-client-toolkit 0.20.0",
  "target-profile",
- "tiny-skia",
 ]
 
 [[package]]
@@ -1058,9 +1114,12 @@ dependencies = [
 name = "mobile-shell"
 version = "0.1.0"
 dependencies = [
+ "app-api",
+ "app-protocol",
  "drm-ffi",
  "hardware-api",
  "mobile-protocol",
+ "serde_json",
  "smithay",
  "target-profile",
  "tracing",
@@ -1639,6 +1698,18 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "runtime-native"
+version = "0.1.0"
+dependencies = [
+ "app-api",
+ "app-runtime-api",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+ "signal-hook",
+]
 
 [[package]]
 name = "rustc_version"
