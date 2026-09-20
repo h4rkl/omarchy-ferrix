@@ -65,6 +65,11 @@ qemu-type text:
 qemu-agent-stop:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-stop.sh"
 
+# Boot a fresh graphical TCG guest and verify minimize, side-edge yield, and
+# long-swipe close through compositor/appd records plus a final framebuffer.
+qemu-gesture-check:
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-gesture-check.sh"
+
 # Headless TCG CI contract: boot-health, telephonyd-ready, networkd-ready,
 # unplugged-to-charging over ferrix.control, clean poweroff.
 # FERRIX_QEMU_REQUIRE_SERVICES=0 skips the two daemon assertions.

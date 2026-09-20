@@ -20,9 +20,29 @@ printf 'starting QEMU agent session\n'
 printf 'serial log: %s\nQMP socket: %s\n' "$runtime/serial.log" "$runtime/qmp.sock"
 # TCG is the portable agent default. A host accelerator remains an explicit
 # override because graphics/readback behavior varies across host backends.
-FERRIX_QEMU_AGENT=1 FERRIX_QEMU_MODE=agent FERRIX_QEMU_ACCEL=${FERRIX_QEMU_ACCEL:-tcg} FERRIX_QEMU_GRAPHICS=${FERRIX_QEMU_GRAPHICS:-none} "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$launch_log" 2>&1 &
-pid=$!
-printf '%s\n' "$pid" > "$pid_file"
+graphics=${FERRIX_QEMU_GRAPHICS:-none}
+case "$graphics" in
+  none|off)
+    # Ask QEMU itself to daemonize. A plain shell background job can receive
+    # SIGHUP when this short-lived launcher exits (notably from automation),
+    # leaving qemu-tap/qemu-swipe with a stale pid file and dead QMP socket.
+    FERRIX_QEMU_AGENT=1 FERRIX_QEMU_MODE=agent FERRIX_QEMU_DAEMONIZE=1 \
+      FERRIX_QEMU_PID_FILE="$pid_file" FERRIX_QEMU_ACCEL=${FERRIX_QEMU_ACCEL:-tcg} \
+      FERRIX_QEMU_GRAPHICS="$graphics" \
+      "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$launch_log" 2>&1
+    [ -s "$pid_file" ] || { cat "$launch_log" >&2; echo "QEMU did not write its pid file" >&2; exit 1; }
+    pid=$(cat "$pid_file")
+    ;;
+  *)
+    # Cocoa/GTK must retain their foreground UI process, so keep the original
+    # background launch for explicitly requested host-window sessions.
+    FERRIX_QEMU_AGENT=1 FERRIX_QEMU_MODE=agent FERRIX_QEMU_ACCEL=${FERRIX_QEMU_ACCEL:-tcg} \
+      FERRIX_QEMU_GRAPHICS="$graphics" \
+      "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$launch_log" 2>&1 &
+    pid=$!
+    printf '%s\n' "$pid" > "$pid_file"
+    ;;
+esac
 for _ in $(seq 1 100); do
   [ -S "$runtime/qmp.sock" ] && break
   kill -0 "$pid" 2>/dev/null || { cat "$launch_log" >&2; rm -f "$pid_file"; exit 1; }

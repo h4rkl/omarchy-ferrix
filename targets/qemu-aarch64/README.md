@@ -515,8 +515,10 @@ while retaining the PNG for diagnosis.
 
 The agent session is headless by default (`-display none`) and uses portable TCG
 unless `FERRIX_QEMU_ACCEL` is explicitly set, so it remains useful on hosts
-without a display server. To simultaneously open a local QEMU window, choose a
-host backend:
+without a display server. Headless sessions use QEMU's own daemon mode, so the
+guest remains alive after `qemu-agent-start` returns and later `qemu-frame`,
+`qemu-tap`, and `qemu-swipe` invocations reach the same VM. To simultaneously
+open a local QEMU window, choose a host backend:
 
 ```sh
 FERRIX_QEMU_GRAPHICS=cocoa just qemu-agent-start
@@ -530,6 +532,17 @@ just qemu-tap 540 1170
 just qemu-swipe 540 2250 540 1800
 just qemu-key esc
 ```
+
+Run the complete navigation regression against a fresh TCG guest with:
+
+```sh
+just qemu-gesture-check
+```
+
+It verifies that a normal bottom swipe backgrounds Messages without terminating
+it, inward swipes from both side edges yield to Home, and a long bottom swipe
+terminates Messages before capturing the final Home framebuffer under
+`out/qemu-aarch64/gesture-check/`.
 
 The interactive reference surface accepts pointer and Wayland touch input. Tap
 any launcher tile to open its QEMU/mock app view, tap the status bar for quick

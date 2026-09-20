@@ -127,6 +127,13 @@ if [ "$agent" = 1 ]; then
   mkdir -p "$runtime"
   rm -f "$qmp_socket"
   set -- "$@" -append "console=ttyAMA0 panic=-1 ferrix.mode=$mode $graphics_args" -device "$gpu" -device virtio-tablet-pci -device virtio-keyboard-pci -display "$(display_for "$graphics")" -serial "file:$serial_log" -qmp "unix:$qmp_socket,server=on,wait=off"
+  if [ "${FERRIX_QEMU_DAEMONIZE:-0}" = 1 ]; then
+    case "$graphics" in
+      none|off) ;;
+      *) echo "FERRIX_QEMU_DAEMONIZE=1 requires headless graphics (none|off)" >&2; exit 2 ;;
+    esac
+    set -- "$@" -daemonize -pidfile "${FERRIX_QEMU_PID_FILE:-$runtime/qemu.pid}"
+  fi
 elif [ "$graphics" = off ]; then
   set -- "$@" -append "console=ttyAMA0 panic=-1 ferrix.mode=$mode" -nographic
 else
