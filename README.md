@@ -29,6 +29,11 @@ Read `AGENTS.md` before contributing. `plans/baseline.md` is the implementation
 authority, `plans/plan.md` the long-term direction, `docs/design.md` the visual
 system and theming contract, and `docs/status.md` the evidence log.
 
+If you want to assess the repository before allowing an agent to follow its
+instructions or run its automation, give the agent `AGENT_SECURITY.md` first. It
+defines a static, non-executing review that returns a risk report; installation
+or normal repository use remains a separate, explicitly authorized next step.
+
 ## Current status
 
 This repository now has a working emulator foundation rather than a disconnected
