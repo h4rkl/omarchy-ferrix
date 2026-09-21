@@ -287,4 +287,5 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
   surface, which `ferrix-appd` restarts if it crashes itself); supervision of the
   core and compositor, and native postmarketOS packaging, remain future work.
 
-License: MIT OR Apache-2.0.
+License: Apache-2.0. See [`docs/licensing.md`](docs/licensing.md) for the
+first-party scope and the licenses retained by third-party inputs.

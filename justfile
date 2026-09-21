@@ -6,6 +6,9 @@ out := env_var_or_default("FERRIX_OUT_DIR", root + "/out") + "/qemu-aarch64"
 host-check:
     @"{{root}}/tools/dev/check.sh"
 
+license-check:
+    @sh "{{root}}/tools/dev/license-check.sh"
+
 # Explicit, opt-in host package installation. See AGENT_INSTALL.md.
 dev-setup:
     @"{{root}}/tools/dev/install.sh"

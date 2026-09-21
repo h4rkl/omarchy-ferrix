@@ -30,7 +30,7 @@ tagged 2025-06-24) and its `anvil`/`smallvil` examples.
 
 | Requirement (AGENTS.md / plans/baseline.md) | Catacomb | Gap |
 | --- | --- | --- |
-| MIT/Apache-2.0-compatible dependencies; workspace is `MIT OR Apache-2.0` | GPL-3.0-only | **Blocking for reuse-as-library or fork inside this workspace.** Linking or vendoring Catacomb code would relicense the shell under GPL-3.0. Running it as a separate process would be allowed, but see the next rows. |
+| Apache-2.0-compatible dependencies; workspace is `Apache-2.0` | GPL-3.0-only | **Blocking for reuse-as-library or fork inside this workspace.** Linking or vendoring Catacomb code would relicense the shell under GPL-3.0. Running it as a separate process would be allowed, but see the next rows. |
 | Minimal portrait touch-first shell, focused fullscreen flows, no desktop window management | Tiling (primary/secondary split), overview grid, cycle gestures, drag-and-drop | Opposite product model. Removing tiling/overview means deleting most of `windows/`, `overview.rs`, `input.rs` gesture logic and the IPC surface: little would remain to reuse. |
 | Software rendering by default; acceleration optional; correctness must not need GL | GLES/GBM only | **Blocking.** Under QEMU `virtio-gpu-pci` with TCG the guest has no virgl, so Catacomb would depend on Mesa's llvmpipe/kms_swrast through GBM: heavy, slow and outside the "correctness without GL" rule. |
 | Host Rust clients via xdg-shell (ferrix-basic-screen, future apps) | Yes | None. |
@@ -47,7 +47,7 @@ tagged 2025-06-24) and its `anvil`/`smallvil` examples.
 
 - **Reuse (run Catacomb as the guest compositor):** license permits process-level use, but the product model (tiling/overview), GL requirement and lack of a nested backend mean the QEMU route would not exercise the intended shell at all. Rejected.
 - **Contribute upstream:** the missing pieces are a pixman/software render path, a winit backend and a fullscreen-only window model. These are not gaps in Catacomb's own goals (it is a tiling phone compositor for real hardware with GPUs), so upstream would rightly push back; and contributions would carry GPL-3.0. Worth revisiting only for protocol-level bugs found in shared Smithay code, which belong in Smithay (MIT) anyway.
-- **Fork:** inherits GPL-3.0 (blocking for the `MIT OR Apache-2.0` workspace) and inherits a codebase where most lines implement the window management we do not want. Rejected.
+- **Fork:** inherits GPL-3.0 (blocking for the `Apache-2.0` workspace) and inherits a codebase where most lines implement the window management we do not want. Rejected.
 - **Build on Smithay directly:** Smithay `0.7.0` is MIT, published on crates.io, and already provides every protocol Catacomb uses plus `PixmanRenderer`, `DumbAllocator`, `DrmCompositor` (software scan-out through DRM dumb buffers), libseat/udev/libinput integration and a winit backend. The phone-shell policy left to write is small and matches our product: one fullscreen toplevel, layer-shell chrome, one seat.
 
 ## Decision

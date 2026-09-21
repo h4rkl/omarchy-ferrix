@@ -1,4 +1,4 @@
-//! E.164 normalization through the `phonenumber` crate (MIT/Apache-2.0; a
+//! E.164 normalization through the `phonenumber` crate (Apache-2.0; a
 //! Rust port of Google's libphonenumber metadata), per ADR-003.
 //!
 //! Only parsing and E.164 formatting are used. Validity against the live

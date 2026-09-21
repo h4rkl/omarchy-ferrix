@@ -71,6 +71,9 @@ jobs:
           rustup toolchain install
           rustup show
 
+      - name: License policy
+        run: sh tools/dev/license-check.sh
+
       - name: Install compositor development libraries
         run: |
           sudo apt-get update

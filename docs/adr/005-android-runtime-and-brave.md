@@ -48,7 +48,7 @@ stores the APK only under ignored `out/android/` (`FERRIX_OUT_DIR`), and
 never auto-updates. Pins live in `tools/android/brave.pins`. A
 `--local PATH` mode verifies a developer-supplied APK against the same pins.
 Brave is MPL-2.0 (with Chromium's BSD-3 and others) and is a third-party
-product; Ferrix code remains MIT OR Apache-2.0. Nothing from Brave is
+product; Ferrix code is Apache-2.0. Nothing from Brave is
 committed. Tests cover wrong hash, wrong certificate, wrong host, missing
 tools.
 
