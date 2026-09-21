@@ -116,13 +116,14 @@ application's own exit code), 127 = the program could not be executed,
 
 ## Degraded and Required semantics
 
-`IsolationMode::Required` (default): if the `unshare` call fails, stage 1
-prints `sandbox-failed` and exits 126 without starting anything; the runtime
-returns `AppError::IsolationUnavailable` from `launch()`. `BestEffort`: the
-application still starts, without namespaces, and the report says so.
-Mount failures and `no_new_privs` failures inside stage 2 never abort a
-launch in either mode; they are recorded and set `degraded`. A policy that
-requests no namespaces, no private tmp, and no `no_new_privs` skips the
+`IsolationMode::Required` (default): stage 1 fails immediately when `unshare`
+cannot establish the requested namespaces, and stage 2 rechecks every requested
+namespace plus private `/tmp`, `no_new_privs`, and the private runtime-directory
+view before exec. Any unmet control prints `sandbox-failed` and exits 126
+without starting the application; the runtime returns
+`AppError::IsolationUnavailable` from `launch()`. Under `BestEffort`, the
+application still starts and the report names every degraded control. A policy
+that requests no namespaces, no private tmp, and no `no_new_privs` skips the
 sandbox and spawns the program directly (still supervised). On non-Linux hosts
 the sandbox is unavailable: `Required` fails, `BestEffort` spawns directly with
 `IsolationReport::unisolated(.., "not linux")`.

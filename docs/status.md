@@ -1,5 +1,49 @@
 # Status
 
+## 2026-09-21 (developer-environment trust and app-surface validation)
+
+- **Developer-focused security review:** `AGENT_SECURITY.md` now asks one
+  bounded question: whether an ordinary developer can safely follow the
+  repository's documented setup, build, test, and emulator workflows. It
+  requires a per-workflow verdict and concentrates on host mutation, supply
+  chain execution, credentials/data, emulator exposure, and the physical-device
+  boundary instead of broad product-security commentary.
+- **Issues fixed during the review:** Waydroid pin parsing no longer evaluates
+  downloaded or alternate pin-file contents as shell code; an adversarial test
+  proves command substitution is rejected without execution. Native sandbox
+  policies with `mode = "required"` now fail closed before application exec if
+  any requested namespace, private `/tmp`, `no_new_privs`, or private runtime
+  directory is missing; a Linux integration test verifies status 126 and that
+  the application command never runs. The QEMU agent now proves a neutral
+  pointer motion reached the compositor (`cursor-ready`) before declaring the
+  launcher ready, fixing a race that could consume the first developer tap.
+- **Developer surfaces validated:** `just host-check`, formatting, workspace
+  Clippy with warnings denied, all workspace tests, Android tool tests,
+  Linux-native sandbox tests, `just qemu-check`, the graphical QEMU gesture
+  workflow, `just pmos-build`, `just pmos-check`, and the host-only Android
+  bootstrap test pass. The opt-in pinned Brave and Waydroid inputs were then
+  fetched and verified, `just pmos-android-build` completed, and
+  `just pmos-android-check` passed under TCG in 52 seconds with Binder,
+  offline Waydroid initialization, container startup, Brave staging, product
+  services, and clean poweroff records. The graphical gesture run exercised
+  launch, minimize, left/right switching, and close; its 1080x2340
+  `out/qemu-aarch64/gesture-check/home-after-close.png` framebuffer was
+  inspected and showed the complete eight-tile developer launcher.
+- **Graphical app evidence:** A fresh Android-enabled pmOS HVF boot recorded
+  Brave provisioning as `installed`, the native home sandbox with every
+  required control applied and no degradation, `home-ready`,
+  `product-wayland-ready`, and healthy product services. Its inspected
+  1080x2340 framebuffer at
+  `out/qemu-aarch64/pmos-android/evidence/home-post-fix.png` shows the complete
+  launcher. A persistent-overlay boot recorded Brave as `present`; the
+  inspected framebuffer at
+  `out/qemu-aarch64/pmos-android/evidence/post-fix-qmp/home.png` shows Brave's
+  Android first-run surface rendered full-screen. Host-nested compositor
+  execution remains Linux-only and therefore was not runnable on this macOS
+  host; its Rust paths are covered by the workspace and pinned Linux tests.
+- **Scope:** All runtime evidence is QEMU/mock evidence. No physical device was
+  enumerated, booted, unlocked, flashed, or otherwise changed.
+
 ## 2026-09-21 (documentation audit and GitHub handoff)
 
 - **Current-state reconciliation:** Audited the repository documentation and

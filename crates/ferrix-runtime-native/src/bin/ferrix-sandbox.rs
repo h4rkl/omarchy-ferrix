@@ -471,9 +471,9 @@ mod linux {
                 Err(e) => notes.push(format!("unreadable init report: {e}")),
             },
             Some(Err(WaitOutcome::ChildExited(status))) => {
-                // Stage 2 refuses to start the application when a Required
-                // policy's socket-directory view cannot be built; forward
-                // that as the isolation failure it is (no readiness).
+                // Stage 2 refuses to start the application when any Required
+                // isolation control cannot be established; forward that as
+                // the isolation failure it is (no readiness).
                 if shell_status_of(status) == ISOLATION_UNAVAILABLE_STATUS {
                     return fail(
                         evidence,
@@ -558,8 +558,9 @@ mod linux {
     // Stage 2: PID 1 of the new PID namespace
     // -----------------------------------------------------------------------
 
-    /// Mounts for the private mount namespace. Failures degrade; they never
-    /// abort the launch (the namespace itself was stage 1's Required gate).
+    /// Mounts for the private mount namespace. Failures are recorded here;
+    /// the init stage fails closed before exec under a Required policy and
+    /// reports degradation under BestEffort.
     fn setup_mounts(
         evidence: &str,
         app: &str,
@@ -831,6 +832,39 @@ mod linux {
             };
         let no_new_privs =
             args.policy.no_new_privs && apply_no_new_privs(evidence, app, &mut reasons);
+
+        if args.policy.mode == IsolationMode::Required {
+            let wanted = select_namespaces(&args.policy, geteuid().is_root());
+            let mut unmet = applied.missing_from(wanted);
+            if args.policy.pid_namespace && std::process::id() != 1 {
+                unmet.push("pid");
+            }
+            if args.policy.private_tmp && !private_tmp {
+                unmet.push("private_tmp");
+            }
+            if args.policy.no_new_privs && !no_new_privs {
+                unmet.push("no_new_privs");
+            }
+            if args.policy.run_dir.is_private() && run_dir_outcome.mode != args.policy.run_dir.mode
+            {
+                unmet.push("run_dir");
+            }
+            if !unmet.is_empty() || !reasons.is_empty() {
+                let mut detail = Vec::new();
+                if !unmet.is_empty() {
+                    unmet.sort_unstable();
+                    unmet.dedup();
+                    detail.push(format!("unmet: {}", unmet.join(",")));
+                }
+                detail.extend(reasons);
+                return fail(
+                    evidence,
+                    app,
+                    format!("required isolation unavailable: {}", detail.join("; ")),
+                    ISOLATION_UNAVAILABLE_STATUS,
+                );
+            }
+        }
 
         let signals = Signals::new([SIGTERM, SIGINT, SIGHUP]).ok();
         if let Some(name) = &args.report {

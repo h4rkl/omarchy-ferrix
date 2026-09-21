@@ -500,12 +500,14 @@ just qemu-agent-start
 just qemu-frame
 ```
 
-`qemu-agent-start` returns only after three serial records: `wayland-ready`
+`qemu-agent-start` returns only after four serial records: `wayland-ready`
 (compositor and home surface committed), `input-ready` for the pointer
-(seat announced), and `home-ready {tiles, catalog, width, height}` (the
-launcher's catalog is loaded and hit-testable), so the first `just qemu-tap`
-lands on a live tile; the pmOS graphical start waits for `home-ready` as
-well and prints `product-home-not-ready` when it never arrives.
+(seat announced), `cursor-ready` (a neutral QMP pointer motion reached the
+compositor), and `home-ready {tiles, catalog, width, height}` (the launcher's
+catalog is loaded and hit-testable). This prevents the first `just qemu-tap`
+from being consumed while the pointer is initialized. The pmOS graphical start
+waits for `home-ready` as well and prints `product-home-not-ready` when it never
+arrives.
 `qemu-frame` produces `out/qemu-aarch64/agent/frame.png`: the rendered QEMU
 framebuffer. Inspect that exact PNG after the guest has reported
 `wayland-ready` in `out/qemu-aarch64/agent/serial.log`. A running QEMU

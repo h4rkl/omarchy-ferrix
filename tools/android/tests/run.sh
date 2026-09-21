@@ -1,12 +1,13 @@
 #!/bin/sh
-# Host tests for tools/android/brave-fetch.sh and brave-verify.sh.
+# Host tests for the Brave and Waydroid acquisition scripts.
 #
 #   sh tools/android/tests/run.sh
 #
 # Builds a fake APK (a stored zip > 50 MiB) and uses a deterministic fake
 # apksigner to assert: correct local file accepted; wrong hash rejected; wrong
 # signer and invalid signatures rejected; wrong redirect host refused (fake
-# `curl` on PATH); missing tool refused; placeholder pins refused.
+# `curl` on PATH); missing tool refused; placeholder pins refused; Waydroid
+# pin values are treated as data and cannot execute shell commands.
 # Requires sh, zip, unzip, openssl, shasum, dd (reported when missing).
 set -eu
 
@@ -168,6 +169,29 @@ expect "tampered download rejected and removed" 1 '"reason":"wrong-sha256"' \
 [ ! -e "$work/out-bad/android/brave/v9.99.999/BraveMonoarm64.apk.part" ] \
     && pass "part file removed after rejection" \
     || fail "part file removed after rejection" "part exists"
+
+# --- Waydroid pin parser ----------------------------------------------------
+# A shell fragment in a pin value must be rejected as a filename, never
+# re-evaluated. The marker path makes command execution directly observable.
+waydroid_marker="$work/waydroid-pin-executed"
+cat >waydroid-injection.pins <<PINS
+WAYDROID_CHANNEL=waydroid_arm64_only
+WAYDROID_BUILD=20260403
+WAYDROID_SYSTEM_FILE=\$(touch $waydroid_marker)
+WAYDROID_SYSTEM_URL=https://sourceforge.net/projects/waydroid/files/images/system/x.zip/download
+WAYDROID_SYSTEM_SIZE=1
+WAYDROID_SYSTEM_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+WAYDROID_VENDOR_FILE=v.zip
+WAYDROID_VENDOR_URL=https://sourceforge.net/projects/waydroid/files/images/vendor/v.zip/download
+WAYDROID_VENDOR_SIZE=1
+WAYDROID_VENDOR_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+PINS
+expect "Waydroid pin shell text is rejected without execution" 1 '"reason":"pin-invalid"' \
+    env FERRIX_OUT_DIR="$work/waydroid-out" \
+        sh "$tools/waydroid-images-fetch.sh" --verify-only --pins waydroid-injection.pins
+[ ! -e "$waydroid_marker" ] \
+    && pass "Waydroid pins are data, not shell" \
+    || fail "Waydroid pins are data, not shell" "pin value executed"
 
 printf '{"evidence":"host","event":"android-tools-tests","passed":%s,"failed":%s}\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

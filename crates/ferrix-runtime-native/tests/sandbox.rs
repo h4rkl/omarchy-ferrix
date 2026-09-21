@@ -15,8 +15,8 @@ use ferrix_app_api::{
 };
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use ferrix_runtime_native::{
-    APPD_SOCKET_FILE, IsolationMode, IsolationPolicy, NativeLaunch, NativeRuntime,
-    NativeRuntimeOptions, RUN_DIR_ENV, RunDirMode, RunDirPolicy, SandboxReady,
+    APPD_SOCKET_FILE, ISOLATION_UNAVAILABLE_STATUS, IsolationMode, IsolationPolicy, NativeLaunch,
+    NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV, RunDirMode, RunDirPolicy, SandboxReady,
     TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan,
     skipped_record,
 };
@@ -101,6 +101,40 @@ fn unique(prefix: &str) -> String {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     format!("{prefix}-{}-{nanos}", std::process::id())
+}
+
+#[test]
+fn required_init_refuses_to_exec_when_a_requested_namespace_is_missing() {
+    let marker = scratch("ferrix-required-fail-closed");
+    let policy = IsolationPolicy {
+        pid_namespace: true,
+        mode: IsolationMode::Required,
+        ..IsolationPolicy::none()
+    };
+    let output = Command::new(SANDBOX)
+        .arg("--init")
+        .arg("--policy")
+        .arg(serde_json::to_string(&policy).unwrap())
+        .arg("--app-id")
+        .arg("org.ferrix.test")
+        .arg("--evidence")
+        .arg(EVIDENCE)
+        .arg("--applied")
+        .arg("{}")
+        .arg("--")
+        .args(["sh", "-c", "touch \"$1\"", "sh"])
+        .arg(&marker)
+        .stdout(Stdio::piped())
+        .output()
+        .expect("run ferrix-sandbox init stage");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(ISOLATION_UNAVAILABLE_STATUS),
+        "{stdout}"
+    );
+    assert!(find_record(&stdout, "sandbox-failed").is_some(), "{stdout}");
+    assert!(!marker.exists(), "required policy executed the application");
 }
 
 #[test]

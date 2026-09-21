@@ -55,14 +55,19 @@ printf 'QEMU control ready (pid %s); waiting for rendered client and hit-testabl
 # activating UI.
 width=$(awk -F= '/^[[:space:]]*width[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
 height=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$profile")
-# Readiness is three records: wayland-ready (compositor + home surface
-# committed), input-ready pointer (seat announced), and home-ready (the
-# launcher's catalog is loaded and hit-testable), so the first `just qemu-tap`
-# after this script returns lands on a live tile instead of an early frame.
+# Readiness includes wayland-ready (compositor + home surface committed),
+# input-ready pointer (seat announced), cursor-ready (a pointer event reached
+# the compositor), and home-ready (the launcher's catalog is loaded and
+# hit-testable). Requiring cursor-ready prevents the first developer tap from
+# being consumed while the compositor initializes its pointer surface.
 for _ in $(seq 1 450); do
+  if [ -f "$runtime/serial.log" ] && grep -q '"event":"wayland-ready"' "$runtime/serial.log"; then
+    python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" move "$((width / 2))" "$((height / 3))" --width "$width" --height "$height" >/dev/null
+  fi
   if [ -f "$runtime/serial.log" ] \
     && grep -q '"event":"wayland-ready"' "$runtime/serial.log" \
     && grep -q '"event":"input-ready".*"capability":"pointer".*"status":"ok"' "$runtime/serial.log" \
+    && grep -q '"event":"cursor-ready"' "$runtime/serial.log" \
     && grep -qE 'home-ready[^"]*".*"tiles":[0-9]+' "$runtime/serial.log"; then
     # Several guest processes write records to the serial console, so a line
     # can be interleaved with another writer's text (observed:
@@ -70,9 +75,6 @@ for _ in $(seq 1 450); do
     # name plus its `tiles` field rather than the exact JSON prefix.
     printf 'QEMU graphical session ready (pid %s): %s\n' "$pid" "$(grep -m1 -E 'home-ready[^"]*".*"tiles":[0-9]+' "$runtime/serial.log")"
     exit 0
-  fi
-  if [ -f "$runtime/serial.log" ] && grep -q '"event":"wayland-ready"' "$runtime/serial.log"; then
-    python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" move "$((width / 2))" "$((height / 3))" --width "$width" --height "$height" >/dev/null
   fi
   if [ -f "$runtime/serial.log" ] && grep -q '"event":"wayland-failed"' "$runtime/serial.log"; then
     cat "$runtime/serial.log" >&2
@@ -84,5 +86,5 @@ for _ in $(seq 1 450); do
 done
 python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" quit 2>/dev/null || kill "$pid" 2>/dev/null || true
 rm -f "$pid_file" "$runtime/qmp.sock"
-echo "timed out waiting for QEMU graphical readiness (wayland-ready + input-ready pointer + home-ready)" >&2
+echo "timed out waiting for QEMU graphical readiness (wayland-ready + input-ready pointer + cursor-ready + home-ready)" >&2
 exit 1

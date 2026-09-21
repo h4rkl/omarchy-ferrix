@@ -51,7 +51,17 @@ check_host() {
 sha256_of() { "$SHASUM" -a 256 "$1" | cut -d' ' -f1 | tr 'A-F' 'a-f'; }
 size_of() { wc -c <"$1" | tr -d ' '; }
 check_shape() { # KIND
-  eval "_f=\$${1}_FILE _u=\$${1}_URL _s=\$${1}_SIZE _h=\$${1}_SHA256"
+  case $1 in
+    WAYDROID_SYSTEM)
+      _f=$WAYDROID_SYSTEM_FILE; _u=$WAYDROID_SYSTEM_URL
+      _s=$WAYDROID_SYSTEM_SIZE; _h=$WAYDROID_SYSTEM_SHA256
+      ;;
+    WAYDROID_VENDOR)
+      _f=$WAYDROID_VENDOR_FILE; _u=$WAYDROID_VENDOR_URL
+      _s=$WAYDROID_VENDOR_SIZE; _h=$WAYDROID_VENDOR_SHA256
+      ;;
+    *) reject pin-invalid key "$1" ;;
+  esac
   case $_f in *.zip) ;; *) reject pin-invalid key "${1}_FILE" ;; esac
   case $_f in *[!0-9a-zA-Z._-]*|.*|*/*) reject pin-invalid key "${1}_FILE" ;; esac
   case $_s in ''|*[!0-9]*) reject pin-invalid key "${1}_SIZE" ;; esac
@@ -60,7 +70,17 @@ check_shape() { # KIND
   case $_u in *"/$_f/download") ;; *) reject pin-invalid key "${1}_URL" detail "url must end in /<file>/download" ;; esac
 }
 fetch_one() { # KIND
-  eval "_f=\$${1}_FILE _u=\$${1}_URL _s=\$${1}_SIZE _h=\$${1}_SHA256"
+  case $1 in
+    WAYDROID_SYSTEM)
+      _f=$WAYDROID_SYSTEM_FILE; _u=$WAYDROID_SYSTEM_URL
+      _s=$WAYDROID_SYSTEM_SIZE; _h=$WAYDROID_SYSTEM_SHA256
+      ;;
+    WAYDROID_VENDOR)
+      _f=$WAYDROID_VENDOR_FILE; _u=$WAYDROID_VENDOR_URL
+      _s=$WAYDROID_VENDOR_SIZE; _h=$WAYDROID_VENDOR_SHA256
+      ;;
+    *) reject pin-invalid key "$1" ;;
+  esac
   final="$dest/$_f"; part="$final.part"
   if [ ! -f "$final" ]; then
     [ "$verify_only" = 0 ] || reject file-missing file "$final"
@@ -76,16 +96,26 @@ fetch_one() { # KIND
   [ "$sum" = "$_h" ] || { rm -f "$final"; reject sha256-mismatch file "$_f" expected "$_h" actual "$sum"; }
   emit waydroid-image-verified kind "$1" file "$_f" sha256 "$sum" bytes "$got"
 }
-for kind in WAYDROID_SYSTEM WAYDROID_VENDOR; do
-  eval "${kind}_FILE=\$(pin ${kind}_FILE) ${kind}_URL=\$(pin ${kind}_URL) ${kind}_SIZE=\$(pin ${kind}_SIZE) ${kind}_SHA256=\$(pin ${kind}_SHA256 | tr 'A-F' 'a-f')"
-  check_shape "$kind"
-done
+WAYDROID_SYSTEM_FILE=$(pin WAYDROID_SYSTEM_FILE)
+WAYDROID_SYSTEM_URL=$(pin WAYDROID_SYSTEM_URL)
+WAYDROID_SYSTEM_SIZE=$(pin WAYDROID_SYSTEM_SIZE)
+WAYDROID_SYSTEM_SHA256=$(pin WAYDROID_SYSTEM_SHA256 | tr 'A-F' 'a-f')
+WAYDROID_VENDOR_FILE=$(pin WAYDROID_VENDOR_FILE)
+WAYDROID_VENDOR_URL=$(pin WAYDROID_VENDOR_URL)
+WAYDROID_VENDOR_SIZE=$(pin WAYDROID_VENDOR_SIZE)
+WAYDROID_VENDOR_SHA256=$(pin WAYDROID_VENDOR_SHA256 | tr 'A-F' 'a-f')
+check_shape WAYDROID_SYSTEM
+check_shape WAYDROID_VENDOR
 fetch_one WAYDROID_SYSTEM
 fetch_one WAYDROID_VENDOR
 # Unpack: each zip holds exactly one image (system.img / vendor.img).
 for pair in "WAYDROID_SYSTEM system.img" "WAYDROID_VENDOR vendor.img"; do
   kind=${pair% *}; img=${pair#* }
-  eval "_f=\$${kind}_FILE"
+  case $kind in
+    WAYDROID_SYSTEM) _f=$WAYDROID_SYSTEM_FILE ;;
+    WAYDROID_VENDOR) _f=$WAYDROID_VENDOR_FILE ;;
+    *) reject pin-invalid key "$kind" ;;
+  esac
   if [ ! -f "$dest/$img" ]; then
     [ "$verify_only" = 0 ] || reject image-missing file "$dest/$img"
     "$UNZIP" -o -q "$dest/$_f" "$img" -d "$dest" || reject unzip-failed file "$_f"
