@@ -1,5 +1,45 @@
 # Status
 
+## 2026-09-21 (Brave shipped and live in Android-enabled postmarketOS QEMU)
+
+- **Root cause and renderer fix:** Waydroid created `waydroid_base.prop`
+  during `init`, before Ferrix appended its software-rendering configuration.
+  The container therefore ignored the configured values and auto-selected
+  Mesa/GBM from QEMU's render node. Live Android logs showed SurfaceFlinger
+  repeatedly aborting with `output buffer not gpu writeable`. The first-boot
+  hook now runs Waydroid's offline upgrade when the materialized base
+  properties are not `gralloc=default` and `egl=swiftshader`, and records
+  `waydroid-properties {status:"materialized", renderer:"swiftshader"}`.
+- **Permanent Brave provisioning:** The Android product build refuses to
+  succeed unless the pinned Brave APK exists and passes SHA-256, APK signature,
+  and signer-certificate verification. The image stages it at
+  `/usr/share/ferrix/android/brave.apk`. After the compositor creates Wayland,
+  product bootstrap starts the Waydroid session, waits for Android framework
+  boot completion, installs only if Android has no `com.brave.browser` package
+  path, and verifies the resulting path. It also assigns the Android browser
+  role as Android's shell UID and verifies that an HTTPS intent resolves to
+  Brave. `ferrix-appd` remains launch-only.
+- **Lifecycle fix:** Waydroid reports an idle container as `FROZEN` and
+  automatically unfreezes it for app commands. The private Android adapter now
+  treats `Session=RUNNING, Container=FROZEN` as a healthy quiescent runtime;
+  the previous classification rejected a valid Brave launch.
+- **Live QEMU evidence (Apple Silicon/HVF, QEMU 11.1.1, 1080x2340):** A fresh
+  Android overlay recorded `android-app-provision` status `installed` with
+  `browser_role:"default"`.
+  Launching `org.ferrix.browser` through the appd protocol recorded
+  `android-app-launched` for `com.brave.browser`, `app-started`, and a mapped
+  `waydroid.com.brave.browser` surface. The Cocoa framebuffer was captured to
+  ignored `out/qemu-aarch64/pmos-android/evidence/brave-default.png` and
+  inspected: it visibly shows Brave's first-run UI without Android's
+  default-browser chooser. An orderly reboot without `FERRIX_PMOS_FRESH=1`
+  recorded provisioning status `present` with `browser_role:"default"`,
+  proving the package, role, and Android data persist in the run overlay. This
+  is QEMU evidence only.
+- **Validation:** Android bootstrap test and shell syntax pass; the 21
+  `ferrix-runtime-android` tests pass, including the frozen-container state
+  regression; the Android pmOS image rebuilt with the pinned APK verified;
+  fresh and persistent graphical boots completed as described above.
+
 ## 2026-09-21 (Space Monkey palette and BMW design dock)
 
 - **Default theme:** `themes/ferrix/colors.toml` and the matching built-in

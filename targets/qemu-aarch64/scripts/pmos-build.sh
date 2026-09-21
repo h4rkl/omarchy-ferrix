@@ -24,16 +24,16 @@ if [ "$android" = 1 ]; then
   done
   sh "$root/tools/android/waydroid-images-fetch.sh" --verify-only >/dev/null || { echo "Waydroid images failed verification; re-run: just waydroid-images-fetch" >&2; exit 2; }
   android_mounts="-v $images_dir:/android/images:ro"
-  # Brave APK: staged only when present AND verified against tools/android/brave.pins.
+  # Brave is part of the Android product image: refuse to build that variant
+  # unless the pinned APK exists and passes hash/signature verification.
   brave_tag=$(sed -n 's/^BRAVE_TAG=//p' "$root/tools/android/brave.pins" | head -1)
   brave_asset=$(sed -n 's/^BRAVE_ASSET=//p' "$root/tools/android/brave.pins" | head -1)
   brave_apk="${FERRIX_OUT_DIR:-$root/out}/android/brave/$brave_tag/$brave_asset"
-  if [ -f "$brave_apk" ] && sh "$root/tools/android/brave-verify.sh" "$brave_apk" >/dev/null; then
-    android_mounts="$android_mounts -v $brave_apk:/android/brave.apk:ro"
-    printf 'brave apk: %s (verified)\n' "$brave_apk"
-  else
-    printf '{"evidence":"host","event":"android-brave-absent","path":"%s"}\n' "$brave_apk"
-  fi
+  [ -f "$brave_apk" ] || { echo "missing pinned Brave APK at $brave_apk; run: sh tools/android/brave-fetch.sh" >&2; exit 2; }
+  sh "$root/tools/android/brave-verify.sh" "$brave_apk" >/dev/null \
+    || { echo "pinned Brave APK failed verification: $brave_apk" >&2; exit 2; }
+  android_mounts="$android_mounts -v $brave_apk:/android/brave.apk:ro"
+  printf 'brave apk: %s (verified)\n' "$brave_apk"
 fi
 cache=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}
 pmos_dir=$root/targets/qemu-aarch64/pmos

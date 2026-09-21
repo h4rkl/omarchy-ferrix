@@ -59,10 +59,15 @@ pub struct WaydroidStatus {
 }
 
 impl WaydroidStatus {
-    /// Both the session and the container report `RUNNING`.
+    /// The session is running and the container is usable. Waydroid freezes
+    /// an idle container by design; its app commands unfreeze it before use,
+    /// so `FROZEN` is a healthy quiescent state rather than a failed session.
     pub fn is_running(&self) -> bool {
         self.session.as_deref() == Some("RUNNING")
-            && self.container.as_deref().is_none_or(|c| c == "RUNNING")
+            && self
+                .container
+                .as_deref()
+                .is_none_or(|c| matches!(c, "RUNNING" | "FROZEN"))
     }
 }
 
@@ -465,7 +470,7 @@ mod tests {
         assert!(!stopped.is_running());
 
         let frozen = parse_status("Session:\tRUNNING\nContainer:\tFROZEN\n");
-        assert!(!frozen.is_running());
+        assert!(frozen.is_running());
 
         let uninit = parse_status("WayDroid is not initialized, run \"waydroid init\"\n");
         assert!(uninit.not_initialized);

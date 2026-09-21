@@ -796,6 +796,67 @@ with the serial log retained. Observed on this Apple Silicon host (QEMU 11.1.1,
 label QEMU): the TCG check passes in about 40 s from launch to `reboot: Power
 down`; under HVF `pmos-run` reaches the `ferrix login:` prompt in about 15 s.
 
+### pmOS QEMU environment reference
+
+Choose the guest route first; they intentionally produce separate artifacts
+and overlays:
+
+| Route | Command | Purpose |
+| --- | --- | --- |
+| Alpine smoke guest | `just qemu-run` | Small emulator/CI contract guest; not the full substrate and no Waydroid. |
+| postmarketOS product | `just pmos-run` | Full product substrate without the Android compatibility packages/images. |
+| postmarketOS + Android | `just pmos-android-run` | Separate image with Waydroid images and the pinned Brave APK; use this for Brave. |
+
+Use these variables with `just pmos-run` or `just pmos-android-run`; they are
+read by the checked-in runner, not by an application. The smoke route has its
+own similarly named controls documented earlier in this file.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `FERRIX_QEMU_GRAPHICS` | `off` | QEMU display backend. On macOS use `cocoa`; `off` is serial-only. |
+| `FERRIX_QEMU_ACCEL` | `auto` | `auto` selects `hvf` on macOS and `tcg` elsewhere. |
+| `FERRIX_PMOS_MEMORY` | `2048` | Guest RAM in MiB; use `4096` for Android/Waydroid. |
+| `FERRIX_PMOS_SMP` | `2` | Guest vCPUs; use `4` for Android where host capacity permits. |
+| `FERRIX_PMOS_FRESH` | `0` | Set `1` to discard the persistent overlay and test first boot. This loses overlay changes. |
+| `FERRIX_PMOS_SSH_PORT` | unset | Loopback SSH forward; `2222` enables `ssh -p 2222 user@127.0.0.1`. |
+| `FERRIX_PMOS_CHECK_TIMEOUT` | `600` | Headless-check timeout in seconds. |
+
+`APKSIGNER` is a host build/acquisition variable, not a QEMU variable. If
+Android SDK Build-Tools is not on `PATH`, set it explicitly on macOS:
+
+```sh
+export APKSIGNER=/Library/Android/sdk/build-tools/36.0.0/apksigner
+```
+
+Normal pmOS graphical run on Apple Silicon:
+
+```sh
+FERRIX_QEMU_GRAPHICS=cocoa just pmos-run
+```
+
+Fresh Android first-boot run:
+
+```sh
+FERRIX_QEMU_GRAPHICS=cocoa \
+FERRIX_PMOS_MEMORY=4096 \
+FERRIX_PMOS_SMP=4 \
+FERRIX_PMOS_FRESH=1 \
+FERRIX_PMOS_SSH_PORT=2222 \
+just pmos-android-run
+```
+
+The terminal is the serial console and the Cocoa window is the Ferrix display.
+Keep it open; quit QEMU with `Ctrl-a`, then `x`. Omit `FERRIX_PMOS_FRESH=1`
+on later runs to retain the guest overlay and Android application data. The
+emulator account is `user`, with test-only password `147147` by default.
+
+For deterministic Android diagnostics:
+
+```sh
+just pmos-android-check
+tail -n 200 out/qemu-aarch64/pmos-android/check/serial.log
+```
+
 ### Service daemons and backend selection on the pmOS route
 
 `finalize-in-container.sh` installs the same binaries as the smoke guest
@@ -824,7 +885,7 @@ Flipping to a production backend requires the daemons built with the
 recorded `pmos-check` with that command line; until then the flip is wired
 but not exercised, and no evidence claims it.
 
-### Opt-in Android compatibility runtime (Waydroid) — QEMU evidence only, claim level none
+### Opt-in Android compatibility runtime (Waydroid) — graphical QEMU validated
 
 `FERRIX_PMOS_ANDROID=1` (recipes `just waydroid-images-fetch`,
 `pmos-android-build`, `pmos-android-run`, `pmos-android-check`) builds a
@@ -837,7 +898,17 @@ state; inputs from
 `docs/android-runtime.md` §6). The default `pmos-build`, `pmos-check`, and
 CI never read that file. Steps:
 
-1. `just waydroid-images-fetch` downloads the pinned LineageOS 20 images
+1. Acquire all pinned host inputs, then build. The Android build now refuses
+   to proceed if Brave is absent or fails its hash/signature/signer check:
+
+   ```sh
+   export APKSIGNER=/Library/Android/sdk/build-tools/36.0.0/apksigner
+   sh tools/android/brave-fetch.sh
+   just waydroid-images-fetch
+   just pmos-android-build
+   ```
+
+   `just waydroid-images-fetch` downloads the pinned LineageOS 20 images
    (`tools/android/waydroid.pins`: channel `waydroid_arm64_only`, build
    20260403, system zip 728,517,282 bytes, vendor zip 77,349,347 bytes, SHA-256
    verified; allow-listed hosts `sourceforge.net` and `*.dl.sourceforge.net`)
@@ -851,37 +922,50 @@ CI never read that file. Steps:
    links `51_waydroid.nft` into `/etc/nftables.d/`, enables `cgroups` and
    `dbus` in the default runlevel, installs
    `/etc/local.d/00-ferrix-android.start`, and stages
-   `/usr/share/ferrix/android/brave.apk` only when
-   `out/android/brave/<tag>/BraveMonoarm64.apk` exists and passes
-   `tools/android/brave-verify.sh` (otherwise `android-brave-absent`). Every
+   `/usr/share/ferrix/android/brave.apk` after requiring
+   `out/android/brave/<tag>/BraveMonoarm64.apk` to pass
+   `tools/android/brave-verify.sh`. Every
    hash lands in `image-facts.json` / `manifest.json` under `guest.android`
    (`waydroid_version`, image hashes, properties and init-script hashes,
-   `brave_apk_sha256`, `nftables_rule_linked`). At first boot the Android
-   bootstrap installs that staged, pinned APK through `waydroid app install`,
-   verifies `com.brave.browser` in `waydroid app list`, and records
-   `android-app-install` as `installed` (or `present` on a subsequent boot).
-   `ferrix-appd` never performs installation; it only launches the already
-   installed package.
+   `brave_apk_sha256`, `nftables_rule_linked`).
 3. At first boot `00-ferrix-android.start` (before `00-ferrix-product.start`)
    records `android-binder-devices {binder, hwbinder, vndbinder, psi}`, runs
    `waydroid init -f -i /etc/waydroid-extra/images` offline (`waydroid-init
    {status}`; the kernel `linux-postmarketos-stable` already provides the
-   Binder devices, no kernel change), appends the properties
-   (`waydroid-properties`), and starts `waydroid-container`
-   (`waydroid-container {status}`). The Waydroid *session* is started only by
-   `ferrix-appd`'s Android adapter on demand, never by init and never via sudo.
-4. `just pmos-android-check` additionally requires the
+   Binder devices, no kernel change), appends the properties, and runs the
+   required offline upgrade to materialize `gralloc=default` and
+   `egl=swiftshader` into `waydroid_base.prop` before starting the container.
+   This prevents Waydroid from auto-selecting Mesa/GBM merely because QEMU has
+   a render node, a combination that made SurfaceFlinger abort with `output
+   buffer not gpu writeable`.
+4. Once `ferrix-shell` has created the Wayland socket, the product bootstrap
+   starts the Waydroid session, waits for Android `sys.boot_completed=1`, and
+   installs the staged APK only when `pm path com.brave.browser` has no package
+   result. It then assigns `android.app.role.BROWSER` to Brave as Android's
+   shell UID and verifies that an HTTPS intent resolves to Brave. It records
+   `android-app-provision` with `browser_role:"default"`, as `installed` on
+   first boot and `present` on subsequent persistent-overlay boots.
+   `ferrix-appd` never installs packages; it launches the installed package
+   through its private runtime adapter. An idle Waydroid container's `FROZEN`
+   state is healthy and launchable; Waydroid's app command unfreezes it.
+5. `just pmos-android-check` additionally requires the
    `android-binder-devices` and `waydroid-init` records and, when Brave was
-   staged, an `android-app-install` record with status `installed` or
-   `present`. `just android-bootstrap-test` exercises that bootstrap contract
-   deterministically without QEMU.
+   staged, the `android-app-staged` record. The headless check deliberately
+   does not claim installation because no compositor/Wayland session exists.
+   `just android-bootstrap-test` exercises offline init, renderer
+   materialization, container startup, and staging without QEMU.
 
-Status: packaging implemented and syntax-checked; the image has **not** been
-built or booted on this host (the images and the larger rootfs did not fit the
-remaining disk), so no record above has been observed and the claim level is
-none. `waydroid init` inside a loop-mounted rootfs was deliberately not
-attempted (it needs the guest's dbus/lxc environment); first boot is the
-documented init point.
+Observed on Apple Silicon/HVF with QEMU 11.1.1: a fresh overlay recorded
+`waydroid-properties {status:"materialized", renderer:"swiftshader"}` and
+`android-app-provision {status:"installed", package:"com.brave.browser",
+browser_role:"default"}`.
+Launching `org.ferrix.browser` through `ferrix-appd` recorded
+`android-app-launched`, `app-started`, and a mapped
+`waydroid.com.brave.browser` surface; the Cocoa framebuffer was captured and
+inspected showing Brave's first-run UI. After orderly power-off, a run without
+`FERRIX_PMOS_FRESH=1` recorded provisioning status `present`, proving the
+installation lives in the persistent overlay. Evidence is QEMU only, not a
+physical-device claim.
 
 ### Limitations
 

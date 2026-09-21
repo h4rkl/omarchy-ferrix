@@ -73,13 +73,7 @@ if [ "$android" = 1 ]; then
   # carries them. Nothing here claims the runtime renders anything.
   grep -q '"event":"android-binder-devices"' "$log" || fail "missing-android-binder-devices"
   grep -q '"event":"waydroid-init"' "$log" || fail "missing-waydroid-init"
-  # A staged APK is not sufficient: the bootstrap must prove that the
-  # Android package manager can see Brave. This establishes the installable
-  # prerequisite before the graphical launch check is attempted.
-  if grep -q '"event":"android-app-staged"' "$log"; then
-    grep -q '"event":"android-app-install".*"status":"\(installed\|present\)"' "$log" \
-      || fail "brave-not-installed"
-  fi
-  grep -E '"event":"(android-binder-devices|waydroid-init|waydroid-properties|waydroid-container|android-app-staged|android-app-install)"' "$log"
+  grep -q '"event":"android-app-staged"' "$log" || fail "brave-not-staged"
+  grep -E '"event":"(android-binder-devices|waydroid-init|waydroid-properties|waydroid-container|android-app-staged)"' "$log"
 fi
 printf '{"evidence":"QEMU","event":"pmos-check-passed","accel":"tcg","android":%s,"seconds":%s,"serial_log":"%s"}\n' "$android" "$elapsed" "$log"

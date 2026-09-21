@@ -3,14 +3,14 @@
 # postmarketOS QEMU guest. Installed only when the image was built with
 # FERRIX_PMOS_ANDROID=1; runs before 00-ferrix-product.start (lexical order)
 # so the container service is up before ferrix-appd composes the Android
-# runtime. The Waydroid *session* is never started here: ferrix-appd's
-# Android adapter starts it on demand as the session user.
+# runtime. The Waydroid *session* is started by the post-compositor product
+# bootstrap, where the Wayland socket exists; ferrix-appd only launches apps.
 # Evidence label QEMU; claim level none until a rendered frame is inspected.
 props=${FERRIX_ANDROID_PROPS:-/etc/ferrix/waydroid-properties.ini}
 images=${FERRIX_ANDROID_IMAGES:-/etc/waydroid-extra/images}
 cfg=${FERRIX_ANDROID_CONFIG:-/var/lib/waydroid/waydroid.cfg}
+base_props=${FERRIX_ANDROID_BASE_PROPS:-${cfg%/*}/waydroid_base.prop}
 brave_apk=${FERRIX_ANDROID_BRAVE_APK:-/usr/share/ferrix/android/brave.apk}
-brave_package=com.brave.browser
 console=${FERRIX_ANDROID_CONSOLE:-/dev/console}
 run_dir=${FERRIX_ANDROID_RUN_DIR:-/run/ferrix}
 rec() { printf '%s\n' "$1" >> "$console"; logger -t ferrix "$1" 2>/dev/null || true; }
@@ -43,28 +43,23 @@ if [ -f "$cfg" ] && [ -f "$props" ] && ! grep -q '^ro.hardware.egl' "$cfg"; then
   { grep -q '^\[properties\]' "$cfg" || printf '\n[properties]\n'; grep -v '^\[' "$props"; } >> "$cfg"
   rec '{"evidence":"QEMU","event":"waydroid-properties","status":"applied","path":"/var/lib/waydroid/waydroid.cfg"}'
 fi
+# `waydroid init` creates waydroid_base.prop before the overrides above exist.
+# A plain container start reuses that file, silently selecting Mesa/GBM from
+# QEMU's render node; SurfaceFlinger then aborts because the virtio buffer is
+# not GPU-writeable. Regenerate the offline container configuration whenever
+# its effective renderer does not match the product configuration.
+if [ -f "$cfg" ] && { ! grep -q '^ro.hardware.gralloc=default$' "$base_props" 2>/dev/null \
+  || ! grep -q '^ro.hardware.egl=swiftshader$' "$base_props" 2>/dev/null; }; then
+  if timeout 300 waydroid upgrade -o >"$run_dir/waydroid-upgrade.log" 2>&1; then
+    rec '{"evidence":"QEMU","event":"waydroid-properties","status":"materialized","renderer":"swiftshader"}'
+  else
+    rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-properties\",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\"}"
+  fi
+fi
 if [ -f "$cfg" ] && rc-service waydroid-container start >"$run_dir/waydroid-container.log" 2>&1; then
   rec '{"evidence":"QEMU","event":"waydroid-container","status":"started"}'
 else
   rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-container\",\"status\":\"failed\",\"log\":\"$run_dir/waydroid-container.log\"}"
 fi
-# APK installation is bootstrap-owned.  It happens only after the initialized
-# container is available, and never in ferrix-appd's launch path: appd merely
-# launches an already-installed package.  `waydroid app install` is idempotent
-# for this pinned package in the Android package manager, but avoid rewriting
-# its data on each guest boot by checking the authoritative package list first.
-if [ -f "$brave_apk" ]; then
-  rec "{\"evidence\":\"QEMU\",\"event\":\"android-app-staged\",\"app\":\"org.ferrix.browser\",\"path\":\"$brave_apk\"}"
-  if ! waydroid app list >"$run_dir/waydroid-app-list.log" 2>&1; then
-    rec "{\"evidence\":\"QEMU\",\"event\":\"android-app-install\",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"package-list-failed\",\"log\":\"$run_dir/waydroid-app-list.log\"}"
-  elif grep -q "^packageName: $brave_package$" "$run_dir/waydroid-app-list.log"; then
-    rec '{"evidence":"QEMU","event":"android-app-install","app":"org.ferrix.browser","status":"present","package":"com.brave.browser"}'
-  elif waydroid app install "$brave_apk" >"$run_dir/waydroid-brave-install.log" 2>&1 \
-    && waydroid app list >"$run_dir/waydroid-app-list.log" 2>&1 \
-    && grep -q "^packageName: $brave_package$" "$run_dir/waydroid-app-list.log"; then
-    rec '{"evidence":"QEMU","event":"android-app-install","app":"org.ferrix.browser","status":"installed","package":"com.brave.browser"}'
-  else
-    rec "{\"evidence\":\"QEMU\",\"event\":\"android-app-install\",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"install-or-verify-failed\",\"log\":\"$run_dir/waydroid-brave-install.log\"}"
-  fi
-fi
+[ ! -f "$brave_apk" ] || rec "{\"evidence\":\"QEMU\",\"event\":\"android-app-staged\",\"app\":\"org.ferrix.browser\",\"path\":\"$brave_apk\"}"
 exit 0
