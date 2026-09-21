@@ -42,8 +42,11 @@ dest="$out_root/$build"
 mkdir -p "$dest"
 host_of() { printf '%s' "$1" | sed -n 's#^https://\([^/:?]*\).*#\1#p'; }
 check_host() {
-  _h=$(host_of "$1")
-  case $_h in sourceforge.net|*.dl.sourceforge.net) ;; *) reject unexpected-host host "${_h:-none}" ;; esac
+  # Do not use `_h` here: callers keep their pinned hash in that variable.
+  # POSIX sh has no function-local variables, so the old name clobbered the
+  # expected digest after validating SourceForge's redirected download host.
+  resolved_host=$(host_of "$1")
+  case $resolved_host in sourceforge.net|*.dl.sourceforge.net) ;; *) reject unexpected-host host "${resolved_host:-none}" ;; esac
 }
 sha256_of() { "$SHASUM" -a 256 "$1" | cut -d' ' -f1 | tr 'A-F' 'a-f'; }
 size_of() { wc -c <"$1" | tr -d ' '; }
