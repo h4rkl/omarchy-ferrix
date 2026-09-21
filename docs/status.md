@@ -1,5 +1,27 @@
 # Status
 
+## 2026-09-21 (postmarketOS development-window sizing)
+
+- **Aspect-preserving pmOS window:** `pmos-run.sh`, shared by `pmos-run` and
+  `pmos-android-run`, now applies the existing smoke-guest window-sizing
+  contract. Graphical runs read the 1080x2340 profile, fit it to the host's
+  visible height without upscaling, pass the resulting even-pixel mode to
+  `virtio-gpu` and `ferrix.display`, and preserve the portrait aspect ratio.
+  `FERRIX_QEMU_WINDOW_HEIGHT` provides an explicit logical-point override.
+- **Live QEMU evidence (Apple Silicon/HVF, Cocoa, Android pmOS):** On a Retina
+  desktop with 960 visible logical points, the runner selected an 830x1800
+  guest panel. macOS reported a 415x900-point Cocoa content area plus its
+  32-point title bar. The ignored capture at
+  `out/qemu-aarch64/pmos-android/evidence/window-fit.png` was inspected and
+  visibly shows Brave filling the correctly proportioned portrait panel.
+  This is QEMU evidence only; no product rendering behavior changed.
+- **Validation and limitation:** Shell syntax and diff checks pass; generated
+  graphical, explicit 720-point override, and headless QEMU commands were
+  inspected. The unchanged headless pmOS route also passed `just pmos-check`
+  under TCG in 43 seconds. Automatic host metrics are currently implemented
+  for macOS; other hosts use an 800-point fallback unless
+  `FERRIX_QEMU_WINDOW_HEIGHT` is set. GTK remains unverified here.
+
 ## 2026-09-21 (Brave shipped and live in Android-enabled postmarketOS QEMU)
 
 - **Root cause and renderer fix:** Waydroid created `waydroid_base.prop`

@@ -820,6 +820,7 @@ own similarly named controls documented earlier in this file.
 | `FERRIX_PMOS_FRESH` | `0` | Set `1` to discard the persistent overlay and test first boot. This loses overlay changes. |
 | `FERRIX_PMOS_SSH_PORT` | unset | Loopback SSH forward; `2222` enables `ssh -p 2222 user@127.0.0.1`. |
 | `FERRIX_PMOS_CHECK_TIMEOUT` | `600` | Headless-check timeout in seconds. |
+| `FERRIX_QEMU_WINDOW_HEIGHT` | host visible height minus 60 points | Window height in logical points for graphical runs; the guest width is derived from the profile aspect ratio. Falls back to `800` when host metrics are unavailable. |
 
 `APKSIGNER` is a host build/acquisition variable, not a QEMU variable. If
 Android SDK Build-Tools is not on `PATH`, set it explicitly on macOS:
@@ -846,6 +847,9 @@ just pmos-android-run
 ```
 
 The terminal is the serial console and the Cocoa window is the Ferrix display.
+The graphical runner preserves the profile's portrait aspect ratio and sizes
+the Cocoa window to fit the desktop. Set `FERRIX_QEMU_WINDOW_HEIGHT=720` (in
+logical points), for example, to request a smaller development window.
 Keep it open; quit QEMU with `Ctrl-a`, then `x`. Omit `FERRIX_PMOS_FRESH=1`
 on later runs to retain the guest overlay and Android application data. The
 emulator account is `user`, with test-only password `147147` by default.
