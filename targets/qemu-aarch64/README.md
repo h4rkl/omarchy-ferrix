@@ -854,7 +854,12 @@ CI never read that file. Steps:
    `tools/android/brave-verify.sh` (otherwise `android-brave-absent`). Every
    hash lands in `image-facts.json` / `manifest.json` under `guest.android`
    (`waydroid_version`, image hashes, properties and init-script hashes,
-   `brave_apk_sha256`, `nftables_rule_linked`).
+   `brave_apk_sha256`, `nftables_rule_linked`). At first boot the Android
+   bootstrap installs that staged, pinned APK through `waydroid app install`,
+   verifies `com.brave.browser` in `waydroid app list`, and records
+   `android-app-install` as `installed` (or `present` on a subsequent boot).
+   `ferrix-appd` never performs installation; it only launches the already
+   installed package.
 3. At first boot `00-ferrix-android.start` (before `00-ferrix-product.start`)
    records `android-binder-devices {binder, hwbinder, vndbinder, psi}`, runs
    `waydroid init -f -i /etc/waydroid-extra/images` offline (`waydroid-init
@@ -864,7 +869,10 @@ CI never read that file. Steps:
    (`waydroid-container {status}`). The Waydroid *session* is started only by
    `ferrix-appd`'s Android adapter on demand, never by init and never via sudo.
 4. `just pmos-android-check` additionally requires the
-   `android-binder-devices` and `waydroid-init` records and reprints them.
+   `android-binder-devices` and `waydroid-init` records and, when Brave was
+   staged, an `android-app-install` record with status `installed` or
+   `present`. `just android-bootstrap-test` exercises that bootstrap contract
+   deterministically without QEMU.
 
 Status: packaging implemented and syntax-checked; the image has **not** been
 built or booted on this host (the images and the larger rootfs did not fit the

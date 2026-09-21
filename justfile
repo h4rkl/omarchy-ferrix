@@ -142,6 +142,11 @@ pmos-check:
 waydroid-images-fetch:
     @sh "{{root}}/tools/android/waydroid-images-fetch.sh"
 
+# Host-only deterministic test of the guest's staged-APK bootstrap. It uses a
+# fake Waydroid CLI and never starts a container, QEMU, or a physical device.
+android-bootstrap-test:
+    @sh "{{root}}/targets/qemu-aarch64/scripts/android-bootstrap-test.sh"
+
 pmos-android-build:
     @FERRIX_PMOS_ANDROID=1 "{{root}}/targets/qemu-aarch64/scripts/pmos-build.sh"
 

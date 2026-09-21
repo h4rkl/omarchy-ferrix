@@ -340,9 +340,12 @@ QEMU agent), TCG-compatible, headless, serial mandatory:
 1. Boot the pmOS guest with the §6 inputs; record `waydroid status` before
    and after `waydroid session start` (`Container:\tRUNNING` = runtime up),
    `ls -l /dev/binder*`, and boot-to-ready time.
-2. `brave-fetch.sh` on the host (or `--local`), copy the verified APK into
-   the guest run directory, `waydroid app install`, then `waydroid app list`
-   must list `com.brave.browser` → **installable**.
+2. `brave-fetch.sh` on the host (or `--local`) supplies the verified APK to
+   the Android image build. At first guest boot, the Android bootstrap (not
+   `ferrix-appd`) runs `waydroid app install` and verifies that `waydroid app
+   list` contains `com.brave.browser` → **installable**. The bounded check
+   must reject a staged APK without an `android-app-install` record of
+   `installed` or `present`.
 3. `ferrix-appd` launch of `org.ferrix.browser` → `app-started` record with
    `kind: android` → **launchable**.
 4. QMP framebuffer capture (existing `qemu-agent` route) shows a non-blank
