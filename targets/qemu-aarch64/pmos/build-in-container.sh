@@ -106,7 +106,7 @@ channel = os.environ["channel"]
 chan = channels[channel] if channel in channels else {}
 cfg = configparser.ConfigParser()
 cfg.read(cfg_path)
-guest_cfg = {k: cfg["pmbootstrap"][k] for k in ("device", "kernel", "ui", "service_manager", "user", "hostname", "extra_packages", "build_pkgs_on_install")}
+guest_cfg = {k: cfg["pmbootstrap"][k] for k in ("device", "kernel", "ui", "service_manager", "user", "hostname", "extra_packages", "extra_space", "build_pkgs_on_install")}
 
 artifacts = {}
 for name in sorted(facts["exported"]):

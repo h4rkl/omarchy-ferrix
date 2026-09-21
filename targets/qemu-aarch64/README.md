@@ -831,7 +831,9 @@ but not exercised, and no evidence claims it.
 **separate** image under `out/qemu-aarch64/pmos-android/` from
 `pmos/pmbootstrap-android.cfg` (identical to `pmbootstrap.cfg` plus
 `waydroid, waydroid-openrc, waydroid-nftrules, nftables, lxc, dnsmasq,
-pulseaudio, dbus` from the pinned Alpine community mirror; inputs from
+pulseaudio, dbus` from the pinned Alpine community mirror and a 4096 MiB
+Android-only rootfs reserve for the pre-seeded images and Waydroid writable
+state; inputs from
 `docs/android-runtime.md` §6). The default `pmos-build`, `pmos-check`, and
 CI never read that file. Steps:
 
