@@ -145,6 +145,34 @@ done
   cat /run/ferrix/ferrix-shell.log > /dev/console
   exit 1
 }
+# Waydroid's package manager needs a running Wayland-backed session.  The
+# early Android local.d hook can initialize the container but intentionally
+# runs before this socket exists.  Provision the already verified, staged APK
+# here, before appd begins launching applications.  The session bus and pulse
+# socket are owned by this bootstrap, not by an application or appd.
+if [ -f /usr/share/ferrix/android/brave.apk ] && command -v waydroid >/dev/null 2>&1; then
+  export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/ferrix-android-bus
+  export PULSE_RUNTIME_PATH=/run/pulse
+  rm -f /run/user/0/ferrix-android-bus
+  dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --fork --nopidfile 2>/run/ferrix/android-dbus.log || true
+  pulseaudio --system --daemonize=yes --exit-idle-time=-1 >/run/ferrix/android-pulse.log 2>&1 || true
+  waydroid session start >/run/ferrix/waydroid-session.log 2>&1 &
+  for _ in $(seq 1 300); do
+    waydroid status 2>/dev/null | grep -q '^Session:[[:space:]]*RUNNING$' && break
+    sleep 0.1
+  done
+  if waydroid status 2>/dev/null | grep -q '^Session:[[:space:]]*RUNNING$' \
+    && waydroid app list >/run/ferrix/waydroid-app-list.log 2>&1 \
+    && ! grep -q '^packageName: com.brave.browser$' /run/ferrix/waydroid-app-list.log; then
+    waydroid app install /usr/share/ferrix/android/brave.apk >/run/ferrix/waydroid-brave-install.log 2>&1 || true
+  fi
+  if waydroid app list >/run/ferrix/waydroid-app-list.log 2>&1 \
+    && grep -q '^packageName: com.brave.browser$' /run/ferrix/waydroid-app-list.log; then
+    printf '%s\n' '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"installed","package":"com.brave.browser"}' > /dev/console
+  else
+    printf '%s\n' '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"failed","log":"/run/ferrix/waydroid-brave-install.log"}' > /dev/console
+  fi
+fi
 # Application platform: ferrix-appd owns the catalog (/usr/share/ferrix/apps), starts
 # every app as a namespaced supervised process via ferrix-sandbox, and
 # auto-starts the home surface. Apps inherit this environment.
