@@ -27,6 +27,8 @@ These rules apply repository-wide. Load only task-relevant detail: `docs/status.
 
 ## Work and validation
 
+- For a fresh developer machine, follow `AGENT_INSTALL.md`; installation is
+  explicit and opt-in, while `just host-check` remains read-only.
 - Preserve user changes; keep work scoped, reproducible through checked-in scripts/`just` recipes, and do not install host tools automatically (`just host-check` reports prerequisites).
 - Prefer popular, maintained libraries and MIT/Apache-2.0-compatible dependencies from existing ecosystems. Hand-roll only with a documented fit reason.
 - Run the applicable subset before handoff: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, and `just qemu-check`.

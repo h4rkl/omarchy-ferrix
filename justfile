@@ -4,15 +4,11 @@ root := justfile_directory()
 out := env_var_or_default("FERRIX_OUT_DIR", root + "/out") + "/qemu-aarch64"
 
 host-check:
-    @echo "Host checks (no tools are installed)"
-    @command -v qemu-system-aarch64 >/dev/null && qemu-system-aarch64 --version | head -1 || echo "FAIL qemu-system-aarch64 — brew install qemu"
-    @command -v docker >/dev/null && docker version >/dev/null 2>&1 && echo "PASS docker runtime" || echo "FAIL docker runtime — start Docker Desktop"
-    @rustc --version
-    @cargo --version
-    @rustup target list --installed | grep -qx aarch64-unknown-linux-gnu && echo "PASS Rust aarch64 target" || echo "FAIL Rust target — rustup target add aarch64-unknown-linux-gnu"
-    @command -v aarch64-linux-gnu-gcc >/dev/null && echo "PASS aarch64 linker" || echo "WARN aarch64 linker unavailable locally — guest-builder container will provide it"
-    @command -v cpio >/dev/null && echo "PASS cpio" || echo "FAIL cpio — brew install cpio"
-    @echo "resolved out: {{out}}"
+    @"{{root}}/tools/dev/check.sh"
+
+# Explicit, opt-in host package installation. See AGENT_INSTALL.md.
+dev-setup:
+    @"{{root}}/tools/dev/install.sh"
 
 oneplus-tools-check:
     @command -v adb >/dev/null && adb version | head -2 || { echo "FAIL adb — brew install --cask android-platform-tools" >&2; exit 1; }
