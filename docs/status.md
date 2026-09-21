@@ -1,5 +1,25 @@
 # Status
 
+## 2026-09-21 (documentation audit and GitHub handoff)
+
+- **Current-state reconciliation:** Audited the repository documentation and
+  READMEs against the workspace manifests, application descriptors, `justfile`, QEMU
+  and postmarketOS scripts, and the latest recorded evidence. The top-level
+  overview, application-platform contract, Android runtime record, Android ADR,
+  appd README, long-term layout, and QEMU guide now agree that Phone, Messages,
+  Contacts, and Settings are independent native apps; Android has a private
+  Waydroid adapter; Brave provisioning/persistence and graphical pmOS evidence
+  exist; and, among catalog/runtime entries, Web remains unimplemented while
+  Camera and Files remain placeholders.
+- **Historical clarity:** `docs/audit-2026-09-21.md` is explicitly marked as a
+  commit-specific phase-0 snapshot rather than current status. Older entries in
+  this chronological file remain unchanged as historical evidence.
+- **Publication checks:** Relative Markdown links and documented `just` recipe
+  names were checked against the tree. `git diff --check`, formatting, Clippy,
+  workspace tests, and the architecture guard are the validation set for this
+  documentation-only handoff; no new graphical, QEMU, or physical-device claim
+  is introduced by the audit.
+
 ## 2026-09-21 (postmarketOS development-window sizing)
 
 - **Aspect-preserving pmOS window:** `pmos-run.sh`, shared by `pmos-run` and

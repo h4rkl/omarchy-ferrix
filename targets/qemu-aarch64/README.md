@@ -646,8 +646,9 @@ or mock; do not infer physical-device support.
 This is the intended **full guest substrate** from `plans/baseline.md`; the
 Alpine initramfs above stays the explicitly labelled smoke-test route. It is a
 **QEMU** target only: generic AArch64 `virt`, never a physical device. The
-first route is console-only (postmarketOS UI `console`, OpenRC); the project
-shell is not in this image yet.
+postmarketOS UI package remains `console` (OpenRC), while the image also
+contains the Ferrix compositor, home surface, services, and applications. They
+start when graphics are enabled; the bounded check remains serial-only.
 
 ```sh
 just pmos-build    # pinned guest-builder container runs pmbootstrap install
@@ -982,10 +983,11 @@ physical-device claim.
   carries OpenRC service output and the project records but few kernel
   messages; the kernel version is recorded in `manifest.json`, not on serial.
 - The pmbootstrap UI selection remains `console`; Omarchy Ferrix supplies its own
-  compositor/client rather than a postmarketOS desktop package. The product
-  graphical startup path is present, but only the core has been exercised by
-  the bounded pmOS check so far; framebuffer evidence currently comes from the
-  Alpine smoke guest.
+  compositor/client rather than a postmarketOS desktop package. The bounded
+  pmOS check remains serial-only, but separate graphical QEMU runs have
+  framebuffer-validated the normal Ferrix launcher and the Android-enabled
+  route with Brave through Waydroid. Those captures do not broaden the
+  headless contract or establish physical-device support.
 - The rootfs is what pmbootstrap installs from the pinned binary channel. The
   project binaries, profile, theme file, startup script, and readiness marker are injected
   by mounting the image; native postmarketOS packaging is still future work.

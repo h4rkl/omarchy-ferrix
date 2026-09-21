@@ -1,8 +1,9 @@
 # ADR-005: Android compatibility runtime and the Brave reference app
 
-Status: evaluation in progress 2026-09-21; the runtime choice is **not**
-final until `docs/android-runtime.md` records measured results and the
-owner confirms the guest kernel/package inputs (see audit §6).
+Status: accepted and implemented for the opt-in QEMU postmarketOS route on
+2026-09-21. Waydroid is the selected runtime; `docs/android-runtime.md` records
+the pinned inputs, measured evidence, and remaining limitations. This is not a
+physical-device or general Android compatibility claim.
 
 ## Constraints the evaluation must measure
 

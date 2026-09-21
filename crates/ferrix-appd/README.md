@@ -7,8 +7,9 @@ surface's restart budget, and the `ferrix_app_protocol` Unix socket. A crashing 
 is observed, recorded, and published; it never takes the compositor, the
 core, `ferrix-appd`, or the home surface with it.
 
-The library depends only on `ferrix-app-api` and `ferrix-app-protocol`. `ferrix-runtime-native`
-is named in `src/main.rs` alone (composition); everything else works with
+The library depends only on `ferrix-app-api` and `ferrix-app-protocol`.
+`ferrix-runtime-native` and `ferrix-runtime-android` are named in `src/main.rs`
+alone (composition); everything else works with
 any `Box<dyn ferrix_app_runtime_api::Runtime>`, so the whole service is tested on the host
 with a channel-driven fake runtime and a fake process tree.
 
@@ -94,7 +95,8 @@ not-running -> starting -> foreground <-> background
 ```
 
 - `launch`: unknown id -> `UnknownApp`; `launchable: false` -> `NotLaunchable`;
-  no runtime for the kind (`web`, `android`) -> `RuntimeUnsupported`; already
+  no runtime for the kind (`web`, or Android when Waydroid is absent) ->
+  `RuntimeUnsupported`; already
   running -> `activated_existing = true` plus `Notification::Activate{pid}` to
   compositor subscribers; otherwise the runtime spawns, the instance is
   `starting`, and a waiter thread polls the handle until it exits. Activation

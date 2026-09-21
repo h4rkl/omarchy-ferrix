@@ -11,8 +11,10 @@ physical-device claim.
 
 ## Decision
 
-Applications are independent, supervised Linux processes. One application
-service (`ferrix-appd`) owns the catalog, activation, foreground/background state,
+Applications are supervised runtime instances; native applications are
+independent Linux processes, while Android applications are processes inside
+the separately managed Waydroid container. One application service
+(`ferrix-appd`) owns the catalog, activation, foreground/background state,
 crash records, and surface association. The compositor (`ferrix-shell`) owns
 surfaces, focus, and the trusted global home gesture. The home surface
 (`ferrix-basic-screen`) is one application among others: it queries `ferrix-appd`
@@ -28,16 +30,18 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 ## Layers and ownership
 
 ```text
-  home surface           Terminal app            future apps
-  (ferrix-basic-screen)  (ferrix-terminal)       (native | web | android)
+  home surface           native apps             Android app
+  (ferrix-basic-screen)  (Terminal, Phone, …)     (Brave via Waydroid)
         |  Launch/Subscribe        |  YieldForeground
         +-------------+------------+-----------------------------+
                       |  ferrix-app-protocol (line-delimited JSON, schema v1)
                     ferrix-appd  <--- SurfaceMapped / FocusChanged / gestures ----- ferrix-shell
                       |   --- Activate{pid} ------------------------------->  (compositor)
             ferrix_app_runtime_api::Runtime (internal trait)
-                      |
-              ferrix-runtime-native ---> ferrix-sandbox ---> init (PID 1 of the app's PID ns) ---> app
+                      |                         |
+              ferrix-runtime-native     ferrix-runtime-android
+                      |                         |
+              ferrix-sandbox ---> app          Waydroid ---> Android app
 ```
 
 | Crate | Owns | Trust ring |
@@ -48,8 +52,9 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 | `ferrix-appd` | catalog, grants policy, single-instance policy, lifecycle state machine, crash records, home restart policy, surface association, pid → identity resolution, role gating | system |
 | `ferrix-runtime-native` | native launch configuration and isolation types (namespaces, private `/tmp`, socket-directory view); the native `Runtime` that spawns `ferrix-sandbox`, classifies exits, and terminates | internal adapter |
 | `ferrix-shell` | toplevels keyed by client pid, focus, `Activate` handling, trusted navigation/dismiss gestures, crash refocus | system |
-| `ferrix-basic-screen` | catalog-driven launcher, in-process quick settings/notifications, illustrative reference pages, crash notice | privileged first-party |
-| `ferrix-terminal` | the Terminal as an independent Wayland client | untrusted application |
+| `ferrix-basic-screen` | catalog-driven launcher, in-process quick settings/notifications, crash notice | privileged first-party |
+| `ferrix-terminal`, `ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings` | independent native Wayland applications | untrusted applications |
+| `ferrix-runtime-android` | private Waydroid adapter for Android descriptors; composed only by `ferrix-appd` | internal adapter |
 | `ferrix-ui` | software-rendering toolkit and the shared fullscreen Wayland client runner; a convenience library, not part of any ABI | library |
 
 Product crates depend on `ferrix-app-api`/`ferrix-app-protocol` and `ferrix-hardware-api`. The
@@ -76,10 +81,13 @@ opaque to `ferrix-appd` and interpreted only by the selected runtime adapter. Fo
 native adapter it contains `exec` (program resolved through `PATH`) and an
 optional isolation policy. The `launch` object is never returned by
 `ferrix-app-protocol`, so applications and shells cannot couple to another runtime's
-implementation. Non-launchable entries exist so the reference launcher keeps its
-illustrative pages while the catalog, not an enum, decides what is shown.
-`web` and `android` are reserved kinds: a descriptor of those kinds is valid,
-but launching it returns `AppError::RuntimeUnsupported` until a runtime exists.
+implementation. Non-launchable entries exist for catalog placeholders such as
+Camera and Files; the catalog, not an enum, decides what is shown. `web`
+remains a reserved kind and returns `AppError::RuntimeUnsupported`. Android
+descriptors are handled by the private `ferrix-runtime-android` adapter; a
+launch returns `RuntimeUnsupported` when Waydroid is absent and `LaunchFailed`
+when the runtime or package is unavailable. Android package/activity details
+remain in the daemon-private `launch` object.
 
 ## Lifecycle
 
@@ -302,7 +310,7 @@ pid), `app-surface`, `app-foreground`,
 `terminal-frame` (Terminal). `just qemu-check` is unchanged. Graphical
 evidence for this slice is recorded in `docs/status.md`.
 
-## Not in this slice
+## Remaining platform work
 
 Portals and user-facing permission prompts (grants are a checked-in policy,
 not a runtime consent flow), a different uid per application, seccomp, cgroup
@@ -310,5 +318,6 @@ limits, a network namespace, a filesystem view restricted beyond `/proc`,
 `/tmp`, and the socket directory, authenticated (rather than bootstrap-trusted)
 compositor/tool/service endpoints, the Rust SDK beyond the launch environment
 constants, the TypeScript/web runtime, per-application logs, and any device
-target. The Android compatibility runtime is specified separately (ADR-005);
-it never receives a `/run/ferrix` socket.
+target. The Android compatibility runtime is documented separately (ADR-005
+and `docs/android-runtime.md`); it never receives a `/run/ferrix` socket. Web
+runtime support is still reserved and unimplemented.

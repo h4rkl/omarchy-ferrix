@@ -1,12 +1,18 @@
-# Android compatibility runtime: evaluation and integration plan
+# Android compatibility runtime: evaluation and integration record
 
-Status: **evaluation record for ADR-005**, written 2026-09-21. Evidence labels
-in this document: desk review of upstream sources fetched on 2026-09-21 and
-`mock` host tests. **No QEMU evidence exists yet**; no APK compatibility claim
-level (installable → launchable → graphical → interactive → integrated) has
-been demonstrated. Subordinate to `plans/baseline.md` and `plans/plan.md`.
-The runtime choice becomes final only when the owner approves the guest
-inputs in §6 and QEMU evidence is recorded in `docs/status.md`.
+Status: **Waydroid selected and implemented for the opt-in Android-enabled
+postmarketOS QEMU route**, 2026-09-21. This document combines the upstream
+evaluation with the resulting pinned implementation and evidence. The normal
+postmarketOS image and CI route remain Android-free. Subordinate to
+`plans/baseline.md` and `plans/plan.md`.
+
+Demonstrated QEMU claim: the verified Brave APK is staged, installed on first
+graphical boot, assigned Android's default-browser role, launched through
+`ferrix-appd`, and rendered in an inspected Cocoa framebuffer. A subsequent
+boot with the same overlay observed the package and role as present. This is a
+graphical QEMU claim with provisioning/persistence evidence, not a claim of
+general APK compatibility, complete interaction, or physical-device support.
+The exact run evidence is in `docs/status.md`.
 
 Terminology: the reference application is "Brave (Android application
 running in the Android compatibility runtime)". It is never described as a
@@ -61,10 +67,10 @@ Each row states what upstream documents or its source does, with the source.
 | Licensing | Waydroid: GPL-3.0 — used as a separate process via its CLI, never linked; Ferrix code stays MIT OR Apache-2.0. LineageOS images: AOSP/LineageOS code is Apache-2.0 with GPL-2.0 kernel-side pieces; the MAINLINE vendor image is built by Waydroid with Mesa (`TARGET_USE_MESA`), i.e. **no proprietary vendor blobs are documented** for the MAINLINE/VANILLA pair. **Unverified**: a full licence inventory of the shipped image (SwiftShader is Apache-2.0; other components not audited). GAPPS images bundle Google apps and are **not** proposed. Brave: MPL-2.0 (Chromium BSD-3 and others), third-party product, never committed. | `LICENSE`; Alpine APKBUILD; docs |
 | Security-update path | Waydroid tool: Alpine `community` package updates within the pinned channel (`3.24-stable` currently 1.6.2; `master` 1.6.3). Android userspace: Waydroid rebuilds lineage-20 images periodically (last 2026-04-03; Android 13 is past AOSP's active security-bulletin window, LineageOS 20 receives backports on a best-effort basis — **unverified** for this image). Brave: new GitHub release ⇒ edit `brave.pins`. Every update is a deliberate pin bump with manifest hashes, never automatic. | Alpine aports; OTA JSON |
 
-## 4. Decision recommendation
+## 4. Decision
 
-Proceed with **Waydroid** as the Android compatibility runtime candidate,
-under these conditions:
+Use **Waydroid** as the Android compatibility runtime for the opt-in QEMU
+route, under these conditions:
 
 1. Runtime tool from Alpine `community/waydroid` at the version the pinned
    pmOS channel resolves (1.6.2 on 3.24-stable today); no pmaports fork.
@@ -73,25 +79,23 @@ under these conditions:
    vs 905 MiB + 148 MiB) shortens `pmos-build`; and `arch.py` would choose
    `arm64_only` automatically on an Apple Silicon host under HVF (no AArch32)
    but `arm64` under TCG, so pinning removes a host-dependent difference.
-   Owner may prefer `arm64` for 32-bit app compatibility.
+   The implemented route intentionally does not provide 32-bit app
+   compatibility.
 3. Software rendering forced explicitly (`ro.hardware.gralloc=default`,
    `ro.hardware.egl=swiftshader`) rather than relying on auto-detection, so
    the QEMU route never silently depends on a render node.
-4. Claim levels reported strictly per `architecture.md` §"APK compatibility
-   claims". If the container does not reach `Container:\tRUNNING` or the
-   framebuffer stays blank within the bounded check, record the limitation
-   and escalate; do not claim completion.
+4. Claim levels are reported strictly per `architecture.md` §"APK
+   compatibility claims". The current evidence reaches graphical for Brave;
+   interactive input remains unverified.
 
 Rejected alternatives: writing a Ferrix-owned container runtime (baseline:
 prefer maintained projects; Binder/ART/HAL surface is enormous); redroid
 (display path is ADB/scrcpy, not Wayland).
 
-## 5. What could not be verified
+## 5. Remaining unverified areas
 
-- Which Alpine release pmOS v26.06 tracks (our `pins.env` says 3.24; the
-  v26.06 `pmaports.cfg` does not state it and `channels.cfg` no longer
-  exists). Consequence: the `waydroid` package version in the built guest
-  must be read from the `pmos-build` manifest, not assumed.
+- The built manifest, rather than a channel assumption, remains authoritative
+  for the resolved Alpine and Waydroid package versions.
 - pmOS wiki content comes from a Wayback snapshot (2026-08-23 capture of a
   page last modified 2026-06-21); the live page was behind an anti-bot
   challenge.
@@ -100,45 +104,40 @@ prefer maintained projects; Binder/ART/HAL surface is enormous); redroid
   source not audited for it.
 - Licence inventory of the shipped LineageOS/Waydroid image beyond the
   headline Apache-2.0/GPL-2.0 split.
-- Whether the composer process's command line contains `graphics.composer`
-  on lineage-20 images (used as the default surface-client needle in §7);
-  this is a configurable string and must be confirmed from the guest.
-- Any behaviour under QEMU TCG (boot time, rendering, input): no run exists.
+- Interactive touch/keyboard behavior and time-to-first-frame under TCG. The
+  inspected Brave graphical run used HVF; the bounded Android check is
+  headless and does not make a rendering claim.
 
-## 6. Guest inputs requiring owner approval (audit §6.2)
+## 6. Implemented guest inputs
 
-Nothing below is applied by this change. The QEMU/pmOS agent owns the
-scripts; these are the exact proposed values.
+These inputs are checked in for the separate Android-enabled image. The
+default `pmos-build`, `pmos-check`, and CI routes do not consume them.
 
-### 6.1 `targets/qemu-aarch64/pmos/pmbootstrap.cfg`
+### 6.1 `targets/qemu-aarch64/pmos/pmbootstrap-android.cfg`
 
 ```ini
-extra_packages = seatd,eudev,libinput,libseat,libdrm,pixman,libxkbcommon,mesa-gbm,libgcc,waydroid,waydroid-openrc,waydroid-nftrules,nftables,lxc,dnsmasq,pulseaudio
+extra_packages = seatd,eudev,libinput,libseat,libdrm,pixman,libxkbcommon,mesa-gbm,libgcc,waydroid,waydroid-openrc,waydroid-nftrules,nftables,lxc,dnsmasq,pulseaudio,dbus
 ```
 
 Notes: `waydroid` pulls `lxc dnsmasq iptables kmod gbinder-python py3-dbus
 py3-gobject3 py3-pyclip python3` itself; `waydroid-openrc` provides
 `/etc/init.d/waydroid-container`; `waydroid-nftrules` provides
 `/usr/share/nftables.avail/51_waydroid.nft`, which the finalize step links
-into `/etc/nftables.d/`. `pulseaudio` (or `pipewire-pulse`, unverified) is
-needed because the container refuses to start without the pulse socket. A
-D-Bus system and session bus must be running (`dbus`, already required by
-`seatd`/`eudev` stacks — to be confirmed from the manifest).
+into `/etc/nftables.d/`. This route installs `pulseaudio` and `dbus`; product
+bootstrap creates the session bus and PulseAudio socket before starting the
+Waydroid session. PipeWire pulse compatibility remains unverified.
 
 ### 6.2 Kernel
 
-No config change. `pmos-check` (or a new `pmos-android-check`) must record,
-from the guest: `ls -l /dev/binder /dev/hwbinder /dev/vndbinder`,
-`grep -c psi /proc/pressure/cpu` (PSI enabled), `zgrep ANDROID_BINDER
-/proc/config.gz` if available, and `cat /sys/kernel/mm/transparent_hugepage/
-enabled` is *not* required. Add `psi=1` to the kernel command line only if
-the documented "Service manager /dev/binder has died" symptom appears
-(`CONFIG_PSI=y` and `PSI_DEFAULT_DISABLED=n` are already required by
-pmaports' `category:default`).
+No config change. `just pmos-android-check` requires the guest's
+`android-binder-devices` record for `/dev/binder`, `/dev/hwbinder`, and
+`/dev/vndbinder`; the first-boot hook also records PSI availability. The
+checked-in kernel already provides the static Binder devices and PSI, so no
+`psi=1` override was needed in the successful graphical run.
 
 ### 6.3 Image pins (OTA JSON fetched 2026-09-21, first entry = newest)
 
-Proposed channel `waydroid_arm64_only`, LineageOS 20.0 (Android 13), built
+Pinned channel `waydroid_arm64_only`, LineageOS 20.0 (Android 13), built
 2026-04-03:
 
 | Image | Filename | Size | SHA-256 (`id`) |
@@ -157,10 +156,10 @@ Alternative `waydroid_arm64` (with AArch32): system
 `lineage-20.0-20260403-MAINLINE-waydroid_arm64-vendor.zip` 147,648,350 bytes
 `1e6d33d464277ea3964e4658001c8882f21325616d6bcc66d473bc9ee1e246c7`.
 
-Handling: a new pinned host-side fetch step (mirroring
-`tools/android/brave-fetch.sh`: allow-listed hosts `sourceforge.net`,
-`*.dl.sourceforge.net`, size window, SHA-256) stores the zips under ignored
-`out/android/waydroid/<date>/`; `pmos-build` copies the extracted
+Handling: `tools/android/waydroid-images-fetch.sh` uses allow-listed hosts
+`sourceforge.net` and `*.dl.sourceforge.net`, enforces size windows and
+SHA-256 pins, and stores the zips under ignored
+`out/android/waydroid/<build>/`; `pmos-android-build` copies the extracted
 `system.img`/`vendor.img` into the guest at `/etc/waydroid-extra/images/`
 and the finalize step runs `waydroid init -f -i /etc/waydroid-extra/images`
 offline (no `ota.waydro.id` access from the guest), then writes
@@ -178,33 +177,30 @@ sizes, hashes, and the `waydroid` package version installed.
 ### 6.4 Service start order (OpenRC, as pinned)
 
 ```text
-cgroups (default runlevel)  →  dbus  →  waydroid-container (default runlevel)
-   →  seatd / compositor (ferrix-shell)  →  pulse socket for the session user
-   →  ferrix-appd (session; composes AndroidRuntime)  →  [first launch] waydroid session start
+cgroups + dbus (default runlevel)
+  → 00-ferrix-android.start: offline init, renderer materialization, container
+  → 00-ferrix-product.start: ferrix-shell, session bus, PulseAudio, Waydroid session
+  → Brave install/default-browser verification
+  → ferrix-appd (composes AndroidRuntime) and Home
 ```
 
-`waydroid-container` is a system service and must be up before
-`ferrix-appd` so `waydroid status` can answer; the **session** is started on
-demand by `ferrix-runtime-android` (detached `waydroid session start` with
-the compositor's `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR`), because it must run
-as the session user with the Wayland socket present. If systemd is chosen
-later, the equivalent is `waydroid-container.service` `Before=` the Ferrix
-session unit.
+The early Android hook runs before the compositor exists, so it initializes
+the images and starts `waydroid-container` but cannot start the Wayland-backed
+session. Product bootstrap creates the compositor socket and session services,
+starts the Waydroid session, waits for Android framework boot, provisions
+Brave, and only then starts `ferrix-appd`. Later launches go through the
+private runtime adapter.
 
-### 6.5 `.gitignore`
+### 6.5 Generated data
 
-`/out/` is already ignored, so `out/android/**` (APKs, images) is covered;
-no new entry is strictly required. Proposed explicit line for clarity:
-
-```gitignore
-# Android compatibility runtime downloads (APKs, container images); never committed
-/out/android/
-```
+`/out/` is ignored, so downloaded APKs, Waydroid images, overlays, logs, and
+captures under `out/android/` and `out/qemu-aarch64/pmos-android/` never enter
+Git.
 
 ### 6.6 `ferrix-appd` composition (`crates/ferrix-appd/src/main.rs`)
 
-`ferrix-appd/Cargo.toml` gains `ferrix-runtime-android = { path =
-"../ferrix-runtime-android" }` (lead-owned). The composition point becomes:
+`ferrix-appd/Cargo.toml` includes `ferrix-runtime-android = { path =
+"../ferrix-runtime-android" }`. The composition point is:
 
 ```rust
 use std::sync::Arc;
@@ -237,8 +233,8 @@ let service = Arc::new(Service::new(
 `WaydroidOptions::default()` resolves the binary from `FERRIX_WAYDROID_BIN`
 then `waydroid` on `PATH`; on a host without Waydroid every Android launch
 returns `AppError::RuntimeUnsupported { runtime: Android }` and an
-`android-runtime-absent` record, exactly as today's reserved-kind behaviour
-but with a reason. The `daemons_name_their_backends_only_in_main`
+`android-runtime-absent` record with a reason. The
+`daemons_name_their_backends_only_in_main`
 architecture test already lists `ferrix_runtime_android` for `ferrix-appd`.
 
 ## 7. Adapter design: `ferrix-runtime-android`
@@ -332,29 +328,35 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   not-initialized/garbage); `waydroid app list` parser; `/proc` cmdline
   ranking; missing binary → `Absent`; fake `/proc` tree scan.
 
-## 8. Evidence plan (QEMU, not yet executed)
+## 8. Evidence and remaining acceptance work
 
-A separate bounded check (proposed `just pmos-android-check`, owned by the
-QEMU agent), TCG-compatible, headless, serial mandatory:
+`just pmos-android-check` is a separate TCG-compatible, headless, serial
+check. It verifies the Android-enabled image's hashes and requires records for
+Binder devices, offline Waydroid initialization, and the staged Brave APK; it
+also prints the renderer/container outcome records for diagnosis. Because it
+has no compositor, it deliberately
+does not claim package installation or rendering.
 
-1. Boot the pmOS guest with the §6 inputs; record `waydroid status` before
-   and after `waydroid session start` (`Container:\tRUNNING` = runtime up),
-   `ls -l /dev/binder*`, and boot-to-ready time.
-2. `brave-fetch.sh` on the host (or `--local`) supplies the verified APK to
-   the Android image build. At first guest boot, the Android bootstrap (not
-   `ferrix-appd`) runs `waydroid app install` and verifies that `waydroid app
-   list` contains `com.brave.browser` → **installable**. The bounded check
-   must reject a staged APK without an `android-app-install` record of
-   `installed` or `present`.
-3. `ferrix-appd` launch of `org.ferrix.browser` → `app-started` record with
-   `kind: android` → **launchable**.
-4. QMP framebuffer capture (existing `qemu-agent` route) shows a non-blank
-   region attributable to the Android surface → **graphical**. Record
-   time-to-first-frame honestly; under TCG + SwiftShader expect minutes.
-5. Synthetic touch via the existing input route changes the frame →
-   **interactive**.
-6. Kill the Brave process inside the container (`am force-stop` from a
-   tool) → `app-crashed` record within the poll interval → crash recovery.
+Completed graphical evidence on Apple Silicon/HVF:
+
+1. A fresh overlay recorded Binder devices, offline Waydroid initialization,
+   `renderer:"swiftshader"`, and Brave provisioning status `installed` with
+   `browser_role:"default"`.
+2. Launching `org.ferrix.browser` through `ferrix-appd` recorded
+   `android-app-launched`, `app-started`, and the mapped
+   `waydroid.com.brave.browser` surface.
+3. An inspected Cocoa framebuffer showed Brave's first-run UI.
+4. After orderly shutdown, reusing the overlay recorded provisioning status
+   `present` with the browser role retained.
+
+Remaining acceptance work:
+
+1. Use synthetic touch and keyboard input to change Brave's rendered state
+   and capture the result before claiming **interactive** compatibility.
+2. Force-stop Brave inside the container and verify `app-crashed` plus home
+   recovery within the polling interval.
+3. Measure boot-to-ready and time-to-first-frame under TCG if graphical TCG
+   becomes an acceptance requirement; today only the headless check uses TCG.
 
 Every passed device, socket, mount, and namespace of the LXC config must
 be listed in `docs/status.md` with the evidence. Google services,
@@ -405,26 +407,23 @@ execution remain **unverified** regardless of the outcome.
 - Nothing from Brave is committed; the APK lives under ignored
   `out/android/brave/v1.95.104/`.
 
-## 10. Risks and owner decisions
+## 10. Remaining risks and limitations
 
 1. **Performance under TCG.** A full Android 13 userspace with SwiftShader
    on an emulated CPU may exceed the bounded check's time budget; the
-   evaluation may end at "installable" or "launchable" with a recorded
-   limitation. Decision: accept a longer, separate CI job for the Android
-   check (architecture reference allows "separate jobs").
+   graphical TCG is not part of the bounded check. The separate Android check
+   stays headless and serial-observable.
 2. **Image size and provenance.** ~800 MiB of third-party images pinned by
    SHA-256 from SourceForge, built by the Waydroid project from LineageOS
-   sources; the project does not rebuild them. Decision: accept pinned
-   binaries, or budget for reproducing the image build.
+   sources; the project verifies but does not reproduce those image builds.
 3. **Android 13 security posture** of lineage-20 images (§3 "Security
-   update path"). Decision: acceptable for an emulator-first evaluation;
-   revisit before any physical target.
-4. **Channel `arm64_only` vs `arm64`** (§4 item 2).
+   update path"). Revisit before any physical target.
+4. **Architecture:** `arm64_only` intentionally excludes 32-bit Android apps.
 5. **Audio stack**: PulseAudio in the guest vs PipeWire + pulse compat
    (unverified).
 6. **Keyboard**: Android's own OSK inside the surface for now; a departure
    from the product OSK direction, to be reconciled in phase 3.
 7. **Networking**: double NAT (waydroid0 → slirp) accepted for the browser
    case; the container is isolated from `/run/ferrix` by construction.
-8. **Brave source**: official GitHub release with pinned hash and signer
-   (this document), or local-only supply (`--local`).
+8. **Brave source**: the official GitHub release is pinned by asset hash and
+   signer; `--local` accepts only a file matching the same pins.

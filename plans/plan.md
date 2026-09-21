@@ -50,7 +50,9 @@ Create directories only as implementation requires them.
 ```text
 .
 ├── README.md
-├── plan.md
+├── plans/
+│   ├── baseline.md          # implementation authority
+│   └── plan.md              # this long-term direction
 ├── Cargo.toml
 ├── rust-toolchain.toml
 ├── justfile
@@ -68,10 +70,10 @@ Create directories only as implementation requires them.
 │   └── boards/               # future target packages; absent until supported
 ├── containers/guest-builder/
 ├── docs/
-│   ├── baseline.md
 │   ├── design.md
+│   ├── app-platform.md
 │   ├── status.md
-│   └── targets.md
+│   └── adr/
 └── .github/workflows/
 ```
 

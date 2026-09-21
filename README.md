@@ -38,15 +38,17 @@ UI prototype:
 - `ferrix-shell` is the default QEMU Wayland compositor, using Smithay, DRM,
   libinput, and pixman software rendering.
 - `ferrix-appd` is the application service: it owns the catalog (`apps/*.json`),
-  launches every application as its own supervised process inside Linux
-  namespaces through `ferrix-sandbox`, tracks lifecycle and crashes, and
-  associates compositor surfaces with instances. See `docs/app-platform.md`.
+  launches applications through runtime adapters, tracks lifecycle and
+  crashes, and associates compositor surfaces with instances. Native apps use
+  Linux namespaces through `ferrix-sandbox`; Android apps use the private
+  Waydroid adapter. See `docs/app-platform.md`.
 - `ferrix-basic-screen` is the home surface: a catalog-driven launcher that
   asks `ferrix-appd` to start apps, plus connected quick settings whose Wi-Fi,
   Bluetooth, and brightness controls operate through `ferrix-core`.
-- `ferrix-terminal` is the first independent application: a separate Wayland
-  client in its own PID/mount/IPC/UTS namespaces. Crashing it leaves the
-  compositor, core, service, and home surface running.
+- `ferrix-terminal`, Phone, Messages, Contacts, and Settings are independent
+  Wayland applications. Native apps run in their own PID/mount/IPC/UTS
+  namespaces; crashing one leaves the compositor, core, services, and home
+  surface running.
 - `ferrix-telephonyd`, `ferrix-networkd`, and `ferrix-contactsd` are typed,
   schema-versioned services (ADR-001..003) with deterministic mock backends in
   QEMU and ModemManager/NetworkManager adapters for postmarketOS. Phone,
@@ -77,9 +79,11 @@ not a finished mobile OS or a physical-device port.
 ## Architecture
 
 ```
-home surface / apps ──▶ ferrix-app-protocol ──▶ ferrix-appd ──▶ ferrix-app-runtime-api::Runtime ──▶ ferrix-runtime-native ──▶ ferrix-sandbox ──▶ app
+home surface / apps ──▶ ferrix-app-protocol ──▶ ferrix-appd ──▶ ferrix-app-runtime-api::Runtime
         ▲                                 ▲
   ferrix-shell ── surfaces/focus/gesture ─┘
+                                                            ├─▶ ferrix-runtime-native ──▶ ferrix-sandbox ──▶ app
+                                                            └─▶ ferrix-runtime-android ──▶ Waydroid ──▶ Android app
 
 apps / shell ──▶ ferrix-protocol ──▶ ferrix-core ──▶ ferrix-hardware-api
                                                ▲              ▲
@@ -104,13 +108,13 @@ phone / messages / contacts ──▶ ferrix-contacts-protocol  ──▶ ferrix
 | `crates/ferrix-protocol` | Shared, schema-versioned Unix-socket contract and client for state snapshots, subscriptions, and portable product commands. It deliberately excludes host mock mutations. |
 | `crates/ferrix-core` | Persistent daemon. Serves the shared protocol on `/run/ferrix/core.sock`, routes product commands through portable capability traits, applies mock-control commands only on the test channel, and prints machine-readable JSON records to serial. |
 | `crates/ferrix-shell` | Default product compositor, built on Smithay 0.7: portrait-first, rotation-aware, fullscreen-only xdg-shell, one seat (keyboard, pointer, touch via libinput), and pixman software rendering into DRM dumb buffers on `virtio-gpu`. GL is optional and used only by nested host development. The Catacomb evaluation is in `crates/ferrix-shell/EVALUATION.md`. |
-| `crates/ferrix-app-api` | Stable public application contract: validated `AppId`s, `RuntimeKind` (`native`; `web` and `android` reserved), public JSON `AppDescriptor`s, lifecycle state, and typed errors. No target or implementation conditionals (enforced). |
+| `crates/ferrix-app-api` | Stable public application contract: validated `AppId`s, `RuntimeKind` (`native`, `web`, `android`), public JSON `AppDescriptor`s, lifecycle state, and typed errors. Native and Android adapters exist; web remains reserved. No target or implementation conditionals (enforced). |
 | `crates/ferrix-app-runtime-api` | Internal, replaceable daemon-to-runtime traits and opaque launch-configuration boundary; never linked by applications or shells. |
 | `crates/ferrix-app-protocol` | Schema-versioned line-delimited JSON protocol and client for `ferrix-appd`: role-gated requests, no-reply compositor reports, and pushed notifications. |
 | `crates/ferrix-appd` | Application service. Loads the catalog, enforces one instance per app, launches through `Runtime` adapters, records crashes, restarts the home surface with backoff, associates compositor surfaces with instances by kernel-reported pid, and publishes lifecycle events. |
 | `crates/ferrix-runtime-native` | The native runtime adapter and the `ferrix-sandbox` binary: safe Rust (rustix, signal-hook) that starts an application inside its own PID, mount, IPC, and UTS namespaces (user namespace when unprivileged) with a private `/proc` and `/tmp`, `no_new_privs`, and a PID 1 that forwards signals and reports the exact exit reason. |
 | `crates/ferrix-ui` | Shared software-rendering toolkit (tiny-skia, fontdue, the Ferrix black/amber/rust palette loaded from `themes/ferrix/colors.toml` or `/etc/ferrix/colors.toml`, on-screen keyboard layout, keymap) and the fullscreen Wayland client runner used by first-party surfaces. See `docs/design.md`. A library, not an ABI. |
-| `crates/ferrix-basic-screen` | The home surface: catalog-driven launcher grid, status bar, connected quick settings, notifications, crash notices, portrait/landscape layouts. Launchable tiles go through `ferrix-appd`; reference entries keep illustrative in-process pages. |
+| `crates/ferrix-basic-screen` | The home surface: catalog-driven launcher grid, status bar, connected quick settings, notifications, crash notices, portrait/landscape layouts. Every launchable tile goes through `ferrix-appd`; Camera and Files remain non-launchable catalog placeholders. |
 | `crates/ferrix-terminal` | The Terminal application as an independent Wayland client (alacritty VT layer on a PTY, touch-first on-screen keyboard), launched and isolated by `ferrix-appd`. |
 | `crates/ferrix-telephony-api`, `-protocol` | Target-neutral telephony contract (modem, SIM, registration, calls, SMS incl. multipart, data bearer, audio route, radio power, feature discovery, typed errors) and its schema-versioned socket protocol with a reconnecting client. Numbers are redacted for `telephony-state`-only clients; emergency numbers are rejected as unsupported. |
 | `crates/ferrix-telephony-adapter-api`, `-mock`, `-mm`, `ferrix-telephonyd` | Internal backend trait; the deterministic mock backend (profile `[telephony]`, tick-driven clock); the ModemManager adapter over `zbus` (feature `production`, never QMI/MBIM/QRTR/AT); and the privileged daemon that owns call/SMS identity, multipart assembly, an atomic fail-closed SMS store, per-operation authorization, and the host-only mock-control channel. |
@@ -211,9 +215,11 @@ never a process-start log.
 
 The postmarketOS contract is separate: `just pmos-check` re-hashes its exported
 artifacts, boots a fresh overlay under TCG, requires `product-core-ready` before
-`pmos-boot-health`, and requires an orderly power-off. This proves that the
-intended full guest substrate contains and starts the core; it does not yet
-constitute graphical pmOS validation.
+`pmos-boot-health`, and requires an orderly power-off. That bounded check proves
+that the intended full guest substrate contains and starts the core; graphical
+pmOS claims are backed separately by inspected framebuffers. The normal product
+route has rendered the Ferrix launcher, and the Android-enabled route has
+rendered Brave through Waydroid (QEMU evidence only).
 
 ## Validation before handoff
 
@@ -249,12 +255,13 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
   portrait-first, touch-first, rotation-aware, and software-rendered by default.
 - Applications, shells, and the core depend on `ferrix-app-api`/`ferrix-app-protocol`, never
   on `ferrix-appd` itself or on a runtime implementation; only `ferrix-appd`'s binary
-  composes `ferrix-runtime-native`. `just arch-check` enforces this.
+  composes `ferrix-runtime-native` and `ferrix-runtime-android`. `just arch-check`
+  enforces this.
 
 ## Known gaps
 
-- App pages beyond the Terminal and system controls are still illustrative
-  reference pages inside the home surface.
+- Camera and Files are non-launchable catalog placeholders. Web applications
+  have a reserved runtime kind but no runtime adapter.
 - Isolation is process and namespace based (PID, mount, IPC, UTS, private
   `/proc` and `/tmp`, `no_new_privs`) plus a private `/run/ferrix` view that
   exposes only the sockets an app's grants allow. Services authorize every
@@ -268,6 +275,9 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
   audio service exists. Emergency calling is not supported anywhere.
 - Brave acquisition requires Android SDK Build-Tools `apksigner` (or an
   explicit `APKSIGNER` path); host tooling is checked but never installed.
+- Android is opt-in and QEMU-only: audio, input/OSK integration, Google
+  services, DRM, codecs, camera, telephony, biometrics, and physical-device
+  behavior remain unverified.
 - Crash recovery covers applications (a crashed app returns focus to the home
   surface, which `ferrix-appd` restarts if it crashes itself); supervision of the
   core and compositor, and native postmarketOS packaging, remain future work.
