@@ -1,7 +1,7 @@
 schema_version = 1
 target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
 kind = "physical"
-status = "identity-established-recovery-prepared"
+status = "bootloader-unlocked-recovery-prepared"
 
 manufacturer = "Google"
 marketing_name = "Pixel 9a"
@@ -18,12 +18,22 @@ stock_build_fingerprint = "google/tegu/tegu:15/BD4A.240925.111/12859276:user/rel
 stock_android_release = "15"
 stock_security_patch = "2025-01-05"
 bootloader_version = "tegu-16.0-12754673"
-bootloader_state = "locked"
-verified_boot_state = "green"
+# These two stock-state fields were captured before the gated unlock. The
+# current Fastboot state is recorded below; post-unlock Android Verified Boot
+# state has not been observed because the device remains in Fastboot.
+stock_bootloader_state = "locked"
+stock_verified_boot_state = "green"
+bootloader_state = "unlocked"
+verified_boot_state = "not-observed-after-unlock"
 current_slot = "_a"
 slot_count = 2
 dynamic_partitions = true
 boot_devices = "13200000.ufs"
+
+unlocked_utc = "2026-09-27T20:55:33Z"
+unlock_transport = "fastboot"
+unlock_workflow = "just pixel-9a-unlock-bootloader --confirm-unlock"
+unlock_result = "verified"
 
 # This package records an exact physical identity and recovery inputs. It does
 # not claim that Ferrix Linux boots on the device or that any hardware API is
@@ -35,5 +45,6 @@ recovery_pins = "recovery.pins"
 identity = "passed"
 image_compatibility = "partial"
 backup = "pending"
+bootloader_unlock = "passed"
 recovery_procedure = "documented-not-tested"
 per_run_confirmation = "required"

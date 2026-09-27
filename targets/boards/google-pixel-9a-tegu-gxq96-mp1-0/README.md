@@ -14,9 +14,9 @@ Identity was established by the checked-in read-only workflow
 | Model number / SKU | GXQ96 |
 | Codename / board | `tegu` |
 | Hardware revision | `MP1.0` |
-| Bootloader | `tegu-16.0-12754673`, locked |
-| Verified boot | `green` |
-| Current slot | `_a` |
+| Bootloader | `tegu-16.0-12754673`; locked at discovery, now unlocked |
+| Verified boot | `green` at discovery; post-unlock Android state not observed |
+| Current slot | `_a` at ADB discovery; `a` in post-unlock Fastboot discovery |
 | Dynamic partitions | `true` |
 | Stock build | `BD4A.240925.111`, Android 15, 2025-01-05 SPL |
 
@@ -73,12 +73,16 @@ unlock succeeds, the phone remains in Fastboot so the verified factory archive
 can be restored. Do not continue if the preflight or either identity check
 fails.
 
+This gated workflow completed successfully on 2026-09-27 UTC. Post-unlock
+Fastboot discovery reported the exact device as `unlocked=yes`; no factory
+restore or slot change has been run.
+
 ## Recovery choices
 
 Back up personal data first. Google documents full OTA sideload as the safer
 route: it normally does not require an unlocked bootloader or a data wipe. The
-current device is locked, so this is the preferred route while stock recovery
-is intact.
+device was locked during initial discovery and is now unlocked; the OTA route
+remains preferred while stock recovery is intact.
 
 For an OTA sideload, use the verified `tegu-ota-*.zip`, enter the phone's
 stock recovery and choose **Apply update from ADB**, confirm that `adb devices`
@@ -98,8 +102,8 @@ image and `flash-all.sh`. Factory flashing commonly requires an unlocked
 bootloader and erases user data; do not run the vendor script blindly. Review
 its exact partitions and hashes, make a verified backup outside the repository,
 and require explicit per-run confirmation before any unlock, wipe, flash, slot
-change, or relock. This repository has not run a Fastboot mutation and does
-not claim a tested restore path yet.
+change, or relock. This repository has run only the gated bootloader unlock; it
+has not run a factory restore and does not claim a tested restore path yet.
 
 For expected failure states, use the route matching the transport: stock
 Android or stock recovery can use the verified full OTA with `adb sideload`;

@@ -5,10 +5,12 @@
 - **Physical-target identity:** With the owner's request and a checked-in
   target-scoped workflow, read-only ADB discovery identified one exact device
   as Google Pixel 9a, model/SKU `GXQ96`, codename `tegu`, hardware revision
-  `MP1.0`. The observed bootloader is `tegu-16.0-12754673`, locked; verified
-  boot is `green`; current slot is `_a`; dynamic partitions are enabled. The
-  serial is redacted and no unique device identifier, user data, IMEI, keys,
-  or raw partition dump is committed.
+  `MP1.0`. Before unlock, the observed bootloader was
+  `tegu-16.0-12754673`, locked; verified boot was `green`; current slot was
+  `_a`; dynamic partitions were enabled. The gated Fastboot workflow then
+  verified `unlocked=yes`, slot `a`, and slot count `2`. The serial is
+  redacted and no unique device identifier, user data, IMEI, keys, or raw
+  partition dump is committed.
 - **Target package:** `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/` records
   the exact identity, conservative capability matrix, recovery gates, and
   official source references. It claims no Ferrix Linux boot or hardware
@@ -20,14 +22,15 @@
   repository-local target folder
   `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/recovery/`. The full OTA
   is the preferred ADB recovery route; the factory archive is the Fastboot
-  route and may wipe data/require an unlocked bootloader. A restore has not
-  been tested, and no ADB or Fastboot state-changing command ran.
+  route and may wipe data/require an unlocked bootloader. A factory restore
+  has not been tested; the separate bootloader unlock reset completed.
 - **Bootloader unlock gate:** The read-only `just
   pixel-9a-unlock-bootloader --preflight` passed the exact-device, single-
-  transport, and recovery-artifact checks. The execution workflow requires
-  two typed confirmations plus the phone's own confirmation before it can
-  issue `adb reboot bootloader` and `fastboot flashing unlock`; no such
-  command has run yet, and unlocking will erase user data.
+  transport, and recovery-artifact checks. The execution workflow then
+  required two typed confirmations plus the phone's own confirmation,
+  issued `adb reboot bootloader` and `fastboot flashing unlock`, and verified
+  `unlocked=yes`. No factory flash, slot change, or relock has run; unlocking
+  erased user data as documented.
 
 ## 2026-09-21 (developer-environment trust and app-surface validation)
 

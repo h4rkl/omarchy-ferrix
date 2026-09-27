@@ -1,13 +1,13 @@
 # Google Pixel 9a board-support proposal
 
-Status: identity established; official recovery artifacts downloaded and
-verified (read-only; restore not tested).
+Status: identity established; bootloader unlocked through the gated workflow;
+official recovery artifacts verified; factory restore not tested.
 
 Owner authorization: the 2026-09-28 requests authorize read-only Pixel 9a
 discovery, proposal work, official stock-recovery downloads, and a
-conditional bootloader unlock after the recovery gate passes. Unlocking is
-allowed only through the checked-in workflow, with exact-identity checks and
-explicit per-run confirmations; factory flashing, erasing, formatting,
+conditional bootloader unlock after the recovery gate passes. The gated
+unlock completed after exact-identity checks and explicit per-run
+confirmations; factory flashing, erasing beyond the unlock reset, formatting,
 changing slots, booting untrusted images, and relocking remain out of scope.
 
 This proposal is for one exact physical device. It must not generalize from
@@ -30,9 +30,9 @@ identifiers remain outside Git.
 | Hardware revision / SKU | MP1.0 / GXQ96 | ADB `ro.boot.hardware.revision` / `ro.boot.hardware.sku`; Google regulatory guide | passed |
 | SoC / board | Tensor G4 platform; board `tegu` | Google Pixel 9a specifications + ADB board properties | partial |
 | Android build | `google/tegu/tegu:15/BD4A.240925.111/12859276:user/release-keys` | ADB read-only properties | passed |
-| Bootloader version and state | `tegu-16.0-12754673`; locked; verified boot `green` | ADB read-only boot properties | passed |
+| Bootloader version and state | `tegu-16.0-12754673`; locked/green at discovery; Fastboot now `unlocked=yes` | ADB and post-unlock Fastboot read-only properties | passed |
 | Supported boot route | Stock recovery full OTA; gated Fastboot unlock/factory archive | Google OTA/factory-image instructions; target workflow | documented |
-| A/B slots and current slot | A/B; current slot `_a` | ADB `ro.boot.slot_suffix` | partial |
+| A/B slots and current slot | A/B; `_a` at ADB discovery, `a` in Fastboot; slot count `2` | ADB `ro.boot.slot_suffix`; Fastboot `current-slot`/`slot-count` | passed |
 | Dynamic partitions and super layout | dynamic partitions `true`; UFS boot device `13200000.ufs` | ADB read-only properties; factory metadata pending | partial |
 | Complete partition inventory | — | read-only Fastboot/ADB evidence, redacted before any commit | pending |
 | Kernel source and version | Google `device/google/tegu-kernels/6.1`, Android GS 6.1 basis | AOSP source repository | partial |
@@ -42,7 +42,7 @@ identifiers remain outside Git.
 | postmarketOS device package basis | No maintained `device-google-tegu` basis established | postmarketOS source/package review | pending |
 | Stock factory image and OTA hashes | CP3A.260905.009 pinned; files downloaded and verified in ignored target folder | official Google image manifests | passed |
 | Backup inventory | — | backup artifacts stored outside Git and verified readable | pending |
-| Tested recovery procedure | Not tested; no destructive operation performed | future exact-target evidence | pending |
+| Tested recovery procedure | Factory restore not tested; unlock reset completed | future exact-target restore evidence | pending |
 | Image compatibility criteria | `tegu`, Android 17 build CP3A.260905.009; AVB/slot checks remain required | pinned official archives; factory metadata review | partial |
 | Capability matrix | all Ferrix capabilities conservative `unsupported` pending Linux evidence | target `capabilities.toml` | passed |
 | Evidence and redaction policy | serials, IMEI/IMSI/ICCID, MAC/BSSID, keys, user data, and raw dumps never enter Git | this proposal + ignored output path | partial |
@@ -63,15 +63,17 @@ identifiers remain outside Git.
   compatible stock build and does not replace a verified backup.
 - Fastboot factory restoration is a separate, destructive procedure. It may
   require an unlocked bootloader and normally erases user data. This proposal
-  is not invoked by the unlock workflow. The checked-in unlock workflow
+  was not invoked by the unlock workflow. The checked-in unlock workflow
   requires the verified recovery artifacts, exact device identity, two typed
   per-run confirmations, and the phone's own confirmation before it issues
   only `adb reboot bootloader` and `fastboot flashing unlock`; it stops in
-  Fastboot afterward.
-- No bootloader unlock, `fastboot boot`, `fastboot flash`, `fastboot update`,
-  `fastboot erase`, `fastboot set_active`, `fastboot reboot`, `adb reboot`, or
-  `adb sideload` command has been run yet. Discovery/download/preflight are
-  read-only; the gated unlock workflow is the sole state-changing exception.
+  Fastboot afterward. That unlock workflow completed successfully; no factory
+  flash, slot change, or relock has been run.
+- No `fastboot boot`, `fastboot flash`, `fastboot update`, `fastboot erase`,
+  `fastboot set_active`, `fastboot reboot`, or `adb sideload` command has been
+  run. Discovery/download/preflight are read-only; the gated unlock workflow
+  is the sole state-changing exception and issued only `adb reboot bootloader`
+  and `fastboot flashing unlock`.
 
 ## Evidence plan
 
@@ -88,8 +90,11 @@ capability claims require separate, target-specific tests and remain
 | --- | --- |
 | 2026-09-28 | Initial proposal created; read-only discovery pending. |
 | 2026-09-27 | ADB discovery established Google Pixel 9a / GXQ96 / tegu / MP1.0; bootloader locked, verified boot green, slot `_a`; serial redacted. |
+| 2026-09-27 | Gated unlock completed after recovery-hash and Fastboot identity checks; post-unlock discovery reported `unlocked=yes`, slot `a`; no factory flash or slot change. |
 | 2026-09-28 | Official CP3A.260905.009 factory and full OTA archives downloaded and SHA-256 verified under the ignored recovery folder; no device mutation performed. |
 
 The discovery command was `just pixel-9a-discover`. It queried one
-unambiguous ADB transport and wrote a serial-redacted transcript to
-`out/pixel-9a/`. It did not reboot or otherwise change the phone.
+unambiguous ADB transport, then later one Fastboot transport, and wrote
+serial-redacted transcripts to `out/pixel-9a/`. Discovery itself did not
+reboot or otherwise change the phone; the separate gated unlock workflow did
+the documented reboot and unlock only.
