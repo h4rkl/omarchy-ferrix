@@ -17,5 +17,32 @@
 /targets/qemu-aarch64/out/
 /targets/qemu-aarch64/scripts/__pycache__/
 
+# Physical-device artifacts (firmware, backups, identifiers, keys, dumps, and
+# captures are never safe to publish; keep only redacted checked-in metadata).
+/out/pixel-9a/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/recovery/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/backups/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/evidence/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/identifiers/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/keys/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/partition-dumps/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/firmware/
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.img
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.zip
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.bin
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.raw
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.dump
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.log
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.serial
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.imei
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.imsi
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.iccid
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.mac
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.adbkey
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.key
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.pem
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.p12
+/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/**/*.jks
+
 # macOS Finder metadata
 .DS_Store

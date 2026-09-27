@@ -17,6 +17,22 @@ oneplus-tools-check:
     @command -v adb >/dev/null && adb version | head -2 || { echo "FAIL adb — brew install --cask android-platform-tools" >&2; exit 1; }
     @command -v fastboot >/dev/null && fastboot --version | head -1 || { echo "FAIL fastboot — brew install --cask android-platform-tools" >&2; exit 1; }
 
+# Pixel 9a read-only tooling checks and identity discovery. The workflow
+# refuses zero or multiple devices and never mutates a physical device.
+pixel-9a-tools-check:
+    @command -v adb >/dev/null && adb version | head -2 || { echo "FAIL adb — brew install --cask android-platform-tools" >&2; exit 1; }
+    @command -v fastboot >/dev/null && fastboot --version | head -1 || { echo "FAIL fastboot — brew install --cask android-platform-tools" >&2; exit 1; }
+
+pixel-9a-discover:
+    @"{{root}}/tools/pixel-9a/discover.sh"
+
+pixel-9a-recovery-download:
+    @"{{root}}/tools/pixel-9a/recovery-download.sh"
+
+[positional-arguments]
+pixel-9a-unlock-bootloader *args:
+    @"{{root}}/tools/pixel-9a/unlock-bootloader.sh" "$@"
+
 # Read-only OnePlus discovery (adb/fastboot identity props). Writes a
 # serial-redacted transcript under out/oneplus/; never mutates the device.
 oneplus-discover:

@@ -1,0 +1,39 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+kind = "physical"
+status = "identity-established-recovery-prepared"
+
+manufacturer = "Google"
+marketing_name = "Pixel 9a"
+model_number = "GXQ96"
+codename = "tegu"
+hardware_revision = "MP1.0"
+sku = "GXQ96"
+
+discovered_utc = "2026-09-27T20:25:21Z"
+discovery_transport = "adb"
+discovery_workflow = "just pixel-9a-discover"
+
+stock_build_fingerprint = "google/tegu/tegu:15/BD4A.240925.111/12859276:user/release-keys"
+stock_android_release = "15"
+stock_security_patch = "2025-01-05"
+bootloader_version = "tegu-16.0-12754673"
+bootloader_state = "locked"
+verified_boot_state = "green"
+current_slot = "_a"
+slot_count = 2
+dynamic_partitions = true
+boot_devices = "13200000.ufs"
+
+# This package records an exact physical identity and recovery inputs. It does
+# not claim that Ferrix Linux boots on the device or that any hardware API is
+# implemented.
+capability_matrix = "capabilities.toml"
+recovery_pins = "recovery.pins"
+
+[gates]
+identity = "passed"
+image_compatibility = "partial"
+backup = "pending"
+recovery_procedure = "documented-not-tested"
+per_run_confirmation = "required"

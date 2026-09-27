@@ -1,0 +1,3 @@
+# kind<TAB>build<TAB>version<TAB>filename<TAB>url<TAB>sha256<TAB>bytes<TAB>source-page
+factory	CP3A.260905.009	17.0.0	tegu-cp3a.260905.009-factory-0c2f9053.zip	https://dl.google.com/dl/android/aosp/tegu-cp3a.260905.009-factory-0c2f9053.zip	0c2f9053bf064b09483c937cf16f4824371afe92fa057029d6f9237668d1c0d7	4227813715	https://developers.google.com/android/images
+ota	CP3A.260905.009	17.0.0	tegu-ota-cp3a.260905.009-6750e3df.zip	https://dl.google.com/dl/android/aosp/tegu-ota-cp3a.260905.009-6750e3df.zip	6750e3df5f8d0723fd2f16dc35722241c23dd84e6d1306009cc675967cdf14eb	3383070270	https://developers.google.com/android/ota

@@ -1,0 +1,40 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+
+# These are deliberately conservative: read-only Android identity discovery is
+# not Ferrix Linux hardware evidence. No QEMU/mock result is reused here.
+[power]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[display]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[input]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[network]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[bluetooth]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[audio]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[telephony]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[lifecycle]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[mock-control]
+status = "unsupported"
+evidence = "Physical target; no mock control is claimed."
