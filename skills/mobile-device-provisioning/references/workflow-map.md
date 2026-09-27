@@ -1,0 +1,78 @@
+# Workflow map
+
+One row per checked-in workflow. "Mutates" means the phone's
+persistent state or running mode changes. "Gate" is what the workflow itself
+enforces; the agent still needs the human's go-ahead per Phase 0 of
+`SKILL.md`. Paths are relative to the repository root; outputs are under
+ignored `out/` unless stated. Status vocabulary: Implemented, Run on hardware
+(date), Stub-tested only (offline PATH-stub tests pass; never run on a phone;
+read the script's usage block before use), Not implemented.
+
+## Host-level
+
+| Recipe / script | Purpose | Host | Mutates | Gate | Inputs | Outputs / evidence | Test | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `just host-check` (`tools/dev/check.sh`) | Read-only host tool report for the Rust/QEMU path | macOS, Linux | no | none | - | stdout PASS/FAIL lines | - | Implemented |
+| `just dev-setup` (`tools/dev/install.sh`) | Opt-in host install; does not install adb/fastboot | macOS, Debian/Ubuntu | no (host packages yes) | human runs it | - | - | - | Implemented |
+| `just pixel-9a-tools-check` / `just oneplus-tools-check` | adb/fastboot presence + versions | macOS, Linux | no | none | - | stdout | - | Implemented |
+
+## Generic device front door (`tools/device/`)
+
+| Recipe / script | Purpose | Host | Mutates | Gate | Inputs | Outputs / evidence | Test | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `just device-discover` (`tools/device/discover.sh`) | Any-vendor read-only identity; exit 2 none, 3 ambiguous, 4 adb unauthorized | macOS, Linux | no | refuses 0 or >1 devices | optional `FERRIX_DEVICE_MANUFACTURER` (Fastboot only) | `out/device/discovery-<stamp>.txt` (redacted), `out/device/identity-latest.env` | `just device-tools-test` (175 checks) | Implemented; Stub-tested only |
+| `just device-match` (`tools/device/match-target.sh [identity.env]`) | Match identity to `targets/boards/*/manifest.toml`; exit 0 exact, 10 none | macOS, Linux | no | none | identity env | `match=exact target_id=.. target_dir=..` or `match=none` + revision note | `device-tools-test` | Implemented; Stub-tested only |
+| `just device-propose` (`tools/device/propose-board.sh [identity.env]`) | Scaffold `targets/boards/<id>/{manifest.toml,capabilities.toml,recovery.pins,README.md}` and `docs/board-support/<codename>-attached.md`; print `.gitignore` lines | macOS, Linux | no | owner approval required afterwards | identity env | new checked-in files (redacted) | `device-tools-test` | Implemented; Stub-tested only |
+| `just device-recovery-download <target> [kind]` (`tools/device/recovery-download.sh --target <id> [--kind factory\|ota\|all]`) | Download + size/SHA-256 verify official recovery per `recovery.pins` | macOS, Linux | no | `FERRIX_RECOVERY_DOWNLOAD=I-understand-this-downloads-vendor-firmware` | `targets/boards/<id>/recovery.pins` | `targets/boards/<id>/recovery/` (ignored) | `device-tools-test` | Implemented; Stub-tested only (https only; `.part` resume) |
+
+## Pixel 9a - read-only and inspection (`tools/pixel-9a/`)
+
+| Recipe / script | Purpose | Host | Mutates | Gate | Inputs | Outputs / evidence | Test | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `just pixel-9a-discover` (`discover.sh`) | Exact-target read-only identity; exit 2/3/4 as generic | macOS, Linux | no | refuses 0 or >1 devices | - | `out/pixel-9a/` transcript (serial -> SHA-256 prefix) | `just pixel-9a-tools-test` (`tests/discover-read-only.sh`) | Implemented; Run on hardware 2026-09-27 |
+| `just pixel-9a-env-validate` / `-print` / `-check [group]` / `-test` (`env.sh`) | Load/validate host profile `dev/profile.env`; `check` needs Linux x86_64 | validate/print: any; check: Linux x86_64 | no | none | `targets/boards/.../dev/profile.env` | stdout | `tests/env.sh` | Implemented |
+| `just pixel-9a-recovery-download` (`recovery-download.sh [all\|factory\|ota]`) | Download + verify Google factory and full OTA; refuses non-`dl.google.com/dl/android/aosp/` URLs | macOS, Linux | no | none beyond pins | `recovery.pins` | `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/recovery/*.zip`, `download-manifest.txt` (ignored) | - | Implemented; Run 2026-09-28 |
+| `just pixel-9a-factory-inspect` (`inspect-factory.sh` -> `ferrix-pixel9a-tool`) | Offline factory archive re-verify; `android-info.txt`, `fastboot-info.txt`, member inventory | macOS, Linux (needs cargo, unzip) | no | none | pinned factory zip | `out/pixel-9a/factory-inspection/inventory.json` | `tests/inspect-factory.sh` | Implemented; Run 2026-09-28 |
+| `just pixel-9a-partition-inventory` (`partition-inventory.sh`) | Read-only live partition list (`/dev/block/by-name`, `/proc/partitions`, mounts, cmdline) or `fastboot getvar all` | macOS, Linux | no | refuses ambiguous/mismatched identity | - | `out/pixel-9a/` redacted transcript | `just pixel-9a-partition-test` | Implemented; Stub-tested only (live capture gate still unticked in `linux-plan.md`) |
+
+## Pixel 9a - device mutation (`tools/pixel-9a/`)
+
+| Recipe / script | Purpose | Host | Mutates | Gate | Inputs | Outputs / evidence | Test | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `just pixel-9a-unlock-bootloader --preflight` (`unlock-bootloader.sh`) | Read-only identity + recovery-hash gate | macOS, Linux | no | single transport, exact identity, both archives verified | recovery zips | stdout key=value block ending `preflight=passed` | none (no offline stub test exists for the unlock script) | Implemented; Run 2026-09-27 |
+| `just pixel-9a-unlock-bootloader --confirm-unlock` | `adb reboot bootloader`, `fastboot flashing unlock`; wipes user data | macOS, Linux | yes | two typed phrases (`CONFIRM PIXEL 9A REBOOT AND UNLOCK (WIPES ALL USER DATA)`, `CONFIRM PIXEL 9A BOOTLOADER UNLOCK (WIPES ALL USER DATA)`) + phone prompt | same | `unlocked_after=yes`, `result=bootloader-unlocked` | as above | Implemented; Run 2026-09-27 (`unlock_result = "verified"`) |
+| `just pixel-9a-sideload-ota --preflight` / `--confirm-sideload` (`sideload-ota.sh`) | Stock full OTA via stock recovery `adb sideload` | macOS, Linux | yes (reboot to recovery, sideload) | one ADB device in `device`/`recovery`/`sideload`; OTA + factory hashes; phrases `CONFIRM PIXEL 9A REBOOT TO RECOVERY FOR OTA SIDELOAD`, `CONFIRM PIXEL 9A OTA SIDELOAD <file> SHA256 <16 hex>` (sideload mode adds `IDENTITY unavailable-in-sideload`) | `tegu-ota-*.zip` | `result=ota-sideload-complete\|failed`; `out/pixel-9a/sideload/<stamp>.txt` | `just pixel-9a-tools-test` (`tests/sideload-workflow.sh`, 49 checks) | Implemented; Stub-tested only |
+| `just pixel-9a-factory-restore --preflight` / `--confirm-restore [--keep-data] [--from-adb]` (`factory-restore.sh`) | Bootloader, radio, then `fastboot [-w] update` per vendor sequence | macOS, Linux | yes (wipe unless `--keep-data`) | requires `pixel-9a-factory-inspect` inventory; archive `flash-all.sh` must equal the reviewed sequence; `unlocked=yes`, `is-userspace=no`; phrases `CONFIRM PIXEL 9A FLASH BOOTLOADER AND RADIO (WIPES ALL USER DATA\|KEEP USER DATA)`, `CONFIRM PIXEL 9A FASTBOOT UPDATE (...)`; stops between stages on version mismatch | factory zip, `inventory.json` | `out/pixel-9a/restore/<stamp>.txt`; staged members removed on exit | `pixel-9a-tools-test` (`tests/factory-restore-workflow.sh`, 69 checks) | Implemented; Stub-tested only; `recovery_procedure = "documented-not-tested"` |
+| `just pixel-9a-flash-check [--stage ..] [--slot ..] [--allow-unsigned-avb]` (`flash.sh preflight`) | Re-hash every artifact vs `boot-manifest.tsv`/`image-layout.toml`; verify pinned factory archive; one Fastboot device `tegu`/`MP1.0`/`unlocked=yes`; print `plan=` per partition | macOS, Linux | no | refuses mismatch; `avb_mode=NONE` + `secure=yes` needs `--allow-unsigned-avb` | boot manifest, `recovery.pins` | stdout | `just pixel-9a-flash-test` (64 checks) | Implemented; Stub-tested only |
+| `just pixel-9a-flash-boot-temp [--allow-unsigned-avb]` (`flash.sh boot-temp`) | One `fastboot boot boot.img`; header-v4 limitation: uses the phone's flashed vendor_boot/init_boot/dtbo (kernel smoke check) | macOS, Linux | running mode only | phrase `CONFIRM PIXEL 9A TEMPORARY BOOT boot.img@<8 hex>` | boot manifest | `result=temporary-boot-issued`; `out/pixel-9a/flash/boot-temp-<stamp>-<pid>.txt` (gate token) | `pixel-9a-flash-test` | Implemented; Stub-tested only |
+| `just pixel-9a-flash [--stage kernel\|rootfs\|all] [--slot a\|b] [--allow-unsigned-avb]` (`flash.sh flash`) | Slot-explicit writes of boot/init_boot/vendor_boot/vendor_kernel_boot/dtbo/vbmeta* in the bootloader, then `vendor_dlkm`/`system_dlkm` from fastbootd, back to bootloader; rootfs stage refuses (no `rootfs.img` yet); never `set_active`/erase/format/-w | macOS, Linux | yes | `FERRIX_PIXEL9A_TEMP_BOOT_EVIDENCE=<boot-temp transcript>` matching boot.img hash + device; device in bootloader (`is-userspace=no`); phrase `CONFIRM PIXEL 9A FLASH KERNEL STAGE TO SLOT <A\|B>` (`--skip-temp-boot-gate` appends `WITHOUT TEMP BOOT GATE`); default slot = current (owner must settle vs `linux-plan.md`) | boot manifest, `recovery.pins` | `result=flashed-not-booted`; `out/pixel-9a/flash/flash-<stamp>-<pid>.txt` | `pixel-9a-flash-test` | Implemented; Stub-tested only |
+
+## Pixel 9a - build chain (native Linux x86_64, device-free)
+
+| Recipe / script | Purpose | Host | Mutates | Gate | Inputs | Outputs / evidence | Test | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `just pixel-9a-kernel-check` (`kernel.sh preflight`) | Host/tool/disk check (Linux x86_64, `repo`, ~80 GiB) | Linux x86_64 | no | none | `kernel-sources.toml` | stdout | `just pixel-9a-kernel-test` | Implemented |
+| `just pixel-9a-kernel-sync` | `repo` sync at pinned manifest commit | Linux x86_64 | no | `FERRIX_PIXEL9A_KERNEL_SYNC=I-understand-this-downloads-large-kernel-sources` | pins | `.cache/ferrix/pixel-9a/kernel/` | kernel-test | Implemented; not run |
+| `just pixel-9a-kernel-verify` | Verify 15 pinned components, clean checkouts | Linux x86_64 | no | none | synced source | stdout | kernel-test | Implemented |
+| `just pixel-9a-kernel-build` | Kleaf `//private/devices/google/tegu:zumapro_tegu_dist` with `--kernel_package=@//aosp` | Linux x86_64 | no | `FERRIX_PIXEL9A_KERNEL_BUILD=I-understand-this-runs-a-large-kleaf-build`; refuses non-empty dist | verified source | `out/pixel-9a/kernel/tegu/dist/`, `build-manifest.tsv` | kernel-test | Implemented; `kernel_build_status = "not-built"` |
+| `just pixel-9a-firmware-check` / `-inventory` / `-stage` (`firmware.sh`) | Policy check; outer member inventory; opt-in extraction from `vendor.img`/`vendor_dlkm.img` per reviewed allowlist | Linux (needs `debugfs`, `simg2img`) | no | stage: `FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware` + `FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST` | factory zip, `firmware-policy.toml` | `out/pixel-9a/firmware/tegu/{source-inventory.tsv,firmware-manifest.tsv,staged/}` | `tests/firmware-workflow.sh` (no `just` recipe found; run with `sh`) | Implemented; not run |
+| `just pixel-9a-rootfs-check` / `-validate` / `-build` / `-test` (`rootfs.sh`) | pmOS substrate with Ferrix product set and target profile | check/validate/test: any; build: Linux | no | `FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap`, `FERRIX_PIXEL9A_PMAPORTS_DIR`, `FERRIX_PIXEL9A_KERNEL_DIST`, `FERRIX_PIXEL9A_FIRMWARE_DIR` | kernel dist, product dir, firmware manifest | `out/pixel-9a/rootfs/tegu/manifest.tsv` (`bootable false`) | `tests/rootfs-workflow.sh` | Implemented; `rootfs_build_status = "not-built"` |
+| `just pixel-9a-boot-check` / `-build` / `-test` (`boot.sh`) | Header-v4 split boot + fresh AVB metadata | Linux (mkbootimg, avbtool) | no | `FERRIX_PIXEL9A_BOOT_BUILD=I-understand-this-composes-pixel-9a-boot-artifacts`, `FERRIX_PIXEL9A_INITRAMFS`, `FERRIX_PIXEL9A_VENDOR_RAMDISK`; refuses existing output | kernel + rootfs manifests | `out/pixel-9a/images/tegu/boot-manifest.tsv` (`composed-not-booted`) | `tests/boot-workflow.sh` | Implemented; not run |
+| `just pixel-9a-artifacts-check` / `-manifest` / `-test` (`artifacts.sh`) | Cross-check every `image-layout.toml` partition row against source manifests | any (check), Linux (manifest inputs) | no | requires boot manifest `composed-not-booted` | all manifests | `out/pixel-9a/images/tegu/artifact-manifest.tsv` | `tests/artifacts-workflow.sh` | Implemented; not run |
+
+## Pixel 9a - radios (`tools/pixel-9a/radios.sh`, over SSH to a booted guest)
+
+| Recipe / script | Purpose | Host | Mutates | Gate | Inputs | Outputs / evidence | Test | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `just pixel-9a-radios-check` (`radios.sh preflight`) | SSH (`FERRIX_PIXEL9A_SSH_HOST` default `172.16.42.1`, `_USER` from `pmbootstrap.cfg`, `_PORT`, `_OPTS`) to the booted guest; requires `/proc/device-tree/compatible` to contain `FERRIX_PIXEL9A_DT_COMPATIBLE` (default `google,tegu`); exit 3 unreachable, 4 mismatch, 5 QEMU (`linux,dummy-virt`) refused | macOS, Linux | no | refuses QEMU/mismatch | running Ferrix guest | `guest_identity=verified`; `out/pixel-9a/radios/preflight-<stamp>.txt` | `just pixel-9a-radios-test` (70 checks) | Implemented; Stub-tested only |
+| `just pixel-9a-radios-inventory` | `rfkill`, `nmcli`, `bluetoothctl`, `mmcli`, `lsmod`, `dmesg` firmware lines, allow-listed firmware presence, OpenRC service state, `ferrix-networkd`/`ferrix-core` records and sockets | macOS, Linux | no | none | guest | `out/pixel-9a/radios/inventory-<stamp>.txt`; `evidence-latest.tsv` (`subsystem status progress evidence`; `status` only `supported\|unsupported`) | `pixel-9a-radios-test` | Implemented; Stub-tested only |
+| `just pixel-9a-radios-enable [wifi\|bluetooth\|modem\|all]` | `rfkill unblock`, `nmcli radio wifi on`, `bluetoothctl power on`, `mmcli -m any --enable` (modem skipped with a note when none is listed) | macOS, Linux | guest runtime state | phrase `CONFIRM PIXEL 9A ENABLE RADIOS: <list>` (exit 6 on mismatch) | guest | `mutation=` lines; `out/pixel-9a/radios/enable-<stamp>.txt` | `pixel-9a-radios-test` | Implemented; Stub-tested only |
+| `just pixel-9a-radios-connect-wifi <SSID>` | `nmcli --ask device wifi connect`; PSK from `FERRIX_PIXEL9A_WIFI_PSK` or a no-echo prompt, piped over stdin, never argv/log; SSID stored hashed | macOS, Linux | guest runtime state | human go-ahead | SSID, PSK | `wifi_connected=yes\|no`; `out/pixel-9a/radios/connect-wifi-<stamp>.txt` | `pixel-9a-radios-test` | Implemented; Stub-tested only |
+| `just pixel-9a-radios-evidence` | Run inventory, print a `capabilities.toml` fragment labelled `physical: google-pixel-9a-tegu-gxq96-mp1-0` for the owner to paste; never edits the file | macOS, Linux | no | none | guest | `out/pixel-9a/radios/evidence-latest.tsv` | `pixel-9a-radios-test` | Implemented; Stub-tested only; telephony stays `unsupported` (S5300 CPIF) |
+
+## OnePlus (discovery only)
+
+| Recipe / script | Purpose | Host | Mutates | Gate | Inputs | Outputs / evidence | Test | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `just oneplus-discover` (`tools/oneplus/discover.sh`) | Read-only identity; exit 2/3/4 | macOS, Linux | no | refuses ambiguous | - | `out/oneplus/discovery-<utc>.txt` (redacted) | `just oneplus-tools-test` | Implemented; no device ever enumerated (2026-09-21) |
+| `just oneplus-provision-gate --image IMG --recovery BACKUP --partition NAME` | Gate skeleton: prints identity/hashes, requires typed `I have verified <serial-prefix> <codename> <revision>`, then exits 3 `no-approved-proposal` | macOS, Linux | no | inert by design | image, recovery paths | JSON refusal | `tests/provision-gate-is-inert.sh` | Implemented; intentionally refuses |
