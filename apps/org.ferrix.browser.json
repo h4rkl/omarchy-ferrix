@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "org.ferrix.browser",
   "runtime": "android",
-  "name": "Brave",
+  "name": "Fulguris",
   "icon": {
     "glyph": "◐",
     "tone": "neutral"
@@ -13,10 +13,10 @@
     "background"
   ],
   "launch": {
-    "package": "com.brave.browser",
+    "package": "net.slions.fulguris.full.fdroid",
     "activity": null,
     "apk": {
-      "pins": "tools/android/brave.pins"
+      "pins": "tools/android/fulguris.pins"
     }
   }
 }

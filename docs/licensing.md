@@ -24,12 +24,12 @@ change these licenses to Apache-2.0 merely by changing Ferrix metadata:
 | --- | --- | --- |
 | JetBrains Mono font files | `crates/ferrix-ui/assets/JetBrainsMono-*.ttf` | SIL Open Font License 1.1; the accompanying `OFL.txt` is retained. |
 | Rust dependencies | Resolved by `Cargo.lock` and linked into the workspace | Each crate retains its upstream SPDX expression. The dependency set includes MIT, BSD, Zlib, and other compatible licenses in addition to Apache-2.0 options. |
-| Brave | Downloaded only into ignored `out/android/` by `tools/android/brave-fetch.sh` | MPL-2.0, with Chromium and other third-party components under their own licenses. The APK is never committed or relabeled. |
+| Fulguris Web Browser | Downloaded only into ignored `out/android/` by `tools/android/fulguris-fetch.sh` | MPL-2.0; bundled third-party components retain their own licenses. The F-Droid APK is never committed or relabeled. |
 | Waydroid and Android images | Opt-in postmarketOS Android route | Waydroid is GPL-3.0; Android/LineageOS images include their own Apache-2.0, GPL-2.0, and other upstream components. They are external runtime inputs, not Ferrix source. |
 | postmarketOS, Alpine, pmbootstrap, and guest system libraries | QEMU/postmarketOS build and runtime | Each project and package retains its upstream license. Ferrix invokes or packages these inputs but does not relicense them. |
 
 The Ferrix browser descriptor is first-party Apache-2.0 metadata; that does not
-change the license of the Brave APK it identifies. Likewise, the Ferrix color
+change the license of the Fulguris APK it identifies. Likewise, the Ferrix color
 palette is an original adaptation and does not bundle the GPL-3.0 Space Monkey
 theme configuration, artwork, wallpapers, or branding.
 

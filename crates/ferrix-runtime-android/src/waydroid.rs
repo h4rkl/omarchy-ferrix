@@ -481,11 +481,11 @@ mod tests {
 
     #[test]
     fn app_list_yields_package_names() {
-        let text = "Name: Brave\npackageName: com.brave.browser\ncategories: \n\tandroid.intent.category.LAUNCHER\n\nName: Files\npackageName: com.android.documentsui\n";
+        let text = "Name: Fulguris\npackageName: net.slions.fulguris.full.fdroid\ncategories: \n\tandroid.intent.category.LAUNCHER\n\nName: Files\npackageName: com.android.documentsui\n";
         assert_eq!(
             parse_app_list(text),
             vec![
-                "com.brave.browser".to_owned(),
+                "net.slions.fulguris.full.fdroid".to_owned(),
                 "com.android.documentsui".to_owned()
             ]
         );
@@ -496,17 +496,20 @@ mod tests {
     fn cmdline_scan_prefers_the_main_process() {
         let cmdlines = [
             (1u32, "/sbin/init\0"),
-            (900, "com.brave.browser:sandboxed_process0:org.chromium\0"),
-            (850, "com.brave.browser:privileged_process0\0"),
-            (700, "com.brave.browser\0"),
-            (2, "com.brave.browser.other\0"),
+            (900, "net.slions.fulguris.full.fdroid:sandboxed_process0\0"),
+            (850, "net.slions.fulguris.full.fdroid:privileged_process0\0"),
+            (700, "net.slions.fulguris.full.fdroid\0"),
+            (2, "net.slions.fulguris.full.fdroid.other\0"),
         ];
         assert_eq!(
-            pid_from_cmdlines("com.brave.browser", cmdlines.iter().copied()),
+            pid_from_cmdlines("net.slions.fulguris.full.fdroid", cmdlines.iter().copied(),),
             Some(700)
         );
         assert_eq!(
-            pid_from_cmdlines("com.brave.browser", cmdlines[..3].iter().copied()),
+            pid_from_cmdlines(
+                "net.slions.fulguris.full.fdroid",
+                cmdlines[..3].iter().copied(),
+            ),
             Some(850)
         );
         assert_eq!(
@@ -528,7 +531,7 @@ mod tests {
             Err(HostError::Absent(_))
         ));
         assert!(matches!(
-            cli.is_installed("com.brave.browser"),
+            cli.is_installed("net.slions.fulguris.full.fdroid"),
             Err(HostError::Absent(_))
         ));
     }
@@ -546,7 +549,11 @@ mod tests {
         std::fs::create_dir_all(root.join("4321")).unwrap();
         std::fs::create_dir_all(root.join("77")).unwrap();
         std::fs::create_dir_all(root.join("self")).unwrap();
-        std::fs::write(root.join("4321/cmdline"), b"com.brave.browser\0").unwrap();
+        std::fs::write(
+            root.join("4321/cmdline"),
+            b"net.slions.fulguris.full.fdroid\0",
+        )
+        .unwrap();
         std::fs::write(
             root.join("77/cmdline"),
             b"/vendor/bin/hw/android.hardware.graphics.composer@2.1-service\0",
@@ -557,9 +564,9 @@ mod tests {
             proc_root: root.clone(),
             ..WaydroidOptions::default()
         });
-        assert_eq!(cli.app_pid("com.brave.browser"), Some(4321));
+        assert_eq!(cli.app_pid("net.slions.fulguris.full.fdroid"), Some(4321));
         assert_eq!(cli.surface_client_pid(), Some(77));
-        assert_eq!(cli.is_running("com.brave.browser"), Ok(true));
+        assert_eq!(cli.is_running("net.slions.fulguris.full.fdroid"), Ok(true));
         assert_eq!(cli.is_running("org.none"), Ok(false));
         let _ = std::fs::remove_dir_all(root);
     }

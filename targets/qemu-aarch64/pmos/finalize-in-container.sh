@@ -94,7 +94,7 @@ fi
 # Only when FERRIX_PMOS_ANDROID=1: stage the pinned container images, the
 # software-rendering properties, the nftables rule, the first-boot init
 # script (00-ferrix-android.start, before 00-ferrix-product.start), and the
-# verified Brave APK when pmos-build mounted one. `waydroid init` itself runs
+# verified Fulguris APK when pmos-build mounted one. `waydroid init` itself runs
 # at first guest boot (offline, from /etc/waydroid-extra/images): it needs
 # the guest's dbus/lxc environment, not a loop-mounted rootfs.
 android_facts='"enabled": false'
@@ -125,14 +125,14 @@ INI
       ln -s "/etc/init.d/$svc" "$mnt/etc/runlevels/default/$svc"
     fi
   done
-  brave_sha=""
-  if [ -f /android/brave.apk ]; then
-    install -Dm644 /android/brave.apk "$mnt/usr/share/ferrix/android/brave.apk"
-    brave_sha=$(sha256sum "$mnt/usr/share/ferrix/android/brave.apk" | cut -d' ' -f1)
+  fulguris_sha=""
+  if [ -f /android/fulguris.apk ]; then
+    install -Dm644 /android/fulguris.apk "$mnt/usr/share/ferrix/android/fulguris.apk"
+    fulguris_sha=$(sha256sum "$mnt/usr/share/ferrix/android/fulguris.apk" | cut -d' ' -f1)
   fi
   waydroid_pkg=$(awk '/^P:waydroid$/ { getline; sub(/^V:/, ""); print; exit }' "$mnt/lib/apk/db/installed")
   [ -n "$waydroid_pkg" ] || fail "waydroid-not-installed" "package waydroid missing from the rootfs apk database"
-  android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"brave_apk_sha256\": \"$brave_sha\", \"init_mode\": \"first-boot\""
+  android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"fulguris_apk_sha256\": \"$fulguris_sha\", \"init_mode\": \"first-boot\""
   log "android runtime staged (waydroid $waydroid_pkg)"
 fi
 

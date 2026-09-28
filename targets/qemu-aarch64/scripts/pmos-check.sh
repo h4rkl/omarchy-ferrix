@@ -73,7 +73,7 @@ if [ "$android" = 1 ]; then
   # carries them. Nothing here claims the runtime renders anything.
   grep -q '"event":"android-binder-devices"' "$log" || fail "missing-android-binder-devices"
   grep -q '"event":"waydroid-init"' "$log" || fail "missing-waydroid-init"
-  grep -q '"event":"android-app-staged"' "$log" || fail "brave-not-staged"
+  grep -q '"event":"android-app-staged"' "$log" || fail "fulguris-not-staged"
   grep -E '"event":"(android-binder-devices|waydroid-init|waydroid-properties|waydroid-container|android-app-staged)"' "$log"
 fi
 printf '{"evidence":"QEMU","event":"pmos-check-passed","accel":"tcg","android":%s,"seconds":%s,"serial_log":"%s"}\n' "$android" "$elapsed" "$log"

@@ -153,7 +153,8 @@ pmos-check:
 
 # OPT-IN Android compatibility runtime (Waydroid) on the pmOS route. Separate
 # image under out/qemu-aarch64/pmos-android/; the default pmOS build, check,
-# and CI are unchanged. The graphical route has QEMU-only Brave evidence.
+# and CI are unchanged. Existing graphical browser evidence is QEMU-only and
+# predates the Fulguris replacement; Fulguris rendering must be revalidated.
 waydroid-images-fetch:
     @sh "{{root}}/tools/android/waydroid-images-fetch.sh"
 

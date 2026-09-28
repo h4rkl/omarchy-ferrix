@@ -1,9 +1,9 @@
 #!/bin/sh
-# Host tests for the Brave and Waydroid acquisition scripts.
+# Host tests for the Fulguris and Waydroid acquisition scripts.
 #
 #   sh tools/android/tests/run.sh
 #
-# Builds a fake APK (a stored zip > 50 MiB) and uses a deterministic fake
+# Builds a fake APK (a stored zip > 1 MiB) and uses a deterministic fake
 # apksigner to assert: correct local file accepted; wrong hash rejected; wrong
 # signer and invalid signatures rejected; wrong redirect host refused (fake
 # `curl` on PATH); missing tool refused; placeholder pins refused; Waydroid
@@ -55,8 +55,8 @@ mkdir -p signed/META-INF unsigned/META-INF
 openssl crl2pkcs7 -nocrl -certfile cert.pem -outform DER -out signed/META-INF/CERT.RSA
 printf 'Manifest-Version: 1.0\n' >signed/META-INF/MANIFEST.MF
 printf 'Manifest-Version: 1.0\n' >unsigned/META-INF/MANIFEST.MF
-# 51 MiB payload stored uncompressed so the archive itself passes the size floor.
-dd if=/dev/zero of=signed/classes.dex bs=1048576 count=51 2>/dev/null
+# 2 MiB payload stored uncompressed so the archive itself passes the size floor.
+dd if=/dev/zero of=signed/classes.dex bs=1048576 count=2 2>/dev/null
 cp signed/classes.dex unsigned/classes.dex
 (cd signed && zip -q -0 -r ../fake.apk .)
 (cd unsigned && zip -q -0 -r ../unsigned.apk .)
@@ -68,19 +68,25 @@ other_signer=$(openssl x509 -in cert2.pem -fingerprint -sha256 -noout | sed 's/^
 unsigned_sha=$(shasum -a 256 unsigned.apk | cut -d' ' -f1)
 
 pins() {
-    # pins FILE SHA SIGNER
+    # pins FILE SHA SIGNER SIZE
     cat >"$1" <<PINS
-BRAVE_TAG=v9.99.999
-BRAVE_ASSET=BraveMonoarm64.apk
-BRAVE_SHA256=$2
-BRAVE_SIGNER_SHA256=$3
+FULGURIS_VERSION=9.99.999
+FULGURIS_VERSION_CODE=999999
+FULGURIS_PACKAGE=net.slions.fulguris.full.fdroid
+FULGURIS_ASSET=net.slions.fulguris.full.fdroid_261.apk
+FULGURIS_URL=https://f-droid.org/repo/net.slions.fulguris.full.fdroid_261.apk
+FULGURIS_SIZE=$4
+FULGURIS_SHA256=$2
+FULGURIS_SIGNER_SHA256=$3
 PINS
 }
-pins good.pins "$sha" "$signer"
-pins badhash.pins "0000000000000000000000000000000000000000000000000000000000000000" "$signer"
-pins badsigner.pins "$sha" "$other_signer"
-pins unsigned.pins "$unsigned_sha" "$signer"
-pins placeholder.pins "UNPINNED-FILL-ME" "$signer"
+fake_size=$(wc -c <fake.apk | tr -d ' ')
+unsigned_size=$(wc -c <unsigned.apk | tr -d ' ')
+pins good.pins "$sha" "$signer" "$fake_size"
+pins badhash.pins "0000000000000000000000000000000000000000000000000000000000000000" "$signer" "$fake_size"
+pins badsigner.pins "$sha" "$other_signer" "$fake_size"
+pins unsigned.pins "$unsigned_sha" "$signer" "$unsigned_size"
+pins placeholder.pins "UNPINNED-FILL-ME" "$signer" "$fake_size"
 
 # Fake curl: honours -o FILE, -D FILE, -w FMT; body is $FAKE_CURL_BODY,
 # effective URL is $FAKE_CURL_EFFECTIVE_URL. Never touches the network.
@@ -123,50 +129,50 @@ FAKE_APKSIGNER_SIGNER=$signer
 export APKSIGNER FAKE_APKSIGNER_SIGNER
 
 # --- verify script ----------------------------------------------------------
-expect "correct local file accepted" 0 '"event":"brave-apk-verified"' \
-    sh "$tools/brave-verify.sh" fake.apk --pins good.pins
-expect "fetch --local accepts the same file" 0 '"event":"brave-apk-verified"' \
-    sh "$tools/brave-fetch.sh" --local fake.apk --pins good.pins
+expect "correct local file accepted" 0 '"event":"fulguris-apk-verified"' \
+    sh "$tools/fulguris-verify.sh" fake.apk --pins good.pins
+expect "fetch --local accepts the same file" 0 '"event":"fulguris-apk-verified"' \
+    sh "$tools/fulguris-fetch.sh" --local fake.apk --pins good.pins
 expect "wrong hash rejected" 1 '"reason":"wrong-sha256"' \
-    sh "$tools/brave-verify.sh" fake.apk --pins badhash.pins
+    sh "$tools/fulguris-verify.sh" fake.apk --pins badhash.pins
 expect "wrong signer rejected" 1 '"reason":"wrong-signer"' \
-    sh "$tools/brave-verify.sh" fake.apk --pins badsigner.pins
+    sh "$tools/fulguris-verify.sh" fake.apk --pins badsigner.pins
 expect "invalid APK signature rejected" 1 '"reason":"signature-invalid"' \
-    env FAKE_APKSIGNER_EXIT=1 sh "$tools/brave-verify.sh" unsigned.apk --pins unsigned.pins
+    env FAKE_APKSIGNER_EXIT=1 sh "$tools/fulguris-verify.sh" unsigned.apk --pins unsigned.pins
 expect "implausible size rejected" 1 '"reason":"unexpected-size"' \
-    sh "$tools/brave-verify.sh" tiny.apk --pins good.pins
+    sh "$tools/fulguris-verify.sh" tiny.apk --pins good.pins
 expect "placeholder pins refused" 1 '"reason":"pin-unpinned"' \
-    sh "$tools/brave-verify.sh" fake.apk --pins placeholder.pins
+    sh "$tools/fulguris-verify.sh" fake.apk --pins placeholder.pins
 expect "missing tool refused (apksigner)" 1 '"reason":"missing-tool","tool":"apksigner"' \
-    env APKSIGNER=/nonexistent/apksigner sh "$tools/brave-verify.sh" fake.apk --pins good.pins
+    env APKSIGNER=/nonexistent/apksigner sh "$tools/fulguris-verify.sh" fake.apk --pins good.pins
 expect "missing file rejected" 1 '"reason":"apk-not-found"' \
-    sh "$tools/brave-verify.sh" nope.apk --pins good.pins
+    sh "$tools/fulguris-verify.sh" nope.apk --pins good.pins
 expect "checked-in pins parse" 1 '"reason":"apk-not-found"' \
-    sh "$tools/brave-verify.sh" nope.apk
+    sh "$tools/fulguris-verify.sh" nope.apk
 
 # --- fetch script (fake curl on PATH, no network) ---------------------------
 expect "wrong redirect host refused" 1 '"reason":"unexpected-host","host":"evil.example.net"' \
     env PATH="$work/fakebin:$PATH" FERRIX_OUT_DIR="$work/out-evil" \
         FAKE_CURL_BODY="$work/fake.apk" FAKE_CURL_EFFECTIVE_URL="https://evil.example.net/x.apk" \
-        sh "$tools/brave-fetch.sh" --pins good.pins
-[ ! -e "$work/out-evil/android/brave/v9.99.999/BraveMonoarm64.apk" ] \
-    && [ ! -e "$work/out-evil/android/brave/v9.99.999/BraveMonoarm64.apk.part" ] \
+        sh "$tools/fulguris-fetch.sh" --pins good.pins
+[ ! -e "$work/out-evil/android/fulguris/9.99.999/net.slions.fulguris.full.fdroid_261.apk" ] \
+    && [ ! -e "$work/out-evil/android/fulguris/9.99.999/net.slions.fulguris.full.fdroid_261.apk.part" ] \
     && pass "nothing stored after host refusal" \
     || fail "nothing stored after host refusal" "file exists"
 expect "missing tool refused (curl)" 1 '"reason":"missing-tool","tool":"curl"' \
-    env CURL=/nonexistent/curl sh "$tools/brave-fetch.sh" --pins good.pins
-expect "good download through allowed host stored" 0 '"event":"brave-apk-stored"' \
+    env CURL=/nonexistent/curl sh "$tools/fulguris-fetch.sh" --pins good.pins
+expect "good download through allowed host stored" 0 '"event":"fulguris-apk-stored"' \
     env PATH="$work/fakebin:$PATH" FERRIX_OUT_DIR="$work/out-ok" \
-        FAKE_CURL_BODY="$work/fake.apk" FAKE_CURL_EFFECTIVE_URL="https://release-assets.githubusercontent.com/x/y" \
-        sh "$tools/brave-fetch.sh" --pins good.pins
-[ -f "$work/out-ok/android/brave/v9.99.999/BraveMonoarm64.apk" ] \
+        FAKE_CURL_BODY="$work/fake.apk" FAKE_CURL_EFFECTIVE_URL="https://f-droid.org/repo/net.slions.fulguris.full.fdroid_261.apk" \
+        sh "$tools/fulguris-fetch.sh" --pins good.pins
+[ -f "$work/out-ok/android/fulguris/9.99.999/net.slions.fulguris.full.fdroid_261.apk" ] \
     && pass "stored at the pinned path" \
     || fail "stored at the pinned path" "missing"
 expect "tampered download rejected and removed" 1 '"reason":"wrong-sha256"' \
     env PATH="$work/fakebin:$PATH" FERRIX_OUT_DIR="$work/out-bad" \
-        FAKE_CURL_BODY="$work/fake.apk" FAKE_CURL_EFFECTIVE_URL="https://github.com/x/y" \
-        sh "$tools/brave-fetch.sh" --pins badhash.pins
-[ ! -e "$work/out-bad/android/brave/v9.99.999/BraveMonoarm64.apk.part" ] \
+        FAKE_CURL_BODY="$work/fake.apk" FAKE_CURL_EFFECTIVE_URL="https://f-droid.org/repo/net.slions.fulguris.full.fdroid_261.apk" \
+        sh "$tools/fulguris-fetch.sh" --pins badhash.pins
+[ ! -e "$work/out-bad/android/fulguris/9.99.999/net.slions.fulguris.full.fdroid_261.apk.part" ] \
     && pass "part file removed after rejection" \
     || fail "part file removed after rejection" "part exists"
 

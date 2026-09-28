@@ -6,15 +6,15 @@ evaluation with the resulting pinned implementation and evidence. The normal
 postmarketOS image and CI route remain Android-free. Subordinate to
 `plans/baseline.md` and `plans/plan.md`.
 
-Demonstrated QEMU claim: the verified Brave APK is staged, installed on first
-graphical boot, assigned Android's default-browser role, launched through
-`ferrix-appd`, and rendered in an inspected Cocoa framebuffer. A subsequent
-boot with the same overlay observed the package and role as present. This is a
-graphical QEMU claim with provisioning/persistence evidence, not a claim of
-general APK compatibility, complete interaction, or physical-device support.
-The exact run evidence is in `docs/status.md`.
+The current reference APK is Fulguris Web Browser, pinned and verified from
+F-Droid. No Fulguris graphical QEMU run has been recorded yet. The Brave
+provisioning and framebuffer run described in the historical evidence below
+predates this replacement and must not be treated as Fulguris evidence. This
+document therefore records the current Fulguris input boundary separately from
+the historical Brave run; neither is a claim of general APK compatibility,
+complete interaction, or physical-device support.
 
-Terminology: the reference application is "Brave (Android application
+Terminology: the reference application is "Fulguris Web Browser (Android application
 running in the Android compatibility runtime)". It is never described as a
 native application.
 
@@ -55,7 +55,7 @@ Each row states what upstream documents or its source does, with the source.
 | Kernel configuration (pinned guest kernel) | `device/main/linux-postmarketos-stable` v26.06 = **7.0.12**, `config-stable.aarch64`: `CONFIG_ANDROID_BINDER_IPC=y`, `CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"`, `# CONFIG_ANDROID_BINDERFS is not set`, `CONFIG_PSI=y`, `CONFIG_MEMFD_CREATE=y`, `CONFIG_VETH=m`, `CONFIG_TUN=m`, `CONFIG_BRIDGE=m`, `CONFIG_BLK_DEV_LOOP=y`, `CONFIG_OVERLAY_FS=m`, `CONFIG_SQUASHFS=m`, `CONFIG_EROFS_FS=m`, nftables + iptables NAT/masquerade as modules, all namespaces, cgroups. The kernel carries `pmb:kconfigcheck-community`, whose alias includes `category:waydroid` in pmaports `kconfigcheck.toml` (`ANDROID_BINDERFS = "n"`, `ANDROID_BINDER_DEVICES = ["binder","hwbinder","vndbinder"]`, `ANDROID_BINDER_IPC = "y"`, `BLK_DEV_LOOP`, `BRIDGE`, `VETH`, `TUN`, `SQUASHFS*`, `FUSE_FS`, `IP_NF_MANGLE`, `NETFILTER_XT_MATCH_COMMENT`, …). **No kernel change is required**; `pmos-check` should still prove the three nodes exist. `CONFIG_RT_GROUP_SCHED` must stay disabled (pmOS wiki). `psi=1` on the command line is a documented workaround for "Service manager /dev/binder has died". | pmaports v26.06 raw config and `kconfigcheck.toml`; docs.waydro.id troubleshooting |
 | Container / process isolation | One LXC container (user, pid, uts, net, mount, ipc namespaces) for the whole Android userspace; all apps are processes inside it (visible from the host `/proc`). No per-app host process. LXC mounts the binder nodes, `/dev/fuse`, `/dev/net/tun`, DRI render node when present, `/dev/dma_heap/*`, the Wayland socket, and the PulseAudio socket into the container. Every passed device must be recorded before any claim (§8). | README; `lxc.py` |
 | Wayland integration | Host `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` is bind-mounted to `/run/xdg/wayland-0`; the container-side hwcomposer is the Wayland client. `xdg_toplevel` `app_id` is `"waydroid." + <package>` for apps and `"Waydroid"` for the full UI; title is the app name. `persist.waydroid.multi_windows` (default false) selects one surface vs. per-app windows. `waydroid session start` needs `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the compositor session and refuses `sudo`. | `wayland-hwc.cpp` (lineage-20), `session_manager.py`, docs |
-| Software rendering without virgl/host GPU | FAQ "Get Waydroid to work through a VM": add `ro.hardware.gralloc=default` and `ro.hardware.egl=swiftshader` to `[properties]` in `/var/lib/waydroid/waydroid.cfg`, then `waydroid upgrade -o`. `lxc.py` auto-selects the same pair when no DRI render node exists; with a render node it selects `gralloc=gbm`, `egl=mesa`. Upstream states only QEMU (and possibly crosvm) have working 3D acceleration in a VM and only with virtio-gpu 3D enabled. **Performance caveat:** SwiftShader is a CPU rasteriser; under TCG the guest CPU is itself emulated, so Android boot and Brave rendering are expected to be very slow. No upstream frame-rate numbers exist; the QEMU check (§8) must measure boot-to-ready and time-to-first-frame and record them. Correctness (non-blank framebuffer) is the acceptance bar, not speed. | docs.waydro.id FAQ; `lxc.py` |
+| Software rendering without virgl/host GPU | FAQ "Get Waydroid to work through a VM": add `ro.hardware.gralloc=default` and `ro.hardware.egl=swiftshader` to `[properties]` in `/var/lib/waydroid/waydroid.cfg`, then `waydroid upgrade -o`. `lxc.py` auto-selects the same pair when no DRI render node exists; with a render node it selects `gralloc=gbm`, `egl=mesa`. Upstream states only QEMU (and possibly crosvm) have working 3D acceleration in a VM and only with virtio-gpu 3D enabled. **Performance caveat:** SwiftShader is a CPU rasteriser; under TCG the guest CPU is itself emulated, so Android boot and Fulguris rendering are expected to be very slow. No upstream frame-rate numbers exist; a future QEMU check (§8) must measure boot-to-ready and time-to-first-frame and record them. Correctness (non-blank framebuffer) is the acceptance bar, not speed. | docs.waydro.id FAQ; `lxc.py` |
 | Input and on-screen keyboard | Touch/mouse/keyboard arrive through the Wayland surface (`persist.waydroid.fake_touch` maps mouse to touch per package). Waydroid shows the **Android** virtual keyboard inside its surface by default; no host OSK/text-input integration is documented. Consequence: the product OSK (phase 3) and the Android keyboard would compete; the initial evaluation keeps Android's keyboard inside the Android surface and records this as a departure. | docs FAQ "Disable on-screen keyboard" |
 | Audio | Binds the host PulseAudio socket `$PULSE_RUNTIME_PATH/native` (default `$XDG_RUNTIME_DIR/pulse/native`) into the container. PipeWire is not mentioned by upstream; PipeWire's pulse compatibility server is the expected path but is **unverified**. pmOS wiki: the container fails to start when the socket is absent. | `lxc.py`, `config/__init__.py`; pmOS wiki |
 | Networking | `waydroid-net.sh` creates bridge `waydroid0` (192.168.240.1/24), runs `dnsmasq` (DHCP/DNS), enables `ip_forward`, and adds NAT masquerade via iptables-legacy/iptables or nftables (`waydroid-nftrules` ships `51_waydroid.nft` on Alpine). This sits **on top of** the guest's virtio-net user-mode networking: Android → `waydroid0` NAT → guest IP stack → QEMU slirp. Double NAT is acceptable for a browser; the container never sees `/run/ferrix` sockets (ADR-004 §5). `waydroid status` prints `IP address: UNKNOWN` when DHCP is blocked (pmOS wiki). | `data/scripts/waydroid-net.sh`; pmOS wiki |
@@ -64,8 +64,8 @@ Each row states what upstream documents or its source does, with the source.
 | Permission mediation | Android permissions are mediated by the Android framework inside the container. Waydroid has no host-side permission portal; the container gets exactly the devices LXC passes (above). Cross-runtime integration (notifications, share, clipboard) is out of scope (ADR-004 §5) and would need its own reviewed bridge. | `lxc.py`; ADR-004 |
 | APK install/update | `waydroid app install <apk>` copies the file to `~/.local/share/waydroid/data/waydroid_tmp/base.apk` and calls `IPlatform.installApp`; `waydroid app remove <pkg>`. No auto-update; Ferrix re-runs the pinned fetch/verify and installs explicitly. | `app_manager.py` |
 | Reproducible builds | System/vendor images are downloaded by `waydroid init` from `https://ota.waydro.id/...json`, whose entries carry `url` (SourceForge), `size`, `datetime`, and `id` = SHA-256 (verified by `images.py`: "Downloaded system image hash doesn't match"). Image sources: `github.com/waydroid/android_vendor_waydroid` (`lineage-20`), built from LineageOS 20 with Waydroid patches (`docs` "Compile Waydroid LineageOS based images"). Ferrix must pin the exact `filename`, `url`, `size`, and `id` (§6) and pre-seed them so `waydroid init` runs offline; the image build itself is not reproduced by this project. | `images.py`; OTA JSON; docs |
-| Licensing | Waydroid: GPL-3.0 — used as a separate process via its CLI, never linked; Ferrix code is Apache-2.0. LineageOS images: AOSP/LineageOS code is Apache-2.0 with GPL-2.0 kernel-side pieces; the MAINLINE vendor image is built by Waydroid with Mesa (`TARGET_USE_MESA`), i.e. **no proprietary vendor blobs are documented** for the MAINLINE/VANILLA pair. **Unverified**: a full licence inventory of the shipped image (SwiftShader is Apache-2.0; other components not audited). GAPPS images bundle Google apps and are **not** proposed. Brave: MPL-2.0 (Chromium BSD-3 and others), third-party product, never committed. | `LICENSE`; Alpine APKBUILD; docs |
-| Security-update path | Waydroid tool: Alpine `community` package updates within the pinned channel (`3.24-stable` currently 1.6.2; `master` 1.6.3). Android userspace: Waydroid rebuilds lineage-20 images periodically (last 2026-04-03; Android 13 is past AOSP's active security-bulletin window, LineageOS 20 receives backports on a best-effort basis — **unverified** for this image). Brave: new GitHub release ⇒ edit `brave.pins`. Every update is a deliberate pin bump with manifest hashes, never automatic. | Alpine aports; OTA JSON |
+| Licensing | Waydroid: GPL-3.0 — used as a separate process via its CLI, never linked; Ferrix code is Apache-2.0. LineageOS images: AOSP/LineageOS code is Apache-2.0 with GPL-2.0 kernel-side pieces; the MAINLINE vendor image is built by Waydroid with Mesa (`TARGET_USE_MESA`), i.e. **no proprietary vendor blobs are documented** for the MAINLINE/VANILLA pair. **Unverified**: a full licence inventory of the shipped image (SwiftShader is Apache-2.0; other components not audited). GAPPS images bundle Google apps and are **not** proposed. Fulguris: MPL-2.0, built and signed by F-Droid, never committed. | `LICENSE`; Alpine APKBUILD; F-Droid package page |
+| Security-update path | Waydroid tool: Alpine `community` package updates within the pinned channel (`3.24-stable` currently 1.6.2; `master` 1.6.3). Android userspace: Waydroid rebuilds lineage-20 images periodically (last 2026-04-03; Android 13 is past AOSP's active security-bulletin window, LineageOS 20 receives backports on a best-effort basis — **unverified** for this image). Fulguris: a new F-Droid version requires an explicit edit to `fulguris.pins`. Every update is a deliberate pin bump with manifest hashes, never automatic. | Alpine aports; OTA JSON; F-Droid index |
 
 ## 4. Decision
 
@@ -85,8 +85,9 @@ route, under these conditions:
    `ro.hardware.egl=swiftshader`) rather than relying on auto-detection, so
    the QEMU route never silently depends on a render node.
 4. Claim levels are reported strictly per `architecture.md` §"APK
-   compatibility claims". The current evidence reaches graphical for Brave;
-   interactive input remains unverified.
+   compatibility claims". Historical evidence reaches graphical for Brave;
+   the current Fulguris input has not reached a graphical claim. Interactive
+   input remains unverified.
 
 Rejected alternatives: writing a Ferrix-owned container runtime (baseline:
 prefer maintained projects; Binder/ART/HAL surface is enormous); redroid
@@ -105,8 +106,8 @@ prefer maintained projects; Binder/ART/HAL surface is enormous); redroid
 - Licence inventory of the shipped LineageOS/Waydroid image beyond the
   headline Apache-2.0/GPL-2.0 split.
 - Interactive touch/keyboard behavior and time-to-first-frame under TCG. The
-  inspected Brave graphical run used HVF; the bounded Android check is
-  headless and does not make a rendering claim.
+  inspected historical Brave graphical run used HVF; the bounded Android check
+  is headless and does not make a Fulguris rendering claim.
 
 ## 6. Implemented guest inputs
 
@@ -180,7 +181,7 @@ sizes, hashes, and the `waydroid` package version installed.
 cgroups + dbus (default runlevel)
   → 00-ferrix-android.start: offline init, renderer materialization, container
   → 00-ferrix-product.start: ferrix-shell, session bus, PulseAudio, Waydroid session
-  → Brave install/default-browser verification
+  → Fulguris install/default-browser verification
   → ferrix-appd (composes AndroidRuntime) and Home
 ```
 
@@ -188,7 +189,7 @@ The early Android hook runs before the compositor exists, so it initializes
 the images and starts `waydroid-container` but cannot start the Wayland-backed
 session. Product bootstrap creates the compositor socket and session services,
 starts the Waydroid session, waits for Android framework boot, provisions
-Brave, and only then starts `ferrix-appd`. Later launches go through the
+Fulguris, and only then starts `ferrix-appd`. Later launches go through the
 private runtime adapter.
 
 ### 6.5 Generated data
@@ -296,7 +297,7 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   limitation, not hidden. `terminate` force-stops and reports an error if
   the process outlives the grace period.
 - **Diagnostics** (runtime-private, attached to `app-started`):
-  `{"kind":"android","host":"waydroid","package":"com.brave.browser",
+  `{"kind":"android","host":"waydroid","package":"net.slions.fulguris.full.fdroid",
   "activity":null,"pid":…,"surface_client_pid":…,"session":{"state":
   "running","session_pid":…},"exit_cause":null}`. The package name appears
   only here and in the runtime's records, never in `ferrix-app-protocol`.
@@ -332,12 +333,13 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
 
 `just pmos-android-check` is a separate TCG-compatible, headless, serial
 check. It verifies the Android-enabled image's hashes and requires records for
-Binder devices, offline Waydroid initialization, and the staged Brave APK; it
-also prints the renderer/container outcome records for diagnosis. Because it
-has no compositor, it deliberately
-does not claim package installation or rendering.
+Binder devices, offline Waydroid initialization, and the staged Fulguris APK;
+it also prints the renderer/container outcome records for diagnosis. Because
+it has no compositor, it deliberately does not claim package installation or
+rendering.
 
-Completed graphical evidence on Apple Silicon/HVF:
+Historical Brave graphical evidence on Apple Silicon/HVF (2026-09-21; not
+evidence for the current Fulguris input):
 
 1. A fresh overlay recorded Binder devices, offline Waydroid initialization,
    `renderer:"swiftshader"`, and Brave provisioning status `installed` with
@@ -349,13 +351,15 @@ Completed graphical evidence on Apple Silicon/HVF:
 4. After orderly shutdown, reusing the overlay recorded provisioning status
    `present` with the browser role retained.
 
-Remaining acceptance work:
+Current Fulguris acceptance work:
 
-1. Use synthetic touch and keyboard input to change Brave's rendered state
-   and capture the result before claiming **interactive** compatibility.
-2. Force-stop Brave inside the container and verify `app-crashed` plus home
+1. Run a fresh Fulguris graphical QEMU boot and inspect its framebuffer before
+   claiming **graphical** compatibility.
+2. Use synthetic touch and keyboard input to change Fulguris' rendered state
+   before claiming **interactive** compatibility.
+3. Force-stop Fulguris inside the container and verify `app-crashed` plus home
    recovery within the polling interval.
-3. Measure boot-to-ready and time-to-first-frame under TCG if graphical TCG
+4. Measure boot-to-ready and time-to-first-frame under TCG if graphical TCG
    becomes an acceptance requirement; today only the headless check uses TCG.
 
 Every passed device, socket, mount, and namespace of the LXC config must
@@ -363,49 +367,45 @@ be listed in `docs/status.md` with the evidence. Google services,
 attestation, DRM, codecs, camera, telephony, biometrics, and background
 execution remain **unverified** regardless of the outcome.
 
-## 9. Brave acquisition (`tools/android/`)
+## 9. Fulguris acquisition (`tools/android/`)
 
-- `brave.pins` (checked in): `BRAVE_TAG=v1.95.104` (release "Release
-  v1.95.104 (Chromium 153.0.8010.53)", published 2026-09-18T03:05:24Z),
-  `BRAVE_ASSET=BraveMonoarm64.apk` (357,090,502 bytes),
-  `BRAVE_SHA256=87c145f47a391acb632f6ff225ad5354af95a64b523bde89d3e268ce99ebec53`
-  (equals the digest GitHub publishes for the asset and the hash of the file
-  fetched on 2026-09-21),
-  `BRAVE_SIGNER_SHA256=9C2DB70513515FDBFBBC585B3EDF3D7123D4DC67C94FFD306361C1D79BBF18AC`
-  (SHA-256 of the APK signer certificate reported after successful
-  `apksigner verify --print-certs`; the
-  certificate subject observed is the historical Link Bubble/Brave Android
-  release key, valid to 2041). Source URL:
-  `https://github.com/brave/brave-browser/releases/download/v1.95.104/BraveMonoarm64.apk`.
-- `brave-fetch.sh` (POSIX sh, `set -eu`): refuses to run if `curl`, Android
-  SDK Build-Tools `apksigner`, or `shasum` is missing (reports, never installs);
-  refuses placeholder pins; HEAD preflight with `--proto '=https'
-  --max-redirs 3` checks the final host (`github.com`,
-  `objects.githubusercontent.com`, `release-assets.githubusercontent.com`
-  only), content type (`application/vnd.android.package-archive` or
-  `application/octet-stream`), and content length within (50 MiB, 500 MiB);
-  downloads to `${FERRIX_OUT_DIR:-out}/android/brave/<TAG>/<ASSET>.part`,
-  re-checks the effective host and size, runs `brave-verify.sh`, then renames.
-  `--local PATH` verifies a developer-supplied APK. Emits
-  `{"evidence":"host","event":"brave-apk-verified"|"brave-apk-rejected",
-  "reason":…,"tag":…,"sha256":…}` records; no tokens exist or are printed.
-- `brave-verify.sh`: size window, SHA-256 (`shasum -a 256`), then Android SDK
-  Build-Tools `apksigner verify --print-certs` validates the APK signing
-  schemes and reports the verified signer certificate; its SHA-256 must equal
-  the pin (`wrong-signer` otherwise). A certificate merely embedded in the
-  zip is never accepted as proof of a valid APK signature. `APKSIGNER` may
-  select a pinned SDK installation; tooling is reported missing, never
-  installed automatically.
-- Tests: `sh tools/android/tests/run.sh` (17 assertions, host tooling) —
-  builds a >50 MiB stored zip and uses a deterministic fake `apksigner` to assert:
-  correct local file accepted (verify and `--local`), wrong hash, wrong
-  signer, invalid signature, implausible size, placeholder pins, missing
-  `apksigner`/`curl`, missing file, checked-in pins parse, wrong redirect host
-  refused via a fake `curl` on `PATH` with nothing stored, allowed-host
-  download stored at the pinned path, tampered download rejected with the
-  `.part` removed.
-- Nothing from Brave is committed; the APK lives under ignored
-  `out/android/brave/v1.95.104/`.
+- `fulguris.pins` (checked in) pins Fulguris Web Browser package
+  `net.slions.fulguris.full.fdroid`, version `2.0.10` / version code `261`,
+  asset `net.slions.fulguris.full.fdroid_261.apk`, and the direct F-Droid
+  source URL:
+  <https://f-droid.org/repo/net.slions.fulguris.full.fdroid_261.apk>. The
+  pinned size is 9,310,262 bytes; the SHA-256 is
+  `cc151e4608d68fa32aba0b5b80c9c89a286050d7b0710a081e77bc1dddbcc8b6`; and
+  the F-Droid signing-certificate SHA-256 is
+  `66958f3366388c23ca1a3cbfd91545cca4abf3e79edaab4fe988213e392b07a1`.
+  The package page is
+  <https://f-droid.org/en/packages/net.slions.fulguris.full.fdroid/> and the
+  values correlate with F-Droid's `index-v2.json`.
+- `fulguris-fetch.sh` (POSIX sh, `set -eu`) refuses to run if `curl`, Android
+  SDK Build-Tools `apksigner`, or `shasum` is missing (reports, never
+  installs); refuses placeholder or malformed pins; performs an HTTPS HEAD
+  preflight against the exact pinned URL; allows only `f-droid.org`, requires
+  an APK/octet-stream content type and the exact pinned size; downloads to
+  `${FERRIX_OUT_DIR:-out}/android/fulguris/<VERSION>/<ASSET>.part`; re-checks
+  the effective host and size; runs `fulguris-verify.sh`; and then renames
+  atomically. `--local PATH` verifies a developer-supplied APK. Events are
+  host-labelled and contain no credentials.
+- `fulguris-verify.sh` checks the exact pinned size and SHA-256
+  (`shasum -a 256`), then Android SDK Build-Tools
+  `apksigner verify --print-certs` validates the APK signing schemes and
+  reports the verified signer certificate; its SHA-256 must equal the pin
+  (`wrong-signer` otherwise). A certificate merely embedded in the zip is
+  never accepted as proof of a valid APK signature. `APKSIGNER` may select a
+  pinned SDK installation; tooling is reported missing, never installed
+  automatically.
+- Tests: `sh tools/android/tests/run.sh` (19 assertions, host tooling) build a
+  deterministic stored zip and fake `apksigner` to cover correct local
+  verification, exact-size enforcement, wrong hash, wrong signer, invalid
+  signature, placeholder pins, missing `apksigner`/`curl`, missing file,
+  checked-in pins parsing, foreign redirect refusal, allowed-host download,
+  tampered-download cleanup, and shell-safe alternate pins.
+- Nothing from Fulguris is committed; the APK lives under ignored
+  `out/android/fulguris/2.0.10/`.
 
 ## 10. Remaining risks and limitations
 
@@ -425,5 +425,6 @@ execution remain **unverified** regardless of the outcome.
    from the product OSK direction, to be reconciled in phase 3.
 7. **Networking**: double NAT (waydroid0 → slirp) accepted for the browser
    case; the container is isolated from `/run/ferrix` by construction.
-8. **Brave source**: the official GitHub release is pinned by asset hash and
-   signer; `--local` accepts only a file matching the same pins.
+8. **Fulguris source**: the official F-Droid APK is pinned by exact URL,
+   size, asset hash, and signer; `--local` accepts only a file matching the
+   same pins.

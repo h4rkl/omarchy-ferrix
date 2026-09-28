@@ -1,5 +1,29 @@
 # Status
 
+## 2026-09-28 (F-Droid Fulguris browser input)
+
+- **Browser replacement:** The Android browser descriptor remains
+  `org.ferrix.browser`, but now names Fulguris Web Browser and package
+  `net.slions.fulguris.full.fdroid`. The target-scoped Waydroid bootstrap,
+  runtime fixtures, product UI fallback, and QEMU staging path use Fulguris;
+  `ferrix-appd` remains launch-only.
+- **Pinned APK:** `tools/android/fulguris.pins` selects F-Droid version
+  `2.0.10` / build `261`, asset
+  `net.slions.fulguris.full.fdroid_261.apk`, 9,310,262 bytes, SHA-256
+  `cc151e4608d68fa32aba0b5b80c9c89a286050d7b0710a081e77bc1dddbcc8b6`, and
+  signer fingerprint
+  `66958f3366388c23ca1a3cbfd91545cca4abf3e79edaab4fe988213e392b07a1`.
+  The source is the [F-Droid Fulguris package page](https://f-droid.org/en/packages/net.slions.fulguris.full.fdroid/)
+  and its direct APK link; the APK remains ignored under `out/android/`.
+- **Claim boundary:** No Fulguris graphical or physical-device evidence has
+  been collected. The dated Brave QEMU/framebuffer entries below remain
+  historical and are explicitly not Fulguris validation.
+- **Validation:** The Android pin and bootstrap fixtures pass (19/19 and
+  2/2), workspace formatting, Clippy, and tests pass, and the fresh QEMU
+  build plus headless `just qemu-check` pass. That QEMU check covers the
+  emulator's mocked core/service readiness and power transition; it does not
+  claim Fulguris graphical rendering or touch behavior.
+
 ## 2026-09-28 (Pixel 9a exact-target admission and stock recovery preparation)
 
 - **Physical-target identity:** With the owner's request and a checked-in

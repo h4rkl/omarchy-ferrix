@@ -2,7 +2,7 @@
 # Host-side tooling only: nothing here runs in the guest or touches a device.
 
 PLACEHOLDER="UNPINNED-FILL-ME"
-MIN_APK_BYTES=52428800      # 50 MiB: a real Brave APK is far larger
+MIN_APK_BYTES=1048576        # 1 MiB: Fulguris is a compact F-Droid APK
 MAX_APK_BYTES=524288000     # 500 MiB: refuse anything implausibly large
 
 # Tool overrides let tests point at a missing tool; defaults resolve via PATH.
@@ -27,7 +27,7 @@ emit() {
 reject() {
     _reason=$1
     shift
-    emit brave-apk-rejected reason "$_reason" "$@"
+    emit fulguris-apk-rejected reason "$_reason" "$@"
     exit 1
 }
 
@@ -54,28 +54,45 @@ pin() {
 
 # Validate the pin shapes so a bad pins file cannot inject into a URL/path.
 check_pin_shapes() {
-    case $BRAVE_TAG in
-        v[0-9]*.[0-9]*.[0-9]*) ;;
-        *) reject "pin-invalid" key BRAVE_TAG ;;
+    case $FULGURIS_VERSION in
+        [0-9]*.[0-9]*.[0-9]*) ;;
+        *) reject "pin-invalid" key FULGURIS_VERSION ;;
     esac
-    case $BRAVE_TAG in
-        *[!0-9a-zA-Z.]*) reject "pin-invalid" key BRAVE_TAG ;;
+    case $FULGURIS_VERSION in
+        *[!0-9a-zA-Z.]*) reject "pin-invalid" key FULGURIS_VERSION ;;
     esac
-    case $BRAVE_ASSET in
+    case $FULGURIS_VERSION_CODE in
+        ''|*[!0-9]*) reject "pin-invalid" key FULGURIS_VERSION_CODE ;;
+    esac
+    case $FULGURIS_PACKAGE in
+        net.slions.fulguris.full.fdroid) ;;
+        *) reject "pin-invalid" key FULGURIS_PACKAGE ;;
+    esac
+    case $FULGURIS_ASSET in
         *.apk) ;;
-        *) reject "pin-invalid" key BRAVE_ASSET ;;
+        *) reject "pin-invalid" key FULGURIS_ASSET ;;
     esac
-    case $BRAVE_ASSET in
-        *[!0-9a-zA-Z._-]*|.*|*/*) reject "pin-invalid" key BRAVE_ASSET ;;
+    case $FULGURIS_ASSET in
+        *[!0-9a-zA-Z._-]*|.*|*/*) reject "pin-invalid" key FULGURIS_ASSET ;;
     esac
-    if [ "$(printf '%s' "$BRAVE_SHA256" | tr -d '0-9a-f' | wc -c | tr -d ' ')" != 0 ] \
-        || [ "$(printf '%s' "$BRAVE_SHA256" | wc -c | tr -d ' ')" != 64 ]; then
-        reject "pin-invalid" key BRAVE_SHA256
+    case $FULGURIS_SIZE in
+        ''|*[!0-9]*) reject "pin-invalid" key FULGURIS_SIZE ;;
+    esac
+    if [ "$FULGURIS_SIZE" -lt "$MIN_APK_BYTES" ] || [ "$FULGURIS_SIZE" -gt "$MAX_APK_BYTES" ]; then
+        reject "pin-invalid" key FULGURIS_SIZE
     fi
-    if [ "$(printf '%s' "$BRAVE_SIGNER_SHA256" | tr -d '0-9A-F' | wc -c | tr -d ' ')" != 0 ] \
-        || [ "$(printf '%s' "$BRAVE_SIGNER_SHA256" | wc -c | tr -d ' ')" != 64 ]; then
-        reject "pin-invalid" key BRAVE_SIGNER_SHA256
+    if [ "$(printf '%s' "$FULGURIS_SHA256" | tr -d '0-9a-f' | wc -c | tr -d ' ')" != 0 ] \
+        || [ "$(printf '%s' "$FULGURIS_SHA256" | wc -c | tr -d ' ')" != 64 ]; then
+        reject "pin-invalid" key FULGURIS_SHA256
     fi
+    if [ "$(printf '%s' "$FULGURIS_SIGNER_SHA256" | tr -d '0-9A-F' | wc -c | tr -d ' ')" != 0 ] \
+        || [ "$(printf '%s' "$FULGURIS_SIGNER_SHA256" | wc -c | tr -d ' ')" != 64 ]; then
+        reject "pin-invalid" key FULGURIS_SIGNER_SHA256
+    fi
+    case $FULGURIS_URL in
+        https://f-droid.org/repo/$FULGURIS_ASSET) ;;
+        *) reject "pin-invalid" key FULGURIS_URL ;;
+    esac
 }
 
 load_pins() {
@@ -89,15 +106,19 @@ load_pins() {
         _key=$(grep "$PLACEHOLDER" "$_pins" | head -n 1 | cut -d= -f1)
         reject "pin-unpinned" key "$_key" pins "$_pins"
     fi
-    for _key in BRAVE_TAG BRAVE_ASSET BRAVE_SHA256 BRAVE_SIGNER_SHA256; do
+    for _key in FULGURIS_VERSION FULGURIS_VERSION_CODE FULGURIS_PACKAGE FULGURIS_ASSET FULGURIS_URL FULGURIS_SIZE FULGURIS_SHA256 FULGURIS_SIGNER_SHA256; do
         if ! grep -q "^$_key=." "$_pins"; then
             reject "pin-missing" key "$_key" pins "$_pins"
         fi
     done
-    BRAVE_TAG=$(pin "$_pins" BRAVE_TAG)
-    BRAVE_ASSET=$(pin "$_pins" BRAVE_ASSET)
-    BRAVE_SHA256=$(pin "$_pins" BRAVE_SHA256 | tr 'A-F' 'a-f')
-    BRAVE_SIGNER_SHA256=$(pin "$_pins" BRAVE_SIGNER_SHA256 | tr -d ':' | tr 'a-f' 'A-F')
+    FULGURIS_VERSION=$(pin "$_pins" FULGURIS_VERSION)
+    FULGURIS_VERSION_CODE=$(pin "$_pins" FULGURIS_VERSION_CODE)
+    FULGURIS_PACKAGE=$(pin "$_pins" FULGURIS_PACKAGE)
+    FULGURIS_ASSET=$(pin "$_pins" FULGURIS_ASSET)
+    FULGURIS_URL=$(pin "$_pins" FULGURIS_URL)
+    FULGURIS_SIZE=$(pin "$_pins" FULGURIS_SIZE)
+    FULGURIS_SHA256=$(pin "$_pins" FULGURIS_SHA256 | tr 'A-F' 'a-f')
+    FULGURIS_SIGNER_SHA256=$(pin "$_pins" FULGURIS_SIGNER_SHA256 | tr -d ':' | tr 'a-f' 'A-F')
     check_pin_shapes
 }
 

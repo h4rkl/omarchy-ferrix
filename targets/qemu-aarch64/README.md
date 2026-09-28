@@ -808,7 +808,7 @@ and overlays:
 | --- | --- | --- |
 | Alpine smoke guest | `just qemu-run` | Small emulator/CI contract guest; not the full substrate and no Waydroid. |
 | postmarketOS product | `just pmos-run` | Full product substrate without the Android compatibility packages/images. |
-| postmarketOS + Android | `just pmos-android-run` | Separate image with Waydroid images and the pinned Brave APK; use this for Brave. |
+| postmarketOS + Android | `just pmos-android-run` | Separate image with Waydroid images and the pinned Fulguris APK; use this for Fulguris. |
 
 Use these variables with `just pmos-run` or `just pmos-android-run`; they are
 read by the checked-in runner, not by an application. The smoke route has its
@@ -906,11 +906,11 @@ state; inputs from
 CI never read that file. Steps:
 
 1. Acquire all pinned host inputs, then build. The Android build now refuses
-   to proceed if Brave is absent or fails its hash/signature/signer check:
+   to proceed if Fulguris is absent or fails its hash/signature/signer check:
 
    ```sh
    export APKSIGNER=/Library/Android/sdk/build-tools/36.0.0/apksigner
-   sh tools/android/brave-fetch.sh
+   sh tools/android/fulguris-fetch.sh
    just waydroid-images-fetch
    just pmos-android-build
    ```
@@ -929,12 +929,12 @@ CI never read that file. Steps:
    links `51_waydroid.nft` into `/etc/nftables.d/`, enables `cgroups` and
    `dbus` in the default runlevel, installs
    `/etc/local.d/00-ferrix-android.start`, and stages
-   `/usr/share/ferrix/android/brave.apk` after requiring
-   `out/android/brave/<tag>/BraveMonoarm64.apk` to pass
-   `tools/android/brave-verify.sh`. Every
+   `/usr/share/ferrix/android/fulguris.apk` after requiring
+   `out/android/fulguris/<version>/net.slions.fulguris.full.fdroid_261.apk` to
+   pass `tools/android/fulguris-verify.sh`. Every
    hash lands in `image-facts.json` / `manifest.json` under `guest.android`
    (`waydroid_version`, image hashes, properties and init-script hashes,
-   `brave_apk_sha256`, `nftables_rule_linked`).
+   `fulguris_apk_sha256`, `nftables_rule_linked`).
 3. At first boot `00-ferrix-android.start` (before `00-ferrix-product.start`)
    records `android-binder-devices {binder, hwbinder, vndbinder, psi}`, runs
    `waydroid init -f -i /etc/waydroid-extra/images` offline (`waydroid-init
@@ -947,32 +947,35 @@ CI never read that file. Steps:
    buffer not gpu writeable`.
 4. Once `ferrix-shell` has created the Wayland socket, the product bootstrap
    starts the Waydroid session, waits for Android `sys.boot_completed=1`, and
-   installs the staged APK only when `pm path com.brave.browser` has no package
-   result. It then assigns `android.app.role.BROWSER` to Brave as Android's
-   shell UID and verifies that an HTTPS intent resolves to Brave. It records
+   installs the staged APK only when `pm path net.slions.fulguris.full.fdroid`
+   has no package result. It then assigns `android.app.role.BROWSER` to
+   Fulguris as Android's shell UID and verifies that an HTTPS intent resolves
+   to Fulguris. It records
    `android-app-provision` with `browser_role:"default"`, as `installed` on
    first boot and `present` on subsequent persistent-overlay boots.
    `ferrix-appd` never installs packages; it launches the installed package
    through its private runtime adapter. An idle Waydroid container's `FROZEN`
    state is healthy and launchable; Waydroid's app command unfreezes it.
 5. `just pmos-android-check` additionally requires the
-   `android-binder-devices` and `waydroid-init` records and, when Brave was
+   `android-binder-devices` and `waydroid-init` records and, when Fulguris was
    staged, the `android-app-staged` record. The headless check deliberately
    does not claim installation because no compositor/Wayland session exists.
    `just android-bootstrap-test` exercises offline init, renderer
    materialization, container startup, and staging without QEMU.
 
-Observed on Apple Silicon/HVF with QEMU 11.1.1: a fresh overlay recorded
-`waydroid-properties {status:"materialized", renderer:"swiftshader"}` and
-`android-app-provision {status:"installed", package:"com.brave.browser",
-browser_role:"default"}`.
+Historical Brave evidence (2026-09-21) on Apple Silicon/HVF with QEMU 11.1.1
+recorded `waydroid-properties {status:"materialized", renderer:"swiftshader"}`
+and `android-app-provision {status:"installed", package:"com.brave.browser",
+browser_role:"default"}`. That evidence predates the Fulguris replacement and
+does not validate Fulguris.
 Launching `org.ferrix.browser` through `ferrix-appd` recorded
 `android-app-launched`, `app-started`, and a mapped
 `waydroid.com.brave.browser` surface; the Cocoa framebuffer was captured and
 inspected showing Brave's first-run UI. After orderly power-off, a run without
 `FERRIX_PMOS_FRESH=1` recorded provisioning status `present`, proving the
-installation lives in the persistent overlay. Evidence is QEMU only, not a
-physical-device claim.
+installation lives in the persistent overlay. This remains historical QEMU
+evidence only, not a Fulguris or physical-device claim. Fulguris-specific
+graphical validation remains outstanding.
 
 ### Limitations
 
@@ -987,9 +990,10 @@ physical-device claim.
 - The pmbootstrap UI selection remains `console`; Omarchy Ferrix supplies its own
   compositor/client rather than a postmarketOS desktop package. The bounded
   pmOS check remains serial-only, but separate graphical QEMU runs have
-  framebuffer-validated the normal Ferrix launcher and the Android-enabled
-  route with Brave through Waydroid. Those captures do not broaden the
-  headless contract or establish physical-device support.
+  framebuffer-validated the normal Ferrix launcher. The Android-enabled Brave
+  capture is historical; Fulguris-specific graphical validation remains
+  outstanding. Those captures do not broaden the headless contract or
+  establish physical-device support.
 - The rootfs is what pmbootstrap installs from the pinned binary channel. The
   project binaries, profile, theme file, startup script, and readiness marker are injected
   by mounting the image; native postmarketOS packaging is still future work.

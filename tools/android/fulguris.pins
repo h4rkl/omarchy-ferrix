@@ -1,0 +1,23 @@
+# Pinned Fulguris Web Browser APK from the official F-Droid repository. Read
+# by tools/android/fulguris-fetch.sh and tools/android/fulguris-verify.sh;
+# never sourced as shell.
+#
+# Source of the pins (recorded 2026-09-28, UTC):
+#   App page      https://f-droid.org/en/packages/net.slions.fulguris.full.fdroid/
+#   APK           https://f-droid.org/repo/net.slions.fulguris.full.fdroid_261.apk
+#   Version       2.0.10 (version code 261), added 2026-04-07
+#   Size          9,310,262 bytes
+#   SHA-256       F-Droid index-v2.json file hash
+#   Signer        F-Droid index-v2.json manifest/preferredSigner fingerprint
+#
+# Nothing here auto-updates. Moving to a new F-Droid version means editing
+# every value below together and re-running `sh tools/android/fulguris-fetch.sh`.
+FULGURIS_VERSION=2.0.10
+FULGURIS_VERSION_CODE=261
+FULGURIS_PACKAGE=net.slions.fulguris.full.fdroid
+FULGURIS_ASSET=net.slions.fulguris.full.fdroid_261.apk
+FULGURIS_URL=https://f-droid.org/repo/net.slions.fulguris.full.fdroid_261.apk
+FULGURIS_SIZE=9310262
+FULGURIS_SHA256=cc151e4608d68fa32aba0b5b80c9c89a286050d7b0710a081e77bc1dddbcc8b6
+FULGURIS_SIGNER_SHA256=66958f3366388c23ca1a3cbfd91545cca4abf3e79edaab4fe988213e392b07a1
+FULGURIS_PINNED_ON=2026-09-28

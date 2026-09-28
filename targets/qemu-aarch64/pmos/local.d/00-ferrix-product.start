@@ -150,7 +150,7 @@ done
 # runs before this socket exists.  Provision the already verified, staged APK
 # here, before appd begins launching applications.  The session bus and pulse
 # socket are owned by this bootstrap, not by an application or appd.
-if [ -f /usr/share/ferrix/android/brave.apk ] && command -v waydroid >/dev/null 2>&1; then
+if [ -f /usr/share/ferrix/android/fulguris.apk ] && command -v waydroid >/dev/null 2>&1; then
   export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/ferrix-android-bus
   export PULSE_RUNTIME_PATH=/run/pulse
   rm -f /run/user/0/ferrix-android-bus
@@ -172,13 +172,13 @@ if [ -f /usr/share/ferrix/android/brave.apk ] && command -v waydroid >/dev/null 
     sleep 0.1
   done
   provision_status=present
-  waydroid shell -- pm path com.brave.browser >/run/ferrix/waydroid-app-list.log 2>&1 || true
+  waydroid shell -- pm path net.slions.fulguris.full.fdroid >/run/ferrix/waydroid-app-list.log 2>&1 || true
   if ! grep -q '^package:' /run/ferrix/waydroid-app-list.log 2>/dev/null; then
     provision_status=installed
-    waydroid app install /usr/share/ferrix/android/brave.apk >/run/ferrix/waydroid-brave-install.log 2>&1 || true
+    waydroid app install /usr/share/ferrix/android/fulguris.apk >/run/ferrix/waydroid-fulguris-install.log 2>&1 || true
   fi
   for _ in $(seq 1 600); do
-    waydroid shell -- pm path com.brave.browser >/run/ferrix/waydroid-app-list.log 2>&1 || true
+    waydroid shell -- pm path net.slions.fulguris.full.fdroid >/run/ferrix/waydroid-app-list.log 2>&1 || true
     grep -q '^package:' /run/ferrix/waydroid-app-list.log 2>/dev/null && break
     sleep 0.1
   done
@@ -187,30 +187,30 @@ if [ -f /usr/share/ferrix/android/brave.apk ] && command -v waydroid >/dev/null 
     # the UID 0 used by `waydroid shell`. Run it in the existing container as
     # that UID, then verify the effective HTTPS resolver rather than trusting
     # the command's asynchronous, output-free success response.
-    : > /run/ferrix/waydroid-brave-role.log
+    : > /run/ferrix/waydroid-fulguris-role.log
     : > /run/ferrix/waydroid-browser-resolver.log
-    waydroid container unfreeze >>/run/ferrix/waydroid-brave-role.log 2>&1 || true
+    waydroid container unfreeze >>/run/ferrix/waydroid-fulguris-role.log 2>&1 || true
     lxc-attach -P /var/lib/waydroid/lxc -n waydroid --uid 2000 -- \
-      /system/bin/cmd role add-role-holder android.app.role.BROWSER com.brave.browser \
-      >>/run/ferrix/waydroid-brave-role.log 2>&1 || true
+      /system/bin/cmd role add-role-holder android.app.role.BROWSER net.slions.fulguris.full.fdroid \
+      >>/run/ferrix/waydroid-fulguris-role.log 2>&1 || true
     for _ in $(seq 1 100); do
       waydroid shell -- cmd package resolve-activity --brief \
         -a android.intent.action.VIEW -c android.intent.category.BROWSABLE \
         -d https://example.com >/run/ferrix/waydroid-browser-resolver.log 2>&1 || true
-      grep -q '^com\.brave\.browser/' /run/ferrix/waydroid-browser-resolver.log 2>/dev/null && break
+      grep -q '^net\.slions\.fulguris\.full\.fdroid/' /run/ferrix/waydroid-browser-resolver.log 2>/dev/null && break
       sleep 0.1
     done
-    if grep -q '^com\.brave\.browser/' /run/ferrix/waydroid-browser-resolver.log 2>/dev/null; then
-      printf '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"%s","package":"com.brave.browser","browser_role":"default"}\n' "$provision_status" > /dev/console
+    if grep -q '^net\.slions\.fulguris\.full\.fdroid/' /run/ferrix/waydroid-browser-resolver.log 2>/dev/null; then
+      printf '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"%s","package":"net.slions.fulguris.full.fdroid","browser_role":"default"}\n' "$provision_status" > /dev/console
     else
-      printf '%s\n' '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"failed","reason":"default-browser-role","role_log":"/run/ferrix/waydroid-brave-role.log","resolver_log":"/run/ferrix/waydroid-browser-resolver.log"}' > /dev/console
-      cat /run/ferrix/waydroid-brave-role.log /run/ferrix/waydroid-browser-resolver.log > /dev/console 2>/dev/null || true
+      printf '%s\n' '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"failed","reason":"default-browser-role","role_log":"/run/ferrix/waydroid-fulguris-role.log","resolver_log":"/run/ferrix/waydroid-browser-resolver.log"}' > /dev/console
+      cat /run/ferrix/waydroid-fulguris-role.log /run/ferrix/waydroid-browser-resolver.log > /dev/console 2>/dev/null || true
     fi
   else
-    printf '%s\n' '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"failed","session_log":"/run/ferrix/waydroid-session.log","install_log":"/run/ferrix/waydroid-brave-install.log"}' > /dev/console
+    printf '%s\n' '{"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"failed","session_log":"/run/ferrix/waydroid-session.log","install_log":"/run/ferrix/waydroid-fulguris-install.log"}' > /dev/console
     printf '%s\n' 'android provisioning diagnostics:' > /dev/console
     waydroid status > /dev/console 2>&1 || true
-    for log in /run/ferrix/waydroid-session.log /run/ferrix/waydroid-brave-install.log /run/ferrix/android-pulse.log /run/ferrix/android-dbus.log; do
+    for log in /run/ferrix/waydroid-session.log /run/ferrix/waydroid-fulguris-install.log /run/ferrix/android-pulse.log /run/ferrix/android-dbus.log; do
       [ ! -s "$log" ] || { printf '%s\n' "--- $log" > /dev/console; tail -n 40 "$log" > /dev/console; }
     done
   fi

@@ -10,7 +10,7 @@ props=${FERRIX_ANDROID_PROPS:-/etc/ferrix/waydroid-properties.ini}
 images=${FERRIX_ANDROID_IMAGES:-/etc/waydroid-extra/images}
 cfg=${FERRIX_ANDROID_CONFIG:-/var/lib/waydroid/waydroid.cfg}
 base_props=${FERRIX_ANDROID_BASE_PROPS:-${cfg%/*}/waydroid_base.prop}
-brave_apk=${FERRIX_ANDROID_BRAVE_APK:-/usr/share/ferrix/android/brave.apk}
+fulguris_apk=${FERRIX_ANDROID_FULGURIS_APK:-/usr/share/ferrix/android/fulguris.apk}
 console=${FERRIX_ANDROID_CONSOLE:-/dev/console}
 run_dir=${FERRIX_ANDROID_RUN_DIR:-/run/ferrix}
 rec() { printf '%s\n' "$1" >> "$console"; logger -t ferrix "$1" 2>/dev/null || true; }
@@ -61,5 +61,5 @@ if [ -f "$cfg" ] && rc-service waydroid-container start >"$run_dir/waydroid-cont
 else
   rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-container\",\"status\":\"failed\",\"log\":\"$run_dir/waydroid-container.log\"}"
 fi
-[ ! -f "$brave_apk" ] || rec "{\"evidence\":\"QEMU\",\"event\":\"android-app-staged\",\"app\":\"org.ferrix.browser\",\"path\":\"$brave_apk\"}"
+[ ! -f "$fulguris_apk" ] || rec "{\"evidence\":\"QEMU\",\"event\":\"android-app-staged\",\"app\":\"org.ferrix.browser\",\"path\":\"$fulguris_apk\"}"
 exit 0

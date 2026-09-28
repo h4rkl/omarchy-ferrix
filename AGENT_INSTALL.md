@@ -56,6 +56,6 @@ creates repository build artifacts rather than developer-machine tooling.
 ## Scope
 
 This installs the default Rust/QEMU development environment only. It does not
-install `adb`, `fastboot`, Android SDK Build Tools, download Brave or Waydroid
+install `adb`, `fastboot`, Android SDK Build Tools, download Fulguris or Waydroid
 images, touch a physical device, build a guest, or modify repository data.
 Those are opt-in target workflows with their own safety and evidence rules.

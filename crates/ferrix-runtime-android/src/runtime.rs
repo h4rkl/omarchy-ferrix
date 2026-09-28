@@ -111,8 +111,8 @@ impl AndroidRuntime {
     }
 
     /// Explicit installation step for a tool or workflow: installs the APK at
-    /// `launch.apk.path` (already verified against its pins by
-    /// `tools/android/brave-verify.sh`). `launch()` never installs.
+    /// `launch.apk.path` (already verified against its configured pins).
+    /// `launch()` never installs.
     pub fn install(&self, app: &AppDescriptor, config: &Value) -> Result<(), AppError> {
         let launch = Self::parse_launch(app, config)?;
         let path = launch
@@ -405,14 +405,14 @@ mod tests {
     use crate::testing::FakeAndroidHost;
     use ferrix_app_api::{AppCapability, AppRole, IconRef, SCHEMA_VERSION, TrustLevel};
 
-    const PACKAGE: &str = "com.brave.browser";
+    const PACKAGE: &str = "net.slions.fulguris.full.fdroid";
 
     fn descriptor() -> AppDescriptor {
         AppDescriptor {
             schema_version: SCHEMA_VERSION,
             id: AppId::new("org.ferrix.browser").unwrap(),
             runtime: RuntimeKind::Android,
-            name: "Brave".to_owned(),
+            name: "Fulguris".to_owned(),
             icon: IconRef::default(),
             launchable: true,
             autostart: false,
@@ -426,7 +426,7 @@ mod tests {
         json!({
             "package": PACKAGE,
             "activity": null,
-            "apk": { "pins": "tools/android/brave.pins" }
+            "apk": { "pins": "tools/android/fulguris.pins" }
         })
     }
 
@@ -479,7 +479,7 @@ mod tests {
         let runtime = runtime(&host);
         for bad in [
             json!({}),
-            json!({ "package": "brave" }),
+            json!({ "package": "fulguris" }),
             json!({ "package": PACKAGE, "exec": ["x"] }),
             json!({ "package": PACKAGE, "activity": "a b" }),
         ] {
@@ -660,7 +660,7 @@ mod tests {
         ));
         let missing = json!({
             "package": PACKAGE,
-            "apk": { "pins": "tools/android/brave.pins", "path": "/nonexistent/brave.apk" }
+            "apk": { "pins": "tools/android/fulguris.pins", "path": "/nonexistent/fulguris.apk" }
         });
         assert!(matches!(
             runtime.install(&descriptor(), &missing),
@@ -672,7 +672,7 @@ mod tests {
         std::fs::write(&apk, b"PK").unwrap();
         let present = json!({
             "package": PACKAGE,
-            "apk": { "pins": "tools/android/brave.pins", "path": apk.to_str().unwrap() }
+            "apk": { "pins": "tools/android/fulguris.pins", "path": apk.to_str().unwrap() }
         });
         runtime.install(&descriptor(), &present).unwrap();
         assert_eq!(host.installs(), vec![apk.clone()]);

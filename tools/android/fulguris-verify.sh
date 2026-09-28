@@ -1,12 +1,12 @@
 #!/bin/sh
-# Verifies a Brave APK (Android application for the Android compatibility
-# runtime) against tools/android/brave.pins: size bounds, SHA-256, and the
+# Verifies a Fulguris APK (Android application for the Android compatibility
+# runtime) against tools/android/fulguris.pins: exact size, SHA-256, and the
 # SHA-256 fingerprint of the APK signing certificate.
 #
-#   sh tools/android/brave-verify.sh PATH [--pins FILE]
+#   sh tools/android/fulguris-verify.sh PATH [--pins FILE]
 #
-# Exit 0 and a `brave-apk-verified` record on success; exit 1 and a
-# `brave-apk-rejected` record with a typed reason otherwise. Host tooling
+# Exit 0 and a `fulguris-apk-verified` record on success; exit 1 and a
+# `fulguris-apk-rejected` record with a typed reason otherwise. Host tooling
 # only; nothing is downloaded or installed. Requires apksigner from Android
 # SDK Build-Tools and shasum (reported when missing, never installed).
 set -eu
@@ -15,7 +15,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 . "$here/lib.sh"
 
 apk=""
-pins="$here/brave.pins"
+pins="$here/fulguris.pins"
 while [ "$#" -gt 0 ]; do
     case $1 in
         --pins)
@@ -42,10 +42,14 @@ load_pins "$pins"
 
 [ -f "$apk" ] || reject "apk-not-found" path "$apk"
 check_size "$apk"
+actual_size=$(file_size "$apk")
+if [ "$actual_size" != "$FULGURIS_SIZE" ]; then
+    reject "unexpected-size" expected "$FULGURIS_SIZE" actual "$actual_size" version "$FULGURIS_VERSION"
+fi
 
 actual_sha=$(sha256_of "$apk")
-if [ "$actual_sha" != "$BRAVE_SHA256" ]; then
-    reject "wrong-sha256" tag "$BRAVE_TAG" expected "$BRAVE_SHA256" actual "$actual_sha"
+if [ "$actual_sha" != "$FULGURIS_SHA256" ]; then
+    reject "wrong-sha256" version "$FULGURIS_VERSION" expected "$FULGURIS_SHA256" actual "$actual_sha"
 fi
 
 # apksigner validates every signature scheme present (v1 through the schemes
@@ -57,16 +61,16 @@ verify_output=$("$APKSIGNER" verify --print-certs "$apk" 2>&1)
 verify_status=$?
 set -e
 if [ "$verify_status" -ne 0 ]; then
-    reject "signature-invalid" tag "$BRAVE_TAG" sha256 "$actual_sha"
+    reject "signature-invalid" version "$FULGURIS_VERSION" sha256 "$actual_sha"
 fi
 fingerprint=$(printf '%s\n' "$verify_output" \
     | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
     | head -n 1 | tr -d ': ' | tr 'a-f' 'A-F')
 if [ -z "$fingerprint" ]; then
-    reject "signature-unreadable" tag "$BRAVE_TAG"
+    reject "signature-unreadable" version "$FULGURIS_VERSION"
 fi
-if [ "$fingerprint" != "$BRAVE_SIGNER_SHA256" ]; then
-    reject "wrong-signer" tag "$BRAVE_TAG" expected "$BRAVE_SIGNER_SHA256" actual "$fingerprint"
+if [ "$fingerprint" != "$FULGURIS_SIGNER_SHA256" ]; then
+    reject "wrong-signer" version "$FULGURIS_VERSION" expected "$FULGURIS_SIGNER_SHA256" actual "$fingerprint"
 fi
 
-emit brave-apk-verified tag "$BRAVE_TAG" asset "$BRAVE_ASSET" sha256 "$actual_sha" signer_sha256 "$BRAVE_SIGNER_SHA256" size "$(file_size "$apk")" path "$apk"
+emit fulguris-apk-verified version "$FULGURIS_VERSION" asset "$FULGURIS_ASSET" sha256 "$actual_sha" signer_sha256 "$FULGURIS_SIGNER_SHA256" size "$actual_size" path "$apk"

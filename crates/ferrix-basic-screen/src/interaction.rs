@@ -621,15 +621,15 @@ mod tests {
         let app = AppId::new("org.ferrix.browser").unwrap();
         let failed = CrashNotice::launch_failed(
             app.clone(),
-            "Brave".to_owned(),
+            "Fulguris".to_owned(),
             "no android runtime is available".to_owned(),
         );
         assert_eq!(
             failed.text(),
-            "Brave could not start \u{b7} no android runtime is available"
+            "Fulguris could not start \u{b7} no android runtime is available"
         );
-        let crashed = CrashNotice::crashed(app, "Brave".to_owned(), "signal 11".to_owned());
-        assert_eq!(crashed.text(), "Brave \u{b7} crashed \u{b7} signal 11");
+        let crashed = CrashNotice::crashed(app, "Fulguris".to_owned(), "signal 11".to_owned());
+        assert_eq!(crashed.text(), "Fulguris \u{b7} crashed \u{b7} signal 11");
         // A failed launch never leaves a tile stuck in `starting`.
         let mut state = state();
         let index = state

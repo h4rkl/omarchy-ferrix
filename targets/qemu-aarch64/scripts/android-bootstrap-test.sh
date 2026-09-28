@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/images" "$work/run" "$work/var/lib/waydroid" "$work/usr/share/ferrix/android"
 : > "$work/images/system.img"
 : > "$work/images/vendor.img"
-: > "$work/usr/share/ferrix/android/brave.apk"
+: > "$work/usr/share/ferrix/android/fulguris.apk"
 : > "$work/console"
 
 cat > "$work/bin/rc-service" <<'EOF'
@@ -49,7 +49,7 @@ run_bootstrap() {
   FERRIX_ANDROID_IMAGES="$work/images" \
   FERRIX_ANDROID_CONFIG="$work/var/lib/waydroid/waydroid.cfg" \
   FERRIX_ANDROID_BASE_PROPS="$work/var/lib/waydroid/waydroid_base.prop" \
-  FERRIX_ANDROID_BRAVE_APK="$work/usr/share/ferrix/android/brave.apk" \
+  FERRIX_ANDROID_FULGURIS_APK="$work/usr/share/ferrix/android/fulguris.apk" \
   FERRIX_ANDROID_CONSOLE="$work/console" \
   FERRIX_ANDROID_RUN_DIR="$work/run" \
   sh "$script"

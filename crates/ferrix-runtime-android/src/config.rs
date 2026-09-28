@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// ```json
 /// {
-///   "package": "com.brave.browser",
+///   "package": "net.slions.fulguris.full.fdroid",
 ///   "activity": null,
-///   "apk": { "pins": "tools/android/brave.pins", "path": null }
+///   "apk": { "pins": "tools/android/fulguris.pins", "path": null }
 /// }
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,7 +30,8 @@ pub struct AndroidLaunch {
 }
 
 /// APK acquisition metadata (informational for the runtime; verification is
-/// the job of `tools/android/brave-verify.sh` against the pins file).
+/// the job of the configured Android acquisition workflow against the pins
+/// file).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApkSource {
@@ -119,7 +120,12 @@ mod tests {
 
     #[test]
     fn valid_packages_pass() {
-        for ok in ["com.brave.browser", "org.example_1.App2", "a.b", "_x.y_"] {
+        for ok in [
+            "net.slions.fulguris.full.fdroid",
+            "org.example_1.App2",
+            "a.b",
+            "_x.y_",
+        ] {
             assert_eq!(validate_package(ok), Ok(()), "{ok}");
         }
     }
@@ -128,16 +134,16 @@ mod tests {
     fn invalid_packages_fail() {
         for bad in [
             "",
-            "brave",
-            "com..brave",
-            ".com.brave",
-            "com.brave.",
-            "com.1brave",
-            "com.brave browser",
-            "com.brave;rm",
-            "com.br-ave",
-            "com/brave",
-            "com.bräve",
+            "fulguris",
+            "com..fulguris",
+            ".com.fulguris",
+            "com.fulguris.",
+            "com.1fulguris",
+            "com.fulguris browser",
+            "com.fulguris;rm",
+            "com.ful-guris",
+            "com/fulguris",
+            "com.fulgurïs",
         ] {
             assert!(validate_package(bad).is_err(), "{bad:?} should fail");
         }
@@ -159,34 +165,34 @@ mod tests {
     #[test]
     fn launch_config_parses_and_rejects_unknown_fields() {
         let launch: AndroidLaunch = serde_json::from_str(
-            r#"{"package":"com.brave.browser","activity":null,"apk":{"pins":"tools/android/brave.pins"}}"#,
+            r#"{"package":"net.slions.fulguris.full.fdroid","activity":null,"apk":{"pins":"tools/android/fulguris.pins"}}"#,
         )
         .unwrap();
-        assert_eq!(launch.package, "com.brave.browser");
+        assert_eq!(launch.package, "net.slions.fulguris.full.fdroid");
         assert_eq!(launch.activity, None);
         assert_eq!(launch.component(), None);
         assert_eq!(
             launch.apk.as_ref().unwrap().pins,
-            "tools/android/brave.pins"
+            "tools/android/fulguris.pins"
         );
         assert_eq!(launch.validate(), Ok(()));
 
         let with_activity: AndroidLaunch = serde_json::from_str(
-            r#"{"package":"com.brave.browser","activity":"com.google.android.apps.chrome.Main"}"#,
+            r#"{"package":"net.slions.fulguris.full.fdroid","activity":"com.google.android.apps.chrome.Main"}"#,
         )
         .unwrap();
         assert_eq!(
             with_activity.component().as_deref(),
-            Some("com.brave.browser/com.google.android.apps.chrome.Main")
+            Some("net.slions.fulguris.full.fdroid/com.google.android.apps.chrome.Main")
         );
 
         assert!(
             serde_json::from_str::<AndroidLaunch>(
-                r#"{"package":"com.brave.browser","exec":["x"]}"#
+                r#"{"package":"net.slions.fulguris.full.fdroid","exec":["x"]}"#
             )
             .is_err()
         );
-        let bad: AndroidLaunch = serde_json::from_str(r#"{"package":"brave"}"#).unwrap();
+        let bad: AndroidLaunch = serde_json::from_str(r#"{"package":"fulguris"}"#).unwrap();
         assert!(bad.validate().is_err());
     }
 }
