@@ -776,6 +776,18 @@ build_rootfs() {
 		*) die "pmaports origin is not the canonical postmarketOS repository: $pmaports_remote" ;;
 	esac
 
+	# A failed privileged pmbootstrap run can leave root-owned chroot files in
+	# the target cache. Reuse its own config to detach those mounts before
+	# removing only the generated rootfs.* directories.
+	for stale_dir in "$rootfs_cache_root"/rootfs.*; do
+		[ -d "$stale_dir" ] || continue
+		stale_config="$stale_dir/pmbootstrap.cfg"
+		if [ -f "$stale_config" ]; then
+			PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$stale_config" -y shutdown >/dev/null 2>&1 || true
+		fi
+		rm -rf -- "$stale_dir" || die "could not remove stale pmbootstrap build directory: $stale_dir"
+	done
+
 	build_dir=$(mktemp -d "$rootfs_cache_root/rootfs.XXXXXX")
 	rootfs_image_tmp=''
 	config=''
