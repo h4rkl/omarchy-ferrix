@@ -385,12 +385,12 @@ ssh -i ~/.ssh/id_ed25519 ezy@100.95.82.97
 
 Use `/home/ezy/orca/workspaces/omarchy-ferrix/remora` when it is the convenient
 checked-out workspace, and synchronize reviewed repository commits through Git
-instead of copying ignored caches, firmware, images, or device evidence. Do
-not use `tanto`. Keep the local Mac exclusively for the Pixel's ADB/Fastboot
+instead of copying ignored caches, firmware, images, or device evidence. Keep
+the local Mac exclusively for the Pixel's ADB/Fastboot
 operations, device logs, flashing, rebooting, and hardware validation; never
 expose its USB transport or ADB server socket to `deba`. If `deba` is
 unavailable, stop the physical build handoff and report the blocker rather
-than substituting the Mac, `tanto`, emulated UTM, or another unapproved host.
+than substituting the Mac, emulated UTM, or another unapproved host.
 
 On macOS, run only the read-only `*-check`/`*-test` recipes that do not contact
 the device, then hand the target build to `deba`. Do not use an ARM64 UTM
