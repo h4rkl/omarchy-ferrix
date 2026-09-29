@@ -70,8 +70,8 @@ grep -q '9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb97265' "$pmo
 if grep -q 'rm -f .cargo/config.toml' "$pmos_dir/exynos-modem/APKBUILD"; then
 	fail 'exynos-modem recipe removes the reviewed target configuration'
 fi
-grep -q 'aarch64-unknown-linux-musl' "$pmos_dir/exynos-modem/APKBUILD" ||
-	fail 'exynos-modem recipe does not pin the target Rust output'
+grep -q 'aarch64-alpine-linux-musl' "$pmos_dir/exynos-modem/APKBUILD" ||
+	fail 'exynos-modem recipe does not pin the Alpine target Rust output'
 grep -q '[[:space:]]modules-initfs-radio$' "$package_dir/APKBUILD" ||
 	fail 'device package does not carry the radio-first initfs module list'
 grep -q 'cargo test --frozen --target="\$_cargo_target" --no-run' "$pmos_dir/exynos-modem/APKBUILD" ||

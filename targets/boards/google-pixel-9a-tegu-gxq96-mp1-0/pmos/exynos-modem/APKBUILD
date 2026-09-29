@@ -13,7 +13,12 @@ makedepends="cargo cargo-auditable"
 subpackages="$pkgname-dev"
 
 _commit=634e8eb404c3fcf959dce6a0b0d97b33ba0fc346
-_cargo_target=aarch64-unknown-linux-musl
+# Alpine's Rust toolchain names its native musl sysroot with the Alpine
+# vendor component. The Ferrix product binaries use rustup's
+# aarch64-unknown-linux-musl target, but this recipe runs inside pmbootstrap's
+# aarch64 Alpine buildroot and must select the sysroot that its rust package
+# actually ships.
+_cargo_target=aarch64-alpine-linux-musl
 source="$pkgname-$_commit.tar.gz::https://git.deusch.me/pixel-mainline/exynos-modem/archive/$_commit.tar.gz"
 builddir="$srcdir/$pkgname"
 
