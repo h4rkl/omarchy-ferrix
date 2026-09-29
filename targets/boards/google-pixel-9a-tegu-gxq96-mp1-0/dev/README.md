@@ -111,6 +111,15 @@ repository checkout and all ignored `.cache/ferrix/pixel-9a` and
   `cpio`, `tar`, hashing, and Python support. `env.sh check build` is the
   authoritative command/tool gate; it never installs any of these tools.
 
+The native builder image also installs Debian's maintained
+`android-sdk-libsparse-utils` host package at the pinned Bookworm version
+`1:29.0.6-28` (the package archive SHA-256 is recorded in the Dockerfile).
+This supplies `simg2img`, which is required when the hash-verified factory
+`vendor.img` is Android-sparse; `e2fsprogs` alone supplies `debugfs` but not
+that converter. The utility is used only on the host during offline firmware
+extraction and is never copied into the Rust OS guest or used as Android
+userspace.
+
 The selected radio-first build requires the exact source archive and clean
 detached checkout in `kernel-radio-route.toml`, the clean target-local
 pmaports checkout at `pmos/pins.env`, and the separately staged, hash-verified

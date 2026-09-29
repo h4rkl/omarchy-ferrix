@@ -38,6 +38,27 @@ grep -F -- 'libudev-dev \' "$dockerfile" >/dev/null || {
   echo 'builder image no longer installs the host libudev probe dependency' >&2
   exit 1
 }
+# e2fsprogs supplies debugfs but not Android sparse-image conversion. The
+# firmware stage must receive the maintained Debian Android Tools package as a
+# hash-verified host utility, rather than relying on an unpinned apt result or
+# a tool copied from Android userspace.
+for sparse_tool_input in \
+  'ANDROID_LIBSPARSE_UTILS_VERSION=1:29.0.6-28' \
+  'ANDROID_LIBSPARSE_UTILS_DEB_VERSION=29.0.6-28' \
+  'ANDROID_LIBSPARSE_UTILS_SHA256=24279a10d4aef1414f09ec65a978f3fcd2869a05d382a8a2378bd7d88c43c195' \
+  'android-sdk-libsparse-utils_29.0.6-28_amd64.deb' \
+  'apt-get install --no-install-recommends --yes \' \
+  'test -x /usr/bin/simg2img' \
+  'android-sdk-libsparse-utils=$ANDROID_LIBSPARSE_UTILS_VERSION:'; do
+  grep -F -- "$sparse_tool_input" "$dockerfile" >/dev/null || {
+    echo "builder image is missing pinned simg2img input/assertion: $sparse_tool_input" >&2
+    exit 1
+  }
+done
+grep -F -- 'simg2img' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/dev/profile.env" >/dev/null || {
+  echo 'Pixel firmware host-tool profile does not require simg2img' >&2
+  exit 1
+}
 for sysroot_input in \
   'PKG_CONFIG_PATH_aarch64_unknown_linux_musl=/opt/ferrix/aarch64-linux-musl-sysroot/usr/lib/pkgconfig' \
   'PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_musl=/opt/ferrix/aarch64-linux-musl-sysroot' \

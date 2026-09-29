@@ -34,6 +34,16 @@ ARG MKDTBOIMG_COMMIT=51befeeee29e8ea2cac77305451e9d781db2fd1a
 ARG AVB_REPO=https://android.googlesource.com/platform/external/avb
 ARG AVB_COMMIT=8201543ece1316d20f8a2002f70f8c076e28c7cb
 
+# Debian's maintained Android Tools package provides the host-only
+# `simg2img` converter used when the official factory `vendor.img` is an
+# Android sparse image.  Keep this separate from e2fsprogs: e2fsprogs
+# provides debugfs/mke2fs but not simg2img.  The package is glibc-native host
+# tooling; it is never copied into the aarch64-musl guest sysroot.
+ARG ANDROID_LIBSPARSE_UTILS_VERSION=1:29.0.6-28
+ARG ANDROID_LIBSPARSE_UTILS_DEB_VERSION=29.0.6-28
+ARG ANDROID_LIBSPARSE_UTILS_SHA256=24279a10d4aef1414f09ec65a978f3fcd2869a05d382a8a2378bd7d88c43c195
+ARG ANDROID_LIBSPARSE_UTILS_URL=https://deb.debian.org/debian/pool/main/a/android-platform-tools/android-sdk-libsparse-utils_29.0.6-28_amd64.deb
+
 # The physical product is linked for Alpine/postmarketOS musl userspace.  The
 # Rust udev/libinput/Smithay crates need the target-side development files at
 # build time, while libudev-sys also probes a host library from its build
@@ -130,6 +140,17 @@ RUN apt-get update \
         util-linux \
         xz-utils \
         zstd \
+    && sparse_deb=/tmp/android-sdk-libsparse-utils_${ANDROID_LIBSPARSE_UTILS_DEB_VERSION}_amd64.deb \
+    && curl --fail --location --retry 3 --connect-timeout 30 \
+        --output "$sparse_deb" "$ANDROID_LIBSPARSE_UTILS_URL" \
+    && printf '%s  %s\n' "$ANDROID_LIBSPARSE_UTILS_SHA256" \
+        "$sparse_deb" | sha256sum --check --status \
+    && apt-get install --no-install-recommends --yes \
+        "$sparse_deb" \
+    && test "$(dpkg-query -W -f='${Version}' android-sdk-libsparse-utils)" = \
+        "$ANDROID_LIBSPARSE_UTILS_VERSION" \
+    && test -x /usr/bin/simg2img \
+    && rm -f "$sparse_deb" \
     && rm -rf /var/lib/apt/lists/*
 
 # Install only the target development/runtime archives needed by the native
@@ -280,6 +301,7 @@ RUN useradd --create-home --uid 1000 --shell /bin/sh ferrix-builder \
         "mkdtboimg=$MKDTBOIMG_COMMIT" \
         "avb=$AVB_COMMIT" \
         "repo=$REPO_VERSION" \
+        "debian-android-sdk-libsparse-utils=$ANDROID_LIBSPARSE_UTILS_VERSION:$ANDROID_LIBSPARSE_UTILS_SHA256" \
         "alpine=$ALPINE_VERSION" \
         "alpine-eudev-dev=$ALPINE_EUDEV_DEV_VERSION:$ALPINE_EUDEV_DEV_SHA256" \
         "alpine-eudev-libs=$ALPINE_EUDEV_LIBS_VERSION:$ALPINE_EUDEV_LIBS_SHA256" \
