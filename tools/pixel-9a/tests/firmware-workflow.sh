@@ -78,6 +78,7 @@ printf 'factory\tSYN\t0\tfactory.zip\thttps://example.invalid/factory\t%s\t%s\th
 printf '%s\n' 'modem-s5300	vendor.img	/firmware/carrierconfig	lib/firmware/carrierconfig	bundle' >"$work/bundle.tsv"
 printf '%s\n' '#!/bin/sh' 'set -eu' 'command=$2' 'case "$command" in' \
   '  "stat /firmware/carrierconfig") printf "%s\n" "Inode: 42 Type: directory" ;;' \
+  '  "stat /firmware/missing.cal") printf "%s\n" "/firmware/missing.cal: File not found by ext2_lookup" ;;' \
   '  "ls -p /firmware/carrierconfig")' \
   '    printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//"' \
   '    case "$FERRIX_FAKE_BUNDLE_MODE" in' \
@@ -87,6 +88,7 @@ printf '%s\n' '#!/bin/sh' 'set -eu' 'command=$2' 'case "$command" in' \
   '      empty) ;;' \
   '      *) exit 2 ;;' \
   '    esac ;;' \
+  '  "ls -p /firmware") printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//" "/6/0100644/0/0/fw_bcmdhd.bin/15/" ;;' \
   '  dump*) destination=$(printf "%s\n" "$command" | sed "s#^dump [^ ]* ##"); mkdir -p "$(dirname "$destination")"; printf "%s\n" synthetic-carrier-config >"$destination" ;;' \
   '  *) exit 2 ;;' \
   'esac' >"$fake_bin/debugfs"
@@ -114,6 +116,15 @@ PATH="$fake_bin:$PATH" "$workflow" inspect >"$work/source-inspect.out"
 grep -q '== modem-s5300: vendor.img:/firmware/carrierconfig -> lib/firmware/carrierconfig (bundle) ==' \
   "$work/source-inspect.out"
 grep -q 'Inode: 42 Type: directory' "$work/source-inspect.out"
+printf 'wifi-bcm4383\tvendor.img\t/firmware/missing.cal\tlib/firmware/missing.cal\n' >"$work/missing-source.tsv"
+FERRIX_PIXEL9A_PINS="$work/recovery.pins" \
+FERRIX_PIXEL9A_FACTORY_ARCHIVE="$work/factory.zip" \
+FERRIX_PIXEL9A_FIRMWARE="$confirmation" \
+FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST="$work/missing-source.tsv" \
+FERRIX_PIXEL9A_FIRMWARE_OUT="$work/missing-source-out" \
+PATH="$fake_bin:$PATH" "$workflow" inspect >"$work/missing-source.out"
+grep -q 'source entry is unresolved; listing parent /firmware' "$work/missing-source.out"
+grep -q 'fw_bcmdhd.bin' "$work/missing-source.out"
 mkdir -p "$work/overwrite-out/staged/lib/firmware/carrierconfig"
 ln -s "$work/archive-root/vendor.img" \
   "$work/overwrite-out/staged/lib/firmware/carrierconfig/carrier.conf"

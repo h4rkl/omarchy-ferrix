@@ -265,6 +265,24 @@ storage.
    archive and writes `out/pixel-9a/factory-inspection/inventory.json`
    (`android-info.txt` requirements, `fastboot-info.txt`, image members). No
    device contact. The factory-restore workflow requires this file.
+   For a native-Linux source-path review of the exact firmware rows, the
+   device-free builder also exposes an opt-in `inspect` mode:
+
+   ```sh
+   FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware \
+     tools/pixel-9a/native-builder.sh run firmware inspect
+   ```
+
+   It re-verifies the pinned factory archive, firmware policy, and reviewed
+   allowlist, then uses `debugfs` to print source-file metadata (and reviewed
+   bundle directory listings) from temporary files under the ignored firmware
+   output. It removes those temporary files on exit and does not populate
+   `staged/` or create a runtime `firmware-manifest.tsv`; this is provenance
+   inspection only, not firmware staging or physical radio evidence. Set
+   `FERRIX_PIXEL9A_FACTORY_ARCHIVE` or
+   `FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST` only to reviewed, checkout-contained
+   paths accepted by the native-builder wrapper; keep the factory archive and
+   generated firmware data ignored and out of Git.
 4. Hash or size mismatch: stop, do not edit the pin. Re-download once; if it
    still mismatches, report to the owner.
 5. New-target pins: record `url`, `sha256`, `bytes`, and the official
@@ -379,6 +397,15 @@ engine, mounts only the checkout plus target-scoped ignored cache/output paths,
 and refuses discovery, ADB, Fastboot, flashing, temporary boot, and guest-radio
 SSH workflows. Source sync, radio-kernel build, and product build opt-ins are
 separate authorizations; completing one stage does not authorize another.
+
+For `rootfs build`, the checkout bind remains read-only while the wrapper's
+target-scoped `.cache/ferrix/pixel-9a` and `out/pixel-9a` mounts are writable.
+The pmbootstrap temporary workspace is created under the cache mount at
+`rootfs.XXXXXX`, so a rootfs build does not try to write temporary state into
+the read-only source checkout. `FERRIX_PIXEL9A_ROOTFS_CACHE_DIR` may override
+that location only with another writable path inside the checkout; the wrapper
+rejects external paths. Keep this cache ignored and separate from the product,
+kernel, firmware, and final rootfs output directories.
 
 The pinned kernel and pmaports source checkouts must be clean before they are
 used: no tracked, staged, or untracked changes. The main Ferrix repository

@@ -427,12 +427,22 @@ inspect_sources() {
     case "$controller" in \#*) continue ;; esac
     [ -z "${extra:-}" ] || die 'firmware allowlist has more than five TSV fields'
     [ -n "${entry_type:-}" ] || entry_type=file
+    validate_path "$controller" controller
+    validate_path "$image" source-image
+    validate_path "$source_path" source-path
+    validate_path "$runtime_path" runtime-path
     grep -q "^id = \"$controller\"$" "$policy" || die "controller is not listed in firmware policy: $controller"
     is_allowed_image "$image" || die "source image is not allow-listed: $image"
     filesystem=$(prepare_image "$image")
     printf '%s\n' "== $controller: $image:$source_path -> $runtime_path ($entry_type) =="
-    if ! DEBUGFS_PAGER=cat debugfs -R "stat $source_path" "$filesystem"; then
-      printf 'source stat failed: %s\n' "$source_path"
+    stat_output=$(DEBUGFS_PAGER=cat debugfs -R "stat $source_path" "$filesystem" 2>&1 || true)
+    printf '%s\n' "$stat_output"
+    if ! printf '%s\n' "$stat_output" | grep -q '^Inode:'; then
+      source_parent=${source_path%/*}
+      [ -n "$source_parent" ] || source_parent=/
+      printf 'source entry is unresolved; listing parent %s\n' "$source_parent"
+      DEBUGFS_PAGER=cat debugfs -R "ls -p $source_parent" "$filesystem" ||
+        printf 'source parent listing failed: %s\n' "$source_parent"
       continue
     fi
     if [ "$entry_type" = bundle ]; then
