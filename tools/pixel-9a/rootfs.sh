@@ -715,17 +715,46 @@ validate_rootfs_image_settings() {
 	esac
 }
 
+rootfs_mkdir() {
+	for directory do
+		if mkdir -p -- "$directory" 2>/dev/null; then
+			continue
+		fi
+		sudo -n mkdir -p -- "$directory"
+	done
+}
+
 stage_file() {
 	src=$1
 	dst=$2
-	mkdir -p "$(dirname -- "$dst")"
-	cp "$src" "$dst"
+	rootfs_mkdir "$(dirname -- "$dst")"
+	if cp "$src" "$dst" 2>/dev/null; then
+		return 0
+	fi
+	sudo -n cp "$src" "$dst"
+}
+
+rootfs_chmod() {
+	mode=$1
+	path=$2
+	if chmod "$mode" "$path" 2>/dev/null; then
+		return 0
+	fi
+	sudo -n chmod "$mode" "$path"
+}
+
+rootfs_symlink() {
+	target=$1
+	destination=$2
+	if ln -sfn -- "$target" "$destination" 2>/dev/null; then
+		return 0
+	fi
+	sudo -n ln -sfn -- "$target" "$destination"
 }
 
 stage_radio_firmware_aliases() {
 	route_manifest="$rootfs_dir/usr/share/ferrix/pixel-9a/radio-firmware-manifest.tsv"
-	mkdir -p "$(dirname -- "$route_manifest")"
-	route_manifest_tmp="$route_manifest.tmp.$$"
+	route_manifest_tmp="$build_dir/radio-firmware-manifest.tsv.tmp.$$"
 	{
 		printf 'schema_version\t1\n'
 		printf 'target_id\tgoogle-pixel-9a-tegu-gxq96-mp1-0\n'
@@ -741,7 +770,8 @@ stage_radio_firmware_aliases() {
 		file="$rootfs_dir/$destination_path"
 		printf 'alias\t%s\t%s\t%s\t%s\n' "$source_path" "$destination_path" "$(file_size "$file")" "$(hash_file "$file")" >>"$route_manifest_tmp"
 	done <"$radio_firmware_route"
-	mv "$route_manifest_tmp" "$route_manifest"
+	stage_file "$route_manifest_tmp" "$route_manifest"
+	rm -f "$route_manifest_tmp"
 }
 
 build_rootfs() {
@@ -900,11 +930,11 @@ build_rootfs() {
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
 		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do
 		stage_file "$product/$name" "$rootfs_dir/usr/bin/$name"
-		chmod 0755 "$rootfs_dir/usr/bin/$name"
+		rootfs_chmod 0755 "$rootfs_dir/usr/bin/$name"
 	done
 	stage_file "$profile_path" "$rootfs_dir/etc/ferrix/profile.toml"
 	stage_file "$product/colors.toml" "$rootfs_dir/etc/ferrix/colors.toml"
-	mkdir -p "$rootfs_dir/usr/share/ferrix/apps"
+	rootfs_mkdir "$rootfs_dir/usr/share/ferrix/apps"
 	for descriptor in "$product"/apps/*.json; do
 		stage_file "$descriptor" "$rootfs_dir/usr/share/ferrix/apps/$(basename -- "$descriptor")"
 	done
@@ -917,7 +947,7 @@ build_rootfs() {
 	stage_file "$package_dir/ferrix-backends.env" "$rootfs_dir/etc/ferrix/backends.env"
 	stage_file "$package_dir/s5300-channels.toml" "$rootfs_dir/usr/share/ferrix/pixel-9a/s5300-channels.toml"
 	stage_file "$package_dir/s5300-userspace-sources.toml" "$rootfs_dir/usr/share/ferrix/pixel-9a/s5300-userspace-sources.toml"
-	mkdir -p "$rootfs_dir/var/lib/ferrix/telephony" "$rootfs_dir/var/lib/ferrix/contacts"
+	rootfs_mkdir "$rootfs_dir/var/lib/ferrix/telephony" "$rootfs_dir/var/lib/ferrix/contacts"
 	while IFS="$tab" read -r kind field2 field3 field4 field5 field6 field7; do
 		case "$kind" in
 			firmware)
@@ -939,20 +969,30 @@ build_rootfs() {
 	# The Google BCM4383 module has build variants that request the same
 	# allow-listed files through Android-era absolute paths. These symlinks are
 	# only filesystem compatibility; no Android framework or userspace is used.
-	mkdir -p "$rootfs_dir/vendor" "$rootfs_dir/etc"
-	ln -sfn /lib/firmware "$rootfs_dir/vendor/firmware"
-	ln -sfn /lib/firmware "$rootfs_dir/etc/wifi"
+	rootfs_mkdir "$rootfs_dir/vendor" "$rootfs_dir/etc"
+	rootfs_symlink /lib/firmware "$rootfs_dir/vendor/firmware"
+	rootfs_symlink /lib/firmware "$rootfs_dir/etc/wifi"
 
 	mkdir -p "$rootfs_out"
 	rootfs_artifact="$rootfs_out/rootfs.tar"
 	tmp_tar="$rootfs_artifact.tmp.$$"
-	tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -C "$rootfs_dir" -cf "$tmp_tar" .
+	if ! tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -C "$rootfs_dir" -cf "$tmp_tar" .; then
+		sudo -n rm -f -- "$tmp_tar"
+		sudo -n tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+			-C "$rootfs_dir" -cf "$tmp_tar" .
+		sudo -n chown "$(id -u):$(id -g)" "$tmp_tar"
+	fi
 	mv "$tmp_tar" "$rootfs_artifact"
 	rootfs_image="$rootfs_out/rootfs.img"
 	rootfs_image_tmp="$rootfs_image.tmp.$$"
 	printf '%s\n' "creating ext4 rootfs image (${rootfs_image_size_mib} MiB) from $rootfs_dir"
-	mke2fs -q -t ext4 -F -L ferrix-tegu -U "$rootfs_uuid" -d "$rootfs_dir" \
-		"$rootfs_image_tmp" "${rootfs_image_size_mib}M"
+	if ! mke2fs -q -t ext4 -F -L ferrix-tegu -U "$rootfs_uuid" -d "$rootfs_dir" \
+		"$rootfs_image_tmp" "${rootfs_image_size_mib}M"; then
+		sudo -n rm -f -- "$rootfs_image_tmp"
+		sudo -n mke2fs -q -t ext4 -F -L ferrix-tegu -U "$rootfs_uuid" -d "$rootfs_dir" \
+			"$rootfs_image_tmp" "${rootfs_image_size_mib}M"
+		sudo -n chown "$(id -u):$(id -g)" "$rootfs_image_tmp"
+	fi
 	mv "$rootfs_image_tmp" "$rootfs_image"
 	rootfs_image_tmp=''
 	cp "$FERRIX_PIXEL9A_FIRMWARE_DIR/firmware-manifest.tsv" "$rootfs_out/firmware-manifest.tsv"
