@@ -7,9 +7,41 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 script="$root/tools/pixel-9a/native-builder.sh"
+dockerfile="$root/containers/pixel-9a-builder/Dockerfile"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/bin" "$work/log"
+
+# Zig 0.14.1 supplies the pinned compiler/linker/archive tools, but its
+# objcopy rejects Kbuild's --prefix-symbols and it has no objdump/strip
+# subcommands. Keep those binutils on the Debian LLVM implementation, and
+# assert that clang/LLD remain Zig-backed.
+for tool in llvm-objcopy llvm-objdump llvm-strip; do
+  grep -F -- "exec /usr/bin/$tool \"\$@\"" "$dockerfile" >/dev/null || {
+    echo "builder image does not route $tool through Debian LLVM" >&2
+    exit 1
+  }
+done
+grep -F -- 'exec python3 /usr/local/bin/ferrix-zig-clang.py "$@"' "$dockerfile" >/dev/null || {
+  echo 'builder image no longer routes clang through the pinned Zig wrapper' >&2
+  exit 1
+}
+grep -F -- 'exec /opt/zig/zig ld.lld "$@"' "$dockerfile" >/dev/null || {
+  echo 'builder image no longer routes ld.lld through pinned Zig LLVM' >&2
+  exit 1
+}
+if grep -F -- 'exec /opt/zig/zig objcopy' "$dockerfile" >/dev/null; then
+  echo 'builder image still routes objcopy through unsupported Zig subcommand' >&2
+  exit 1
+fi
+if grep -F -- 'exec /opt/zig/zig objdump' "$dockerfile" >/dev/null; then
+  echo 'builder image still routes objdump through unsupported Zig subcommand' >&2
+  exit 1
+fi
+if grep -F -- 'exec /opt/zig/zig strip' "$dockerfile" >/dev/null; then
+  echo 'builder image still routes strip through unsupported Zig subcommand' >&2
+  exit 1
+fi
 
 cat >"$work/bin/docker" <<'EOF'
 #!/bin/sh

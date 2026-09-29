@@ -91,7 +91,9 @@ RUN apt-get update \
 # Debian Bookworm's clang package is 14, but this kernel revision gates
 # Kconfig on LLVM >= 17.  Zig carries a pinned LLVM 19 toolchain and can act
 # as the clang/lld driver for both host tools and the arm64 Kbuild.  Keep the
-# wrappers in PATH ahead of the Debian LLVM 14 tools.
+# wrappers in PATH ahead of the Debian LLVM 14 tools. Zig 0.14 does not expose
+# `objdump` or `strip` subcommands, and its `objcopy` rejects Kbuild's
+# `--prefix-symbols`; use the pinned Debian LLVM binutils for those operations.
 RUN curl --fail --location --retry 3 --connect-timeout 30 --output /tmp/zig.tar.xz "$ZIG_URL" \
     && printf '%s  %s\n' "$ZIG_SHA256" /tmp/zig.tar.xz | sha256sum --check --status \
     && tar -xJf /tmp/zig.tar.xz -C /opt \
@@ -103,10 +105,10 @@ RUN curl --fail --location --retry 3 --connect-timeout 30 --output /tmp/zig.tar.
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig ld.lld "$@"' > /usr/local/bin/ld.lld \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig ar "$@"' > /usr/local/bin/llvm-ar \
     && printf '%s\n' '#!/bin/sh' 'exec /usr/bin/llvm-nm "$@"' > /usr/local/bin/llvm-nm \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig objcopy "$@"' > /usr/local/bin/llvm-objcopy \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig objdump "$@"' > /usr/local/bin/llvm-objdump \
+    && printf '%s\n' '#!/bin/sh' 'exec /usr/bin/llvm-objcopy "$@"' > /usr/local/bin/llvm-objcopy \
+    && printf '%s\n' '#!/bin/sh' 'exec /usr/bin/llvm-objdump "$@"' > /usr/local/bin/llvm-objdump \
     && printf '%s\n' '#!/bin/sh' 'exec /usr/bin/llvm-readelf "$@"' > /usr/local/bin/llvm-readelf \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig strip "$@"' > /usr/local/bin/llvm-strip \
+    && printf '%s\n' '#!/bin/sh' 'exec /usr/bin/llvm-strip "$@"' > /usr/local/bin/llvm-strip \
     && chmod 0755 /usr/local/bin/clang /usr/local/bin/clang++ \
         /usr/local/bin/ld.lld /usr/local/bin/llvm-ar /usr/local/bin/llvm-nm \
         /usr/local/bin/llvm-objcopy /usr/local/bin/llvm-objdump \
