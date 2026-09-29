@@ -499,6 +499,8 @@ real_tar=$(command -v tar)
 		'  case "$1" in' '    --config) config=$2; shift 2 ;;' '    *) shift ;;' '  esac' \
 		'done' '[ -n "$config" ]' 'build_work=$(sed -n "s/^work = //p" "$config")' \
 		'aports=$(sed -n "s/^aports = //p" "$config")' \
+		'git -C "$aports" rev-parse HEAD >/dev/null' \
+		'[ "$(git -C "$aports" remote get-url origin)" = https://gitlab.postmarketos.org/postmarketOS/pmaports.git ]' \
 		'[ -f "$aports/device/testing/exynos-modem/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/modemmanager-samsung-sit/APKBUILD" ]' \
 	'[ -f "$aports/device/testing/device-google-tegu/s5300-userspace-sources.toml" ]' \
@@ -529,11 +531,12 @@ chmod 0755 "$fake_bin/uname" "$fake_bin/pmbootstrap" "$fake_bin/tar" "$fake_bin/
 
 pmaports="$work/pmaports"
 mkdir -p "$pmaports"
-git -C "$pmaports" init -q
-git -C "$pmaports" config user.email test@example.invalid
-git -C "$pmaports" config user.name ferrix-rootfs-test
-git -C "$pmaports" commit --allow-empty -qm fixture
-pmaports_commit=$(git -C "$pmaports" rev-parse HEAD)
+	git -C "$pmaports" init -q
+	git -C "$pmaports" config user.email test@example.invalid
+	git -C "$pmaports" config user.name ferrix-rootfs-test
+	git -C "$pmaports" commit --allow-empty -qm fixture
+	git -C "$pmaports" remote add origin https://gitlab.postmarketos.org/postmarketOS/pmaports.git
+	pmaports_commit=$(git -C "$pmaports" rev-parse HEAD)
 
 # A fresh native-Linux checkout has no ignored cache root yet. The build must
 # create it before mktemp, then fail at the actionable pinned-pmaports gate;

@@ -744,6 +744,12 @@ build_rootfs() {
 	if git -C "$pmaports" status --porcelain --untracked-files=all | grep -q .; then
 		die 'pmaports checkout has untracked changes'
 	fi
+	[ -d "$pmaports/.git" ] || die 'pmaports checkout must have a directory Git metadata root'
+	pmaports_remote=$(git -C "$pmaports" remote get-url origin 2>/dev/null || true)
+	case "$pmaports_remote" in
+		https://gitlab.postmarketos.org/postmarketOS/pmaports.git|git@gitlab.postmarketos.org:postmarketOS/pmaports.git) ;;
+		*) die "pmaports origin is not the canonical postmarketOS repository: $pmaports_remote" ;;
+	esac
 
 	build_dir=$(mktemp -d "$rootfs_cache_root/rootfs.XXXXXX")
 	rootfs_image_tmp=''
@@ -758,6 +764,12 @@ build_rootfs() {
 	pmaports_archive="$build_dir/pmaports.tar"
 	git -C "$pmaports" archive HEAD >"$pmaports_archive" || die 'could not archive the pinned pmaports checkout'
 	tar -xf "$pmaports_archive" -C "$aports"
+	# pmbootstrap identifies the staged tree as pmaports through its canonical
+	# Git remote. Keep the deterministic archive as the working tree, but carry
+	# over the already-verified metadata so the package manager can resolve that
+	# identity without treating the cache checkout itself as mutable input.
+	cp -R "$pmaports/.git" "$aports/.git"
+	git -C "$aports" rev-parse HEAD >/dev/null 2>&1 || die 'staged pmaports metadata is not a valid Git repository'
 	mkdir -p "$aports/device/testing"
 	cp -R "$package_dir" "$aports/device/testing/device-google-tegu"
 	# The checked-in package keeps Google's Kleaf module list for the comparison
