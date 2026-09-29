@@ -886,7 +886,7 @@ build_rootfs() {
 	# after pmbootstrap returns. Keep the explicit postcondition and print the
 	# workspace contents when it fails so a substrate problem is diagnosable.
 	rootfs_dir=''
-	for candidate in "$pmb_work"/chroot_rootfs-*; do
+	for candidate in "$pmb_work"/chroot_rootfs_*; do
 		[ -d "$candidate" ] || continue
 		rootfs_dir=$candidate
 		break

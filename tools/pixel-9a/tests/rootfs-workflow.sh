@@ -530,7 +530,7 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'grep -q "634e8eb404c3fcf959dce6a0b0d97b33ba0fc346" "$aports/device/testing/exynos-modem/APKBUILD"' \
 		'grep -q "14a0013a28e5d5eec513c65e75d7549678ecc61e" "$aports/device/testing/modemmanager-samsung-sit/APKBUILD"' \
 		'grep -q "^build_pkgs_on_install = True$" "$config"' \
-		'mkdir -p "$build_work/chroot_rootfs-test"'
+		'mkdir -p "$build_work/chroot_rootfs_test"'
 } >"$fake_bin/pmbootstrap"
 {
 	printf '%s\n' '#!/bin/sh' 'set -eu' 'while [ "$#" -gt 0 ]; do' \
