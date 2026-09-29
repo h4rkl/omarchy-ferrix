@@ -778,14 +778,27 @@ build_rootfs() {
 
 	# A failed privileged pmbootstrap run can leave root-owned chroot files in
 	# the target cache. Reuse its own config to detach those mounts before
-	# removing only the generated rootfs.* directories.
+	# removing only the generated rootfs.* directories. The native builder
+	# grants this build user passwordless sudo because pmbootstrap creates
+	# root-owned chroot content; keep the fallback limited to this exact
+	# generated directory.
+	remove_generated_dir() {
+		target_dir=$1
+		rm -rf -- "$target_dir" 2>/dev/null || true
+		[ ! -e "$target_dir" ] && return 0
+		if command -v sudo >/dev/null 2>&1; then
+			sudo -n rm -rf -- "$target_dir" 2>/dev/null || true
+		fi
+		[ ! -e "$target_dir" ]
+	}
+
 	for stale_dir in "$rootfs_cache_root"/rootfs.*; do
 		[ -d "$stale_dir" ] || continue
 		stale_config="$stale_dir/pmbootstrap.cfg"
 		if [ -f "$stale_config" ]; then
 			PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$stale_config" -y shutdown >/dev/null 2>&1 || true
 		fi
-		rm -rf -- "$stale_dir" || die "could not remove stale pmbootstrap build directory: $stale_dir"
+		remove_generated_dir "$stale_dir" || die "could not remove stale pmbootstrap build directory: $stale_dir"
 	done
 
 	build_dir=$(mktemp -d "$rootfs_cache_root/rootfs.XXXXXX")
@@ -798,7 +811,8 @@ build_rootfs() {
 		if [ -n "$config" ]; then
 			PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y shutdown >/dev/null 2>&1 || true
 		fi
-		rm -rf "$build_dir"
+		remove_generated_dir "$build_dir" ||
+			printf '%s\n' "WARN pixel-9a-rootfs: could not remove temporary pmbootstrap build directory: $build_dir" >&2
 		[ -z "$rootfs_image_tmp" ] || rm -f "$rootfs_image_tmp"
 	}
 	trap cleanup EXIT HUP INT TERM
