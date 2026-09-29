@@ -87,12 +87,14 @@ printf '%s\n' '#!/bin/sh' 'set -eu' 'command=$2' 'case "$command" in' \
   '    printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//"' \
   '    case "$FERRIX_FAKE_BUNDLE_MODE" in' \
   '      regular) printf "%s\n" "/4/100644/0/0/carrier-extra.conf/15/" "/5/100644/0/0/carrier.conf/15/" ;;' \
+  '      nested-sibling) printf "%s\n" "/6/040755/0/0/confseqs//" "/7/100644/0/0/confseqs_symbolic_link_mapping/15/" ;;' \
   '      symlink) printf "%s\n" "/4/120777/0/0/carrier.conf/15/" ;;' \
   '      traversal) printf "%s\n" "/4/100644/0/0/..evil/15/" ;;' \
   '      special) printf "%s\n" "/4/020600/0/0/character-device/0/" ;;' \
   '      empty) ;;' \
   '      *) exit 2 ;;' \
   '    esac ;;' \
+  '  "ls -p /firmware/carrierconfig/confseqs") printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//" "/8/100644/0/0/seq-hash/15/" ;;' \
   '  "ls -p /firmware") printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//" "/6/100644/0/0/fw_bcmdhd.bin/15/" ;;' \
   '  dump*) destination=$(printf "%s\n" "$command" | sed "s#^dump [^ ]* ##"); mkdir -p "$(dirname "$destination")"; printf "%s\n" synthetic-carrier-config >"$destination" ;;' \
   '  *) exit 2 ;;' \
@@ -111,6 +113,22 @@ PATH="$fake_bin:$PATH" "$workflow" stage >/dev/null
   { echo 'bundle extractor did not stage the second regular file' >&2; exit 1; }
 grep -q '^firmware\tmodem-s5300\tvendor.img\t/firmware/carrierconfig/carrier.conf\tlib/firmware/carrierconfig/carrier.conf\t' \
   "$work/bundle-out/firmware-manifest.tsv"
+FERRIX_FAKE_BUNDLE_MODE=nested-sibling \
+FERRIX_PIXEL9A_PINS="$work/recovery.pins" \
+FERRIX_PIXEL9A_FACTORY_ARCHIVE="$work/factory.zip" \
+FERRIX_PIXEL9A_FIRMWARE="$confirmation" \
+FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST="$work/bundle.tsv" \
+FERRIX_PIXEL9A_FIRMWARE_OUT="$work/bundle-nested-sibling-out" \
+PATH="$fake_bin:$PATH" "$workflow" stage >/dev/null
+[ -f "$work/bundle-nested-sibling-out/staged/lib/firmware/carrierconfig/confseqs/seq-hash" ] ||
+  { echo 'bundle extractor did not stage a nested directory file at its exact runtime path' >&2; exit 1; }
+[ -f "$work/bundle-nested-sibling-out/staged/lib/firmware/carrierconfig/confseqs_symbolic_link_mapping" ] ||
+  { echo 'bundle extractor did not stage the root-level sibling after a nested directory' >&2; exit 1; }
+awk -F '\t' \
+  '$1 == "firmware" && $2 == "modem-s5300" && $3 == "vendor.img" && $4 == "/firmware/carrierconfig/confseqs/seq-hash" && $5 == "lib/firmware/carrierconfig/confseqs/seq-hash" { nested=1 } \
+   $1 == "firmware" && $2 == "modem-s5300" && $3 == "vendor.img" && $4 == "/firmware/carrierconfig/confseqs_symbolic_link_mapping" && $5 == "lib/firmware/carrierconfig/confseqs_symbolic_link_mapping" { sibling=1 } \
+   END { exit(nested && sibling ? 0 : 1) }' \
+  "$work/bundle-nested-sibling-out/firmware-manifest.tsv"
 FERRIX_FAKE_BUNDLE_MODE=regular \
 FERRIX_PIXEL9A_PINS="$work/recovery.pins" \
 FERRIX_PIXEL9A_FACTORY_ARCHIVE="$work/factory.zip" \

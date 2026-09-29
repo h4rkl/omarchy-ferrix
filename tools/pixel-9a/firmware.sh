@@ -280,22 +280,26 @@ walk_bundle() {
   runtime_directory=$4
   listing="$work/.bundle-list.$$.${bundle_sequence}"
   bundle_sequence=$((bundle_sequence + 1))
-  list_ext4_directory "$filesystem" "$source_directory" "$listing"
-  [ -s "$listing" ] || die "required firmware bundle is empty: $source_directory"
+  # Keep this traversal frame in positional parameters. The helper functions
+  # below use ordinary /bin/sh variables, and recursive calls otherwise
+  # overwrite the caller's source/runtime paths and listing filename.
+  set -- "$1" "$2" "$3" "$4" "$listing"
+  list_ext4_directory "$filesystem" "$3" "$5"
+  [ -s "$5" ] || die "required firmware bundle is empty: $3"
   while IFS="$(printf '\t')" read -r entry_kind entry_name; do
     [ -n "${entry_kind:-}" ] || continue
     case "$entry_name" in
       .|..) continue ;;
     esac
     validate_bundle_component "$entry_name"
-    source_entry="$source_directory/$entry_name"
-    runtime_entry="$runtime_directory/$entry_name"
+    source_entry="$3/$entry_name"
+    runtime_entry="$4/$entry_name"
     case "$entry_kind" in
       directory)
-        walk_bundle "$controller" "$image" "$source_entry" "$runtime_entry"
+        walk_bundle "$1" "$2" "$source_entry" "$runtime_entry"
         ;;
       regular)
-        stage_bundle_file "$controller" "$image" "$source_entry" "$runtime_entry"
+        stage_bundle_file "$1" "$2" "$source_entry" "$runtime_entry"
         ;;
       symlink)
         die "firmware bundle contains a symlink: $source_entry"
@@ -307,8 +311,8 @@ walk_bundle() {
         die "firmware bundle listing has an unknown entry kind: $entry_kind"
         ;;
     esac
-  done < "$listing"
-  rm -f "$listing"
+  done < "$5"
+  rm -f "$5"
 }
 
 stage_one() {
