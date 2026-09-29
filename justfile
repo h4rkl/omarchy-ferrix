@@ -26,6 +26,13 @@ pixel-9a-tools-check:
 pixel-9a-discover:
     @"{{root}}/tools/pixel-9a/discover.sh"
 
+# Non-destructive, target-scoped Android -> bootloader Fastboot transition for
+# development. This removes the hard-button requirement when ADB is available;
+# it never enters Fastbootd or changes device storage.
+[positional-arguments]
+pixel-9a-enter-fastboot *args:
+    @"{{root}}/tools/pixel-9a/enter-fastboot.sh" "$@"
+
 # Offline safety/privacy tests with strict adb/fastboot stubs; never contacts a
 # physical device.
 pixel-9a-tools-test:
@@ -34,6 +41,10 @@ pixel-9a-tools-test:
     @sh "{{root}}/tools/pixel-9a/tests/sideload-workflow.sh"
     @sh "{{root}}/tools/pixel-9a/tests/factory-restore-workflow.sh"
     @sh "{{root}}/tools/pixel-9a/tests/unlock-workflow.sh"
+    @sh "{{root}}/tools/pixel-9a/tests/enter-fastboot-workflow.sh"
+
+pixel-9a-enter-fastboot-test:
+    @sh "{{root}}/tools/pixel-9a/tests/enter-fastboot-workflow.sh"
 
 # Separate native-Linux Pixel host environment. Loading it is opt-in and
 # read-only; it never creates output directories or contacts a device.

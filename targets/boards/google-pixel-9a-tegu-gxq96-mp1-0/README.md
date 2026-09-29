@@ -132,6 +132,28 @@ This gated workflow completed successfully on 2026-09-27 UTC. Post-unlock
 Fastboot discovery reported the exact device as `unlocked=yes`; no factory
 restore or slot change has been run.
 
+## Development Fastboot entry
+
+When stock Android is running and ADB is authorized, the LLM may place the
+exact target into ordinary bootloader Fastboot through the checked-in,
+non-destructive workflow:
+
+```sh
+just pixel-9a-enter-fastboot --preflight
+just pixel-9a-enter-fastboot --confirm-enter
+```
+
+The workflow verifies the exact Google Pixel 9a / `tegu` / `GXQ96` / `MP1.0`
+identity before and after issuing `adb reboot bootloader`, requires the typed
+phrase `CONFIRM PIXEL 9A ENTER FASTBOOT`, and never changes storage, slots,
+the bootloader, or user data. Hard-button entry is only a fallback when ADB is
+unavailable. This device may report `variant=N/A` from bootloader Fastboot;
+the dev workflow treats that field as unavailable only after the exact ADB
+identity was checked before reboot and product, hardware revision, serial,
+slot count, and `is-userspace=no` are rechecked afterward. This is ordinary
+bootloader Fastboot; the separate capacity workflow still refuses to enter
+Fastbootd on its own.
+
 ## Recovery choices
 
 Back up personal data first. Google documents full OTA sideload as the safer

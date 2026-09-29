@@ -136,6 +136,20 @@ ignored outputs and their manifests out-of-band to the transport host, then
 re-run the target-scoped validators there. Firmware, factory archives, AVB
 keys, device identifiers, and generated images remain outside Git.
 
+For development sessions, ordinary bootloader Fastboot does not require a
+hard-button entry when Android ADB is available:
+
+```sh
+just pixel-9a-enter-fastboot --preflight
+just pixel-9a-enter-fastboot --confirm-enter
+```
+
+This target-scoped workflow performs only an exact-identity-checked,
+confirmation-gated `adb reboot bootloader` and verifies the resulting
+bootloader Fastboot transport. It never enters Fastbootd; the partition
+capacity workflow remains read-only and requires an owner-entered Fastbootd
+session when Android cannot expose inactive logical mappings.
+
 ## Radio-first split-artifact completion
 
 First, with exactly one authorized Pixel 9a visible over ADB, collect the

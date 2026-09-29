@@ -45,6 +45,12 @@
   artifacts, exact-device temporary boot, and any persistent flash remain
   pending. QEMU remains the passing development/CI baseline; no QEMU result
   is promoted to the Pixel target.
+- **Development transport entry:** Ordinary bootloader Fastboot can now be
+  entered without hard buttons through the checked-in,
+  confirmation-gated `just pixel-9a-enter-fastboot` workflow when exact-target
+  ADB is available. Its read-only preflight has now run on the exact target;
+  it never enters Fastbootd or changes storage, and no reboot mutation has
+  been run through it yet.
 
 ## 2026-09-29 (factory-version reconciliation and native-build handoff)
 
