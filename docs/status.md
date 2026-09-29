@@ -59,6 +59,21 @@
   and radio workflows now accept that only when the same serial hash has a
   complete redacted ADB discovery proving Google / Pixel 9a / `tegu` /
   `GXQ96` / `MP1.0`. This is admission evidence only.
+- **Recovery preflight (read-only):** On 2026-09-29T21:11:49Z the exact
+  Fastboot device passed `just pixel-9a-factory-restore --preflight`. The
+  pinned factory and OTA archives matched their SHA-256/size pins; the
+  offline factory inventory required board `tegu`, bootloader
+  `tegu-17.0-15819938`, and baseband
+  `g5300t-260604-260807-B-16036236`; and the reviewed vendor sequence matched.
+  This remains `recovery_procedure=documented-not-tested` and
+  `image_compatibility=partial`: no factory restore, stock recovery boot, or
+  Ferrix mutation was run.
+- **Fastboot inventory refresh (read-only):** At 2026-09-29T21:12:06Z the
+  exact target's ordinary bootloader Fastboot `getvar all` inventory completed
+  with the same `tegu` / `MP1.0` / two-slot identity and included `userdata`
+  capacity. The Android-side inventory remains `partial` because Android
+  denied the broader `/proc` reads; this does not satisfy the separate
+  Fastbootd capacity handoff gate.
 - **Capacity gate:** The real read-only capacity workflow refused ordinary
   bootloader Fastboot with `Fastboot capacity handoff requires fastbootd
   (is-userspace=yes) ...; no reboot was issued`. An owner-entered Fastbootd

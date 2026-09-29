@@ -9,6 +9,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 . "$root/tools/pixel-9a/data-safety.sh"
+. "$root/tools/pixel-9a/adb-correlation.sh"
 target="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
 pins="$target/recovery.pins"
 recovery="$target/recovery"
@@ -66,6 +67,14 @@ sha256_of() {
   else
     sha256sum "$1" | awk '{ print $1 }'
   fi
+}
+
+sha256_prefix() {
+  printf '%s' "$1" | if [ "$hash_tool" = shasum ]; then
+    shasum -a 256
+  else
+    sha256sum
+  fi | awk '{ print substr($1, 1, 12) }'
 }
 
 pin() {
@@ -235,6 +244,8 @@ read_adb_identity() {
   [ "$flash_locked" = 1 ] || die "bootloader flash lock property is '$flash_locked', not 1"
   [ "$verified_boot" = green ] || die "verified boot state is '$verified_boot', not green"
   [ "$dynamic_partitions" = true ] || die "dynamic partitions property is '$dynamic_partitions', not true"
+  pixel9a_mark_live_adb_correlation "$(sha256_prefix "$adb_serial")" ||
+    die "could not record the verified live ADB identity for Fastboot correlation"
 }
 
 print_adb_summary() {
@@ -339,8 +350,11 @@ read_fastboot_identity() {
   [ "$fastboot_product" = "$expected_product" ] || {
     die "Fastboot product mismatch: $fastboot_product"
   }
-  [ "$fastboot_variant" = "$expected_sku" ] || {
-    die "Fastboot SKU/variant mismatch: $fastboot_variant"
+  pixel9a_fastboot_sku_gate "$fastboot_variant" "$(sha256_prefix "$adb_serial")" || {
+    case "$fastboot_variant" in
+      N/A|NA|unknown|unavailable|'') die "Fastboot SKU/variant '$fastboot_variant' is unavailable and no matching redacted ADB identity proves $expected_sku" ;;
+      *) die "Fastboot SKU/variant mismatch: $fastboot_variant" ;;
+    esac
   }
   [ "$fastboot_revision" = "$expected_revision" ] || {
     die "Fastboot hardware revision mismatch: $fastboot_revision"
@@ -361,7 +375,9 @@ read_fastboot_identity() {
   printf 'serial=%s\n' "$fastboot_serial"
   printf 'product=%s\n' "$fastboot_product"
   printf 'variant=%s\n' "$fastboot_variant"
-  printf 'sku=%s\n' "$fastboot_variant"
+  printf 'sku=%s\n' "$expected_sku"
+  printf 'sku_source=%s\n' "$pixel9a_sku_source"
+  printf 'sku_evidence=%s\n' "$pixel9a_sku_evidence"
   printf 'hardware_revision=%s\n' "$fastboot_revision"
   printf 'current_slot=%s\n' "$fastboot_slot"
   printf 'unlocked=%s\n' "$fastboot_unlocked"
@@ -397,7 +413,8 @@ recheck_fastboot_transport() {
   recheck_serial=$(printf '%s\n' "$fastboot_rows" | awk '{ print $1 }')
   [ "$recheck_serial" = "$fastboot_serial" ] || die "Fastboot serial changed before unlock"
   [ "$(fastboot_getvar product)" = "$expected_product" ] || die "Fastboot product changed before unlock"
-  [ "$(fastboot_getvar variant)" = "$expected_sku" ] || die "Fastboot SKU/variant changed before unlock"
+  recheck_variant=$(fastboot_getvar variant)
+  pixel9a_fastboot_sku_gate "$recheck_variant" "$(sha256_prefix "$fastboot_serial")" || die "Fastboot SKU/variant changed before unlock and no matching ADB correlation is available"
   [ "$(fastboot_getvar hw-revision)" = "$expected_revision" ] || die "Fastboot hardware revision changed before unlock"
   recheck_slot=$(fastboot_getvar current-slot)
   case "$recheck_slot" in a|b|_a|_b) ;; *) die "Fastboot current slot changed before unlock: $recheck_slot" ;; esac

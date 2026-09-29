@@ -6,6 +6,7 @@ set -eu
 # reads. The generated transcript is redacted and ignored.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$root/tools/pixel-9a/adb-correlation.sh"
 target="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
 out=${FERRIX_OUT_DIR:-"$root/out"}/pixel-9a
 expected_product=tegu
@@ -195,12 +196,15 @@ slot=$(fastboot_getvar current-slot)
 slot_count=$(fastboot_getvar slot-count)
 [ "$product" = "$expected_product" ] || die "product mismatch: $product"
 [ "$revision" = "$expected_revision" ] || die "hardware revision mismatch: $revision"
-[ "$sku" = "$expected_sku" ] || die "SKU/variant mismatch: $sku"
+pixel9a_fastboot_sku_gate "$sku" "$(sha256_prefix "$serial")" || die "SKU/variant '$sku' is unavailable and no matching redacted ADB identity proves $expected_sku"
 case "$slot" in a|b|_a|_b) ;; *) die "unexpected current slot: $slot" ;; esac
 [ "$slot_count" = 2 ] || die "unexpected slot count: $slot_count"
 emit product "$product"
 emit hardware_revision "$revision"
 emit variant "$sku"
+emit sku "$expected_sku"
+emit sku_source "$pixel9a_sku_source"
+emit sku_evidence "$pixel9a_sku_evidence"
 emit current_slot "$slot"
 emit slot_count "$slot_count"
 emit unlocked "$(fastboot_getvar unlocked)"

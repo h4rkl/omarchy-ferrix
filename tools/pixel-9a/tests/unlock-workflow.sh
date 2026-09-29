@@ -29,7 +29,8 @@ mkdir -p "$work/bin" "$work/target/recovery" "$work/state"
 # Generate a test copy only to redirect the script's fixed board path to this
 # private fixture. The checked-in workflow remains fixed to the exact Pixel 9a
 # board target and is statically inspected below.
-sed "s|target=\"\$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0\"|target=\"$work/target\"|" \
+sed -e "s|^root=.*|root=\"$root\"|" \
+  -e "s|target=\"\$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0\"|target=\"$work/target\"|" \
   "$script" > "$work/unlock.sh"
 chmod 0755 "$work/unlock.sh"
 
@@ -140,7 +141,7 @@ case "$1" in
         [ "$#" -eq 4 ] || exit 99
         case "$4" in
           product) value=tegu ;;
-          variant) value=${STUB_VARIANT:-GXQ96} ;;
+          variant) value=${STUB_VARIANT:-N/A} ;;
           hw-revision) value=MP1.0 ;;
           current-slot) value=a ;;
           unlocked) if [ -f "$STUB_STATE/unlocked" ]; then value=yes; else value=no; fi ;;
@@ -201,7 +202,7 @@ check "execute: approved unlock flow succeeds" [ "$status" -eq 0 ]
 check "execute: adb reboot precedes fastboot unlock" sh -c "grep -q '^adb\t-s\t$serial\treboot\tbootloader\t$' '$calls' && grep -q '^fastboot\t-s\t$serial\tflashing\tunlock\t$' '$calls'"
 check "execute: result records bootloader unlock" grep -q '^result=bootloader-unlocked$' "$work/approved/stdout"
 check "execute: mutation output names partition and recovery hashes" \
-  sh -c "grep -q '^partition_target=bootloader (fastboot flashing unlock)$' '$work/approved/stdout' && grep -q '^factory_recovery_sha256=$factory_hash$' '$work/approved/stdout' && grep -q '^ota_recovery_sha256=$ota_hash$' '$work/approved/stdout'"
+  sh -c "grep -q '^partition_target=bootloader (fastboot flashing unlock)$' '$work/approved/stdout' && grep -q '^factory_recovery_sha256=$factory_hash$' '$work/approved/stdout' && grep -q '^ota_recovery_sha256=$ota_hash$' '$work/approved/stdout' && grep -q '^sku_source=adb-correlated-live$' '$work/approved/stdout'"
 
 export STUB_VARIANT=GB62
 mkdir -p "$work/wrong_variant"

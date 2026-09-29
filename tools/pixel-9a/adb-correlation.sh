@@ -6,6 +6,15 @@
 # match the exact target.  The helper prints a matching transcript path and
 # never contacts a device.
 
+pixel9a_adb_live_correlation_prefix=''
+pixel9a_adb_live_correlation_evidence=''
+
+pixel9a_mark_live_adb_correlation() {
+	[ -n "$1" ] || return 1
+	pixel9a_adb_live_correlation_prefix=$1
+	pixel9a_adb_live_correlation_evidence=adb-live-identity
+}
+
 pixel9a_adb_correlation_file() {
 	correlation_prefix=$1
 	correlation_root=${FERRIX_OUT_DIR:-"$root/out"}
@@ -41,10 +50,15 @@ pixel9a_fastboot_sku_gate() {
 			return 0
 			;;
 		N/A|NA|unknown|unavailable|'')
-			pixel9a_sku_correlation=$(pixel9a_adb_correlation_file "$correlation_prefix" || true)
-			[ -n "$pixel9a_sku_correlation" ] || return 1
-			pixel9a_sku_source=adb-correlated
-			pixel9a_sku_evidence=$pixel9a_sku_correlation
+			if [ "${pixel9a_adb_live_correlation_prefix:-}" = "$correlation_prefix" ]; then
+				pixel9a_sku_source=adb-correlated-live
+				pixel9a_sku_evidence=${pixel9a_adb_live_correlation_evidence:-adb-live-identity}
+			else
+				pixel9a_sku_correlation=$(pixel9a_adb_correlation_file "$correlation_prefix" || true)
+				[ -n "$pixel9a_sku_correlation" ] || return 1
+				pixel9a_sku_source=adb-correlated
+				pixel9a_sku_evidence=$pixel9a_sku_correlation
+			fi
 			return 0
 			;;
 		*) return 1 ;;

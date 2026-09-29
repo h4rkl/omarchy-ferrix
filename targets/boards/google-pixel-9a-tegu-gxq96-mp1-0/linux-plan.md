@@ -62,6 +62,15 @@ bootloader-unlock observations are admission and recovery history only, not
 Linux evidence. The target-local `FERRIX_EVIDENCE=physical:<target-id>` value
 is a scope label required by the host profile, not proof of a physical run.
 
+The latest read-only physical gates are recorded without promoting them to
+Linux evidence: the exact Fastboot device passed the pinned factory/OTA
+preflight on 2026-09-29T21:11:49Z, and the ordinary-bootloader Fastboot
+partition inventory completed at 2026-09-29T21:12:06Z. The preflight still
+reports `image_compatibility=partial` and
+`recovery_procedure=documented-not-tested`; the Android-side inventory remains
+partial, and an owner-entered Fastbootd session is still required for the
+independent ten-partition capacity handoff.
+
 ## Kernel decision and pinned source baseline
 
 Mainline Linux and postmarketOS do not currently provide a Pixel 9a target.

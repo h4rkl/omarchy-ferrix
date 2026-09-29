@@ -20,13 +20,13 @@ Identity was established by the checked-in read-only workflow
 | Dynamic partitions | `true` |
 | Stock build | `BD4A.240925.111`, Android 15, 2025-01-05 SPL |
 
-The latest read-only admission refresh ran at `2026-09-28T05:57:17Z`
-(`just pixel-9a-discover`) and `2026-09-28T05:57:22Z`
-(`just pixel-9a-partition-inventory`). It reproduced the identity and A/B
-topology above; the inventory remains `partial` because Android denies
-`/proc/partitions` and `/proc/cmdline`. The ignored transcripts are evidence
-of the stock Android admission state only, not of a Ferrix Linux boot or radio
-functionality.
+The latest read-only admission refresh ran at `2026-09-29T21:12:06Z`
+(`just pixel-9a-partition-inventory`) in ordinary bootloader Fastboot. It
+reproduced the identity and A/B topology and recorded the complete read-only
+Fastboot `getvar all` output, including `userdata` capacity. The earlier
+Android-side inventory remains `partial` because Android denies
+`/proc/partitions` and `/proc/cmdline`; neither transcript is evidence of a
+Ferrix Linux boot or radio functionality.
 
 The serial and all other unique identifiers are intentionally absent. The
 redacted discovery transcript is generated under ignored `out/pixel-9a/`.
@@ -201,6 +201,12 @@ erase, format, slot, or oem commands. Only serial-redacted transcripts remain
 under `out/pixel-9a/{sideload,restore}/`. Do not run the vendor script
 directly; this repository has not yet run a factory restore and does not
 claim a tested restore path.
+
+The read-only factory preflight passed on `2026-09-29T21:11:49Z`: both pinned
+official recovery archives, the offline factory inventory, the required
+bootloader/baseband versions, and the reviewed vendor sequence matched. This
+does not test stock recovery or change the manifest's
+`recovery_procedure=documented-not-tested` gate.
 
 For expected failure states, use the route matching the transport: stock
 Android or stock recovery can use the verified full OTA with `adb sideload`;
