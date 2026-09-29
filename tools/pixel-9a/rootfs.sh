@@ -823,8 +823,8 @@ build_rootfs() {
 		printf '\n' >>"$init_input"
 		init_input_count=$((init_input_count + 1))
 	done
-	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y init <"$init_input"
-	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y install --no-image --no-fde --no-sshd --no-firewall --no-recommends
+	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --details-to-stdout --config "$config" -y init <"$init_input"
+	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --details-to-stdout --config "$config" -y install --no-image --no-fde --no-sshd --no-firewall --no-recommends
 	rootfs_dir=$(find "$pmb_work" -maxdepth 2 -type d -name 'chroot_rootfs-*' -print -quit)
 	[ -n "$rootfs_dir" ] || die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
