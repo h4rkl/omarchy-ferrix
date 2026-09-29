@@ -43,6 +43,33 @@ if grep -F -- 'exec /opt/zig/zig strip' "$dockerfile" >/dev/null; then
   exit 1
 fi
 
+command -v python3 >/dev/null 2>&1 || {
+  echo 'native-builder test requires python3 to exercise the Zig argument shim' >&2
+  exit 1
+}
+PYTHONDONTWRITEBYTECODE=1 python3 - "$root/containers/pixel-9a-builder/zig-clang.py" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("ferrix_zig_clang", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+arm64 = ["--target=aarch64-linux-gnu", "-Wa,-march=armv8.5-a", "-mcpu=generic", "-c"]
+normalized = module.normalize_compile_args(arm64)
+assert "-Wa,-march=armv8.5-a" in normalized
+assert normalized[-1] == "-mcpu=generic+el3"
+
+arm32 = ["--target=arm-linux-gnueabi", "-march=armv8-a", "-mthumb"]
+assert module.normalize_compile_args(arm32) == [
+    "--target=arm-linux-gnueabi",
+    "-mcpu=cortex_a32",
+    "-mthumb",
+]
+assert module.normalize_compile_args(["-mcpu=armv8"]) == ["-mcpu=generic"]
+PY
+
 cat >"$work/bin/docker" <<'EOF'
 #!/bin/sh
 set -eu

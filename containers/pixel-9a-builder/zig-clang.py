@@ -26,6 +26,7 @@ def normalize_compile_args(args: list[str]) -> list[str]:
     # instead of allowing an otherwise unrelated helper build to fail on the
     # spelling difference.
     normalized: list[str] = []
+    needs_el3 = False
     for arg in args:
         if arg == "-march=armv8-a":
             normalized.append("-mcpu=cortex_a32")
@@ -33,6 +34,15 @@ def normalize_compile_args(args: list[str]) -> list[str]:
             normalized.append("-mcpu=generic")
         else:
             normalized.append(arg)
+        if arg == "-Wa,-march=armv8.5-a":
+            needs_el3 = True
+    # Kbuild's arm64 platform helpers use an inline `smc #0`.  The original
+    # assembler dialect flag must remain visible to Zig, while its generic
+    # CPU model also needs the explicit EL3 extension or LLVM rejects that
+    # privileged instruction. Append this after the original arguments so a
+    # later generic -mcpu flag cannot silently remove +el3.
+    if needs_el3:
+        normalized.append("-mcpu=generic+el3")
     return normalized
 
 
