@@ -5,8 +5,10 @@ The Rust ``aarch64-unknown-linux-musl`` target spec adds the GNU ld-only
 ``--fix-cortex-a53-843419`` workaround to every link. Zig 0.14.1 rejects
 that spelling before it reaches lld. The Pixel 9a product is not built for a
 Cortex-A53 CPU, and lld does not need this legacy workaround for the target,
-so remove only that one target-spec argument before invoking Zig. Keep all
-other linker arguments byte-for-byte intact.
+so remove only that one target-spec argument before invoking Zig. Rust also
+supplies its own musl startup objects; ``-nostdlib`` prevents Zig from
+injecting a second ``crt1.o`` while retaining the explicit Rust objects and
+libraries. Keep all other linker arguments byte-for-byte intact.
 """
 
 from __future__ import annotations
@@ -43,7 +45,14 @@ def normalize_link_args(args: list[str]) -> list[str]:
 
 def main() -> int:
     return subprocess.run(
-        [ZIG, "cc", "-target", "aarch64-linux-musl", *normalize_link_args(sys.argv[1:])],
+        [
+            ZIG,
+            "cc",
+            "-target",
+            "aarch64-linux-musl",
+            "-nostdlib",
+            *normalize_link_args(sys.argv[1:]),
+        ],
         check=False,
     ).returncode
 
