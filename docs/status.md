@@ -7,10 +7,12 @@
   `/home`. The repository is cloned at
   `/home/ezy/github-projects/omarchy-ferrix`. This satisfies the physical
   architecture and disk-space gate; it is distinct from the rejected
-  Apple-Silicon OrbStack/UTM emulation path. Docker is installed but the
-  `ezy` account currently cannot access `/var/run/docker.sock`; no remote
-  build has started until the account is granted Docker access or a rootless
-  socket is provided.
+  Apple-Silicon OrbStack/UTM emulation path. Docker access is now enabled for
+  `ezy`; the pinned target builder image
+  `ferrix-pixel9a-builder:rust-1.98.1` was built on the native engine as
+  `linux/amd64` (`sha256:c1f648717e6695e5b020ce8c2124f62314157feb9206616b436b58de7937c8c7`).
+  Its device-free `env check build`, radio-kernel, product, and rootfs
+  preflights pass. No source sync or opt-in build has started yet.
 - **Radio-first physical adapter:** `flash-radio.sh` and its strict offline
   test now provide the separate physical route for the
   `linux-google-tegu-wwan` split manifest. It validates the route/contract
@@ -20,9 +22,11 @@
   and typed confirmations. The canonical Google Kleaf `flash.sh` route still
   refuses radio-first manifests. `just pixel-9a-flash-radio-test` passes; no
   physical boot or flash has been attempted.
-- **Phone state:** The exact Pixel 9a remains unproven for Ferrix Linux and
-  all radios. The current Mac ADB transport failure and incomplete Android
-  partition inventory still block the capacity handoff and physical route.
+- **Phone state:** The checked-in read-only discovery now sees exactly one
+  Pixel 9a (`tegu` / `GXQ96` / `MP1.0`) over Mac ADB, unlocked in slot A with
+  dynamic partitions. This remains admission evidence only: Ferrix Linux and
+  all-radio support are unproven, the complete capacity handoff is still
+  outstanding, and no physical boot or flash has been attempted.
 
 ## 2026-09-28 (latest read-only transport retry)
 
