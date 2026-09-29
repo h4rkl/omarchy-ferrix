@@ -74,6 +74,12 @@ ARG ALPINE_PIXMAN_DEV_VERSION=0.46.4-r0
 ARG ALPINE_PIXMAN_DEV_SHA256=c74cfa9a982fbf9a73d52cc3e88dab44273cef74334198f13ed1d54b1b0c7d51
 ARG ALPINE_PIXMAN_VERSION=0.46.4-r0
 ARG ALPINE_PIXMAN_SHA256=022ab7d2b766f3893e6c457a03c723fe3e79e9f009d8a62d06f1692d9f2fc77f
+ARG ALPINE_MUSL_DEV_VERSION=1.2.6-r2
+ARG ALPINE_MUSL_DEV_SHA256=ca72b84f4eb3c36bbbec04d919eb10159d414c7a43413cc2253841d301fa9486
+ARG ALPINE_MUSL_VERSION=1.2.6-r2
+ARG ALPINE_MUSL_SHA256=5e9674b7f41152fe2119093b5cb4c13eaaadb19c2d5422b2d7267913e663ee6e
+ARG ALPINE_LIBGCC_VERSION=15.2.0-r5
+ARG ALPINE_LIBGCC_SHA256=369aaa6e9d099a737bad6dd3e6c2fe7bb1547ca26d22b94ee0411228f709b403
 
 COPY zig-clang.py /usr/local/bin/ferrix-zig-clang.py
 COPY zig-musl-link.py /usr/local/bin/ferrix-zig-musl-link.py
@@ -159,6 +165,9 @@ RUN set -eux; \
     fetch_apk "libinput-libs-${ALPINE_LIBINPUT_LIBS_VERSION}.apk" "$ALPINE_LIBINPUT_LIBS_SHA256" community; \
     fetch_apk "pixman-dev-${ALPINE_PIXMAN_DEV_VERSION}.apk" "$ALPINE_PIXMAN_DEV_SHA256" main; \
     fetch_apk "pixman-${ALPINE_PIXMAN_VERSION}.apk" "$ALPINE_PIXMAN_SHA256" main; \
+    fetch_apk "musl-dev-${ALPINE_MUSL_DEV_VERSION}.apk" "$ALPINE_MUSL_DEV_SHA256" main; \
+    fetch_apk "musl-${ALPINE_MUSL_VERSION}.apk" "$ALPINE_MUSL_SHA256" main; \
+    fetch_apk "libgcc-${ALPINE_LIBGCC_VERSION}.apk" "$ALPINE_LIBGCC_SHA256" main; \
     test -f "$sysroot/usr/include/libudev.h"; \
     test -f "$sysroot/usr/lib/pkgconfig/libudev.pc"; \
     test -f "$sysroot/usr/lib/pkgconfig/libseat.pc"; \
@@ -173,6 +182,12 @@ RUN set -eux; \
     test -f "$sysroot/usr/lib/libgbm.so"; \
     test -f "$sysroot/usr/lib/libinput.so"; \
     test -f "$sysroot/usr/lib/libpixman-1.so"; \
+    test -f "$sysroot/usr/lib/crt1.o"; \
+    test -L "$sysroot/usr/lib/libc.so"; \
+    test -f "$sysroot/lib/ld-musl-aarch64.so.1"; \
+    test -f "$sysroot/lib/libc.musl-aarch64.so.1"; \
+    test -f "$sysroot/usr/lib/libgcc_s.so.1"; \
+    ln -s libgcc_s.so.1 "$sysroot/usr/lib/libgcc_s.so"; \
     rm -rf /tmp/alpine-pkgs
 
 ENV PKG_CONFIG_PATH_aarch64_unknown_linux_musl=/opt/ferrix/aarch64-linux-musl-sysroot/usr/lib/pkgconfig \
@@ -282,6 +297,9 @@ RUN useradd --create-home --uid 1000 --shell /bin/sh ferrix-builder \
         "alpine-libinput-libs=$ALPINE_LIBINPUT_LIBS_VERSION:$ALPINE_LIBINPUT_LIBS_SHA256" \
         "alpine-pixman-dev=$ALPINE_PIXMAN_DEV_VERSION:$ALPINE_PIXMAN_DEV_SHA256" \
         "alpine-pixman=$ALPINE_PIXMAN_VERSION:$ALPINE_PIXMAN_SHA256" \
+        "alpine-musl-dev=$ALPINE_MUSL_DEV_VERSION:$ALPINE_MUSL_DEV_SHA256" \
+        "alpine-musl=$ALPINE_MUSL_VERSION:$ALPINE_MUSL_SHA256" \
+        "alpine-libgcc=$ALPINE_LIBGCC_VERSION:$ALPINE_LIBGCC_SHA256" \
       > /usr/share/doc/ferrix-pixel9a-builder/pins.txt \
     && rustup target add --toolchain 1.98.1 aarch64-unknown-linux-musl
 

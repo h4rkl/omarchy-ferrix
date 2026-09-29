@@ -6,9 +6,12 @@ The Rust ``aarch64-unknown-linux-musl`` target spec adds the GNU ld-only
 that spelling before it reaches lld. The Pixel 9a product is not built for a
 Cortex-A53 CPU, and lld does not need this legacy workaround for the target,
 so remove only that one target-spec argument before invoking lld. Rust also
-supplies its own musl startup objects and libraries. Invoking lld directly
-prevents Zig's C driver from injecting a second ``crt1.o``; all explicit Rust
-objects, ``-L`` paths, and libraries are retained.
+supplies its own musl startup objects and libraries, but dynamic musl linking
+still needs the target libc and libgcc runtime objects. The builder image
+provides those from pinned Alpine aarch64 packages under ``TARGET_SYSROOT``.
+Invoking lld directly prevents Zig's C driver from injecting a second
+``crt1.o``; all explicit Rust objects, ``-L`` paths, and libraries are retained
+while the target sysroot is always selected explicitly.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import sys
 
 
 ZIG = "/opt/zig/zig"
+TARGET_SYSROOT = "/opt/ferrix/aarch64-linux-musl-sysroot"
 LEGACY_CORTEX_A53_FIX = "--fix-cortex-a53-843419"
 
 
@@ -61,6 +65,8 @@ def main() -> int:
             "ld.lld",
             "-m",
             "aarch64elf",
+            f"--sysroot={TARGET_SYSROOT}",
+            f"-L{TARGET_SYSROOT}/usr/lib",
             *normalize_link_args(sys.argv[1:]),
         ],
         check=False,

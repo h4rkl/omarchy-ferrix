@@ -49,7 +49,10 @@ for sysroot_input in \
   'libxkbcommon-dev-${ALPINE_LIBXKBCOMMON_DEV_VERSION}.apk' \
   'mesa-dev-${ALPINE_MESA_DEV_VERSION}.apk' \
   'libinput-dev-${ALPINE_LIBINPUT_DEV_VERSION}.apk' \
-  'pixman-dev-${ALPINE_PIXMAN_DEV_VERSION}.apk'; do
+  'pixman-dev-${ALPINE_PIXMAN_DEV_VERSION}.apk' \
+  'musl-dev-${ALPINE_MUSL_DEV_VERSION}.apk' \
+  'musl-${ALPINE_MUSL_VERSION}.apk' \
+  'libgcc-${ALPINE_LIBGCC_VERSION}.apk'; do
   grep -F -- "$sysroot_input" "$dockerfile" >/dev/null || {
     echo "builder image is missing target musl sysroot input: $sysroot_input" >&2
     exit 1
@@ -129,6 +132,7 @@ assert module.normalize_link_args([
     "-static",
 ]) == ["-z", "relro", "-lc", "-static"]
 assert module.normalize_link_args(["--fix-cortex-a53-843419", "-lc"]) == ["-lc"]
+assert module.TARGET_SYSROOT == "/opt/ferrix/aarch64-linux-musl-sysroot"
 PY
 
 cat >"$work/bin/docker" <<'EOF'
