@@ -229,15 +229,16 @@ list_ext4_directory() {
     die "source bundle directory is not readable: $source_directory"
   fi
   # debugfs -p emits /inode/mode/uid/gid/name// for directories and
-  # /inode/mode/uid/gid/name/size/ for non-directories.  The mode's leading
-  # octal digits identify the ext2 file type: 04 directory, 010 regular,
-  # 012 symlink, and the remaining values are special files.  Names are kept
-  # as a slash-delimited field, then rejected below before becoming paths.
+  # /inode/mode/uid/gid/name/size/ for non-directories. Its octal mode text
+  # uses prefixes such as 040755 (directory), 100644 (regular), and 120777
+  # (symlink); accept the alternate zero-padded regular/symlink spellings as
+  # well. Remaining mode types are special files. Names are kept as a
+  # slash-delimited field, then rejected below before becoming paths.
   awk -F '/' '
     $1 == "" && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-7]+$/ && $4 ~ /^-?[0-9]+$/ && $5 ~ /^-?[0-9]+$/ && $6 != "" {
       if ($3 ~ /^04/) kind = "directory"
-      else if ($3 ~ /^010/) kind = "regular"
-      else if ($3 ~ /^012/) kind = "symlink"
+      else if ($3 ~ /^100/ || $3 ~ /^010/) kind = "regular"
+      else if ($3 ~ /^12/ || $3 ~ /^012/) kind = "symlink"
       else kind = "special"
       print kind "\t" $6
       found = 1

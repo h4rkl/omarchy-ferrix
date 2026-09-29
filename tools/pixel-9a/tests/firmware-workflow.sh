@@ -86,13 +86,14 @@ printf '%s\n' '#!/bin/sh' 'set -eu' 'command=$2' 'case "$command" in' \
   '  "ls -p /firmware/carrierconfig")' \
   '    printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//"' \
   '    case "$FERRIX_FAKE_BUNDLE_MODE" in' \
-  '      regular) printf "%s\n" "/4/0100644/0/0/carrier-extra.conf/15/" "/5/0100644/0/0/carrier.conf/15/" ;;' \
-  '      symlink) printf "%s\n" "/4/0120777/0/0/carrier.conf/15/" ;;' \
-  '      traversal) printf "%s\n" "/4/0100644/0/0/..evil/15/" ;;' \
+  '      regular) printf "%s\n" "/4/100644/0/0/carrier-extra.conf/15/" "/5/100644/0/0/carrier.conf/15/" ;;' \
+  '      symlink) printf "%s\n" "/4/120777/0/0/carrier.conf/15/" ;;' \
+  '      traversal) printf "%s\n" "/4/100644/0/0/..evil/15/" ;;' \
+  '      special) printf "%s\n" "/4/020600/0/0/character-device/0/" ;;' \
   '      empty) ;;' \
   '      *) exit 2 ;;' \
   '    esac ;;' \
-  '  "ls -p /firmware") printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//" "/6/0100644/0/0/fw_bcmdhd.bin/15/" ;;' \
+  '  "ls -p /firmware") printf "%s\n" "/2/040755/0/0/.//" "/3/040755/0/0/..//" "/6/100644/0/0/fw_bcmdhd.bin/15/" ;;' \
   '  dump*) destination=$(printf "%s\n" "$command" | sed "s#^dump [^ ]* ##"); mkdir -p "$(dirname "$destination")"; printf "%s\n" synthetic-carrier-config >"$destination" ;;' \
   '  *) exit 2 ;;' \
   'esac' >"$fake_bin/debugfs"
@@ -155,7 +156,7 @@ if FERRIX_FAKE_BUNDLE_MODE=regular \
   exit 1
 fi
 grep -q 'already exists' "$work/overwrite-file.stderr"
-for mode in symlink traversal empty; do
+for mode in symlink traversal empty special; do
   if FERRIX_FAKE_BUNDLE_MODE="$mode" \
     FERRIX_PIXEL9A_PINS="$work/recovery.pins" \
     FERRIX_PIXEL9A_FACTORY_ARCHIVE="$work/factory.zip" \
@@ -170,4 +171,5 @@ done
 grep -q 'symlink' "$work/symlink.stderr"
 grep -q 'unsafe path component' "$work/traversal.stderr"
 grep -q 'empty' "$work/empty.stderr"
+grep -q 'non-regular, non-directory entry' "$work/special.stderr"
 printf '%s\n' 'pixel-9a firmware workflow tests passed'
