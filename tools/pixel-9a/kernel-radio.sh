@@ -467,7 +467,7 @@ install_kernel_modules() {
 	mkdir -p "$module_dir"
 	(
 		cd "$source_root"
-		make ARCH=arm64 LLVM=1 O="$build_out" modules_install INSTALL_MOD_PATH="$module_dir"
+		MAKEFLAGS="-j$(kernel_make_jobs)" make ARCH=arm64 LLVM=1 O="$build_out" modules_install INSTALL_MOD_PATH="$module_dir"
 	)
 	module_list="$dist/split-inputs/.module-install-list.$$"
 	find "$module_dir" -type f -print | LC_ALL=C sort >"$module_list"
@@ -487,6 +487,18 @@ install_kernel_modules() {
 	mv "$tmp" "$module_manifest"
 	rm -f "$module_list"
 	trap - EXIT HUP INT TERM
+}
+
+kernel_make_jobs() {
+	# The native builder is deliberately single-architecture and runs on a
+	# Linux x86_64 host. Use all reported host CPUs for the expensive Kbuild
+	# phases while retaining a deterministic single-job fallback for unusual
+	# minimal environments.
+	jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
+	case "$jobs" in
+		''|*[!0-9]*|0) jobs=1 ;;
+	esac
+	printf '%s\n' "$jobs"
 }
 
 write_partition_size_status() {
@@ -564,12 +576,13 @@ build_kernel() {
 	extra_config="$target/$(route_value extra_config_fragment)"
 	merge_config="$source_root/scripts/kconfig/merge_config.sh"
 	[ -x "$merge_config" ] || die "kernel config merge helper is missing or not executable: $merge_config"
+	jobs=$(kernel_make_jobs)
 	(
 		cd "$source_root"
-		make ARCH=arm64 LLVM=1 O="$build_out" defconfig
-		ARCH=arm64 LLVM=1 "$merge_config" -m -O "$build_out" "$build_out/.config" "$config" "$extra_config"
-		make ARCH=arm64 LLVM=1 O="$build_out" olddefconfig
-		make ARCH=arm64 LLVM=1 O="$build_out" Image dtbs modules
+		MAKEFLAGS="-j$jobs" make ARCH=arm64 LLVM=1 O="$build_out" defconfig
+		MAKEFLAGS="-j$jobs" ARCH=arm64 LLVM=1 "$merge_config" -m -O "$build_out" "$build_out/.config" "$config" "$extra_config"
+		MAKEFLAGS="-j$jobs" make ARCH=arm64 LLVM=1 O="$build_out" olddefconfig
+		MAKEFLAGS="-j$jobs" make ARCH=arm64 LLVM=1 O="$build_out" Image dtbs modules
 	)
 	check_built_config
 	image="$build_out/$(route_value kernel_artifact)"
