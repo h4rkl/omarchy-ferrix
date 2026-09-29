@@ -11,6 +11,7 @@ package_dir="$target/pmos/device-google-tegu"
 radio_initfs_module_list="$package_dir/modules-initfs-radio"
 pmos_dir="$target/pmos"
 pmaports_pins="$pmos_dir/pins.env"
+channels_cfg="$pmos_dir/channels.cfg"
 exynos_package_dir="$pmos_dir/exynos-modem"
 modemmanager_package_dir="$pmos_dir/modemmanager-samsung-sit"
 out_root=${FERRIX_OUT_DIR:-"$root/out"}
@@ -63,6 +64,8 @@ manifest_begin() {
 		printf 'route_id\texperimental-linux-google-tegu-s5300-wwan\n'
 		printf 'kernel_backend\tlinux-google-tegu-wwan\n'
 		printf 'pmaports_commit\t%s\n' "${FERRIX_PIXEL9A_PMAPORTS_COMMIT:-$(pinned_pmaports_commit)}"
+		printf 'pmaports_channel\t%s\n' "$(pinned_pmaports_channel)"
+		printf 'pmaports_branch\t%s\n' "$(pinned_pmaports_branch)"
 		printf 'firmware_mapping\tfirmware-radio-route.tsv\t%s\n' "$(hash_file "$radio_firmware_route")"
 		printf 'split_artifact_contract\tradio-split-artifact-contract.toml\t%s\n' "$radio_split_contract_hash"
 		printf 'status\t%s\n' "$1"
@@ -102,8 +105,18 @@ pinned_pmaports_commit() {
 		"$pmaports_pins"
 }
 
+pinned_pmaports_channel() {
+	awk -F '=' '$1 == "PMAPORTS_CHANNEL" { value=$2; gsub(/[[:space:]]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' \
+		"$pmaports_pins"
+}
+
+pinned_pmaports_branch() {
+	awk -F '=' '$1 == "PMAPORTS_BRANCH" { value=$2; gsub(/[[:space:]]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' \
+		"$pmaports_pins"
+}
+
 check_static_inputs() {
-	for file in pmbootstrap.cfg; do
+	for file in pmbootstrap.cfg channels.cfg; do
 		required_file "$pmos_dir/$file"
 	done
 	required_file "$pmaports_pins"
@@ -129,6 +142,14 @@ check_static_inputs() {
 		required_file "$package_path"
 	done
 	target_pmaports_commit=$(pinned_pmaports_commit) || die 'target pmOS package is missing PMAPORTS_COMMIT'
+	target_pmaports_channel=$(pinned_pmaports_channel) || die 'target pmOS package is missing PMAPORTS_CHANNEL'
+	target_pmaports_branch=$(pinned_pmaports_branch) || die 'target pmOS package is missing PMAPORTS_BRANCH'
+	[ "$target_pmaports_channel" = v26.06 ] || die "unsupported target pmaports channel: $target_pmaports_channel"
+	[ "$target_pmaports_branch" = v26.06 ] || die "unsupported target pmaports branch: $target_pmaports_branch"
+	grep -q '^\[v26\.06\]$' "$channels_cfg" || die 'target channel metadata lacks the pinned v26.06 section'
+	grep -q '^branch_pmaports=v26\.06$' "$channels_cfg" || die 'target channel metadata has the wrong pmaports branch'
+	grep -q '^branch_aports=3\.24-stable$' "$channels_cfg" || die 'target channel metadata has the wrong Alpine aports branch'
+	grep -q '^mirrordir_alpine=v3\.24$' "$channels_cfg" || die 'target channel metadata has the wrong Alpine mirror directory'
 	case "$target_pmaports_commit" in
 		''|*[!0-9a-fA-F]*) die 'target pmOS PMAPORTS_COMMIT is not a hexadecimal revision' ;;
 	esac
@@ -182,6 +203,7 @@ preflight() {
 	manifest_artifact s5300-userspace-sources.toml "$package_dir/s5300-userspace-sources.toml"
 	manifest_artifact firmware-radio-route.tsv "$radio_firmware_route"
 	manifest_artifact pmos/pins.env "$pmaports_pins"
+	manifest_artifact pmos/channels.cfg "$channels_cfg"
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
 	manifest_artifact profile.toml "$profile_path"
@@ -655,6 +677,7 @@ validate_inputs() {
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
 	manifest_artifact pmos/pins.env "$pmaports_pins"
+	manifest_artifact pmos/channels.cfg "$channels_cfg"
 	manifest_artifact profile.toml "$profile_path"
 	manifest_artifact firmware-manifest.tsv "$FERRIX_PIXEL9A_FIRMWARE_DIR/firmware-manifest.tsv"
 	manifest_artifact firmware-radio-route.tsv "$radio_firmware_route"
@@ -790,7 +813,7 @@ build_rootfs() {
 	# The target package set includes two local, source-pinned aports. Keep
 	# local package installation enabled so pmbootstrap builds and installs
 	# those recipes from the staged aports tree.
-	PMB_CHANNELS_CFG="$aports/pmaports.cfg" pmbootstrap --config "$config" -y install --no-image --no-fde --no-sshd --no-firewall --no-recommends
+	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y install --no-image --no-fde --no-sshd --no-firewall --no-recommends
 	rootfs_dir=$(find "$pmb_work" -maxdepth 2 -type d -name 'chroot_rootfs-*' -print -quit)
 	[ -n "$rootfs_dir" ] || die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
@@ -870,6 +893,7 @@ build_rootfs() {
 	manifest_artifact firmware-manifest.tsv "$rootfs_out/firmware-manifest.tsv"
 	manifest_artifact radio-firmware-manifest.tsv "$rootfs_out/radio-firmware-manifest.tsv"
 	manifest_artifact firmware-radio-route.tsv "$radio_firmware_route"
+	manifest_artifact pmos/channels.cfg "$channels_cfg"
 	manifest_artifact rootfs.tar "$rootfs_artifact"
 	manifest_artifact rootfs.img "$rootfs_image"
 	manifest_finish

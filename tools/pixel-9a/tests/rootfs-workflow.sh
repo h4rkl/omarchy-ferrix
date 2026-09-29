@@ -501,7 +501,8 @@ real_tar=$(command -v tar)
 		'aports=$(sed -n "s/^aports = //p" "$config")' \
 		'git -C "$aports" rev-parse HEAD >/dev/null' \
 		'[ "$(git -C "$aports" remote get-url origin)" = https://gitlab.postmarketos.org/postmarketOS/pmaports.git ]' \
-		'[ "$PMB_CHANNELS_CFG" = "$aports/pmaports.cfg" ]' \
+		'[ "${PMB_CHANNELS_CFG##*/}" = channels.cfg ]' \
+		'[ -f "$PMB_CHANNELS_CFG" ]' \
 		'[ -f "$aports/device/testing/exynos-modem/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/modemmanager-samsung-sit/APKBUILD" ]' \
 	'[ -f "$aports/device/testing/device-google-tegu/s5300-userspace-sources.toml" ]' \
