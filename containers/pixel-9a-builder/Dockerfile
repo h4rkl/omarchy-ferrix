@@ -34,6 +34,8 @@ ARG MKDTBOIMG_COMMIT=51befeeee29e8ea2cac77305451e9d781db2fd1a
 ARG AVB_REPO=https://android.googlesource.com/platform/external/avb
 ARG AVB_COMMIT=8201543ece1316d20f8a2002f70f8c076e28c7cb
 
+COPY zig-clang.py /usr/local/bin/ferrix-zig-clang.py
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -96,7 +98,7 @@ RUN curl --fail --location --retry 3 --connect-timeout 30 --output /tmp/zig.tar.
     && mv "/opt/zig-x86_64-linux-$ZIG_VERSION" /opt/zig \
     && ln -s /opt/zig/zig /usr/local/bin/zig \
     && rm -f /tmp/zig.tar.xz \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig cc "$@"' > /usr/local/bin/clang \
+    && printf '%s\n' '#!/bin/sh' 'exec python3 /usr/local/bin/ferrix-zig-clang.py "$@"' > /usr/local/bin/clang \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig c++ "$@"' > /usr/local/bin/clang++ \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig ld.lld "$@"' > /usr/local/bin/ld.lld \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig ar "$@"' > /usr/local/bin/llvm-ar \
