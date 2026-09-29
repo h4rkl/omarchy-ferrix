@@ -59,7 +59,7 @@ spec.loader.exec_module(module)
 arm64 = ["--target=aarch64-linux-gnu", "-Wa,-march=armv8.5-a", "-mcpu=generic", "-c"]
 normalized = module.normalize_compile_args(arm64)
 assert "-Wa,-march=armv8.5-a" in normalized
-assert normalized[-1] == "-mcpu=generic+el3"
+assert normalized[-1] == "-mcpu=generic+el3+v8a"
 
 arm32 = ["--target=arm-linux-gnueabi", "-march=armv8-a", "-mthumb"]
 assert module.normalize_compile_args(arm32) == [

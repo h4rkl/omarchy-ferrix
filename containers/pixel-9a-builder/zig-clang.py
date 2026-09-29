@@ -38,11 +38,11 @@ def normalize_compile_args(args: list[str]) -> list[str]:
             needs_el3 = True
     # Kbuild's arm64 platform helpers use an inline `smc #0`.  The original
     # assembler dialect flag must remain visible to Zig, while its generic
-    # CPU model also needs the explicit EL3 extension or LLVM rejects that
-    # privileged instruction. Append this after the original arguments so a
-    # later generic -mcpu flag cannot silently remove +el3.
+    # CPU model also needs the explicit EL3 and ARMv8-A extensions or LLVM
+    # rejects those privileged instructions. Append this after the original
+    # arguments so a later generic -mcpu flag cannot silently remove them.
     if needs_el3:
-        normalized.append("-mcpu=generic+el3")
+        normalized.append("-mcpu=generic+el3+v8a")
     return normalized
 
 
