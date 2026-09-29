@@ -20,6 +20,15 @@ grep -q 'linux-google-tegu-wwan' "$workflow" || fail 'kernel/userspace backend c
 grep -q 'kbuild-make' "$workflow" || fail 'independent Kbuild contract is not checked'
 grep -q 'verify_source_archive' "$workflow" || fail 'source archive integrity is not checked'
 grep -q 'curl --fail --location' "$workflow" || fail 'source archive download is not pinned'
+grep -q '^source_clone_depth=1$' "$workflow" || fail 'radio source clone depth is not pinned shallow'
+grep -q '^source_clone_filter=blob:none$' "$workflow" || fail 'radio source clone filter is not pinned'
+grep -q -- '--single-branch' "$workflow" || fail 'radio source clone is not single-branch'
+grep -q -- '--no-checkout' "$workflow" || fail 'radio source clone does not defer checkout'
+grep -q 'rev-parse --is-shallow-repository' "$workflow" || fail 'radio source shallow state is not verified'
+grep -q 'rev-list --count HEAD' "$workflow" || fail 'radio source depth is not verified'
+grep -q 'remote.origin.promisor' "$workflow" || fail 'radio source promisor remote is not verified'
+grep -q 'remote.origin.partialclonefilter' "$workflow" || fail 'radio source partial-clone filter is not verified'
+grep -q 'radio kernel source remote mismatch' "$workflow" || fail 'radio source remote is not pinned'
 for symbol in CONFIG_NET CONFIG_NETDEVICES CONFIG_INET CONFIG_IPV6 CONFIG_S5300_MODEM CONFIG_SPI CONFIG_GNSS CONFIG_GNSS_KEPLER CONFIG_BLK_DEV_DM CONFIG_BRCMFMAC_PCIE CONFIG_BT_HCIUART_BCM CONFIG_BT_HCIUART_H4 CONFIG_BT_HCIUART_SERDEV CONFIG_SERIAL_DEV_BUS; do
 	grep -q "$symbol" "$route" || fail "radio route omits required data/radio symbol: $symbol"
 done

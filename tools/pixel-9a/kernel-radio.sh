@@ -19,6 +19,12 @@ dist="$kernel_out/dist"
 manifest=${FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST:-"$kernel_out/build-manifest.tsv"}
 sync_confirmation=I-understand-this-downloads-the-radio-first-kernel
 build_confirmation=I-understand-this-runs-the-radio-first-kernel-build
+# The radio kernel source is large enough that a normal clone needlessly
+# transfers its complete history and every blob.  Keep the optimization
+# explicit and fixed: the checkout remains shallow, but Git can lazily fetch
+# the blobs Kbuild actually reads through the promisor remote.
+source_clone_depth=1
+source_clone_filter=blob:none
 
 die() {
 	printf 'FAIL pixel-9a-radio-kernel: %s\n' "$*" >&2
@@ -122,6 +128,24 @@ check_path() {
 
 source_archive_path() {
 	printf '%s/%s.tar.gz\n' "$(dirname -- "$source_root")" "$(route_value source_revision)"
+}
+
+verify_clone_strategy() {
+	origin_url=$(git -C "$source_root" remote get-url origin 2>/dev/null || true)
+	[ "$origin_url" = "$(route_value source_url)" ] ||
+		die "radio kernel source remote mismatch: expected $(route_value source_url), found ${origin_url:-unset}"
+	shallow=$(git -C "$source_root" rev-parse --is-shallow-repository 2>/dev/null || true)
+	[ "$shallow" = true ] ||
+		die 'radio kernel source checkout is not shallow; use a fresh source path instead of a full clone'
+	commit_count=$(git -C "$source_root" rev-list --count HEAD 2>/dev/null || true)
+	[ "$commit_count" = "$source_clone_depth" ] ||
+		die "radio kernel source checkout is not depth-$source_clone_depth: found ${commit_count:-unknown} commits"
+	promisor=$(git -C "$source_root" config --get remote.origin.promisor 2>/dev/null || true)
+	[ "$promisor" = true ] ||
+		die 'radio kernel source checkout is not a blob-filtered promisor clone'
+	filter=$(git -C "$source_root" config --get remote.origin.partialclonefilter 2>/dev/null || true)
+	[ "$filter" = "$source_clone_filter" ] ||
+		die "radio kernel source checkout has unexpected partial-clone filter: ${filter:-unset}"
 }
 
 verify_source_archive() {
@@ -296,6 +320,7 @@ print_resolution() {
 	printf '%s\n' "source archive cache: $(source_archive_path)"
 	printf '%s\n' "source archive sha256: $(route_value source_archive_sha256)"
 	printf '%s\n' "source archive sha512: $(route_value source_archive_sha512)"
+	printf '%s\n' "source clone: shallow depth=$source_clone_depth, filter=$source_clone_filter, single branch, no tags"
 	printf '%s\n' "extra config: $(route_value extra_config_fragment) ($(route_value extra_config_sha256))"
 	printf '%s\n' "firmware mapping: $(route_value firmware_mapping)"
 	printf '%s\n' "initfs module list: $(route_value initfs_module_list)"
@@ -307,6 +332,7 @@ print_resolution() {
 verify_source() {
 	check_metadata
 	[ -d "$source_root/.git" ] || die "radio kernel source is not initialized: $source_root; run just pixel-9a-kernel-radio-sync"
+	verify_clone_strategy
 	verify_source_archive "$(source_archive_path)"
 	actual=$(git -C "$source_root" rev-parse HEAD 2>/dev/null) || die 'radio kernel source is not a readable Git checkout'
 	expected=$(route_value source_revision)
@@ -341,6 +367,7 @@ sync_source() {
 		die "radio kernel source sync is opt-in; set FERRIX_PIXEL9A_RADIO_SYNC=$sync_confirmation"
 	if [ -e "$source_root" ]; then
 		[ -d "$source_root/.git" ] || die "radio source path exists but is not a Git checkout: $source_root"
+		verify_clone_strategy
 	fi
 	archive=$(source_archive_path)
 	mkdir -p "$(dirname -- "$archive")"
@@ -359,9 +386,21 @@ sync_source() {
 	fi
 	if [ ! -e "$source_root" ]; then
 		mkdir -p "$(dirname -- "$source_root")"
-		git clone --no-tags --branch "$(route_value source_branch)" "$(route_value source_url)" "$source_root"
+		git clone \
+			--filter="$source_clone_filter" \
+			--no-tags \
+			--single-branch \
+			--depth="$source_clone_depth" \
+			--branch "$(route_value source_branch)" \
+			--no-checkout \
+			"$(route_value source_url)" "$source_root"
+		verify_clone_strategy
 	fi
-	git -C "$source_root" fetch --no-tags origin "$(route_value source_revision)"
+	git -C "$source_root" fetch \
+		--no-tags \
+		--filter="$source_clone_filter" \
+		--depth="$source_clone_depth" \
+		origin "$(route_value source_revision)"
 	git -C "$source_root" checkout --detach "$(route_value source_revision)"
 	verify_source
 }

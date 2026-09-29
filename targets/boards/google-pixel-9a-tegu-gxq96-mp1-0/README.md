@@ -370,8 +370,13 @@ just pixel-9a-kernel-radio-test
 
 The sync step downloads the pinned source archive into the target cache and
 verifies its recorded byte count plus SHA-256/SHA-512 before creating or
-building the clean detached checkout. A missing or mismatched archive stops
-the route before Kbuild.
+building the clean detached checkout. New checkouts use a depth-1,
+single-branch, `blob:none` promisor clone, so Git can fetch only the blobs
+needed by verification and Kbuild instead of transferring the complete
+history. The workflow verifies that clone shape, the exact source revision,
+the archive hashes, the pinned remote, and a clean checkout before Kbuild; a
+pre-existing full clone must be replaced with a fresh source path. A missing
+or mismatched archive stops the route before Kbuild.
 
 This route requires the same native Linux x86_64 build host, records the exact
 candidate revision/config/DTS hashes, checks the IP/WWAN/rmnet data path and
