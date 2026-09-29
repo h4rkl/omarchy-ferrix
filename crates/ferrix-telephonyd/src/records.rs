@@ -17,6 +17,19 @@ pub const EVIDENCE_QEMU: &str = "QEMU";
 /// Evidence label for nested host runs from the mock profile.
 pub const EVIDENCE_MOCK: &str = "mock";
 
+/// Resolve the process evidence label without encoding a physical board in
+/// this service crate.
+pub fn runtime_evidence(nested: bool) -> String {
+    if nested {
+        EVIDENCE_MOCK.to_owned()
+    } else {
+        std::env::var("FERRIX_EVIDENCE")
+            .ok()
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| EVIDENCE_QEMU.to_owned())
+    }
+}
+
 /// Prints one JSON record per line and flushes, so serial captures are exact.
 pub fn emit(value: &Value) {
     let mut stdout = std::io::stdout().lock();

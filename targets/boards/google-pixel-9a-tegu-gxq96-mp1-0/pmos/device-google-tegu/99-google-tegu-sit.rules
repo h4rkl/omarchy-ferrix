@@ -1,0 +1,6 @@
+# Native Linux S5300 SIT transport.  The target-local ModemManager fork
+# consumes these properties and talks through sit-proxy; no Android RIL/HAL or
+# Binder service is involved.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", ENV{ID_MM_SIT_CARRIER_CONFIG_DIRECTORY}="/vendor/firmware/carrierconfig"
+# The AT veneer is not the modem control protocol and must not race SIT.
+ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ENV{ID_MM_PORT_IGNORE}="1"

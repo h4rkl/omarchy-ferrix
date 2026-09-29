@@ -9,6 +9,7 @@ license.workspace = true
 ferrix-hardware-api = { path = "../ferrix-hardware-api" }
 ferrix-hardware-emulator = { path = "../ferrix-hardware-emulator" }
 ferrix-target-profile = { path = "../ferrix-target-profile" }
+ferrix-target-pixel9a = { path = "../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/adapter" }
 
 [lints]
 workspace = true

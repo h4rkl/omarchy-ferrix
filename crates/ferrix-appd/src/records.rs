@@ -2,8 +2,9 @@
 //! first, mirroring `ferrix-core` and `ferrix-shell`.
 //!
 //! The evidence label is `QEMU` inside the guest and `mock` for nested host
-//! runs; neither is a physical-device claim. A [`Recorder`] carries the label
-//! and a sink so the service can be tested without reading stdout.
+//! runs. Physical target bootstraps provide their exact redacted target label
+//! through `FERRIX_EVIDENCE`. A [`Recorder`] carries the label and a sink so
+//! the service can be tested without reading stdout.
 
 use std::collections::BTreeSet;
 use std::io::Write as _;
@@ -18,6 +19,20 @@ use serde_json::{Map, Value};
 pub const EVIDENCE_QEMU: &str = "QEMU";
 /// Evidence label for nested host runs from the mock profile.
 pub const EVIDENCE_MOCK: &str = "mock";
+
+/// Resolve the runtime evidence label without making the application service
+/// know which board selected it. Nested development always remains mock
+/// evidence; a non-nested guest may opt into the exact target label.
+pub fn runtime_evidence(nested: bool) -> String {
+    if nested {
+        EVIDENCE_MOCK.to_owned()
+    } else {
+        std::env::var("FERRIX_EVIDENCE")
+            .ok()
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| EVIDENCE_QEMU.to_owned())
+    }
+}
 
 /// Prints one JSON record per line and flushes, so serial captures are exact.
 pub fn emit(value: &Value) {

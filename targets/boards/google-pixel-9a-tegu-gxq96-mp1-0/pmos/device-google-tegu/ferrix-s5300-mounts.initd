@@ -1,0 +1,116 @@
+#!/sbin/openrc-run
+
+name="Ferrix S5300 read-only source mounts"
+description="Mounts the exact Pixel 9a modem image and calibration partitions read-only"
+command="/bin/true"
+command_background="no"
+
+mount_root=/mnt/vendor
+efs_source=/dev/disk/by-partlabel/efs
+persist_source=/dev/disk/by-partlabel/persist
+modem_userdata_source=/dev/disk/by-partlabel/modem_userdata
+
+depend() {
+	need udev ferrix-radio-firmware
+	after localmount
+	before exynos-modem sit-proxy modemmanager
+}
+
+mounted_read_only() {
+	path=$1
+	awk -v wanted="$path" '
+		$2 == wanted {
+			for (i = 4; i <= NF; i++) {
+				if ($i == "ro" || $i ~ /^ro,|,ro$/ || $i ~ /,ro,/) {
+					found = 1
+				}
+			}
+		}
+		END { exit(found ? 0 : 1) }
+	' /proc/mounts 2>/dev/null
+}
+
+mounted_source_matches() {
+	source=$1
+	path=$2
+	expected=$(readlink -f "$source" 2>/dev/null) || return 1
+	actual=$(awk -v wanted="$path" '$2 == wanted { print $1; exit }' /proc/mounts 2>/dev/null) || return 1
+	[ -n "$actual" ] || return 1
+	actual=$(readlink -f "$actual" 2>/dev/null) || return 1
+	[ "$actual" = "$expected" ]
+}
+
+resolve_modem_source() {
+	# The modem partition is A/B while EFS, persist, and modem_userdata are
+	# single-label partitions.  The bootloader supplies the selected slot in
+	# androidboot.slot_suffix; never guess `_a` when Ferrix is booted from the
+	# inactive slot.  Requiring exactly one recognized value also prevents a
+	# malformed or conflicting command line from attaching the wrong modem
+	# calibration image.
+	slot_values=$(awk '{
+		for (i = 1; i <= NF; i++) {
+			if ($i ~ /^androidboot\.slot_suffix=/) {
+				value = $i
+				sub(/^androidboot\.slot_suffix=/, "", value)
+				print value
+			}
+		}
+	}' /proc/cmdline 2>/dev/null)
+	slot_count=$(printf '%s\n' "$slot_values" | awk 'NF { count++ } END { print count + 0 }')
+	[ "$slot_count" -eq 1 ] || {
+		eerror "exactly one androidboot.slot_suffix is required (found $slot_count)"
+		return 1
+	}
+	slot=$(printf '%s\n' "$slot_values")
+	case "$slot" in
+		_a|_b) printf '/dev/disk/by-partlabel/modem%s\n' "$slot" ;;
+		*) eerror "unsupported androidboot.slot_suffix: $slot"; return 1 ;;
+	esac
+}
+
+mount_one() {
+	source=$1
+	destination=$2
+	options=$3
+
+	[ -e "$source" ] || {
+		eerror "required exact partition label is unavailable: $source"
+		return 1
+	}
+	checkpath -d -m 0755 "$destination"
+	if mountpoint -q "$destination"; then
+		mounted_source_matches "$source" "$destination" || {
+			eerror "refusing a foreign mount at $destination (expected $source)"
+			return 1
+		}
+		mounted_read_only "$destination" || {
+			eerror "refusing a non-read-only mount at $destination"
+			return 1
+		}
+		return 0
+	fi
+	mount -o "$options" "$source" "$destination"
+}
+
+start() {
+	ebegin "Mounting exact Pixel 9a modem inputs read-only"
+	modem_source=$(resolve_modem_source) || { eend 1; return 1; }
+	mount_one "$modem_source" "$mount_root/modem_img" ro,nosuid,nodev,noexec || { eend 1; return 1; }
+	mount_one "$efs_source" "$mount_root/efs" ro,nosuid,nodev,noexec || { eend 1; return 1; }
+	mount_one "$persist_source" "$mount_root/persist" ro,nosuid,nodev,noexec || { eend 1; return 1; }
+	mount_one "$modem_userdata_source" "$mount_root/modem_userdata" ro,nosuid,nodev,noexec || { eend 1; return 1; }
+	eend 0
+}
+
+stop() {
+	ebegin "Unmounting exact Pixel 9a modem inputs"
+	# The daemon must be stopped by OpenRC dependency ordering before this
+	# service is stopped.  Never force an unmount: a busy mount is safer left in
+	# place than torn down while the modem owns an fd.
+	for destination in "$mount_root/modem_userdata" "$mount_root/persist" "$mount_root/efs" "$mount_root/modem_img"; do
+		if mountpoint -q "$destination"; then
+			umount "$destination" || { eerror "could not unmount $destination"; eend 1; return 1; }
+		fi
+	done
+	eend 0
+}

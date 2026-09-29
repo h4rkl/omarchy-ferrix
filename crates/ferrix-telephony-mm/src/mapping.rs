@@ -7,8 +7,9 @@
 use std::collections::BTreeSet;
 
 use ferrix_telephony_api::{
-    AccessTechnology, CallEndReason, CallState, Capabilities, Direction, ModemState, Operator,
-    RadioPower, Registration, Signal, SimLock, SimState, SmsFailure, SmsState, TelephonyFeature,
+    AccessTechnology, CallEndReason, CallState, Capabilities, DataBearer, Direction, ModemState,
+    Operator, RadioPower, Registration, Signal, SimLock, SimState, SmsFailure, SmsState,
+    TelephonyFeature,
 };
 
 /// `MMModemState`.
@@ -290,8 +291,43 @@ pub fn signal(quality_percent: u32) -> Signal {
 
 pub fn radio_power(power_state: u32) -> RadioPower {
     match power_state {
-        power_state::OFF | power_state::LOW => RadioPower::Off,
-        _ => RadioPower::On,
+        power_state::ON => RadioPower::On,
+        // Do not claim that the modem radio is on for UNKNOWN or a future
+        // ModemManager value.  The public contract has no third state, so an
+        // unrecognised value must take the non-operational side.
+        _ => RadioPower::Off,
+    }
+}
+
+/// Maps the read-only data surface that ModemManager exposes through
+/// `Modem.Simple` and `Bearer` objects.
+///
+/// A connected bearer may not expose a usable interface name during a brief
+/// transition; `Connected { interface: None }` is therefore intentional.
+pub fn data_bearer(
+    has_simple: bool,
+    modem_state_value: i32,
+    connected: bool,
+    interface: Option<&str>,
+) -> DataBearer {
+    if !has_simple {
+        return DataBearer::Unsupported;
+    }
+    if connected {
+        return DataBearer::Connected {
+            interface: interface
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+        };
+    }
+    if modem_state_value == modem_state::CONNECTING {
+        DataBearer::Connecting
+    } else if modem_state_value == modem_state::CONNECTED {
+        // ModemManager can report the modem's connected state before the
+        // Bearer object's properties are visible in the same enumeration.
+        DataBearer::Connected { interface: None }
+    } else {
+        DataBearer::Disconnected
     }
 }
 
@@ -386,17 +422,28 @@ pub fn is_complete_inbound(state: u32) -> bool {
 }
 
 /// Capabilities ModemManager exposes through this adapter.
-pub fn capabilities(has_voice: bool, has_messaging: bool) -> Capabilities {
+///
+/// `call_controls` is kept separate from the presence of the voice
+/// interface.  ModemManager exports the standard voice D-Bus surface even
+/// when a plugin only implements basic dial/answer/hangup operations.  In
+/// particular, the Samsung-SIT plugin deliberately leaves its DTMF and
+/// `HoldAndAccept` vfuncs unset; advertising those operations would make the
+/// Ferrix shell offer controls that can only fail at runtime.
+pub fn capabilities(
+    has_voice: bool,
+    has_messaging: bool,
+    has_simple: bool,
+    call_controls: bool,
+) -> Capabilities {
     let mut set: BTreeSet<TelephonyFeature> =
         [TelephonyFeature::SimPin, TelephonyFeature::RadioPower]
             .into_iter()
             .collect();
     if has_voice {
-        set.extend([
-            TelephonyFeature::Voice,
-            TelephonyFeature::Dtmf,
-            TelephonyFeature::Hold,
-        ]);
+        set.insert(TelephonyFeature::Voice);
+        if call_controls {
+            set.extend([TelephonyFeature::Dtmf, TelephonyFeature::Hold]);
+        }
     }
     if has_messaging {
         set.extend([
@@ -404,6 +451,9 @@ pub fn capabilities(has_voice: bool, has_messaging: bool) -> Capabilities {
             TelephonyFeature::MultipartSms,
             TelephonyFeature::DeliveryReports,
         ]);
+    }
+    if has_simple {
+        set.insert(TelephonyFeature::Data);
     }
     set
 }
@@ -562,7 +612,38 @@ mod tests {
         assert_eq!(radio_power(power_state::OFF), RadioPower::Off);
         assert_eq!(radio_power(power_state::LOW), RadioPower::Off);
         assert_eq!(radio_power(power_state::ON), RadioPower::On);
-        assert_eq!(radio_power(power_state::UNKNOWN), RadioPower::On);
+        assert_eq!(radio_power(power_state::UNKNOWN), RadioPower::Off);
+        assert_eq!(radio_power(99), RadioPower::Off);
+    }
+
+    #[test]
+    fn data_bearer_observation_is_conservative_and_preserves_interface() {
+        assert_eq!(
+            data_bearer(false, modem_state::CONNECTED, true, Some("wwan0")),
+            DataBearer::Unsupported
+        );
+        assert_eq!(
+            data_bearer(true, modem_state::CONNECTING, false, None),
+            DataBearer::Connecting
+        );
+        assert_eq!(
+            data_bearer(true, modem_state::ENABLED, true, Some("wwan0")),
+            DataBearer::Connected {
+                interface: Some("wwan0".into())
+            }
+        );
+        assert_eq!(
+            data_bearer(true, modem_state::CONNECTED, false, None),
+            DataBearer::Connected { interface: None }
+        );
+        assert_eq!(
+            data_bearer(true, modem_state::ENABLED, false, None),
+            DataBearer::Disconnected
+        );
+        assert_eq!(
+            data_bearer(true, modem_state::ENABLED, true, Some("")),
+            DataBearer::Connected { interface: None }
+        );
     }
 
     #[test]
@@ -681,13 +762,19 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_never_include_audio_route_or_data() {
-        let all = capabilities(true, true);
+    fn capabilities_follow_exported_interfaces() {
+        let all = capabilities(true, true, true, true);
         assert!(all.contains(&TelephonyFeature::Voice));
+        assert!(all.contains(&TelephonyFeature::Dtmf));
+        assert!(all.contains(&TelephonyFeature::Hold));
         assert!(all.contains(&TelephonyFeature::MultipartSms));
+        assert!(all.contains(&TelephonyFeature::Data));
         assert!(!all.contains(&TelephonyFeature::AudioRoute));
-        assert!(!all.contains(&TelephonyFeature::Data));
-        let none = capabilities(false, false);
+        let sit = capabilities(true, true, true, false);
+        assert!(sit.contains(&TelephonyFeature::Voice));
+        assert!(!sit.contains(&TelephonyFeature::Dtmf));
+        assert!(!sit.contains(&TelephonyFeature::Hold));
+        let none = capabilities(false, false, false, false);
         assert_eq!(none.len(), 2);
     }
 }

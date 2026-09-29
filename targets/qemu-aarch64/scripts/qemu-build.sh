@@ -10,7 +10,7 @@ cache=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}
 rust_toolchain=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "$root/rust-toolchain.toml")
 [ -n "$rust_toolchain" ] || { echo "cannot resolve pinned Rust channel" >&2; exit 2; }
 
-command -v docker >/dev/null || { echo "missing docker" >&2; exit 2; }
+command -v docker >/dev/null || { echo "missing Docker-compatible container CLI (OrbStack provides 'docker')" >&2; exit 2; }
 command -v cpio >/dev/null || { echo "missing cpio" >&2; exit 2; }
 mkdir -p "$out" "$out/product" "$cache/cargo-registry" "$cache/guest-target"
 

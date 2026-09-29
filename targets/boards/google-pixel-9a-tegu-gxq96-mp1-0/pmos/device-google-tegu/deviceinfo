@@ -1,0 +1,22 @@
+# Reference: https://postmarketos.org/deviceinfo
+deviceinfo_format_version="0"
+deviceinfo_name="Google Pixel 9a"
+deviceinfo_manufacturer="Google"
+deviceinfo_codename="google-tegu"
+deviceinfo_year="2025"
+deviceinfo_arch="aarch64"
+deviceinfo_chassis="handset"
+deviceinfo_external_storage="false"
+deviceinfo_screen_width="1080"
+deviceinfo_screen_height="2424"
+
+# Keep generic pmbootstrap from guessing a destructive or incomplete flash
+# route. Split-boot composition is handled by a separate validated workflow.
+deviceinfo_flash_method="none"
+deviceinfo_generate_bootimg="false"
+deviceinfo_flash_kernel_on_update="false"
+deviceinfo_header_version="4"
+deviceinfo_initfs_compression="lz4:fast"
+deviceinfo_bootimg_vendor_device_tree_identifiers="zumapro-tegu-mp"
+deviceinfo_dev_internal_storage_repartition="false"
+deviceinfo_usb_idVendor="0x18D1"

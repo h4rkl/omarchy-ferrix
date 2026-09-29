@@ -17,8 +17,8 @@ cache=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}
 rust_image=rust@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f
 rust_toolchain=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "$root/rust-toolchain.toml")
 [ -n "$rust_toolchain" ] || { echo "cannot resolve pinned Rust channel" >&2; exit 2; }
-command -v docker >/dev/null || { echo "missing docker; start Docker Desktop (see just host-check)" >&2; exit 2; }
-docker info >/dev/null 2>&1 || { echo "docker daemon is not running; start Docker Desktop" >&2; exit 2; }
+command -v docker >/dev/null || { echo "missing Docker-compatible container CLI; start OrbStack or the configured container engine (see just host-check)" >&2; exit 2; }
+docker info >/dev/null 2>&1 || { echo "container engine is not running; start OrbStack or the configured container engine" >&2; exit 2; }
 mkdir -p "$cache/cargo-registry" "$cache/linux-check-target"
 
 if [ "$#" -eq 0 ]; then

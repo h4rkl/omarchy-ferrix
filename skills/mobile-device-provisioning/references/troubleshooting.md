@@ -55,8 +55,15 @@ reconnect. `offline` after a reboot usually clears within seconds.
 
 - ADB reports `ro.boot.slot_suffix=_a`; Fastboot reports `current-slot: a`.
   They are the same slot. Workflows normalize both forms.
-- `slot-count` is `2` on the Pixel 9a. A different value is an identity
-  mismatch; the workflow dies.
+- Fastboot must report `slot-count=2` on the Pixel 9a. Android may expose an
+  empty `ro.boot.slot_count`; `pixel-9a-partition-inventory` then accepts `2`
+  only when a read-only `/dev/block/by-name` listing proves both A/B suffixes
+  and records `slot_count_source=block-by-name`. If neither source proves two
+  slots, the workflow dies rather than guessing.
+- The same inventory can finish with `inventory_completeness=partial` when
+  Android denies or omits `/proc/partitions` or `/proc/cmdline`. That is usable
+  as topology evidence, but rootfs flashing requires `complete`; obtain a
+  complete read-only guest inventory before that stage.
 - Never change the active slot by hand. A first Ferrix flash must not
   overwrite the active stock slot without the owner's approved inactive-slot
   plan (`linux-plan.md`). State the slot in every checklist.
@@ -77,7 +84,9 @@ reconnect. `offline` after a reboot usually clears within seconds.
 Expected. `unlock-bootloader.sh` leaves the phone in Fastboot on purpose so
 the verified factory archive can be restored. The unlock erased user data.
 Next steps are the owner's decision: factory restore (Phase 4) to return to
-stock Android, or, once every gate passes, a temporary Ferrix boot (Phase 6).
+stock Android, or, once a complete checked-in Ferrix route passes every gate,
+a temporary Ferrix boot (Phase 6). The current radio-first composer is only an
+unbooted handoff and has no approved temporary-boot or persistent-flash route.
 `fastboot reboot` by hand is not permitted; the restore and flash workflows
 reboot as part of their confirmed sequence.
 
@@ -123,8 +132,8 @@ idempotent).
   (`FERRIX_PIXEL9A_SSH_PORT`), extra options in `FERRIX_PIXEL9A_SSH_OPTS`.
   All remote calls use `BatchMode=yes`, so key-based SSH must already work.
 - Exit 3: unreachable. Exit 4: device tree does not contain
-  `FERRIX_PIXEL9A_DT_COMPATIBLE` (default `google,tegu`); override it only
-  after the first physical transcript shows the exact string. Exit 5: a QEMU
+  `FERRIX_PIXEL9A_DT_COMPATIBLE` (default `google,ZUMA PRO TEGU`); override it
+  only after a new pinned source revision is reviewed. Exit 5: a QEMU
   guest (`linux,dummy-virt`) is refused by design; you are connected to the
   wrong thing. Exit 6: confirmation phrase mismatch; nothing was changed.
 - `connect-wifi` reads the PSK from `FERRIX_PIXEL9A_WIFI_PSK` or a no-echo
@@ -133,13 +142,38 @@ idempotent).
 
 ## Build host problems (Phase 5)
 
-- `kernel.sh preflight` refuses macOS or non-x86_64: hand off, do not
-  emulate.
+- `env.sh check build`, `kernel.sh preflight`, and the radio-first split/build
+  preflights require native Linux x86_64. On Apple Silicon, an ARM64 UTM
+  guest is the wrong architecture, an x86_64 UTM guest uses rejected CPU
+  emulation, and OrbStack/Lima/Docker containers or a cross build are not
+  native-host substitutes. Hand the Pixel build off to provisioned native
+  Linux x86_64; UTM is still fine for a separate Linux smoke test or QEMU
+  workflow.
 - `repo` missing or under 80 GiB free: report; do not install or free disk on
   your own.
 - `pmbootstrap` needs a clean pmaports checkout at the pinned commit
   (`FERRIX_PIXEL9A_PMAPORTS_DIR`); a dirty or wrong-commit checkout is
   refused.
+
+## Artifact and firmware gates (Phase 5)
+
+- The canonical `pixel-9a-artifacts-manifest` route accepts only the exact
+  Google Kleaf kernel/rootfs contracts and a header-v4,
+  `composed-not-booted` boot manifest with an explicit AVB mode. It rejects
+  unsafe or traversing artifact paths and any size/SHA-256 mismatch. Do not
+  edit a manifest to make it pass; rebuild into a fresh ignored output.
+- The radio-first split composer is device-free and requires all ten
+  exact-target partition capacities plus source-built DTBO/module inputs. It
+  generates salted AVB descriptors from the final staged bytes and rejects
+  external or stock vbmeta inputs. Its `complete-source-built` manifest is
+  still not boot or flash authorization; `pixel-9a-flash-*` has no radio-first
+  adapter and must refuse it.
+- If `ferrix-radio-firmware` refuses, stop before NetworkManager, BlueZ,
+  ModemManager, or Ferrix adapters start. The runtime gate checks every
+  manifest destination against the reviewed allowlist (including descendants
+  of the modem configuration directories), file size/SHA-256, regular-file
+  status, and all four radio aliases. Missing, changed, unreviewed, or
+  symlinked rows are a fail-closed condition, not a reason to bypass the gate.
 
 ## When to stop and ask the owner
 

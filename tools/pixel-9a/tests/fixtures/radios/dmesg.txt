@@ -1,0 +1,6 @@
+[    4.100000] bcmdhd4383: Dongle Host Driver, version synthetic
+[    4.200000] bcmdhd4383: loading firmware /lib/firmware/fw_bcmdhd.bin
+[    4.300000] bcmdhd4383: wlan0: MAC 12:34:56:78:9A:BC
+[    5.000000] Bluetooth: hci0: BCM: firmware Patch file loaded
+[    5.100000] Bluetooth: hci0: BCM: address 0a:1b:2c:3d:4e:5f
+[    6.000000] cpif: s5300 synthetic: no ModemManager transport exposed

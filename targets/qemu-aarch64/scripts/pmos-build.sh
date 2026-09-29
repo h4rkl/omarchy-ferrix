@@ -45,8 +45,8 @@ builder_dir=$root/containers/guest-builder
 . "$pmos_dir/pins.env"
 tag=${FERRIX_GUEST_BUILDER_TAG:-"ferrix-guest-builder:pmbootstrap-$PMBOOTSTRAP_TAG"}
 
-command -v docker >/dev/null || { echo "missing docker; start Docker Desktop (see just host-check)" >&2; exit 2; }
-docker info >/dev/null 2>&1 || { echo "docker daemon is not running; start Docker Desktop" >&2; exit 2; }
+command -v docker >/dev/null || { echo "missing Docker-compatible container CLI; start OrbStack or the configured container engine (see just host-check)" >&2; exit 2; }
+docker info >/dev/null 2>&1 || { echo "container engine is not running; start OrbStack or the configured container engine" >&2; exit 2; }
 "$root/targets/qemu-aarch64/scripts/qemu-build.sh"
 # Every product artifact the finalize step installs, including the service
 # daemons, the apps, and the ADR-004 grants policy (without it ferrix-appd
@@ -58,10 +58,9 @@ for file in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sand
 done
 mkdir -p "$out"
 # pmbootstrap's work directory holds chroots and needs real POSIX semantics
-# (ownership, setuid bits, device nodes). Docker Desktop's virtiofs bind
-# mounts from macOS provide none of them (verified: chown stays uid 0, 4755
-# becomes 755, mknod is EPERM), so the default is a Docker volume inside the
-# Docker VM. Linux hosts can bind the cache directory instead.
+# (ownership, setuid bits, device nodes). macOS host bind mounts may not
+# provide all of them, so the default is a named container volume inside the
+# container engine's Linux VM. Linux hosts can bind the cache directory instead.
 if [ "${FERRIX_PMOS_WORK_BIND:-0}" = 1 ]; then
   work_mount="$cache/pmbootstrap"
   mkdir -p "$work_mount"

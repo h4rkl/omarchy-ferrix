@@ -99,6 +99,11 @@ fi
 # the guest's dbus/lxc environment, not a loop-mounted rootfs.
 android_facts='"enabled": false'
 if [ "${FERRIX_PMOS_ANDROID:-0}" = 1 ]; then
+  # Pixel-class Android viewport for the generic QEMU phone: 400 dpi makes
+  # the 1080-pixel panel approximately 432 dp wide. Keep this inside the
+  # QEMU Android image branch; it must not enter the shared Ferrix profile or
+  # any physical-target package.
+  android_density_dpi=400
   for f in system.img vendor.img images.json; do
     [ -f "/android/images/$f" ] || fail "android-images-missing" "/android/images/$f not mounted"
   done
@@ -110,6 +115,7 @@ if [ "${FERRIX_PMOS_ANDROID:-0}" = 1 ]; then
 ro.hardware.gralloc=default
 ro.hardware.egl=swiftshader
 persist.waydroid.multi_windows=false
+ro.sf.lcd_density=400
 INI
   install -Dm755 "$project/local.d/00-ferrix-android.start" "$mnt/etc/local.d/00-ferrix-android.start"
   mkdir -p "$mnt/var/lib/waydroid" "$mnt/etc/nftables.d"
@@ -133,7 +139,8 @@ INI
   waydroid_pkg=$(awk '/^P:waydroid$/ { getline; sub(/^V:/, ""); print; exit }' "$mnt/lib/apk/db/installed")
   [ -n "$waydroid_pkg" ] || fail "waydroid-not-installed" "package waydroid missing from the rootfs apk database"
   android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"fulguris_apk_sha256\": \"$fulguris_sha\", \"init_mode\": \"first-boot\""
-  log "android runtime staged (waydroid $waydroid_pkg)"
+  android_facts="\"density_dpi\": $android_density_dpi, $android_facts"
+  log "android runtime staged (waydroid $waydroid_pkg, density ${android_density_dpi}dpi)"
 fi
 
 local_enabled=true

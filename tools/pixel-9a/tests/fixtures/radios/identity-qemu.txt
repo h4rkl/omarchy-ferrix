@@ -1,0 +1,7 @@
+dt_model=linux,dummy-virt
+dt_compatible=linux,dummy-virt
+hostname=ferrix-qemu
+kernel=6.12.0-synthetic
+os_release=postmarketos edge
+uid=0
+priv=

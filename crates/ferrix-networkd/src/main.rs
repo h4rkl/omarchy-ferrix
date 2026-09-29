@@ -119,11 +119,13 @@ fn main() -> ExitCode {
     let args = match cli::parse(std::env::args().skip(1), &env) {
         Ok(args) => args,
         Err(error) => {
-            Recorder::stdout(ferrix_networkd::records::EVIDENCE_MOCK).failed(&error.to_string());
+            let evidence = ferrix_networkd::records::runtime_evidence(false);
+            Recorder::stdout(&evidence).failed(&error.to_string());
             return ExitCode::from(2);
         }
     };
-    let recorder = Recorder::stdout(args.evidence());
+    let evidence = args.evidence();
+    let recorder = Recorder::stdout(&evidence);
     match run(args, recorder.clone()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(reason) => {

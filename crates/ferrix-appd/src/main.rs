@@ -17,10 +17,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use ferrix_app_api::{DEFAULT_APPD_SOCKET, GRANTS_PATH_ENV, GUEST_APP_DIR, REPO_APP_DIR};
+use ferrix_app_api::{
+    DEFAULT_APPD_SOCKET, GRANTS_PATH_ENV, GUEST_APP_DIR, REPO_APP_DIR, TELEPHONY_APN_ENV,
+};
 use ferrix_app_runtime_api::Runtime;
 use ferrix_appd::process_tree::ProcTree;
-use ferrix_appd::records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder};
+use ferrix_appd::records::{Recorder, runtime_evidence};
 use ferrix_appd::{Catalog, GrantsSource, Server, Service, ServiceOptions, load_grants};
 use ferrix_runtime_android::{AndroidRuntime, AndroidRuntimeOptions, WaydroidCli, WaydroidOptions};
 use ferrix_runtime_native::{NativeRuntime, NativeRuntimeOptions};
@@ -105,7 +107,7 @@ fn default_app_dir() -> PathBuf {
     }
 }
 
-fn run(args: Args, recorder: Recorder) -> Result<(), String> {
+fn run(args: Args, recorder: Recorder, telephony_apn: Option<String>) -> Result<(), String> {
     let mut catalog = Catalog::new();
     for dir in &args.app_dirs {
         catalog.extend_from_dir(dir).map_err(|e| e.to_string())?;
@@ -157,6 +159,7 @@ fn run(args: Args, recorder: Recorder) -> Result<(), String> {
     let listener = Server::bind(&args.socket)?;
     let options = ServiceOptions {
         socket: args.socket.clone(),
+        telephony_apn,
         grants,
         ..ServiceOptions::default()
     };
@@ -193,16 +196,17 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("{USAGE}");
-            Recorder::stdout(EVIDENCE_QEMU).appd_failed(&error);
+            let recorder = Recorder::stdout(&runtime_evidence(false));
+            recorder.appd_failed(&error);
             return ExitCode::FAILURE;
         }
     };
-    let recorder = Recorder::stdout(if args.nested {
-        EVIDENCE_MOCK
-    } else {
-        EVIDENCE_QEMU
-    });
-    match run(args, recorder.clone()) {
+    let evidence = runtime_evidence(args.nested);
+    let recorder = Recorder::stdout(&evidence);
+    let telephony_apn = std::env::var(TELEPHONY_APN_ENV)
+        .ok()
+        .filter(|value| !value.is_empty());
+    match run(args, recorder.clone(), telephony_apn) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             recorder.appd_failed(&error);

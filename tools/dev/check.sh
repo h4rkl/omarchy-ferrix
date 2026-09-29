@@ -46,15 +46,20 @@ check_command "cpio" cpio cpio --version
 check_command "SHA-256 tool" shasum shasum --version
 check_command "QEMU AArch64" qemu-system-aarch64 qemu-system-aarch64 --version
 check_command "QEMU image tool" qemu-img qemu-img --version
-check_command "Docker CLI" docker docker --version
+check_command "Docker-compatible container CLI" docker docker --version
 check_command "rustup" rustup rustup --version
 check_command "just" just just --version
 
 if command -v docker >/dev/null 2>&1; then
   if docker info >/dev/null 2>&1; then
-    pass "Docker engine — reachable by the current user"
+    container_context=$(docker context show 2>/dev/null || true)
+    if [ "$container_context" = orbstack ]; then
+      pass "Container engine — OrbStack is reachable by the current user (context: orbstack)"
+    else
+      pass "Container engine — reachable by the current user${container_context:+ (context: $container_context)}"
+    fi
   else
-    fail "Docker engine — not running or not reachable by the current user"
+    fail "Container engine — not running or not reachable by the current user"
   fi
 fi
 

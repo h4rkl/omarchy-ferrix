@@ -1,0 +1,77 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+route_id = "experimental-linux-google-tegu-s5300-wwan"
+status = "experimental-not-adopted"
+
+# This is an independent native-Linux Kbuild candidate. It is deliberately
+# not an entry in kernel-sources.toml and cannot be consumed by the canonical
+# Google Kleaf split-boot workflow.
+source_url = "https://github.com/SteffenDE/linux-google-tegu.git"
+source_branch = "tegu-v7.2"
+source_revision = "88335b765d920cc345cdffb9c1a6d77e3a531ff9"
+source_archive_url = "https://github.com/SteffenDE/linux-google-tegu/archive/88335b765d920cc345cdffb9c1a6d77e3a531ff9.tar.gz"
+source_archive_bytes = 266688197
+source_archive_sha256 = "efb166b113618722b6e124a2d70f0b30c3708cea9bc9b5b468909cce1d3705af"
+source_archive_sha512 = "5d4de3b79ea7ae7007ec913f36791424d50bc68d60183c9189fcf76b610790eb3a20eb50054af9447d27a31cf1ba6044f27c7473ff1eab812a521feed6ff9dd7"
+
+architecture = "arm64"
+build_system = "kbuild-make"
+compiler_mode = "llvm"
+config_fragment = "arch/arm64/configs/tegu.config"
+config_sha256 = "8fea23220e412a9c462aafe585e1b206fb1c176a0151c61459a5803833515a55"
+extra_config_fragment = "kernel-radio-extra.config"
+extra_config_sha256 = "9dd69074c4233695a6b5088382f37141b721fb19ff3ed6e0246e08821c2ce78c"
+device_tree_source = "arch/arm64/boot/dts/exynos/google/zumapro-tegu.dts"
+device_tree_sha256 = "b18b5a40413afa55497d4d2f10a6dd769588ab01d11fbb7433a7e13760854b1a"
+device_tree_artifact = "arch/arm64/boot/dts/exynos/google/zumapro-tegu.dtb"
+kernel_artifact = "arch/arm64/boot/Image"
+userspace_backend = "linux-google-tegu-wwan"
+firmware_mapping = "firmware-radio-route.tsv"
+firmware_mapping_sha256 = "2811f41574c407de01936aa66565676518bf626077cd9c1be10e22dbcf141e86"
+initfs_module_list = "pmos/device-google-tegu/modules-initfs-radio"
+split_artifact_contract = "radio-split-artifact-contract.toml"
+split_artifact_contract_sha256 = "221347949752c3a7865264958bd5ad58e0fec1f9a080630902b3c384488bac12"
+
+# Associated-radio boundary.  KEPLER is a source-built kernel raw-device
+# contract only; no location parser or service is selected until a native
+# Linux boot establishes the BETP startup/data path.  The NFC/ST54 names below
+# are comparison-route Android modules and must never enter this Kbuild route.
+gnss_binding = "samsung,kepler"
+gnss_driver_source = "drivers/gnss/kepler.c"
+gnss_runtime_device_glob = "/dev/gnss*"
+gnss_userspace_status = "raw-device-only"
+nfc_route_status = "not-selected"
+nfc_comparison_modules = "st21nfc.ko,st54spi.ko"
+st54_route_status = "not-selected"
+
+# These symbols are checked after Kbuild merges defconfig + tegu.config. The
+# route is useful specifically because it exposes the S5300 WWAN/SIT ports, the
+# BCM4383 Wi-Fi/Bluetooth hardware, and the candidate's built-in Samsung Kepler
+# GNSS path in a native Linux kernel contract. NFC/ST54 and UWB are deliberately
+# not selected; see associated-radio-audit.md.
+required_config = [
+  "CONFIG_NET=y",
+  "CONFIG_NET_CORE=y",
+  "CONFIG_NETDEVICES=y",
+  "CONFIG_INET=y",
+  "CONFIG_IPV6=y",
+  "CONFIG_WWAN=y",
+  "CONFIG_S5300_MODEM=y",
+  "CONFIG_SPI=y",
+  "CONFIG_GNSS=y",
+  "CONFIG_GNSS_KEPLER=y",
+  "CONFIG_BLK_DEV_DM=y",
+  "CONFIG_RFKILL=y",
+  "CONFIG_CFG80211=y",
+  "CONFIG_BRCMFMAC=y",
+  "CONFIG_BRCMFMAC_PCIE=y",
+  "CONFIG_BT=y",
+  "CONFIG_BT_LE=y",
+  "CONFIG_BT_HCIUART=y",
+  "CONFIG_BT_HCIUART_H4=y",
+  "CONFIG_BT_HCIUART_SERDEV=y",
+  "CONFIG_BT_HCIUART_BCM=y",
+  "CONFIG_SERIAL_DEV_BUS=y",
+  "CONFIG_DRM_EXYNOS_ZUMAPRO_DPU=y",
+  "CONFIG_PCIE_ZUMAPRO=y",
+]

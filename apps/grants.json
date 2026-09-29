@@ -33,6 +33,8 @@
       "network-state",
       "network-control",
       "telephony-state",
+      "telephony-data",
+      "telephony-radio",
       "core-state",
       "core-control"
     ],

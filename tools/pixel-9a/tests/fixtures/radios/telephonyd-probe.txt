@@ -1,0 +1,2 @@
+{"reply":"hello","schema_version":1}
+{"reply":"error","error":{"kind":"unauthorized","capability":"telephony-state"}}

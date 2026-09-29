@@ -155,7 +155,10 @@ directory. The socket is bound before `ferrix-appd-ready` is printed; then the
 home surface and every `autostart: true` descriptor are launched (unless
 `--no-autostart`), and the socket is served until the process is stopped.
 Launched apps inherit `ferrix-appd`'s environment plus `FERRIX_APP_ID`,
-`FERRIX_APP_INSTANCE`, and `FERRIX_APPD_SOCKET`.
+`FERRIX_APP_INSTANCE`, and `FERRIX_APPD_SOCKET`. The optional
+`FERRIX_TELEPHONY_APN` value is forwarded only to an app whose effective grant
+contains `telephony-data`; it is never written to appd evidence or lifecycle
+records.
 
 Tests: `cargo test -p ferrix-appd` runs on macOS and Linux; `tests/socket.rs` drives
 a real Unix socket with `ferrix_app_protocol::Client` and the fake runtime,

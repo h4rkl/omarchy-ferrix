@@ -9,9 +9,9 @@ telephony APIs.
 
 | Subsystem | Kernel side (Pixel 9a `tegu`) | Linux service | Ferrix adapter crate | Product-facing contract | Selected by |
 | --- | --- | --- | --- | --- | --- |
-| Wi-Fi | Broadcom BCM4383, `bcmdhd` driver, firmware `fw_bcmdhd.bin`, `bcmdhd.cal`, `bcmdhd_clm.blob`, `fw_bcmdhd.map`, `bcmdhd_txcap.blob` (`firmware-policy.toml`) | NetworkManager | `ferrix-network-nm` inside `ferrix-networkd --backend networkmanager` | `ferrix-network-api` / `-protocol` (ADR-002) | `FERRIX_NETWORK_BACKEND=networkmanager` |
-| Bluetooth | Broadcom Bluetooth module (pinned `bluetooth-broadcom` source) | BlueZ (`org.bluez.Adapter1`) | `ferrix-bluetooth-bluez` (`--features production`) | `ferrix-hardware-api::Bluetooth` (present/enabled only) | `FERRIX_BLUETOOTH_BACKEND=bluez` |
-| Cellular | Samsung S5300 CPIF (pinned `modem-s5300` source); SIPC5 link frames | ModemManager, if and only if it can expose the modem | `ferrix-telephony-mm` inside `ferrix-telephonyd --backend modemmanager`; `ferrix-s5300-cpif` is a Rust SIPC5 frame codec only | `ferrix-telephony-api` / `-protocol` (ADR-001) | `FERRIX_TELEPHONY_BACKEND=modemmanager` |
+| Wi-Fi | Radio-first candidate: Broadcom BCM4383 PCIe with Linux `brcmfmac`; the checked-in `firmware-radio-route.tsv` copies the verified factory `bcmdhd` members to `brcm/brcmfmac4383-pcie.bin`, `.txt`, `.clm_blob`, and `.txcap_blob`. The canonical Google `bcmdhd` contract remains a separate route and must not be mixed. | NetworkManager | `ferrix-network-nm` inside `ferrix-networkd --backend networkmanager` | `ferrix-network-api` / `-protocol` (ADR-002) | `FERRIX_NETWORK_BACKEND=networkmanager` |
+| Bluetooth | Broadcom Bluetooth controller with Linux `btbcm`/HCI-UART support and the factory-selected `brcm/BCM.hcd` firmware path; candidate and canonical routes share this reviewed firmware filename but still require route-specific kernel evidence. | BlueZ (`org.bluez.Adapter1`) | `ferrix-bluetooth-bluez` (`--features production`) | `ferrix-hardware-api::Bluetooth` (present/enabled only) | `FERRIX_BLUETOOTH_BACKEND=bluez` |
+| Cellular | Radio-first candidate: Samsung S5300 with the pinned `s5300_modem` WWAN/SIT driver, `/dev/umts_boot0` loader path, runtime `wwan0sit0`/`wwan0sit1` and AT ports, and `rmnet*` data devices after CP ONLINE. The Google Kleaf `cpif` route is incompatible. | ModemManager, if and only if the target-local SIT plugin exposes the modem | `ferrix-telephony-mm` inside `ferrix-telephonyd --backend modemmanager`; target-local `exynos-modem`/SIT package recipes provide the external loader/plugin boundary; `ferrix-s5300-cpif` remains a Rust SIPC5 frame codec only | `ferrix-telephony-api` / `-protocol` (ADR-001) | `FERRIX_TELEPHONY_BACKEND=modemmanager` |
 | Power | Google BMS modules | UPower (`/org/freedesktop/UPower/devices/DisplayDevice`) | `ferrix-power-upower` | `ferrix-hardware-api::Power` | `FERRIX_POWER_BACKEND=upower` |
 | Audio | AoC / amplifiers | PipeWire + WirePlumber (`wpctl`) | `ferrix-audio-wireplumber` | `ferrix-hardware-api::Audio` | `FERRIX_AUDIO_BACKEND=wireplumber` |
 
@@ -24,7 +24,8 @@ Evidence label: the guest exports
 `FERRIX_EVIDENCE=physical:google-pixel-9a-tegu-gxq96-mp1-0`. QEMU guests
 export `QEMU`; the nested host route exports `mock`. The radios workflow
 (`tools/pixel-9a/radios.sh`, Stub-tested only) refuses a guest whose device tree
-is not `google,tegu` (exit 4) and refuses a QEMU `linux,dummy-virt` guest
+is not the pinned `google,ZUMA PRO TEGU` / `ZUMA PRO TEGU MP on ZUMA PRO`
+identity (exit 4) and refuses a QEMU `linux,dummy-virt` guest
 outright (exit 5).
 
 ## Evidence status vocabulary
@@ -61,13 +62,40 @@ words above. A capability status change goes through the owner: the radios
 `physical: google-pixel-9a-tegu-gxq96-mp1-0`; the owner pastes it after
 review. Telephony never becomes `supported` from this workflow.
 
+The board's
+`targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-source-evidence.md`
+records the immutable external sources used by the target-local S5300 loader
+and SIT ModemManager package recipes, while
+`targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/grapheneos-radio-correlation.md`
+records Android-source corroboration for hardware-facing module names and load
+order. The package recipes are a checked-in native-Linux build boundary, but
+neither source record is physical evidence. Runtime adoption requires verified
+source/archive hashes, licensing/source offer, exact factory carrierconfig and
+UECAP directory inputs, and a readiness boundary through public ModemManager
+D-Bus; Android RIL/HAL/Binder/SELinux/vendor services and prebuilts remain
+excluded.
+
+The host firmware manifest is not runtime evidence. Before any radio service
+starts, `ferrix-radio-firmware` validates the exact target/schema, checks every
+manifest destination against the reviewed runtime allowlist (including every
+descendant under the explicitly reviewed carrierconfig/UECAP directories),
+rechecks regular-file size and SHA-256, and verifies the four radio-first
+aliases. A passing offline stage or runtime gate only establishes a safe input
+boundary; it does not show that a physical controller loaded.
+
+The radio-first split-image composer is likewise device-free implementation
+evidence. Even with a complete source-built partition handoff, its manifest
+remains `composed-not-booted` / `bootable=false`; only a later exact-target
+guest run through the Linux service and Ferrix adapter can provide capability
+evidence.
+
 ## What counts as radio evidence
 
 | Radio | Evidence rows (all redacted) | Not evidence |
 | --- | --- | --- |
 | Wi-Fi | driver bound, firmware files present with hashes matching `firmware-manifest.tsv`, `rfkill` unblocked, NetworkManager device state, scan count (not SSIDs), association state, DHCP lease obtained (address family only), DNS resolution, traffic bytes; `ferrix-networkd` `networkd-ready` record | a QEMU `set-radio` scenario; `dmesg` alone; stock Android connectivity |
 | Bluetooth | adapter object present, `Powered=true` after `ferrix-bluetooth-bluez` enable, re-read state; optionally discovery count | pairing or audio unless separately evidenced |
-| Modem | module loaded, CPIF device nodes present; ModemManager `mmcli -L` result; SIM state; registration; bearer | any claim of calls, SMS, VoLTE, or emergency calling; modem enumeration alone is not phone support |
+| Modem | radio-first `s5300_modem` bound, CP ONLINE transition, `/dev/umts_boot0` loader, `wwan0sit0`/`wwan0sit1` and AT WWAN ports, `rmnet*` presence, verified carrierconfig/UECAP rows, ModemManager `mmcli -L`/D-Bus readiness, SIM state, registration, and bearer; the legacy Google CPIF surface is recorded separately as an ABI mismatch | any claim of calls, SMS, VoLTE, or emergency calling; modem enumeration alone is not phone support |
 | Power | UPower percentage and charging state; a Ferrix `Power` change on plug/unplug | QEMU unplugged-to-charging |
 | Audio | WirePlumber sinks; default sink change via `wpctl set-default` reflected in Ferrix state | ALSA control dumps |
 
@@ -93,15 +121,23 @@ subfolders in `.gitignore`. Before staging, grep the diff for `serial`,
 
 - Nothing has booted Linux on the device; all nine capabilities are
   `unsupported` in `capabilities.toml`.
-- Cellular: the S5300 CPIF is not a QMI/MBIM/AT modem that ModemManager
-  supports out of the box. `ferrix-telephony-mm` cannot provide phone service
-  until a target-specific CPIF backend or ModemManager plugin exists.
+- Cellular: the Google Kleaf S5300 CPIF surface (`cpif` and
+  `/dev/umts_ipc*`) is not the WWAN SIT ABI consumed by the reviewed
+  `exynos-modem`/SIT ModemManager packages. `ferrix-telephony-mm` cannot
+  provide phone service until the radio-first `s5300_modem` kernel backend,
+  target-local package, exact factory `/firmware/carrierconfig` and
+  `/firmware/uecapconfig` inputs, and plugin are built together and expose a
+  modem through the WWAN/SIT ports; those package inputs are not physical
+  evidence. The checked-in `radios.sh` workflow must observe that route's
+  WWAN/SIT readiness before any telephony capability can change.
   `ferrix-s5300-cpif` stops at the SIPC5 wire-frame boundary and claims no
   modem, SMS, data, voice, IMS, or call audio. Emergency calling is rejected
   as `unsupported{feature: emergency}` everywhere and must stay that way.
-- Wi-Fi/Bluetooth: the firmware policy names the BCM4383 files but no
-  Linux load or association has been observed; the stock `modem.img` is a raw
-  radio payload the firmware stager refuses to treat as a filesystem.
+- Wi-Fi/Bluetooth: the firmware policy names the BCM4383 files and the
+  radio-first route records explicit `bcmdhd`→`brcmfmac4383-pcie.*` aliases,
+  but no Linux load, association, controller power, or BlueZ evidence has been
+  observed; the stock `modem.img` is a raw radio payload the firmware stager
+  refuses to treat as a filesystem.
 - Audio: `wpctl set-default` cannot select ports on a single sink; mobile UCM
   layouts that expose earpiece and speaker as ports will report fewer routes.
 - Power: the adapter keeps the last authoritative reading if UPower
@@ -109,5 +145,7 @@ subfolders in `.gitignore`. Before staging, grep the diff for `serial`,
 - Bluetooth: the adapter models presence and power only; no discovery,
   pairing, profiles, or audio routing.
 - Kernel/module coherence: stock Android modules must never be mixed with
-  the Ferrix-built kernel; module and DTBO evidence is valid only for the
-  pinned Kleaf build recorded in `build-manifest.tsv`.
+  the Ferrix-built kernel. The Google Kleaf and radio-first kernel backends
+  have different CPIF and BCM4383 firmware contracts; module, DTB/DTBO, and
+  firmware evidence is valid only for the one pinned backend recorded in
+  `build-manifest.tsv`.

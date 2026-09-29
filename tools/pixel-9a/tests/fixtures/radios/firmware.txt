@@ -1,0 +1,10 @@
+firmware=/lib/firmware/fw_bcmdhd.bin=verified
+firmware=/lib/firmware/bcmdhd.cal=verified
+firmware=/lib/firmware/bcmdhd_clm.blob=verified
+firmware=/lib/firmware/fw_bcmdhd.map=verified
+firmware=/lib/firmware/bcmdhd_txcap.blob=verified
+firmware=/lib/firmware/brcm/BCM.hcd=verified
+firmware=/lib/firmware/carrierconfig/carrier.conf=verified
+firmware=/lib/firmware/carrierconfig/carrier-extra.conf=verified
+firmware=/lib/firmware/uecapconfig/capability.conf=verified
+firmware_manifest=verified

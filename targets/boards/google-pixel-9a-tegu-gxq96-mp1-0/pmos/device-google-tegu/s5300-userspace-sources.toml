@@ -1,0 +1,64 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+codename = "tegu"
+hardware_revision = "MP1.0"
+
+# These are external, source-built native-Linux packages. The source archives
+# are fetched by the pmaports recipes below and are never copied into this
+# repository. The hashes are repeated in the recipes so a package build fails
+# closed even when this metadata is consumed independently.
+source_policy = "immutable-source-archives-only"
+android_framework = false
+android_ril = false
+android_hal = false
+
+[[source]]
+name = "exynos-modem"
+repository = "https://git.deusch.me/pixel-mainline/exynos-modem"
+archive_url = "https://git.deusch.me/pixel-mainline/exynos-modem/archive/634e8eb404c3fcf959dce6a0b0d97b33ba0fc346.tar.gz"
+commit = "634e8eb404c3fcf959dce6a0b0d97b33ba0fc346"
+sha256 = "324efde8cdef9c3e108cc92d9248556cdc8c0234e77a8a66218b49b978a9445f"
+sha512 = "fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952c9f60d476ccc0da635160ba5ee6aaca39c9920ab061e1272b2b3bcaa89ff4357c"
+license = "GPL-2.0-or-later"
+packages = ["exynos-modem", "sit-proxy", "samsung-sit-ffi"]
+
+[[source]]
+name = "modemmanager-samsung-sit"
+repository = "https://git.deusch.me/pixel-mainline/ModemManager"
+archive_url = "https://git.deusch.me/pixel-mainline/ModemManager/archive/14a0013a28e5d5eec513c65e75d7549678ecc61e.tar.gz"
+commit = "14a0013a28e5d5eec513c65e75d7549678ecc61e"
+sha256 = "6c11c4de4926d2e928e86fd1c5fbcfeebb515c373ddc8a515ace62d35de391b2"
+sha512 = "9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb972653c182fb994521e0f64602a00b22c54f0e83f282f11322b856978a9355ccfd8ea"
+license = "GPL-2.0-or-later AND LGPL-2.1-or-later"
+packages = ["modemmanager-samsung-sit", "libmm-glib"]
+
+[runtime]
+# The daemon and SIT plugin communicate with Ferrix only through the standard
+# ModemManager D-Bus API. No Android framework, RIL, HAL, Binder service, or
+# vendor Android process is part of this package boundary.
+modemmanager_plugin = "samsung-sit"
+modemmanager_service = "modemmanager"
+modem_daemon = "/usr/sbin/exynos-modem"
+sit_proxy = "/usr/sbin/sit-proxy"
+carrier_config_directory = "/vendor/firmware/carrierconfig"
+uecap_directory = "/vendor/firmware/uecapconfig"
+state_directory = "/var/lib/exynos-modem"
+
+[runtime.partitions]
+# All four sources are mounted read-only by ferrix-s5300-mounts. The daemon
+# reads stock modem/NV inputs and keeps any generated state under its writable
+# rootfs state directory; no private NV or modem image is staged in Git.
+# Resolve the A/B modem label from the bootloader's
+# androidboot.slot_suffix at runtime; never hardcode the active slot.
+modem_image_label = "modem_{androidboot.slot_suffix}"
+modem_image_label_policy = "exact-current-slot-only"
+efs_label = "efs"
+persist_label = "persist"
+modem_userdata_label = "modem_userdata"
+
+[runtime.services]
+mounts = "ferrix-s5300-mounts"
+modem_loader = "exynos-modem"
+proxy = "sit-proxy"
+modemmanager = "modemmanager"
+ordering = "mounts -> exynos-modem -> sit-proxy -> modemmanager"

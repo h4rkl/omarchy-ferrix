@@ -16,6 +16,11 @@ cpu=cortex-a57
 case "$accel" in
   hvf|kvm) cpu=host ;;
 esac
+memory=${FERRIX_QEMU_MEMORY:-2048}
+case "$memory" in
+  ''|*[!0-9]*) echo "invalid FERRIX_QEMU_MEMORY: $memory (positive MiB integer)" >&2; exit 2 ;;
+esac
+[ "$memory" -gt 0 ] || { echo "invalid FERRIX_QEMU_MEMORY: $memory (positive MiB integer)" >&2; exit 2; }
 # Host window metrics for windowed backends: prints "<visible height in
 # logical points> <backing scale>" or nothing when the host cannot report them
 # (no GUI session, unsupported platform).
@@ -39,7 +44,7 @@ display_for() {
 [ -x "$(command -v qemu-system-aarch64)" ] || { echo "missing qemu-system-aarch64; install with: brew install qemu" >&2; exit 2; }
 [ -f "$out/Image" ] && [ -f "$out/initramfs.cpio.gz" ] || { echo "missing guest artifacts; run: just qemu-build" >&2; exit 2; }
 [ -f "$profile" ] || { echo "missing QEMU profile: $profile" >&2; exit 2; }
-set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m 1024 -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz"
+set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m "$memory" -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz"
 # Mock-control channel: a virtio-serial port named ferrix.control, exposed on
 # the host as a local Unix socket. ferrix-core reads line-delimited JSON
 # commands from it (see scripts/mock_control.py / `just qemu-mock`). Agent

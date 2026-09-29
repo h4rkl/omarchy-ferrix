@@ -1,0 +1,71 @@
+# Target-local native-Linux package for the reviewed Pixel 9a S5300 userspace.
+# The source archive is external and immutable; no modem image, NV, UECAP, or
+# other device data is included in this repository.
+maintainer="Omarchy Ferrix maintainers"
+pkgname=exynos-modem
+pkgver=0.1.0_git20260731
+pkgrel=1
+pkgdesc="Native-Linux userspace daemon and SIT proxy for the Exynos S5300"
+url="https://git.deusch.me/pixel-mainline/exynos-modem"
+arch="aarch64"
+license="GPL-2.0-or-later"
+makedepends="cargo cargo-auditable"
+subpackages="$pkgname-dev"
+
+_commit=634e8eb404c3fcf959dce6a0b0d97b33ba0fc346
+_cargo_target=aarch64-unknown-linux-musl
+source="$pkgname-$_commit.tar.gz::https://git.deusch.me/pixel-mainline/exynos-modem/archive/$_commit.tar.gz"
+builddir="$srcdir/$pkgname"
+
+prepare() {
+	default_prepare
+	# Keep the reviewed upstream config: it pins the static musl target used by
+	# the target's initramfs. Explicitly repeating it makes the output directory
+	# and dependency resolution independent of the package host's defaults.
+	RUSTC_WRAPPER= cargo fetch --target="$_cargo_target" --locked
+}
+
+build() {
+	RUSTC_WRAPPER= cargo auditable build --release --frozen --target="$_cargo_target" \
+		-p exynos-modem -p sit-proxy -p samsung-sit-ffi
+}
+
+check() {
+	# `cargo test --target=...` executes the produced test binaries.  A native
+	# x86_64 pmbootstrap builder cannot execute the target's aarch64 binaries
+	# without an explicit qemu/binfmt setup, so compile those tests with
+	# --no-run and execute the same unit-test set for the builder host target.
+	# Native aarch64 builders run the target tests directly instead.
+	_host_target=$(rustc -vV | sed -n 's/^host: //p')
+	[ -n "$_host_target" ] || die "could not determine the Rust package-builder target"
+	if [ "$_host_target" = "$_cargo_target" ]; then
+		RUSTC_WRAPPER= cargo test --frozen --target="$_cargo_target" \
+			-p exynos-modem -p samsung-sit -p sit-proxy
+	else
+		RUSTC_WRAPPER= cargo test --frozen --target="$_cargo_target" --no-run \
+			-p exynos-modem -p samsung-sit -p sit-proxy
+		RUSTC_WRAPPER= cargo test --frozen --target="$_host_target" \
+			-p exynos-modem -p samsung-sit -p sit-proxy
+	fi
+}
+
+package() {
+	install -Dm755 "$builddir/target/$_cargo_target/release/exynos-modem" -t "$pkgdir/usr/sbin"
+	install -Dm755 "$builddir/target/$_cargo_target/release/sit-proxy" -t "$pkgdir/usr/sbin"
+}
+
+dev() {
+	pkgdesc="C ABI and static SIT codec for the Samsung SIT ModemManager plugin"
+	depends="$pkgname=$pkgver-r$pkgrel"
+	install -Dm644 "$builddir/target/$_cargo_target/release/libsamsung_sit_ffi.a" -t "$subpkgdir/usr/lib"
+	install -Dm644 "$builddir/crates/samsung-sit-ffi/include/samsung_sit_ffi.h" -t "$subpkgdir/usr/include"
+	install -dm755 "$subpkgdir/usr/lib/pkgconfig"
+	sed -e "s|@prefix@|/usr|" \
+		-e "s|@version@|${pkgver%%_*}|" \
+		"$builddir/crates/samsung-sit-ffi/samsung-sit-ffi.pc.in" \
+		> "$subpkgdir/usr/lib/pkgconfig/samsung-sit-ffi.pc"
+}
+
+sha512sums="
+fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952c9f60d476ccc0da635160ba5ee6aaca39c9920ab061e1272b2b3bcaa89ff4357c  exynos-modem-634e8eb404c3fcf959dce6a0b0d97b33ba0fc346.tar.gz
+"

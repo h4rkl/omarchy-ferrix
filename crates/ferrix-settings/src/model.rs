@@ -8,7 +8,7 @@ use ferrix_network_api::{
     ProfileId, RadioState, SavedProfile, ScanState, SecurityType,
 };
 use ferrix_network_protocol::Feed;
-use ferrix_telephony_api::{RadioPower, RedactedTelephonyState};
+use ferrix_telephony_api::{DataBearer, DataProfile, RadioPower, RedactedTelephonyState};
 use ferrix_telephony_protocol::{Event as TeleEvent, Update};
 use ferrix_ui::osk::OskState;
 
@@ -75,6 +75,8 @@ pub enum Action {
     Forget(ProfileId),
     /// Telephony radio power (airplane mode's cellular half).
     SetRadioPower(RadioPower),
+    /// Cellular packet-data bearer control, independent of radio power.
+    SetCellularData(bool),
     Back,
 }
 
@@ -87,6 +89,10 @@ pub struct Model {
     pub tele_link: Link,
     pub tele: Option<RedactedTelephonyState>,
     pub tele_evidence: Option<String>,
+    /// Non-secret cellular data parameters supplied by the target runtime.
+    /// The Samsung-SIT backend requires an explicit APN; the value is never
+    /// included in UI state or evidence records.
+    pub data_profile: DataProfile,
     /// An access point awaiting a passphrase.
     pub passphrase_for: Option<ApId>,
     pub passphrase: String,
@@ -96,6 +102,20 @@ pub struct Model {
     pub target: String,
     net_lost_once: bool,
     tele_lost_once: bool,
+}
+
+/// Converts the optional target launch setting into the typed data profile.
+/// Invalid values are dropped at the UI boundary; `ferrix-telephonyd` still
+/// performs the authoritative validation for every socket request.
+pub fn data_profile_from_env(apn: Option<&str>) -> DataProfile {
+    let profile = DataProfile {
+        apn: apn.filter(|value| !value.is_empty()).map(str::to_owned),
+    };
+    if profile.validate().is_ok() {
+        profile
+    } else {
+        DataProfile::default()
+    }
 }
 
 impl Default for Model {
@@ -114,6 +134,7 @@ impl Model {
             tele_link: Link::Connecting,
             tele: None,
             tele_evidence: None,
+            data_profile: DataProfile::default(),
             passphrase_for: None,
             passphrase: String::new(),
             osk: OskState::default(),
@@ -122,6 +143,15 @@ impl Model {
             target: "unknown".to_owned(),
             net_lost_once: false,
             tele_lost_once: false,
+        }
+    }
+
+    /// Applies an optional target-runtime APN without making carrier
+    /// assumptions. Invalid values are ignored here; the privileged daemon
+    /// performs the authoritative typed validation before any modem call.
+    pub fn set_data_profile(&mut self, profile: DataProfile) {
+        if profile.validate().is_ok() {
+            self.data_profile = profile;
         }
     }
 
@@ -379,6 +409,22 @@ impl Model {
         }
     }
 
+    pub fn cellular_data_on(&self) -> bool {
+        self.tele.as_ref().is_some_and(|t| {
+            matches!(
+                &t.data,
+                DataBearer::Connected { .. } | DataBearer::Connecting
+            )
+        })
+    }
+
+    pub fn cellular_data_label(&self) -> String {
+        match &self.tele {
+            None => format!("cellular data · {}", self.tele_link.name()),
+            Some(t) => format!("cellular data · {}", t.data.name()),
+        }
+    }
+
     // -- intents -------------------------------------------------------------
 
     pub fn show(&mut self, page: Page) {
@@ -466,6 +512,9 @@ impl Model {
     pub fn toggle_airplane(&mut self) {
         let on = !self.airplane();
         self.pending.push(Action::SetRadio(!on));
+        if on && self.cellular_data_on() {
+            self.pending.push(Action::SetCellularData(false));
+        }
         self.pending.push(Action::SetRadioPower(if on {
             RadioPower::Off
         } else {
@@ -479,7 +528,15 @@ impl Model {
         } else {
             RadioPower::On
         };
+        if power == RadioPower::Off && self.cellular_data_on() {
+            self.pending.push(Action::SetCellularData(false));
+        }
         self.pending.push(Action::SetRadioPower(power));
+    }
+
+    pub fn toggle_cellular_data(&mut self) {
+        self.pending
+            .push(Action::SetCellularData(!self.cellular_data_on()));
     }
 
     pub fn back(&mut self) {
@@ -753,5 +810,47 @@ mod tests {
         m.apply_telephony(Update::Disconnected);
         assert_eq!(m.telephony_label(), "telephony \u{b7} unavailable");
         assert_eq!(Page::parse("about"), Some(Page::About));
+    }
+
+    #[test]
+    fn cellular_data_is_separate_from_radio_power() {
+        let mut m = Model::new();
+        let mut tele = ferrix_telephony_api::TelephonyState::new();
+        tele.radio = RadioPower::On;
+        tele.data = ferrix_telephony_api::DataBearer::Connected {
+            interface: Some("rmnet0".into()),
+        };
+        m.apply_telephony(Update::Snapshot(
+            ferrix_telephony_protocol::StateView::Redacted(tele.redacted()),
+        ));
+        assert!(m.cellular_data_on());
+        assert_eq!(m.cellular_data_label(), "cellular data \u{b7} connected");
+        m.toggle_cellular_data();
+        assert_eq!(m.pending, vec![Action::SetCellularData(false)]);
+        m.pending.clear();
+        m.toggle_cellular();
+        assert_eq!(
+            m.pending,
+            vec![
+                Action::SetCellularData(false),
+                Action::SetRadioPower(RadioPower::Off)
+            ]
+        );
+    }
+
+    #[test]
+    fn target_apn_is_optional_and_invalid_values_are_dropped() {
+        assert_eq!(data_profile_from_env(None), DataProfile::default());
+        assert_eq!(data_profile_from_env(Some("")), DataProfile::default());
+        assert_eq!(
+            data_profile_from_env(Some("internet.example")),
+            DataProfile {
+                apn: Some("internet.example".to_owned())
+            }
+        );
+        assert_eq!(
+            data_profile_from_env(Some("has whitespace")),
+            DataProfile::default()
+        );
     }
 }

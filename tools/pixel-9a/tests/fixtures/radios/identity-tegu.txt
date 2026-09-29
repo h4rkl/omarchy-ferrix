@@ -1,0 +1,7 @@
+dt_model=ZUMA PRO TEGU MP on ZUMA PRO
+dt_compatible=google,ZUMA PRO TEGU google,ZUMA PRO
+hostname=ferrix-tegu
+kernel=6.1.162-ferrix-synthetic
+os_release=postmarketos edge
+uid=1000
+priv=doas

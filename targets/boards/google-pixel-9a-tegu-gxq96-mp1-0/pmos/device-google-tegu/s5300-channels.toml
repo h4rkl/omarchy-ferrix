@@ -1,0 +1,192 @@
+# Source-level CPIF channel metadata for this exact board target.
+# This records pinned DTS evidence only; it is not physical runtime evidence
+# and must not be treated as a telephony backend configuration.
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+protocol = "PROTOCOL_SIT"
+source_url = "https://android.googlesource.com/kernel/devices/google/zuma"
+source_revision = "42395e8adcb880aa336f0da6bb2a19ed53929c40"
+source_path = "dts/zuma-cp-s5300-sit.dtsi"
+source_constants_url = "https://android.googlesource.com/kernel/google-modules/soc/gs"
+source_constants_revision = "204078758737776959ecc85c527a00fd2cabb62f"
+source_constants_path = "include/dt-bindings/soc/google/exynos-cpif.h"
+
+[[channel]]
+device_node = "/dev/umts_ipc0"
+iod_name = "umts_ipc"
+channel_id = "EXYNOS_CH_ID_FMT_0"
+channel_value = 245
+channel_index = 0
+
+[[channel]]
+device_node = "/dev/umts_ipc1"
+iod_name = "umts_ipc"
+channel_id = "EXYNOS_CH_ID_FMT_1"
+channel_value = 246
+channel_index = 1
+
+# Complete source-derived I/O-device catalog from the same DTS include. These
+# are symbolic kernel registrations, not a list of nodes this package may
+# open. `runtime_names` is the kernel's multi-channel expansion where the DTS
+# sets `iod,ch_count`; all physical existence still requires read-only runtime
+# observation on the exact phone.
+[[io_device]]
+name = "umts_ipc"
+channel = "EXYNOS_CH_ID_FMT_0"
+channel_value = 245
+format = "IPC_FMT"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = ["IO_ATTR_MULTI_CH", "IO_ATTR_STATE_RESET_NOTI"]
+channel_count = 2
+runtime_names = ["umts_ipc0", "umts_ipc1"]
+
+[[io_device]]
+name = "umts_rfs0"
+channel = "EXYNOS_CH_ID_RFS_0"
+channel_value = 41
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "umts_router"
+channel = "EXYNOS_CH_ID_BT_DUN"
+channel_value = 21
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "umts_dm0"
+channel = "EXYNOS_CH_ID_CPLOG"
+channel_value = 81
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = ["IO_ATTR_STATE_RESET_NOTI"]
+
+[[io_device]]
+name = "umts_loopback"
+channel = "EXYNOS_CH_ID_LOOPBACK"
+channel_value = 82
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "rmnet"
+channel = "EXYNOS_CH_EX_ID_PDP_0"
+channel_value = 181
+channel_end = 210
+format = "IPC_RAW"
+io_type = "IODEV_NET"
+link_type = "LINKDEV_PCIE"
+attributes = ["IO_ATTR_MULTI_CH"]
+channel_count = 30
+runtime_names = ["rmnet0", "rmnet1", "rmnet2", "rmnet3", "rmnet4", "rmnet5", "rmnet6", "rmnet7", "rmnet8", "rmnet9", "rmnet10", "rmnet11", "rmnet12", "rmnet13", "rmnet14", "rmnet15", "rmnet16", "rmnet17", "rmnet18", "rmnet19", "rmnet20", "rmnet21", "rmnet22", "rmnet23", "rmnet24", "rmnet25", "rmnet26", "rmnet27", "rmnet28", "rmnet29"]
+
+[[io_device]]
+name = "umts_dummy"
+channel = "EXYNOS_CH_EX_ID_PDP_30"
+channel_value = 211
+format = "IPC_RAW"
+io_type = "IODEV_NET"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "multipdp"
+channel = "EXYNOS_CH_ID_MULTIPDP"
+channel_value = 0
+format = "IPC_MULTI_RAW"
+io_type = "IODEV_DUMMY"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "umts_boot0"
+channel = "EXYNOS_CH_ID_BOOT"
+channel_value = 241
+format = "IPC_BOOT"
+io_type = "IODEV_BOOTDUMP"
+link_type = "LINKDEV_PCIE"
+attributes = ["IO_ATTR_NO_CHECK_MAXQ"]
+
+[[io_device]]
+name = "umts_rcs0"
+channel = "EXYNOS_CH_ID_RCS_0"
+channel_value = 91
+format = "IPC_FMT"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "umts_rcs1"
+channel = "EXYNOS_CH_ID_RCS_1"
+channel_value = 92
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "umts_wfc0"
+channel = "EXYNOS_CH_ID_WFS_0"
+channel_value = 93
+format = "IPC_FMT"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "umts_wfc1"
+channel = "EXYNOS_CH_ID_WFS_1"
+channel_value = 94
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "oem_ipc"
+channel = "EXYNOS_CH_ID_OEM_0"
+channel_value = 129
+channel_end = 136
+format = "IPC_FMT"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = ["IO_ATTR_MULTI_CH"]
+channel_count = 8
+runtime_names = ["oem_ipc0", "oem_ipc1", "oem_ipc2", "oem_ipc3", "oem_ipc4", "oem_ipc5", "oem_ipc6", "oem_ipc7"]
+
+[[io_device]]
+name = "oem_test"
+channel = "137"
+channel_value = 137
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = []
+
+[[io_device]]
+name = "gnss_boot"
+channel = "EXYNOS_CH_ID_GNSS_BOOT"
+channel_value = 240
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = ["IO_ATTR_NO_CHECK_MAXQ", "IO_ATTR_STATE_RESET_NOTI"]
+
+[[io_device]]
+name = "gnss_dump"
+channel = "EXYNOS_CH_ID_GNSS_DUMP"
+channel_value = 239
+format = "IPC_RAW"
+io_type = "IODEV_IPC"
+link_type = "LINKDEV_PCIE"
+attributes = ["IO_ATTR_NO_CHECK_MAXQ"]

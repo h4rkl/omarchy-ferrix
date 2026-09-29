@@ -12,17 +12,22 @@ Install the host tools once:
 ```sh
 xcode-select --install
 brew install qemu just cpio
-brew install --cask docker
+brew install --cask orbstack
 rustup target add aarch64-unknown-linux-gnu
 ```
 
-Open Docker Desktop and wait until it reports that the engine is running. Then, from the repository root, verify the environment:
+Open OrbStack, or run `orb`, and wait until its container engine is running.
+Then, from the repository root, verify the environment:
 
 ```sh
 just host-check
 ```
 
-It should report QEMU, Docker, the Rust AArch64 target, and `cpio` as available. The host-side AArch64 linker is optional for this initial container-built guest.
+It should report QEMU, the Docker-compatible container CLI, the Rust AArch64
+target, and `cpio` as available. When OrbStack is selected on macOS, the
+active Docker context should be `orbstack`; another Docker-compatible engine
+may expose a different context. The host-side AArch64 linker is optional for
+this initial container-built guest.
 
 ## Build and run
 
@@ -484,6 +489,9 @@ host.
 `qemu-build` compiles the guest binaries for aarch64 musl inside a pinned `rust` container image; its digest, the exact Rust channel from `rust-toolchain.toml`, the binary hashes (`ferrix_basic_screen_sha256`, `ferrix_core_sha256`, `ferrix_shell_sha256`, `ferrix_appd_sha256`, `ferrix_sandbox_sha256`, `ferrix_terminal_sha256`, `ferrix_telephonyd_sha256`, `ferrix_networkd_sha256`, `ferrix_contactsd_sha256`, `ferrix_phone_sha256`, `ferrix_messages_sha256`, `ferrix_contacts_sha256`, `ferrix_settings_sha256`), the catalog hash (`apps_sha256`) and grants hash (`grants_sha256`), the contacts fixtures hash (`contacts_fixtures_sha256`, empty when the fixture file is absent), and the theme file hash (`colors_sha256`, with its source path as `colors`) are recorded in `out/qemu-aarch64/manifest.json`. `ferrix-shell` is linked dynamically against the guest's Alpine musl libraries (libinput, libudev, libseat, libdrm, pixman, libxkbcommon, libgbm, libgcc_s), which `qemu-build` installs into the initramfs. The initramfs is first written to a temporary sibling, checked with `gzip -t`, and atomically moved into place, so an interrupted or corrupt archive cannot replace the last usable guest artifact or receive a manifest hash.
 
 On Apple Silicon, `qemu-run` selects HVF automatically; `qemu-check` always uses portable TCG. This smoke-test image uses the pinned Alpine arm64 builder image and its generic `linux-virt` kernel; the postmarketOS/pmbootstrap guest (below) is the full mobile-image route.
+The smoke runner defaults to `FERRIX_QEMU_MEMORY=2048` MiB so the current
+software-rendered initramfs can unpack under TCG; set that variable explicitly
+when testing a constrained host.
 
 The boot contract is the pair of JSON `boot-health` records on serial (the core's, then init's). The smoke check also requires a deterministic mock transition from unplugged to charging, driven over the control channel.
 
@@ -658,10 +666,10 @@ just pmos-check    # bounded, headless, TCG: readiness record + clean poweroff
 just pmos-run      # interactive serial console (HVF on Apple Silicon)
 ```
 
-Prerequisites are those of `just host-check`: Docker Desktop running (arm64
-containers), `qemu-system-aarch64` and `qemu-img` from Homebrew's `qemu`, and
-`python3`. Nothing is installed on the host; pmbootstrap only ever runs inside
-the container.
+Prerequisites are those of `just host-check`: OrbStack running on macOS (or a
+Docker-compatible engine on Linux), arm64 containers, `qemu-system-aarch64`
+and `qemu-img` from Homebrew's `qemu`, and `python3`. Nothing is installed on
+the host; pmbootstrap only ever runs inside the container.
 
 ### How it is built
 
@@ -682,22 +690,19 @@ that only appear after the container starts. There is no udev in the
 container, so the entrypoint mounts devtmpfs over `/dev` (restoring `/dev/pts`
 and `/dev/shm`) and the kernel creates those nodes itself; without this,
 `pmbootstrap install` stops at "File did not appear: /dev/loop0p2" (observed).
-`--privileged` is the one Docker flag that provides that set; no host PID or
-network namespace and no extra mounts are used. The four mounts are the
+`--privileged` is the one container-engine flag that provides that set; no host
+PID or network namespace and no extra mounts are used. The four mounts are the
 pmbootstrap work directory (rw, keeps chroots, the apk cache and the pmaports
 clone between runs), the checked-in `targets/qemu-aarch64/pmos/` inputs (ro),
 the product binaries/profile produced by `qemu-build` (ro), and the output
 directory (rw).
 
-The work directory is a Docker volume (`FERRIX_PMOS_WORK_VOLUME`, default
-`ferrix-pmbootstrap-work`; remove it with `docker volume rm`), not the
+The work directory is a named container volume (`FERRIX_PMOS_WORK_VOLUME`,
+default `ferrix-pmbootstrap-work`; remove it with `docker volume rm`), not the
 `${FERRIX_CACHE_DIR:-.cache/ferrix}/pmbootstrap` path the rest of the cache
-uses. That is a measured deviation: on this macOS host Docker Desktop mounts
-host directories with virtiofs (`no_xattr`), and as root inside the container
-`chown 1000` left the file at uid 0, `chmod 4755` produced `755`, and `mknod`
-failed with `EPERM`. pmbootstrap chroots need all three (ownership, suid
-`su`/`sudo`/BusyBox, device nodes) and the rootfs image is copied out of those
-chroots, so a bind-mounted work directory would silently corrupt the guest.
+uses. This is required on macOS because host bind mounts may not preserve the
+ownership, suid `su`/`sudo`/BusyBox, and device-node semantics that pmbootstrap
+chroots need; a bind-mounted work directory would silently corrupt the guest.
 The entrypoint probes the three semantics on the mounted work directory and
 refuses to continue (`guest-builder-failed`, reason `work-fs-*`) when they are
 missing; Linux hosts with a real filesystem can set `FERRIX_PMOS_WORK_BIND=1`
@@ -746,7 +751,7 @@ out/qemu-aarch64/pmos/qemu-aarch64.img   # raw disk image (pmOS_boot + pmOS_root
 out/qemu-aarch64/pmos/cmdline.txt        # kernel command line boot-deploy generated
 out/qemu-aarch64/pmos/manifest.json      # pins, versions, hashes
 out/qemu-aarch64/pmos/build.log          # full pmbootstrap output
-out/qemu-aarch64/pmos/builder-image.log  # docker build output
+out/qemu-aarch64/pmos/builder-image.log  # container image build output
 out/qemu-aarch64/pmos/check/serial.log   # pmos-check serial evidence
 ```
 
@@ -925,7 +930,11 @@ CI never read that file. Steps:
 2. `just pmos-android-build` mounts those images read-only into the finalize
    step, which installs them to `/etc/waydroid-extra/images/`, writes
    `/etc/ferrix/waydroid-properties.ini` (`ro.hardware.gralloc=default`,
-   `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=false`),
+   `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=false`,
+   `ro.sf.lcd_density=400`). The 400 dpi value is scoped to this QEMU
+   Android image and gives the 1080-pixel panel an approximately 432 dp
+   Pixel-class logical width; it is not read by the default pmOS image or any
+   physical-target workflow.
    links `51_waydroid.nft` into `/etc/nftables.d/`, enables `cgroups` and
    `dbus` in the default runlevel, installs
    `/etc/local.d/00-ferrix-android.start`, and stages
@@ -934,14 +943,15 @@ CI never read that file. Steps:
    pass `tools/android/fulguris-verify.sh`. Every
    hash lands in `image-facts.json` / `manifest.json` under `guest.android`
    (`waydroid_version`, image hashes, properties and init-script hashes,
-   `fulguris_apk_sha256`, `nftables_rule_linked`).
+   `fulguris_apk_sha256`, `density_dpi`, `nftables_rule_linked`).
 3. At first boot `00-ferrix-android.start` (before `00-ferrix-product.start`)
    records `android-binder-devices {binder, hwbinder, vndbinder, psi}`, runs
    `waydroid init -f -i /etc/waydroid-extra/images` offline (`waydroid-init
    {status}`; the kernel `linux-postmarketos-stable` already provides the
    Binder devices, no kernel change), appends the properties, and runs the
-   required offline upgrade to materialize `gralloc=default` and
-   `egl=swiftshader` into `waydroid_base.prop` before starting the container.
+   required offline upgrade to materialize `gralloc=default`,
+   `egl=swiftshader`, and the 400 dpi density into `waydroid_base.prop` before
+   starting the container.
    This prevents Waydroid from auto-selecting Mesa/GBM merely because QEMU has
    a render node, a combination that made SurfaceFlinger abort with `output
    buffer not gpu writeable`.
@@ -974,8 +984,9 @@ Launching `org.ferrix.browser` through `ferrix-appd` recorded
 inspected showing Brave's first-run UI. After orderly power-off, a run without
 `FERRIX_PMOS_FRESH=1` recorded provisioning status `present`, proving the
 installation lives in the persistent overlay. This remains historical QEMU
-evidence only, not a Fulguris or physical-device claim. Fulguris-specific
-graphical validation remains outstanding.
+evidence only, not a physical-device claim. A fresh Fulguris QEMU run now
+reaches and has inspected its onboarding framebuffer; full Android
+interaction remains bounded by the limitations recorded in `docs/status.md`.
 
 ### Limitations
 
@@ -991,16 +1002,16 @@ graphical validation remains outstanding.
   compositor/client rather than a postmarketOS desktop package. The bounded
   pmOS check remains serial-only, but separate graphical QEMU runs have
   framebuffer-validated the normal Ferrix launcher. The Android-enabled Brave
-  capture is historical; Fulguris-specific graphical validation remains
-  outstanding. Those captures do not broaden the headless contract or
-  establish physical-device support.
+  capture is historical; a fresh Fulguris onboarding capture is recorded under
+  `out/qemu-aarch64/pmos-android/`. Those captures do not broaden the
+  headless contract or establish physical-device support.
 - The rootfs is what pmbootstrap installs from the pinned binary channel. The
   project binaries, profile, theme file, startup script, and readiness marker are injected
   by mounting the image; native postmarketOS packaging is still future work.
 - `pmbootstrap install` output (`build.log`) is the record of what was
   downloaded; the binary repository behind a stable channel can still change,
   so the manifest's package versions, not the channel alone, define the build.
-- The pmbootstrap work directory lives in a Docker volume rather than under
+- The pmbootstrap work directory lives in a named container volume rather than under
   `.cache/ferrix` (see above); `just qemu-clean` does not remove it.
 - First build downloads several hundred MB of packages; subsequent builds reuse
   the volume's apk cache and pmaports clone.

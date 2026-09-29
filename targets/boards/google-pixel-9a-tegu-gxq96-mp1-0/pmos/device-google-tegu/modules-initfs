@@ -1,0 +1,32 @@
+dm_mod
+dm_verity
+ext4
+ufshcd_core
+ufshcd_pltfrm
+
+# These names come from the pinned tegu vendor-ramdisk module list and
+# init.insmod.tegu.cfg. They are target inputs, not stock Android modules:
+# the coherent Ferrix Kleaf build must provide each .ko before an image can be
+# composed. Keep the CPIF, Wi-Fi, touch, panel, audio, charger, GPS, and NFC
+# seams available during native-Linux bring-up.
+bcmdhd4383
+# Google Broadcom Bluetooth GPIO/UART low-power controller for goog,nitrous.
+nitrous
+shm_ipc
+cpif_page
+cpif
+touch_bus_negotiator
+touch_offload
+syna_touch
+panel-gs-simple
+panel-gs-tg4a
+panel-gs-tg4b
+panel-gs-tg4c
+cs40l26-i2c
+snd-soc-cs40l26
+rt6160-regulator
+google_ccd
+rt9471_charger
+bcm47765
+st21nfc
+st54spi

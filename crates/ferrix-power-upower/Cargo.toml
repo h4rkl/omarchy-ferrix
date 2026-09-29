@@ -1,0 +1,18 @@
+[package]
+name = "ferrix-power-upower"
+description = "Target-neutral UPower adapter for the Ferrix power hardware contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Keep the real system-D-Bus transport opt-in so state mapping and fake-bus
+# tests run on development hosts without a UPower daemon.
+production = ["dep:zbus"]
+
+[dependencies]
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
+
+[lints]
+workspace = true

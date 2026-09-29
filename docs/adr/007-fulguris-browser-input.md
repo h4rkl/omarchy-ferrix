@@ -28,9 +28,11 @@ role, and verifies HTTPS resolution. `ferrix-appd` remains launch-only.
 
 ## Claim boundary
 
-The replacement changes the packaged input and acquisition evidence, not the
-claim level. No Fulguris graphical QEMU run has been recorded yet; the prior
-Brave framebuffer evidence must not be relabeled as Fulguris evidence.
+The replacement changes the packaged input and acquisition evidence. A fresh
+QEMU run now reaches and has inspected the Fulguris onboarding framebuffer;
+the prior Brave framebuffer evidence must not be relabeled as Fulguris
+evidence, and this run is not a general APK compatibility claim. Interactive
+advancement beyond the onboarding surface remains partially unverified.
 
 Fulguris is MPL-2.0. Its third-party components retain their upstream licenses;
 Ferrix metadata and code remain Apache-2.0.

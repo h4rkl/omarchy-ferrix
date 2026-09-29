@@ -11,6 +11,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 target="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
 pins="$target/recovery.pins"
 recovery="$target/recovery"
+target_manifest="$target/manifest.toml"
 
 expected_manufacturer=Google
 expected_model="Pixel 9a"
@@ -84,6 +85,7 @@ verify_artifact() {
 
   path="$recovery/$filename"
   [ -f "$path" ] || die "missing verified $kind recovery artifact: $path"
+  [ ! -L "$path" ] || die "$kind recovery artifact must not be a symlink: $path"
   actual_bytes=$(wc -c < "$path" | tr -d '[:space:]')
   actual_hash=$(sha256_of "$path")
   [ "$actual_bytes" = "$expected_bytes" ] || {
@@ -103,6 +105,57 @@ verify_artifact() {
     ota_path=$path
     ota_hash=$actual_hash
   fi
+}
+
+read_all_gates() {
+  gate_value() {
+    key=$1
+    awk -v wanted="$key" '
+      /^\[gates\][[:space:]]*$/ { in_gates=1; next }
+      /^\[/ { in_gates=0 }
+      in_gates && $0 ~ "^[[:space:]]*" wanted "[[:space:]]*=" {
+        value=$0
+        sub(/^[^=]*=[[:space:]]*/, "", value)
+        gsub(/[[:space:]"]/, "", value)
+        print value
+        found=1
+        exit
+      }
+      END { if (!found) exit 1 }
+    ' "$target_manifest"
+  }
+  identity_gate=$(gate_value identity) || die "target manifest has no [gates].identity entry: $target_manifest"
+  image_compatibility_gate=$(gate_value image_compatibility) || die "target manifest has no [gates].image_compatibility entry: $target_manifest"
+  backup_gate=$(gate_value backup) || die "target manifest has no [gates].backup entry: $target_manifest"
+  recovery_procedure_gate=$(gate_value recovery_procedure) || die "target manifest has no [gates].recovery_procedure entry: $target_manifest"
+  confirmation_gate=$(gate_value per_run_confirmation) || die "target manifest has no [gates].per_run_confirmation entry: $target_manifest"
+  [ -n "$identity_gate" ] && [ -n "$image_compatibility_gate" ] && [ -n "$backup_gate" ] && [ -n "$recovery_procedure_gate" ] && [ -n "$confirmation_gate" ] ||
+    die "target manifest has an empty provisioning gate: $target_manifest"
+  printf 'gate_identity=%s\n' "$identity_gate"
+  printf 'gate_image_compatibility=%s\n' "$image_compatibility_gate"
+  printf 'gate_recovery_procedure=%s\n' "$recovery_procedure_gate"
+  printf 'backup_gate=%s\n' "$backup_gate"
+  printf 'per_run_confirmation=%s\n' "$confirmation_gate"
+}
+
+require_backup_gate() {
+  read_all_gates
+  [ "$identity_gate" = passed ] || die "identity gate is '$identity_gate'; exact target identity must be approved before unlocking"
+  [ "$confirmation_gate" = required ] || die "per-run confirmation gate is '$confirmation_gate'; manifest must require typed confirmation"
+  [ "$backup_gate" = verified ] ||
+    die "backup gate is '$backup_gate'; owner must verify a readable backup outside Git before unlocking"
+}
+
+require_mutation_gates() {
+  require_backup_gate
+  case "$image_compatibility_gate" in
+    passed|verified) ;;
+    *) die "image compatibility gate is '$image_compatibility_gate'; exact target image inputs are not approved for unlocking" ;;
+  esac
+  case "$recovery_procedure_gate" in
+    tested|passed|verified) ;;
+    *) die "recovery procedure gate is '$recovery_procedure_gate'; exact-target recovery procedure is not tested" ;;
+  esac
 }
 
 count_rows() {
@@ -209,6 +262,7 @@ print_adb_summary() {
 preflight() {
   verify_artifact factory
   verify_artifact ota
+  read_all_gates
   read_adb_identity
   print_adb_summary
   printf 'preflight=passed\n'
@@ -237,6 +291,16 @@ recheck_adb_transport() {
   [ "$(adb -s "$adb_serial" get-state </dev/null | tr -d '\r')" = device ] || {
     die "ADB device is no longer in device state"
   }
+  [ "$(adb_prop ro.product.name)" = "$expected_product" ] || die "ADB product changed before reboot"
+  [ "$(adb_prop ro.product.device)" = "$expected_product" ] || die "ADB codename changed before reboot"
+  [ "$(adb_prop ro.product.board)" = "$expected_product" ] || die "ADB board changed before reboot"
+  [ "$(adb_prop ro.boot.hardware.revision)" = "$expected_revision" ] || die "ADB hardware revision changed before reboot"
+  [ "$(adb_prop ro.boot.hardware.sku)" = "$expected_sku" ] || die "ADB SKU changed before reboot"
+  recheck_slot=$(adb_prop ro.boot.slot_suffix)
+  case "$recheck_slot" in _a|_b) ;; *) die "ADB current slot changed before reboot: $recheck_slot" ;; esac
+  [ "$(adb_prop ro.boot.slot_count)" = 2 ] || die "ADB slot count changed before reboot"
+  verify_artifact factory
+  verify_artifact ota
 }
 
 wait_for_fastboot() {
@@ -262,6 +326,7 @@ wait_for_fastboot() {
 
 read_fastboot_identity() {
   fastboot_product=$(fastboot_getvar product)
+  fastboot_variant=$(fastboot_getvar variant)
   fastboot_revision=$(fastboot_getvar hw-revision)
   fastboot_slot=$(fastboot_getvar current-slot)
   fastboot_unlocked=$(fastboot_getvar unlocked)
@@ -270,6 +335,9 @@ read_fastboot_identity() {
 
   [ "$fastboot_product" = "$expected_product" ] || {
     die "Fastboot product mismatch: $fastboot_product"
+  }
+  [ "$fastboot_variant" = "$expected_sku" ] || {
+    die "Fastboot SKU/variant mismatch: $fastboot_variant"
   }
   [ "$fastboot_revision" = "$expected_revision" ] || {
     die "Fastboot hardware revision mismatch: $fastboot_revision"
@@ -289,6 +357,8 @@ read_fastboot_identity() {
   printf 'transport=fastboot\n'
   printf 'serial=%s\n' "$fastboot_serial"
   printf 'product=%s\n' "$fastboot_product"
+  printf 'variant=%s\n' "$fastboot_variant"
+  printf 'sku=%s\n' "$fastboot_variant"
   printf 'hardware_revision=%s\n' "$fastboot_revision"
   printf 'current_slot=%s\n' "$fastboot_slot"
   printf 'unlocked=%s\n' "$fastboot_unlocked"
@@ -303,6 +373,7 @@ read_fastboot_identity() {
 
 preflight
 [ "$mode" = unlock ] || exit 0
+require_mutation_gates
 
 confirm_phrase \
   "CONFIRM PIXEL 9A REBOOT AND UNLOCK (WIPES ALL USER DATA)" \
@@ -316,6 +387,27 @@ read_fastboot_identity
 confirm_phrase \
   "CONFIRM PIXEL 9A BOOTLOADER UNLOCK (WIPES ALL USER DATA)" \
   "The exact Fastboot device and recovery hashes are verified. The next command unlocks the bootloader and wipes user data."
+recheck_fastboot_transport() {
+  fastboot_rows=$(fastboot devices -l 2>/dev/null | awk 'NF { print }')
+  fastboot_count=$(count_rows "$fastboot_rows")
+  [ "$fastboot_count" -eq 1 ] || die "Fastboot transport changed before unlock: found $fastboot_count devices"
+  recheck_serial=$(printf '%s\n' "$fastboot_rows" | awk '{ print $1 }')
+  [ "$recheck_serial" = "$fastboot_serial" ] || die "Fastboot serial changed before unlock"
+  [ "$(fastboot_getvar product)" = "$expected_product" ] || die "Fastboot product changed before unlock"
+  [ "$(fastboot_getvar variant)" = "$expected_sku" ] || die "Fastboot SKU/variant changed before unlock"
+  [ "$(fastboot_getvar hw-revision)" = "$expected_revision" ] || die "Fastboot hardware revision changed before unlock"
+  recheck_slot=$(fastboot_getvar current-slot)
+  case "$recheck_slot" in a|b|_a|_b) ;; *) die "Fastboot current slot changed before unlock: $recheck_slot" ;; esac
+  [ "$(fastboot_getvar unlocked)" = no ] || die "Fastboot is no longer locked before unlock"
+  [ "$(fastboot_getvar serialno)" = "$fastboot_serial" ] || die "Fastboot serialno changed before unlock"
+  verify_artifact factory
+  verify_artifact ota
+}
+recheck_fastboot_transport
+printf 'partition_target=bootloader (fastboot flashing unlock)\n'
+printf 'input_image_sha256=none (unlock-only operation)\n'
+printf 'factory_recovery_sha256=%s\n' "$factory_hash"
+printf 'ota_recovery_sha256=%s\n' "$ota_hash"
 printf 'mutation=fastboot flashing unlock\n'
 fastboot -s "$fastboot_serial" flashing unlock
 

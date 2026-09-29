@@ -6,9 +6,10 @@
 //! target's capability matrix. Product crates (`ferrix-core`, shells, apps)
 //! depend on this crate and `ferrix-hardware-api` only; they never name an adapter.
 //!
-//! Today the only target is the generic QEMU virtual phone
-//! (`qemu-aarch64`), served by `ferrix-hardware-emulator`. A future target package
-//! adds a new arm to [`select_adapters`], nowhere else.
+//! The generic QEMU virtual phone (`qemu-aarch64`) is served by
+//! `ferrix-hardware-emulator`; the admitted Pixel 9a target is composed by
+//! `ferrix-target-pixel9a`. Further target packages add arms to
+//! [`select_adapters`], nowhere else.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -112,6 +113,7 @@ pub struct Session {
 pub enum SessionError {
     Profile(ProfileError),
     UnknownTarget(String),
+    TargetUnavailable(ferrix_target_pixel9a::ConnectError),
 }
 
 impl fmt::Display for SessionError {
@@ -120,8 +122,10 @@ impl fmt::Display for SessionError {
             SessionError::Profile(e) => write!(f, "{e}"),
             SessionError::UnknownTarget(id) => write!(
                 f,
-                "unknown target id {id:?}; the only supported target is {DEFAULT_TARGET_ID}"
+                "unknown target id {id:?}; supported targets are {DEFAULT_TARGET_ID:?} and {:?}",
+                ferrix_target_pixel9a::TARGET_ID
             ),
+            SessionError::TargetUnavailable(error) => write!(f, "{error}"),
         }
     }
 }
@@ -188,6 +192,23 @@ fn select_adapters(
                 services,
             ))
         }
+        ferrix_target_pixel9a::TARGET_ID => {
+            let target =
+                ferrix_target_pixel9a::connect().map_err(SessionError::TargetUnavailable)?;
+            let services = HardwareServices {
+                power: target.power,
+                display: target.display,
+                input: target.input,
+                network: target.network,
+                bluetooth: target.bluetooth,
+                audio: target.audio,
+                telephony: target.telephony,
+                lifecycle: target.lifecycle,
+                events: target.events,
+                mock_control: None,
+            };
+            Ok((ferrix_target_pixel9a::capability_matrix(), services))
+        }
         other => Err(SessionError::UnknownTarget(other.to_owned())),
     }
 }
@@ -228,6 +249,19 @@ mod tests {
         .err()
         .expect("must fail");
         assert_eq!(err, SessionError::UnknownTarget("solana-seeker".to_owned()));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn physical_target_preserves_the_typed_non_linux_unavailable_error() {
+        let profile = Profile::load(repo_profile()).expect("profile");
+        let result = bootstrap_with_profile(ferrix_target_pixel9a::TARGET_ID, profile);
+        assert!(matches!(
+            result,
+            Err(SessionError::TargetUnavailable(
+                ferrix_target_pixel9a::ConnectError::Unavailable { .. }
+            ))
+        ));
     }
 
     #[test]

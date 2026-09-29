@@ -1,0 +1,97 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+branch = "android-gs-tegu-6.1-android16"
+gki_family = "android14-6.1"
+
+# The manifest and superproject commits are the reproducible build inputs. The
+# component entries below make hardware ownership reviewable without treating
+# a moving branch name as a pin.
+[[source]]
+name = "manifest"
+url = "https://android.googlesource.com/kernel/manifest"
+revision = "893fbfd2192bc1c4a921f5daf23ea8543c09670d"
+
+[[source]]
+name = "superproject"
+url = "https://android.googlesource.com/kernel/superproject"
+revision = "ef85063e6f3c68fbd580eb7e41809b8b64f935ed"
+
+[[source]]
+name = "gki-common"
+url = "https://android.googlesource.com/kernel/common"
+revision = "a4662a84a15f38b99cf597354edccf75988852de"
+
+[[source]]
+name = "tegu-board"
+url = "https://android.googlesource.com/kernel/devices/google/tegu"
+revision = "6276884d9940694b25a6934671918ec8ac412ee8"
+
+[[source]]
+name = "zuma-board"
+url = "https://android.googlesource.com/kernel/devices/google/zuma"
+revision = "42395e8adcb880aa336f0da6bb2a19ed53929c40"
+
+[[source]]
+name = "zumapro-soc"
+url = "https://android.googlesource.com/kernel/devices/google/zumapro"
+revision = "8831630eee2ad095b85ed452944e6353940966a5"
+
+[[source]]
+name = "soc-gs"
+url = "https://android.googlesource.com/kernel/google-modules/soc/gs"
+revision = "204078758737776959ecc85c527a00fd2cabb62f"
+
+[[source]]
+name = "wifi-bcm4383"
+url = "https://android.googlesource.com/kernel/google-modules/wlan/bcmdhd/bcm4383"
+revision = "3526a8cb8e13b7a72fca642c7b6411cd69e70d87"
+
+[[source]]
+name = "bluetooth-broadcom"
+url = "https://android.googlesource.com/kernel/google-modules/bluetooth/broadcom"
+revision = "d7bd4dd23cc52fedd2e36c6e45c12f0c2a595ae0"
+
+[[source]]
+name = "modem-s5300"
+url = "https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300"
+revision = "a8976934fe7f396627f9900958eb1457a74ebcca"
+
+[[source]]
+name = "display-common"
+url = "https://android.googlesource.com/kernel/google-modules/display/common"
+revision = "e34756e6205a16083c5c7c4e5cde2c899674a120"
+
+[[source]]
+name = "display-tegu-panels"
+url = "https://android.googlesource.com/kernel/google-modules/display/panels/tegu"
+revision = "e3a801fb038fdd1bbaec36d387f27bd99f10757a"
+
+[[source]]
+name = "audio-amplifiers"
+url = "https://android.googlesource.com/kernel/google-modules/amplifiers"
+revision = "33976d763bc0ace11603e7ecb207fc2b6e3f2608"
+
+[[source]]
+name = "audio-aoc"
+url = "https://android.googlesource.com/kernel/google-modules/aoc"
+revision = "ac69293d11343b47f0b2b758b0df9f936360dbd4"
+
+[[source]]
+name = "audio-aoc-ipc"
+url = "https://android.googlesource.com/kernel/google-modules/aoc-ipc"
+revision = "1fe9b9cf3a2954a4a0c0f9868aa04c9d88c902b9"
+
+[[source]]
+name = "battery-management"
+url = "https://android.googlesource.com/kernel/google-modules/bms"
+revision = "183509aff980610401869deca9f6ce8836980fe7"
+
+[[source]]
+name = "touch-common"
+url = "https://android.googlesource.com/kernel/google-modules/touch/common"
+revision = "340d76ec988f2960427647e9ac4852f072a86c88"
+
+[[source]]
+name = "touch-synaptics"
+url = "https://android.googlesource.com/kernel/google-modules/touch/synaptics_touch"
+revision = "a5d225cc4034f3e98c6f7f0c0c7e182c254a517f"

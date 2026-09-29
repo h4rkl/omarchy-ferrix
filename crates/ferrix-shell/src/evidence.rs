@@ -16,13 +16,20 @@ pub enum Evidence {
     Qemu,
     /// Running nested on a development host from the mock profile.
     Mock,
+    /// Running on an admitted physical Linux target. The exact label comes
+    /// from `FERRIX_EVIDENCE` so the compositor does not encode a board name.
+    Physical,
 }
 
 impl Evidence {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Evidence::Qemu => "QEMU",
-            Evidence::Mock => "mock",
+            Evidence::Qemu => "QEMU".to_owned(),
+            Evidence::Mock => "mock".to_owned(),
+            Evidence::Physical => std::env::var("FERRIX_EVIDENCE")
+                .ok()
+                .filter(|label| !label.is_empty())
+                .unwrap_or_else(|| "physical".to_owned()),
         }
     }
 }
@@ -100,10 +107,11 @@ pub fn escape(input: &str) -> String {
 /// Build one JSON record line: `{"evidence":..,"event":..,"compositor":"ferrix-shell",...}`.
 pub fn record(evidence: Evidence, event: &str, fields: &[(&str, Value)]) -> String {
     let mut out = String::new();
+    let label = evidence.label();
     let _ = write!(
         out,
         "{{\"evidence\":\"{}\",\"event\":\"{}\",\"compositor\":\"ferrix-shell\"",
-        evidence.label(),
+        escape(&label),
         escape(event)
     );
     for (key, value) in fields {

@@ -9,7 +9,10 @@
 //! `FERRIX_TARGET`) names the target on the About page. Records:
 //! `app-context`, `settings-frame`, `ui-state {page, state}`,
 //! `settings-action {action, status}`, `network-link`, `telephony-link`;
-//! never SSIDs, passphrases, or addresses.
+//! never SSIDs, passphrases, APNs, or addresses. The
+//! `FERRIX_TELEPHONY_APN` launch-environment contract is an optional
+//! non-secret runtime setting used when the selected modem plugin requires an
+//! explicit carrier APN.
 
 mod interaction;
 mod model;

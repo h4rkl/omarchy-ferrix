@@ -1,0 +1,8 @@
+Controller AA:BB:CC:DD:EE:FF (public)
+	Name: ferrix-tegu
+	Alias: ferrix-tegu
+	Class: 0x00000000
+	Powered: yes
+	Discoverable: no
+	Pairable: yes
+	UUID: Generic Access Profile    (00001800-0000-1000-8000-00805f9b34fb)

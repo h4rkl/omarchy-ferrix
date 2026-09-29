@@ -1,0 +1,140 @@
+# Target-local native-Linux ModemManager fork with Samsung SIT support.
+maintainer="Omarchy Ferrix maintainers"
+pkgname=modemmanager-samsung-sit
+pkgver=1.25.95_git20260731
+pkgrel=1
+pkgdesc="ModemManager with Samsung SIT support for the Exynos S5300"
+url="https://git.deusch.me/pixel-mainline/ModemManager"
+arch="aarch64"
+license="GPL-2.0-or-later AND LGPL-2.1-or-later"
+provides="modemmanager=$pkgver-r$pkgrel"
+replaces="modemmanager"
+provider_priority=100
+depends="
+	dbus
+	libmm-glib
+	mobile-broadband-provider-info
+	polkit
+	"
+depends_dev="libmm-glib"
+makedepends="
+	bash-completion-dev
+	dbus-dev
+	elogind-dev
+	exynos-modem-dev
+	gobject-introspection-dev
+	gtk-doc
+	libgudev-dev
+	libmbim-dev
+	libqmi-dev
+	linux-headers
+	meson
+	polkit-dev
+	pkgconf
+	sqlite-dev
+	vala
+	"
+checkdepends="dbus glib-dev py3-gobject3 py3-dbus"
+subpackages="
+	$pkgname-lang
+	$pkgname-doc
+	libmm-glib:libmm
+	$pkgname-dbg
+	$pkgname-dev
+	$pkgname-openrc
+	$pkgname-bash-completion:bashcomp
+	$pkgname-systemd
+	$pkgname-udev
+	"
+
+_commit=14a0013a28e5d5eec513c65e75d7549678ecc61e
+source="modemmanager-$_commit.tar.gz::https://git.deusch.me/pixel-mainline/ModemManager/archive/$_commit.tar.gz
+	modemmanager.rules
+	modemmanager.initd
+	"
+builddir="$srcdir/modemmanager"
+
+build() {
+	abuild-meson \
+		-Db_lto=true \
+		-Dsystemdsystemunitdir=/usr/lib/systemd/system \
+		-Ddbus_policy_dir=/usr/share/dbus-1/system.d \
+		-Dgtk_doc=false \
+		-Dplugin_samsung_sit=enabled \
+		-Dpolkit=permissive \
+		-Dsystemd_journal=false \
+		-Dsystemd_suspend_resume=false \
+		-Dvapi=true \
+		. output
+	meson compile -C output
+}
+
+check() {
+	meson test --print-errorlogs -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+	install -m644 -D "$srcdir/modemmanager.rules" \
+		"$pkgdir/usr/share/polkit-1/rules.d/01-org.freedesktop.ModemManager.rules"
+	mkdir -p "$pkgdir/usr/share/doc/modemmanager"
+	cat > "$pkgdir/usr/share/doc/modemmanager/README.alpine" <<- EOF
+	This target package carries the GPL SIT plugin for the Pixel 9a S5300.
+	Its source archive and license notices are pinned by the target package.
+	EOF
+}
+
+libmm() {
+	depends=""
+	amove usr/lib/girepository-1.0
+	amove usr/lib/libmm-glib.so*
+}
+
+lang() {
+	default_lang
+	provides="modemmanager-lang=$pkgver-r$pkgrel"
+	replaces="modemmanager-lang"
+}
+
+doc() {
+	default_doc
+	provides="modemmanager-doc=$pkgver-r$pkgrel"
+	replaces="modemmanager-doc"
+}
+
+dev() {
+	default_dev
+	provides="modemmanager-dev=$pkgver-r$pkgrel"
+	replaces="modemmanager-dev"
+}
+
+openrc() {
+	depends="$pkgname=$pkgver-r$pkgrel"
+	provides="modemmanager-openrc=$pkgver-r$pkgrel"
+	replaces="modemmanager-openrc"
+	install -Dm755 "$srcdir/modemmanager.initd" "$subpkgdir/etc/init.d/modemmanager"
+}
+
+bashcomp() {
+	default_bashcomp
+	provides="modemmanager-bash-completion=$pkgver-r$pkgrel"
+	replaces="modemmanager-bash-completion"
+}
+
+systemd() {
+	default_systemd
+	provides="modemmanager-systemd=$pkgver-r$pkgrel"
+	replaces="modemmanager-systemd"
+}
+
+udev() {
+	default_udev
+	provides="modemmanager-udev=$pkgver-r$pkgrel"
+	replaces="modemmanager-udev"
+}
+
+sha512sums="
+9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb972653c182fb994521e0f64602a00b22c54f0e83f282f11322b856978a9355ccfd8ea  modemmanager-14a0013a28e5d5eec513c65e75d7549678ecc61e.tar.gz
+765c542e2b4f8255610ab0fa76d67653b392abeb6bfeae433a8755c2f0f9abaaad572ed00e5c66f49a83802d9d2861d6ea4356cdeffc3864346a67fc6a8b884e  modemmanager.initd
+2be18878972bee9924cdf28d2f124e126c30c02da4e96f0567acbea2f5a84278f116cf08f644499b10b82eb9baedabcfb62ad4c1e010f3afa82c8b403a922e59  modemmanager.rules
+"

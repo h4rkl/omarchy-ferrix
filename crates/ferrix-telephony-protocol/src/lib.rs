@@ -25,7 +25,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_telephony_api::{
-    AudioRoute, Call, CallId, Dtmf, MessageId, RadioPower, RedactedTelephonyEvent,
+    AudioRoute, Call, CallId, DataProfile, Dtmf, MessageId, RadioPower, RedactedTelephonyEvent,
     RedactedTelephonyState, SCHEMA_VERSION, Sms, TelephonyError, TelephonyEvent, TelephonyState,
 };
 use serde::{Deserialize, Serialize};
@@ -123,6 +123,12 @@ pub enum Request {
     DeleteSms {
         id: MessageId,
     },
+    // --- telephony-data ---
+    ConnectData {
+        #[serde(flatten)]
+        profile: DataProfile,
+    },
+    DisconnectData {},
     // --- telephony-call (radio) / telephony-call (sim) ---
     SetRadioPower {
         power: RadioPower,
@@ -150,6 +156,8 @@ impl Request {
             Request::ListSms { .. } => "list-sms",
             Request::MarkRead { .. } => "mark-read",
             Request::DeleteSms { .. } => "delete-sms",
+            Request::ConnectData { .. } => "connect-data",
+            Request::DisconnectData {} => "disconnect-data",
             Request::SetRadioPower { .. } => "set-radio-power",
             Request::EnterPin { .. } => "enter-pin",
         }
@@ -422,6 +430,19 @@ impl Client {
         })
     }
 
+    /// Starts cellular data. An empty profile delegates APN selection to the
+    /// backend (ModemManager normally uses its carrier configuration).
+    pub fn connect_data(
+        &mut self,
+        profile: DataProfile,
+    ) -> Result<(), Result<TelephonyError, String>> {
+        self.expect_ok(&Request::ConnectData { profile })
+    }
+
+    pub fn disconnect_data(&mut self) -> Result<(), Result<TelephonyError, String>> {
+        self.expect_ok(&Request::DisconnectData {})
+    }
+
     pub fn list_sms(
         &mut self,
         filter: SmsFilter,
@@ -675,6 +696,25 @@ mod tests {
             })
             .unwrap(),
             r#"{"request":"set-radio-power","power":"off"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::ConnectData {
+                profile: DataProfile {
+                    apn: Some("internet".into()),
+                }
+            })
+            .unwrap(),
+            r#"{"request":"connect-data","apn":"internet"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::DisconnectData {}).unwrap(),
+            r#"{"request":"disconnect-data"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"request":"connect-data"}"#).unwrap(),
+            Request::ConnectData {
+                profile: DataProfile::default()
+            }
         );
         assert_eq!(
             serde_json::from_str::<Request>(r#"{"request":"list-sms"}"#).unwrap(),

@@ -32,6 +32,9 @@ pub const APP_ID_ENV: &str = "FERRIX_APP_ID";
 pub const APP_INSTANCE_ENV: &str = "FERRIX_APP_INSTANCE";
 /// Environment variable carrying the path of the `ferrix_appd` socket.
 pub const APPD_SOCKET_ENV: &str = "FERRIX_APPD_SOCKET";
+/// Optional non-secret carrier APN passed only to applications granted
+/// `telephony-data`. The application service never records this value.
+pub const TELEPHONY_APN_ENV: &str = "FERRIX_TELEPHONY_APN";
 /// Default `ferrix_appd` socket path inside the guest.
 pub const DEFAULT_APPD_SOCKET: &str = "/run/ferrix/ferrix-appd.sock";
 /// Directory of application descriptors inside the guest.
@@ -218,6 +221,10 @@ pub enum AppCapability {
     TelephonyCall,
     /// Send, list, and manage text messages.
     TelephonySms,
+    /// Start and stop cellular data bearers.
+    TelephonyData,
+    /// Control cellular radio power without granting voice-call control.
+    TelephonyRadio,
     /// Read, search, and export contacts.
     ContactsRead,
     /// Create, update, delete, and import contacts.
@@ -230,7 +237,7 @@ pub enum AppCapability {
 
 impl AppCapability {
     /// Every capability, in declaration order.
-    pub const ALL: [AppCapability; 11] = [
+    pub const ALL: [AppCapability; 13] = [
         AppCapability::CoreState,
         AppCapability::CoreControl,
         AppCapability::Shell,
@@ -238,6 +245,8 @@ impl AppCapability {
         AppCapability::TelephonyState,
         AppCapability::TelephonyCall,
         AppCapability::TelephonySms,
+        AppCapability::TelephonyData,
+        AppCapability::TelephonyRadio,
         AppCapability::ContactsRead,
         AppCapability::ContactsWrite,
         AppCapability::NetworkState,
@@ -254,6 +263,8 @@ impl AppCapability {
             AppCapability::TelephonyState => "telephony-state",
             AppCapability::TelephonyCall => "telephony-call",
             AppCapability::TelephonySms => "telephony-sms",
+            AppCapability::TelephonyData => "telephony-data",
+            AppCapability::TelephonyRadio => "telephony-radio",
             AppCapability::ContactsRead => "contacts-read",
             AppCapability::ContactsWrite => "contacts-write",
             AppCapability::NetworkState => "network-state",
@@ -948,6 +959,8 @@ mod tests {
             "telephony-state",
             "telephony-call",
             "telephony-sms",
+            "telephony-data",
+            "telephony-radio",
             "contacts-read",
             "contacts-write",
             "network-state",

@@ -1,0 +1,317 @@
+#!/sbin/openrc-run
+
+# Fail closed before any radio service starts.  The rootfs workflow already
+# verifies these inputs while building, but a runtime check prevents a
+# partially copied /lib/firmware tree, a changed external mount, or a stale
+# radio-first alias from being mistaken for working hardware.
+
+name="Ferrix Pixel 9a radio firmware gate"
+description="Verifies the exact target firmware handoff before radio services"
+command=/bin/true
+command_background="no"
+
+firmware_manifest=${FERRIX_PIXEL9A_FIRMWARE_MANIFEST:-/usr/share/ferrix/pixel-9a/firmware-manifest.tsv}
+firmware_allowlist=${FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST:-/usr/share/ferrix/pixel-9a/firmware-allowlist.tsv}
+radio_manifest=${FERRIX_PIXEL9A_RADIO_FIRMWARE_MANIFEST:-/usr/share/ferrix/pixel-9a/radio-firmware-manifest.tsv}
+# Tests may point this at a synthetic root.  The target default is the real
+# filesystem root, so no host path is consulted by a production guest.
+firmware_root=${FERRIX_PIXEL9A_FIRMWARE_ROOT:-/}
+tab=$(printf '\t')
+
+depend() {
+	need udev
+	# NetworkManager, BlueZ, and the S5300 chain must not probe a controller
+	# until every reviewed firmware row and radio-first alias is present.
+	before networkmanager bluetooth ferrix-s5300-mounts exynos-modem sit-proxy modemmanager ferrix-networkd ferrix-telephonyd ferrix-audio ferrix-core ferrix-product
+}
+
+die_gate() {
+	eerror "radio firmware gate: $*"
+	return 1
+}
+
+hash_file() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{ print $1 }'
+	elif command -v sha256 >/dev/null 2>&1; then
+		sha256 -q "$1"
+	else
+		die_gate "sha256sum or sha256 is required"
+		return 1
+	fi
+}
+
+file_size() {
+	wc -c <"$1" | tr -d '[:space:]'
+}
+
+require_manifest_row() {
+	controller=$1
+	source_path=$2
+	runtime_path=$3
+	awk -F "$tab" -v controller="$controller" -v source_path="$source_path" -v runtime_path="$runtime_path" '
+		$1 == "firmware" && $2 == controller && $4 == source_path && $5 == runtime_path { found = 1 }
+		END { exit(found ? 0 : 1) }
+	' "$firmware_manifest" || {
+		die_gate "exact reviewed firmware row is absent: $runtime_path"
+		return 1
+	}
+}
+
+safe_relative() {
+	case "$1" in
+		''|/*|*..*|*' '*|*'	'*|*[!A-Za-z0-9_./+-]*) return 1 ;;
+		*) return 0 ;;
+	esac
+}
+
+regular_firmware_file() {
+	path=$1
+	[ -f "$path" ] || return 1
+	[ ! -L "$path" ] || return 1
+	return 0
+}
+
+validate_firmware_manifest() {
+	[ -f "$firmware_manifest" ] || {
+		die_gate "missing firmware manifest: $firmware_manifest"
+		return 1
+	}
+	schema_count=0
+	target_count=0
+	firmware_count=0
+	while IFS="$tab" read -r kind field2 field3 field4 field5 field6 field7 extra; do
+		case "$kind" in
+			''|'#'*) continue ;;
+			schema_version)
+				[ "$field2" = 1 ] && [ -z "${field3:-}" ] && [ -z "${extra:-}" ] || {
+					die_gate "malformed schema_version row"
+					return 1
+				}
+				schema_count=$((schema_count + 1))
+				;;
+			target_id)
+				[ "$field2" = google-pixel-9a-tegu-gxq96-mp1-0 ] && [ -z "${field3:-}" ] && [ -z "${extra:-}" ] || {
+					die_gate "firmware manifest target is not google-pixel-9a-tegu-gxq96-mp1-0"
+					return 1
+				}
+				target_count=$((target_count + 1))
+				;;
+			factory_archive)
+				[ -n "${field2:-}" ] && [ -n "${field3:-}" ] && [ -z "${field4:-}" ] && [ -z "${extra:-}" ] || {
+					die_gate "malformed factory_archive row"
+					return 1
+				}
+				;;
+			source)
+				[ "$field2" = vendor.img ] || [ "$field2" = vendor_dlkm.img ] || {
+					die_gate "unsupported firmware source image: ${field2:-missing}"
+					return 1
+				}
+				case "${field3:-}" in ''|*[!0-9]*) die_gate "malformed source byte count"; return 1 ;; esac
+				case "${field4:-}" in ''|*[!0-9a-fA-F]*) die_gate "malformed source hash"; return 1 ;; esac
+				[ "${#field4}" -eq 64 ] && [ -z "${field5:-}" ] && [ -z "${extra:-}" ] || {
+					die_gate "malformed source row"
+					return 1
+				}
+				;;
+			firmware)
+				[ -z "${extra:-}" ] || {
+					die_gate "firmware row has extra fields"
+					return 1
+				}
+				case "${field4:-}" in /*) ;; *) die_gate "firmware source path is not absolute"; return 1 ;; esac
+				safe_relative "${field5:-}" || {
+					die_gate "unsafe firmware runtime path: ${field5:-missing}"
+					return 1
+				}
+				awk -F "$tab" -v wanted="${field5:-}" '
+					$0 !~ /^[[:space:]]*#/ && NF == 3 && ($2 == wanted || index(wanted, $2 "/") == 1) { found = 1 }
+					END { exit(found ? 0 : 1) }
+				' "$firmware_allowlist" || {
+					die_gate "firmware runtime path is not in the reviewed allowlist: ${field5:-missing}"
+					return 1
+				}
+				case "${field6:-}" in ''|*[!0-9]*) die_gate "invalid firmware byte count: ${field5:-missing}"; return 1 ;; esac
+				case "${field7:-}" in ''|*[!0-9a-fA-F]*) die_gate "invalid firmware hash: ${field5:-missing}"; return 1 ;; esac
+				[ "${#field7}" -eq 64 ] || {
+					die_gate "invalid firmware hash length: ${field5:-missing}"
+					return 1
+				}
+				file="$firmware_root/${field5}"
+				regular_firmware_file "$file" || {
+					die_gate "firmware file is missing, non-regular, or symlinked: $file"
+					return 1
+				}
+				[ "$(file_size "$file")" = "$field6" ] || {
+					die_gate "firmware byte count mismatch: $file"
+					return 1
+				}
+				[ "$(hash_file "$file")" = "$field7" ] || {
+					die_gate "firmware hash mismatch: $file"
+					return 1
+				}
+				firmware_count=$((firmware_count + 1))
+				;;
+			*)
+				die_gate "unknown firmware manifest row: ${kind:-empty}"
+				return 1
+				;;
+		esac
+	done <"$firmware_manifest"
+	[ "$schema_count" -eq 1 ] || {
+		die_gate "firmware manifest must contain exactly one schema_version row"
+		return 1
+	}
+	[ "$target_count" -eq 1 ] || {
+		die_gate "firmware manifest must contain exactly one target_id row"
+		return 1
+	}
+	[ "$firmware_count" -gt 0 ] || {
+		die_gate "firmware manifest contains no firmware rows"
+		return 1
+	}
+	# Keep the selected controller contracts explicit even if a future package
+	# adds optional firmware rows. In particular, do not allow BTFW_B/BTFW_D or
+	# an unrelated Broadcom file to replace the factory-selected BCM.hcd.
+	for row in \
+		'wifi-bcm4383 /firmware/fw_bcmdhd.bin lib/firmware/fw_bcmdhd.bin' \
+		'wifi-bcm4383 /firmware/bcmdhd.cal lib/firmware/bcmdhd.cal' \
+		'wifi-bcm4383 /firmware/bcmdhd_clm.blob lib/firmware/bcmdhd_clm.blob' \
+		'wifi-bcm4383 /firmware/fw_bcmdhd.map lib/firmware/fw_bcmdhd.map' \
+		'wifi-bcm4383 /firmware/bcmdhd_txcap.blob lib/firmware/bcmdhd_txcap.blob' \
+		'bluetooth-broadcom /firmware/brcm/BCM.hcd lib/firmware/brcm/BCM.hcd'; do
+		set -- $row
+		require_manifest_row "$1" "$2" "$3" || return 1
+	done
+}
+
+validate_allowlist() {
+	[ -f "$firmware_allowlist" ] || {
+		die_gate "missing firmware allowlist: $firmware_allowlist"
+		return 1
+	}
+	awk -F "$tab" '
+		$0 !~ /^[[:space:]]*#/ && NF > 0 && (NF != 3 || $1 == "" || $2 == "" || $3 !~ /^(0|1)$/) { bad = 1 }
+		$0 !~ /^[[:space:]]*#/ && NF == 3 && seen[$2]++ { duplicate = 1 }
+		END { exit(bad || duplicate) }
+	' "$firmware_allowlist" || {
+		die_gate "firmware allowlist is malformed or contains duplicate paths"
+		return 1
+	}
+	required_entries=0
+	while IFS="$tab" read -r component runtime_path required extra; do
+		case "$component" in
+			''|'#'*) continue ;;
+		esac
+		[ -z "${extra:-}" ] || {
+			die_gate "firmware allowlist row has extra fields"
+			return 1
+		}
+		safe_relative "$runtime_path" || {
+			die_gate "unsafe firmware allowlist path: ${runtime_path:-missing}"
+			return 1
+		}
+		[ "$required" = 1 ] || continue
+		required_entries=$((required_entries + 1))
+		awk -F "$tab" -v wanted="$runtime_path" '
+			$1 == "firmware" && ($5 == wanted || index($5, wanted "/") == 1) { found = 1 }
+			END { exit(found ? 0 : 1) }
+		' "$firmware_manifest" || {
+			die_gate "allowlisted firmware is absent from the verified manifest: $runtime_path"
+			return 1
+		}
+	done <"$firmware_allowlist"
+	[ "$required_entries" -gt 0 ] || {
+		die_gate "firmware allowlist contains no required entries"
+		return 1
+	}
+}
+
+validate_radio_aliases() {
+	[ -f "$radio_manifest" ] || {
+		die_gate "missing radio-first firmware alias manifest: $radio_manifest"
+		return 1
+	}
+	schema_count=0
+	target_count=0
+	route_count=0
+	backend_count=0
+	policy_count=0
+	alias_count=0
+	seen_aliases=''
+	while IFS="$tab" read -r kind field2 field3 field4 field5 extra; do
+		case "$kind" in
+			''|'#'*) continue ;;
+			schema_version) [ "$field2" = 1 ] && [ -z "${field3:-}" ] || { die_gate "malformed radio alias schema row"; return 1; }; schema_count=$((schema_count + 1)) ;;
+			target_id) [ "$field2" = google-pixel-9a-tegu-gxq96-mp1-0 ] && [ -z "${field3:-}" ] || { die_gate "radio alias target mismatch"; return 1; }; target_count=$((target_count + 1)) ;;
+			route_id) [ "$field2" = experimental-linux-google-tegu-s5300-wwan ] && [ -z "${field3:-}" ] || { die_gate "radio alias route mismatch"; return 1; }; route_count=$((route_count + 1)) ;;
+			kernel_backend) [ "$field2" = linux-google-tegu-wwan ] && [ -z "${field3:-}" ] || { die_gate "radio alias backend mismatch"; return 1; }; backend_count=$((backend_count + 1)) ;;
+			source_policy) [ "$field2" = canonical-factory-manifest-explicit-aliases ] && [ -z "${field3:-}" ] || { die_gate "radio alias source policy mismatch"; return 1; }; policy_count=$((policy_count + 1)) ;;
+			alias)
+				[ -z "${extra:-}" ] || { die_gate "radio alias row has extra fields"; return 1; }
+				safe_relative "${field2:-}" && safe_relative "${field3:-}" || { die_gate "unsafe radio alias path"; return 1; }
+				[ "$field2" != "$field3" ] || { die_gate "radio alias source and destination are identical"; return 1; }
+				# Bind the external runtime handoff to the four reviewed
+				# source/destination pairs. A hash-preserving copy to an
+				# unrelated destination must not become a new firmware contract
+				# merely because it has the expected row count.
+				case "$field2:$field3" in
+					lib/firmware/fw_bcmdhd.bin:lib/firmware/brcm/brcmfmac4383-pcie.bin|\
+					lib/firmware/bcmdhd.cal:lib/firmware/brcm/brcmfmac4383-pcie.txt|\
+					lib/firmware/bcmdhd_clm.blob:lib/firmware/brcm/brcmfmac4383-pcie.clm_blob|\
+					lib/firmware/bcmdhd_txcap.blob:lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob)
+						;;
+					*) die_gate "radio alias is not one of the reviewed source/destination pairs: ${field2:-missing} -> ${field3:-missing}"; return 1 ;;
+				 esac
+				alias_pair="$field2:$field3"
+				case " $seen_aliases " in
+					*" $alias_pair "*)
+						die_gate "radio alias manifest repeats reviewed pair: $field2 -> $field3"
+						return 1
+						;;
+				 esac
+				seen_aliases="$seen_aliases $alias_pair"
+				case "${field4:-}" in ''|*[!0-9]*) die_gate "invalid radio alias byte count"; return 1 ;; esac
+				case "${field5:-}" in ''|*[!0-9a-fA-F]*) die_gate "invalid radio alias hash"; return 1 ;; esac
+				[ "${#field5}" -eq 64 ] || { die_gate "invalid radio alias hash length"; return 1; }
+				source="$firmware_root/${field2}"
+				destination="$firmware_root/${field3}"
+				regular_firmware_file "$source" || { die_gate "radio alias source missing: $source"; return 1; }
+				regular_firmware_file "$destination" || { die_gate "radio alias destination missing: $destination"; return 1; }
+				[ "$(file_size "$destination")" = "$field4" ] || { die_gate "radio alias byte count mismatch: $destination"; return 1; }
+				[ "$(hash_file "$source")" = "$field5" ] && [ "$(hash_file "$destination")" = "$field5" ] || { die_gate "radio alias hash mismatch: $destination"; return 1; }
+				alias_count=$((alias_count + 1))
+				;;
+			*) die_gate "unknown radio alias row: ${kind:-empty}"; return 1 ;;
+		esac
+	done <"$radio_manifest"
+	[ "$schema_count" -eq 1 ] && [ "$target_count" -eq 1 ] && [ "$route_count" -eq 1 ] && [ "$backend_count" -eq 1 ] && [ "$policy_count" -eq 1 ] || {
+		die_gate "radio alias manifest headers are incomplete"
+		return 1
+	}
+	[ "$alias_count" -eq 4 ] || {
+		die_gate "radio alias manifest must contain four reviewed aliases"
+		return 1
+	}
+	for required_pair in \
+		'lib/firmware/fw_bcmdhd.bin:lib/firmware/brcm/brcmfmac4383-pcie.bin' \
+		'lib/firmware/bcmdhd.cal:lib/firmware/brcm/brcmfmac4383-pcie.txt' \
+		'lib/firmware/bcmdhd_clm.blob:lib/firmware/brcm/brcmfmac4383-pcie.clm_blob' \
+		'lib/firmware/bcmdhd_txcap.blob:lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob'; do
+		case " $seen_aliases " in
+			*" $required_pair "*) ;;
+			*)
+				die_gate "radio alias manifest is missing reviewed pair: $required_pair"
+				return 1
+				;;
+		esac
+	done
+}
+
+start_pre() {
+	validate_allowlist || return 1
+	validate_firmware_manifest || return 1
+	validate_radio_aliases || return 1
+	einfo "verified $firmware_manifest and $radio_manifest before radio services"
+}

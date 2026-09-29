@@ -1,0 +1,13 @@
+Controller AA:BB:CC:DD:EE:FF (public)
+wlan0: MAC 12:34:56:78:9a:bc joined
+  3GPP | imei: 356789012345678
+  SIM  | iccid: 89014103211118510720
+       | imsi: 310150123456789
+  Numbers | own: +15551234567
+usb 1-1: SerialNumber: 3A091FDJG0012X
+serial=SYN0001234
+GENERAL.CONNECTION:Synthetic Home 5G
+SSID:Synthetic Home 5G
+IP6.ADDRESS[1]:2001:db8:1:2::abcd:ef01/64
+IP6.ADDRESS[2]:fd12:3456:789a::1/64
+ordinary line with hostname ferrix-tegu stays readable

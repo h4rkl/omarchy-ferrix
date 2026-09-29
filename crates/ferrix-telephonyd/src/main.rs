@@ -21,8 +21,8 @@ use ferrix_telephony_adapter_api::ModemBackend;
 use ferrix_telephony_mock::{MockControl, MockModem, MockTelephonyConfig};
 use ferrix_telephony_protocol::{DEFAULT_SOCKET, SOCKET_ENV};
 use ferrix_telephonyd::{
-    AllowAll, AppdIdentity, DATA_DIR_ENV, DEFAULT_DATA_DIR, DenyAll, EVIDENCE_MOCK, EVIDENCE_QEMU,
-    Identity, LocalControl, Recorder, Server, Service, ServiceOptions, SmsStore,
+    AllowAll, AppdIdentity, DATA_DIR_ENV, DEFAULT_DATA_DIR, DenyAll, Identity, LocalControl,
+    Recorder, Server, Service, ServiceOptions, SmsStore,
 };
 
 const USAGE: &str =
@@ -260,15 +260,13 @@ fn main() -> ExitCode {
         }
         Err(error) => {
             eprintln!("{USAGE}");
-            Recorder::stdout(EVIDENCE_QEMU).failed(&error);
+            let evidence = ferrix_telephonyd::records::runtime_evidence(false);
+            Recorder::stdout(&evidence).failed(&error);
             return ExitCode::FAILURE;
         }
     };
-    let recorder = Recorder::stdout(if args.nested {
-        EVIDENCE_MOCK
-    } else {
-        EVIDENCE_QEMU
-    });
+    let evidence = ferrix_telephonyd::records::runtime_evidence(args.nested);
+    let recorder = Recorder::stdout(&evidence);
     match run(args, recorder.clone()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

@@ -1,0 +1,4 @@
+socket=/run/ferrix/core.sock=present
+socket=/run/ferrix/networkd.sock=present
+socket=/run/ferrix/telephonyd.sock=present
+socket=/run/ferrix/ferrix-appd.sock=present

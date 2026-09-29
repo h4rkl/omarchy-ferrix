@@ -33,6 +33,16 @@ use crate::server::{Server, Subscribers, broadcast};
 const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
 const DEFAULT_SHUTDOWN_MARKER: &str = "/run/ferrix/shutdown";
 
+/// The target bootstrap supplies an exact redacted evidence label for a
+/// physical board. Development defaults stay compatible with the QEMU/mock
+/// routes when no label is supplied.
+pub(crate) fn evidence_label() -> String {
+    std::env::var("FERRIX_EVIDENCE")
+        .ok()
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "mock".to_owned())
+}
+
 /// Prints one JSON record per line and flushes, so serial captures are exact.
 pub(crate) fn emit(value: Value) {
     use std::io::Write as _;
@@ -96,7 +106,7 @@ impl control::Handler for Controller {
             Ok(c) => c,
             Err(reason) => {
                 emit(json!({
-                    "evidence": "mock",
+                    "evidence": evidence_label(),
                     "event": "mock-command",
                     "status": "error",
                     "reason": reason,
@@ -107,7 +117,7 @@ impl control::Handler for Controller {
         match core::apply(&self.session.services, command) {
             Ok(applied) => {
                 emit(json!({
-                    "evidence": "mock",
+                    "evidence": evidence_label(),
                     "event": "mock-command",
                     "cmd": command.name(),
                     "status": "ok",
@@ -120,7 +130,7 @@ impl control::Handler for Controller {
             }
             Err(reason) => {
                 emit(json!({
-                    "evidence": "mock",
+                    "evidence": evidence_label(),
                     "event": "mock-command",
                     "cmd": command.name(),
                     "status": "error",
@@ -141,7 +151,7 @@ impl Controller {
     fn request_shutdown(&self) {
         // Report first: init powers off as soon as the marker exists.
         emit(json!({
-            "evidence": "mock",
+            "evidence": evidence_label(),
             "event": "shutdown",
             "status": "accepted",
             "marker": self.shutdown_marker.display().to_string(),
@@ -155,7 +165,7 @@ impl Controller {
         match result {
             Ok(()) => {}
             Err(e) => emit(json!({
-                "evidence": "mock",
+                "evidence": evidence_label(),
                 "event": "shutdown",
                 "status": "failed",
                 "marker": self.shutdown_marker.display().to_string(),
@@ -194,7 +204,7 @@ fn run() -> Result<(), String> {
 
     let state = session.services.snapshot();
     emit(json!({
-        "evidence": "mock",
+        "evidence": evidence_label(),
         "event": "boot-health",
         "status": "ok",
         "target": session.target_id,
@@ -206,7 +216,7 @@ fn run() -> Result<(), String> {
         "capabilities": session.capabilities,
     }));
     emit(json!({
-        "evidence": "mock",
+        "evidence": evidence_label(),
         "event": "mock-control",
         "status": control_status["status"],
         "path": control_status.get("path").cloned().unwrap_or(Value::Null),
@@ -221,7 +231,7 @@ fn run() -> Result<(), String> {
     for event in events {
         // Records lead with the evidence label, then the event's own fields.
         let mut record = serde_json::Map::new();
-        record.insert("evidence".to_owned(), Value::String("mock".to_owned()));
+        record.insert("evidence".to_owned(), Value::String(evidence_label()));
         if let Ok(Value::Object(fields)) = serde_json::to_value(event) {
             record.extend(fields);
         }
@@ -236,7 +246,7 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             emit(json!({
-                "evidence": "mock",
+                "evidence": evidence_label(),
                 "event": "boot-failed",
                 "status": "failed",
                 "reason": error,

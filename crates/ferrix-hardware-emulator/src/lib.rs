@@ -66,6 +66,7 @@ impl Emulator {
             },
             audio: AudioState {
                 route: profile.audio.route,
+                available: ferrix_hardware_api::AudioRouteAvailability::ALL,
             },
             telephony: TelephonyState {
                 registration: profile.connectivity.modem,
@@ -256,7 +257,10 @@ impl Audio for Emulator {
         route: ferrix_hardware_api::AudioRoute,
     ) -> Result<AudioState, HardwareError> {
         let mut inner = self.lock();
-        let audio = AudioState { route };
+        let audio = AudioState {
+            route,
+            available: inner.state.audio.available,
+        };
         Self::publish(&mut inner, HardwareEvent::AudioChanged(audio));
         Ok(audio)
     }

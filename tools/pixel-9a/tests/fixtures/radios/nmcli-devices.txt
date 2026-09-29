@@ -1,0 +1,4 @@
+wlan0:wifi:connected
+p2p-dev-wlan0:wifi-p2p:disconnected
+usb0:ethernet:connected
+lo:loopback:unmanaged

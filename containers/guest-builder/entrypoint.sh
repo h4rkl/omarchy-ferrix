@@ -23,8 +23,8 @@ rmdir "$probe"
 losetup -f >/dev/null 2>&1 || fail "no-free-loop-device" "losetup -f found no free loop device"
 
 # pmbootstrap waits for partition nodes such as /dev/loop0p2 after
-# `losetup -P`. Docker gives the container a static /dev and there is no udev
-# here, so let the kernel populate /dev itself: mount devtmpfs over it and
+# `losetup -P`. The container engine gives the container a static /dev and
+# there is no udev here, so let the kernel populate /dev itself: mount devtmpfs over it and
 # restore the pseudo-terminal and shm mounts that were layered on the old /dev.
 mount -t devtmpfs devtmpfs /dev || fail "devtmpfs-denied" "cannot mount devtmpfs on /dev; run the container with --privileged"
 mkdir -p /dev/pts /dev/shm
@@ -32,12 +32,12 @@ mount -t devpts -o newinstance,ptmxmode=0666,gid=5,mode=620 devpts /dev/pts || f
 mount -t tmpfs -o nosuid,nodev shm /dev/shm || fail "shm-denied" "cannot mount /dev/shm"
 
 # pmbootstrap chroots need real POSIX semantics on the work filesystem:
-# ownership changes, setuid bits (su, sudo, BusyBox) and device nodes. Docker
-# Desktop's virtiofs bind mounts from macOS provide none of these, so the
-# work directory must be a Docker volume there (pmos-build.sh's default).
+# ownership changes, setuid bits (su, sudo, BusyBox) and device nodes. macOS
+# host bind mounts may not provide these, so the work directory must be a
+# named container volume there (pmos-build.sh's default).
 mkdir -p "$cache"
 fs_probe="$cache/.fs-probe.$$"
-fs_detail="use a Docker volume for the pmbootstrap work directory (FERRIX_PMOS_WORK_VOLUME) instead of a macOS bind mount"
+fs_detail="use a named container volume for the pmbootstrap work directory (FERRIX_PMOS_WORK_VOLUME) instead of a macOS bind mount"
 touch "$fs_probe"
 chown 1000:1000 "$fs_probe"
 [ "$(stat -c %u "$fs_probe")" = 1000 ] || { rm -f "$fs_probe"; fail "work-fs-no-chown" "$cache does not preserve file ownership; $fs_detail"; }

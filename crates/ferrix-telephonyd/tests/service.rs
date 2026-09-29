@@ -10,8 +10,8 @@ use ferrix_telephony_adapter_api::{
     BackendCall, BackendError, BackendEvent, CallHandle, SmsHandle,
 };
 use ferrix_telephony_api::{
-    AudioRoute, CallEndReason, CallId, CallState, Direction, Dtmf, E164, MessageId, ModemState,
-    MultipartPart, RadioPower, SCHEMA_VERSION, SmsFailure, SmsState, TelephonyError,
+    AudioRoute, CallEndReason, CallId, CallState, DataProfile, Direction, Dtmf, E164, MessageId,
+    ModemState, MultipartPart, RadioPower, SCHEMA_VERSION, SmsFailure, SmsState, TelephonyError,
     TelephonyEvent, TelephonyFeature,
 };
 use ferrix_telephony_protocol::{
@@ -21,8 +21,9 @@ use ferrix_telephonyd::records::captured_events;
 use ferrix_telephonyd::server::parse_line;
 use ferrix_telephonyd::testing::{FakeBackend, MemorySink, temp_data_dir};
 use ferrix_telephonyd::{
-    AllowAll, CAP_CALL, CAP_SMS, CAP_STATE, Connection, DenyAll, Identity, IdentityInfo, Outcome,
-    Recorder, Server, Service, ServiceOptions, SmsStore, StaticIdentity, dispatch,
+    AllowAll, CAP_CALL, CAP_DATA, CAP_RADIO, CAP_SMS, CAP_STATE, Connection, DenyAll, Identity,
+    IdentityInfo, Outcome, Recorder, Server, Service, ServiceOptions, SmsStore, StaticIdentity,
+    dispatch,
 };
 
 const NUMBER: &str = "+15550100042";
@@ -30,6 +31,7 @@ const PHONE_PID: u32 = 100;
 const MESSAGES_PID: u32 = 200;
 const STATUS_PID: u32 = 300;
 const DECLARED_NOT_GRANTED_PID: u32 = 400;
+const DATA_PID: u32 = 500;
 
 fn number() -> E164 {
     E164::new(NUMBER).unwrap()
@@ -71,6 +73,13 @@ fn harness_with(tag: &str, backend: FakeBackend, options: ServiceOptions) -> Har
                 STATUS_PID,
                 IdentityInfo::granted(Some("org.ferrix.home"), &[CAP_STATE]),
             )
+            .with(
+                DATA_PID,
+                IdentityInfo::granted(
+                    Some("org.ferrix.settings"),
+                    &[CAP_STATE, CAP_DATA, CAP_RADIO],
+                ),
+            )
             // Declared telephony-call in its descriptor, but the grants file
             // does not grant it: the effective set is empty.
             .with(
@@ -85,6 +94,65 @@ fn harness_with(tag: &str, backend: FakeBackend, options: ServiceOptions) -> Har
         records,
         dir,
     }
+}
+
+#[test]
+fn cellular_data_has_a_separate_capability_and_backend_operation() {
+    let backend = FakeBackend::ready();
+    backend.set_capabilities([TelephonyFeature::Data].into_iter().collect());
+    let h = harness_with("data-control", backend, ServiceOptions::default());
+    let mut conn = h.conn(DATA_PID);
+
+    assert_eq!(
+        h.send(
+            &mut conn,
+            Request::ConnectData {
+                profile: DataProfile {
+                    apn: Some("internet".into()),
+                },
+            },
+        ),
+        Reply::Ok
+    );
+    assert_eq!(h.backend.ops(), ["connect-data internet"]);
+    assert_eq!(h.send(&mut conn, Request::DisconnectData {}), Reply::Ok);
+    assert_eq!(
+        h.backend.ops(),
+        ["connect-data internet", "disconnect-data"]
+    );
+
+    let state_only = h.conn(STATUS_PID);
+    let mut state_only = state_only;
+    h.denied(
+        &mut state_only,
+        Request::ConnectData {
+            profile: DataProfile::default(),
+        },
+        CAP_DATA,
+    );
+}
+
+#[test]
+fn settings_radio_grant_does_not_grant_voice_calls() {
+    let h = harness("radio-control");
+    let mut settings = h.conn(DATA_PID);
+    assert_eq!(
+        h.send(
+            &mut settings,
+            Request::SetRadioPower {
+                power: RadioPower::Off,
+            },
+        ),
+        Reply::Ok
+    );
+    assert_eq!(h.backend.ops(), ["set-radio-power off"]);
+    h.denied(
+        &mut settings,
+        Request::Dial {
+            number: NUMBER.into(),
+        },
+        CAP_CALL,
+    );
 }
 
 impl Harness {
@@ -323,7 +391,7 @@ fn state_grant_cannot_reach_any_control_verb() {
             Request::SetRadioPower {
                 power: RadioPower::Off,
             },
-            CAP_CALL,
+            CAP_RADIO,
         ),
         (Request::EnterPin { pin: "0000".into() }, CAP_CALL),
         (
@@ -351,6 +419,13 @@ fn state_grant_cannot_reach_any_control_verb() {
             },
             CAP_SMS,
         ),
+        (
+            Request::ConnectData {
+                profile: DataProfile::default(),
+            },
+            CAP_DATA,
+        ),
+        (Request::DisconnectData {}, CAP_DATA),
     ] {
         h.denied(&mut conn, request, capability);
     }
@@ -360,7 +435,7 @@ fn state_grant_cannot_reach_any_control_verb() {
         "no denied request reached the backend"
     );
     let denials = h.denials();
-    assert_eq!(denials.len(), 14);
+    assert_eq!(denials.len(), 16);
     assert!(denials.iter().all(|(app, _, _)| app == "org.ferrix.home"));
     assert!(
         denials
@@ -705,9 +780,10 @@ fn backend_errors_map_to_typed_replies() {
     h.service.handle_backend_event(BackendEvent::Capabilities(
         [TelephonyFeature::Voice].into_iter().collect(),
     ));
+    let mut settings = h.conn(DATA_PID);
     assert_eq!(
         h.send(
-            &mut phone,
+            &mut settings,
             Request::SetRadioPower {
                 power: RadioPower::Off
             }

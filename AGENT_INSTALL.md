@@ -16,10 +16,13 @@ Do not replace that command with a guessed package list. The checked-in script
 installs the versions and host packages expected by this checkout, including:
 
 - the Rust toolchain pinned by `rust-toolchain.toml`, with `rustfmt`, `clippy`,
-  and `aarch64-unknown-linux-gnu`;
+  `aarch64-unknown-linux-gnu` for QEMU/CI, and
+  `aarch64-unknown-linux-musl` for the physical Pixel 9a product target;
 - `just`, QEMU's AArch64 system emulator and image tools, Python 3, `cpio`,
   hashing/archive utilities, and normal native build tools;
-- Docker, which builds the pinned Linux guest and postmarketOS containers; and
+- a Docker-compatible container engine—OrbStack on Apple Silicon macOS or
+  Docker Engine on Debian/Ubuntu Linux—which builds the pinned Linux guest and
+  postmarketOS containers; and
 - Linux-only libraries needed to compile and run the nested compositor.
 
 The supported bootstrap hosts are Apple Silicon macOS and 64-bit Debian or
@@ -27,11 +30,11 @@ Ubuntu Linux. Linux on either `x86_64` or `aarch64` is accepted; the installer
 adds QEMU binfmt support for the repository's pinned arm64 containers.
 
 The script changes host packages and downloads Rust components. On macOS it
-may open Docker Desktop, whose first-run license and privileged configuration
-must be completed by the human owner. On Linux it may require `sudo`; a newly
-added Docker group membership requires starting a new login shell. Those are
-the only expected interactive boundaries, and the script prints the exact
-continuation command if it encounters one.
+may open OrbStack, whose first-run configuration must be completed by the
+human owner. On Linux it may require `sudo`; a newly added Docker group
+membership requires starting a new login shell. Those are the only expected
+interactive boundaries, and the script prints the exact continuation command
+if it encounters one.
 
 To inspect the environment without changing it, run either:
 

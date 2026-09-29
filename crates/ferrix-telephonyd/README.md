@@ -39,6 +39,12 @@ ferrix-telephonyd --backend mock|modemmanager [--profile PATH] [--socket PATH]
   `telephonyd-unauthenticated`).
 - `--mock-control` with `--backend modemmanager` is a typed startup error.
 - `--backend modemmanager` needs the `production` cargo feature (Linux guest).
+- The production ModemManager adapter accepts the non-secret
+  `FERRIX_TELEPHONY_APN` environment value as a fallback when a
+  `connect-data` client sends the default profile. An explicit request APN
+  wins; malformed configured values are rejected without including the value
+  in an error or record. The board OpenRC service is responsible for sourcing
+  this target-local setting.
 
 Nested host example:
 
@@ -54,8 +60,10 @@ ferrix-telephonyd --backend mock --nested --appd none --allow-unauthenticated \
 | Capability | Requests | Visibility |
 | --- | --- | --- |
 | `telephony-state` | `hello`, `state`, `subscribe` | parties redacted (`+***0042`), no bodies |
-| `telephony-call` | `dial`, `answer`, `reject`, `hangup`, `hold`, `resume`, `dtmf`, `set-audio-route`, `set-radio-power`, `enter-pin` | full call numbers; no messages |
+| `telephony-call` | `dial`, `answer`, `reject`, `hangup`, `hold`, `resume`, `dtmf`, `set-audio-route`, `enter-pin` | full call numbers; no messages |
 | `telephony-sms` | `send-sms`, `list-sms`, `mark-read`, `delete-sms` | full message numbers and bodies; no calls |
+| `telephony-data` | `connect-data`, `disconnect-data` | bearer lifecycle and interface only |
+| `telephony-radio` | `set-radio-power` | cellular radio power only; no calls or data control |
 
 A peer holding both `telephony-call` and `telephony-sms` gets the full
 snapshot. Denials reply `{"kind":"unauthorized","capability":...}` and record
@@ -163,7 +171,10 @@ persists; `message_id` therefore defaults to the latest pending message.
 
 ## Limitations
 
-- Cellular data bearers are `unsupported` on both backends.
+- The mock backend keeps cellular data `unsupported` in the checked-in QEMU
+  profile. Profiles that include the `data` feature exercise a deterministic
+  mock bearer. The ModemManager adapter exposes the same target-neutral
+  connect/disconnect API through `Modem.Simple` and observes `Bearer` state.
 - Audio route is `unsupported` on the ModemManager adapter (delegated to a
   future audio service); the mock emulates it.
 - The ModemManager adapter is type-checked (host and `aarch64-unknown-linux-gnu`)

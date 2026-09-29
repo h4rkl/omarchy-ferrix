@@ -16,8 +16,10 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 /// A contact must start at or below this fraction of the output height
-/// (the bottom 8%) to be considered for the home gesture.
-pub const START_ZONE: f64 = 0.92;
+/// (the bottom 3%) to be considered for the home gesture. Keep this within
+/// the system navigation strip so application controls near the bottom edge
+/// (for example an Android browser's onboarding arrow) remain clickable.
+pub const START_ZONE: f64 = 0.97;
 /// Upward travel, as a fraction of `min(width, height)`, beyond which the
 /// contact is a swipe (and it must be more vertical than horizontal).
 pub const SWIPE_FRACTION: f64 = 0.12;
@@ -184,16 +186,27 @@ mod tests {
             assert!(!gesture.is_active());
             assert!(gesture.begin((0.0, size.1 - 1.0), size), "corner {size:?}");
         }
-        // 1080x2340: zone starts at y = 2152.8; 830x1800: y = 1656; 2340x1080: y = 993.6.
+        // 1080x2340: zone starts at y = 2269.8; 830x1800: y = 1746; 2340x1080: y = 1047.6.
         let mut gesture = EdgeGesture::new();
-        assert!(!gesture.begin((540.0, 2152.0), PORTRAIT));
-        assert!(gesture.begin((540.0, 2153.0), PORTRAIT));
+        assert!(!gesture.begin((540.0, 2269.0), PORTRAIT));
+        assert!(gesture.begin((540.0, 2270.0), PORTRAIT));
         let mut gesture = EdgeGesture::new();
-        assert!(!gesture.begin((415.0, 1655.0), SMALL));
-        assert!(gesture.begin((415.0, 1656.0), SMALL));
+        assert!(!gesture.begin((415.0, 1745.0), SMALL));
+        assert!(gesture.begin((415.0, 1746.0), SMALL));
         let mut gesture = EdgeGesture::new();
-        assert!(!gesture.begin((1170.0, 993.0), LANDSCAPE));
-        assert!(gesture.begin((1170.0, 994.0), LANDSCAPE));
+        assert!(!gesture.begin((1170.0, 1047.0), LANDSCAPE));
+        assert!(gesture.begin((1170.0, 1048.0), LANDSCAPE));
+    }
+
+    #[test]
+    fn app_controls_above_the_system_strip_are_not_grabbed() {
+        let mut gesture = EdgeGesture::new();
+        assert!(
+            !gesture.begin((900.0, 2260.0), PORTRAIT),
+            "the Android app action area must remain available"
+        );
+        assert!(gesture.begin((900.0, 2280.0), PORTRAIT));
+        gesture.cancel();
     }
 
     #[test]
@@ -297,7 +310,7 @@ mod tests {
     #[test]
     fn horizontal_or_downward_movement_is_not_home() {
         assert_eq!(
-            kind(swipe(PORTRAIT, (540.0, 2200.0), (540.0, 2339.0))),
+            kind(swipe(PORTRAIT, (540.0, 2270.0), (540.0, 2339.0))),
             None,
             "downward drag"
         );

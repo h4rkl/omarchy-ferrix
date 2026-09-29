@@ -1,0 +1,14 @@
+# Radio-first firmware name mapping.
+# source-runtime-path	linux-google-tegu-wwan-runtime-path
+# The source paths are the already verified, Google factory-derived files in
+# firmware-manifest.tsv.  The destination names are requested by the
+# candidate kernel's upstream brcmfmac4383 and btbcm drivers.  This is copy/rename only;
+# it is not a format conversion or a compatibility claim.  This mapping is
+# used only by the radio-first rootfs workflow; the canonical Google bcmdhd
+# route keeps its original names and is never silently renamed. The
+# factory-selected Bluetooth `brcm/BCM.hcd` already matches btbcm's runtime
+# name and is therefore carried by the canonical manifest without an alias row.
+lib/firmware/fw_bcmdhd.bin	lib/firmware/brcm/brcmfmac4383-pcie.bin
+lib/firmware/bcmdhd.cal	lib/firmware/brcm/brcmfmac4383-pcie.txt
+lib/firmware/bcmdhd_clm.blob	lib/firmware/brcm/brcmfmac4383-pcie.clm_blob
+lib/firmware/bcmdhd_txcap.blob	lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob

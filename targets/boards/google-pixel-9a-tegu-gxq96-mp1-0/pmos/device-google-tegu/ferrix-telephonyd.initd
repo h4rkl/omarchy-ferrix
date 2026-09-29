@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+# The APN is non-secret target configuration.  Export it only to this
+# privileged daemon so a default `connect-data` request can use the board's
+# carrier profile; product applications receive it only through the existing
+# capability-gated appd launch environment.
+export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_NETWORK_BACKEND FERRIX_TELEPHONY_BACKEND FERRIX_TELEPHONY_APN FERRIX_BLUETOOTH_BACKEND FERRIX_AUDIO_BACKEND FERRIX_POWER_BACKEND
+
+name="Ferrix ModemManager adapter"
+command="/usr/bin/ferrix-telephonyd"
+command_args="--backend modemmanager --profile /etc/ferrix/profile.toml --socket /run/ferrix/telephonyd.sock --mock-control none --appd /run/ferrix/ferrix-appd.sock --data-dir /var/lib/ferrix/telephony"
+command_background="yes"
+pidfile="/run/ferrix-telephonyd.pid"
+output_log="/var/log/ferrix-telephonyd.log"
+error_log="/var/log/ferrix-telephonyd.err"
+
+depend() {
+	need dbus modemmanager ferrix-radio-firmware
+	after udev networkmanager ferrix-s5300-mounts exynos-modem sit-proxy
+}
+
+start_pre() {
+	checkpath -d -m 0755 /run/ferrix /var/log /var/lib/ferrix/telephony
+	checkpath -f -m 0644 /etc/ferrix/profile.toml
+}

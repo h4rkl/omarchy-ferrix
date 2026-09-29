@@ -119,7 +119,7 @@ pub fn run(
         app_id: APP_ID.to_owned(),
         title: TITLE.to_owned(),
         initial_size: (profile.display.width, profile.display.height),
-        evidence: EVIDENCE.to_owned(),
+        evidence: EVIDENCE.to_string(),
         first_frame_event: "basic-screen-frame".to_owned(),
         first_frame_extra: vec![("profile".to_owned(), profile.name.clone())],
     };

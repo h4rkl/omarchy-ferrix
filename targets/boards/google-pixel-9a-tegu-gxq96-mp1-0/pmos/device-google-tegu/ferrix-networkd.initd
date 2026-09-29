@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_NETWORK_BACKEND FERRIX_TELEPHONY_BACKEND FERRIX_BLUETOOTH_BACKEND FERRIX_AUDIO_BACKEND FERRIX_POWER_BACKEND
+
+name="Ferrix NetworkManager adapter"
+command="/usr/bin/ferrix-networkd"
+command_args="--backend networkmanager --profile /etc/ferrix/profile.toml --socket /run/ferrix/networkd.sock --mock-control none --appd /run/ferrix/ferrix-appd.sock"
+command_background="yes"
+pidfile="/run/ferrix-networkd.pid"
+output_log="/var/log/ferrix-networkd.log"
+error_log="/var/log/ferrix-networkd.err"
+
+depend() {
+	need dbus networkmanager ferrix-radio-firmware
+	after udev
+}
+
+start_pre() {
+	checkpath -d -m 0755 /run/ferrix /var/log /var/lib/ferrix
+	checkpath -f -m 0644 /etc/ferrix/profile.toml
+}

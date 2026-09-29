@@ -1,0 +1,11 @@
+[package]
+name = "ferrix-s5300-cpif"
+description = "Bounded S5300 SIPC5/SIT and userspace FMT codecs plus explicit channel descriptors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
+use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind, TELEPHONY_APN_ENV};
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 
 #[cfg(not(target_os = "linux"))]
@@ -332,6 +332,11 @@ pub fn with_granted_sockets(
 /// Spawns with the launch environment, its own process group, and inherited
 /// stdio (application output flows to the launcher's log).
 fn spawn(mut command: Command, context: &LaunchContext) -> std::io::Result<Child> {
+    // `ferrix-appd` captures the target APN before it starts workers, but keep
+    // this boundary explicit as well: a future caller or test may run a
+    // runtime with the value in its own environment. The service re-adds it
+    // through `context.env` only for an authorized telephony-data app.
+    command.env_remove(TELEPHONY_APN_ENV);
     command.envs(context.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     command
         .stdin(Stdio::inherit())
@@ -580,6 +585,28 @@ mod tests {
         );
         let mut running = runtime().launch(&app, &config, &context()).unwrap();
         assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_apn_is_removed_unless_the_launch_context_allows_it() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "test -z \"${FERRIX_TELEPHONY_APN+x}\""])
+            .env(TELEPHONY_APN_ENV, "inherited-from-appd");
+        let mut child = spawn(command, &context()).unwrap();
+        assert!(child.wait().unwrap().success());
+
+        let mut allowed = context();
+        allowed
+            .env
+            .push((TELEPHONY_APN_ENV.to_owned(), "internet.example".to_owned()));
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "test \"$FERRIX_TELEPHONY_APN\" = internet.example"])
+            .env(TELEPHONY_APN_ENV, "inherited-from-appd");
+        let mut child = spawn(command, &allowed).unwrap();
+        assert!(child.wait().unwrap().success());
     }
 
     #[cfg(unix)]

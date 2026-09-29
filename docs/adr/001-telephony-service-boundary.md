@@ -60,8 +60,10 @@ Typed enums and structs, kebab-case serde, no vendor types:
 Client capabilities map to `ferrix-app-api::AppCapability`: `telephony-state`
 (read snapshot, subscribe; party numbers redacted to `display` only),
 `telephony-call` (dial, answer, reject, hangup, hold, resume, dtmf, set audio
-route, see full party numbers on calls), `telephony-sms` (send, list, mark
-read, delete, see bodies). Emergency numbers are **rejected** with
+route, enter SIM PIN, see full party numbers on calls), `telephony-sms` (send,
+list, mark read, delete, see bodies), `telephony-data` (connect and disconnect
+packet-data bearers), and `telephony-radio` (set cellular radio power without
+voice-call control). Emergency numbers are **rejected** with
 `Unsupported { feature: emergency }`; no emergency path exists.
 
 ## Adapter contract (`ferrix-telephony-adapter-api`, internal)

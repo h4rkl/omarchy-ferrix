@@ -55,13 +55,9 @@ pub struct Args {
 }
 
 impl Args {
-    /// Evidence label for records: `mock` nested, `QEMU` in the guest.
-    pub fn evidence(&self) -> &'static str {
-        if self.nested {
-            crate::records::EVIDENCE_MOCK
-        } else {
-            crate::records::EVIDENCE_QEMU
-        }
+    /// Evidence label for records: nested mock or the target bootstrap label.
+    pub fn evidence(&self) -> String {
+        crate::records::runtime_evidence(self.nested)
     }
 }
 

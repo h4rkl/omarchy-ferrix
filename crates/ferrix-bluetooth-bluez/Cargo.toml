@@ -1,0 +1,18 @@
+[package]
+name = "ferrix-bluetooth-bluez"
+description = "Target-neutral BlueZ adapter for the Ferrix Bluetooth hardware contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# The real system-D-Bus transport is opt-in so mapping and mocked-bus tests run
+# on every development host. Linux target composition enables this feature.
+production = ["dep:zbus"]
+
+[dependencies]
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+zbus = { version = "5", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
+
+[lints]
+workspace = true

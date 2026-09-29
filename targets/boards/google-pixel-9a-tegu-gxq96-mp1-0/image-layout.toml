@@ -1,0 +1,57 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+codename = "tegu"
+hardware_revision = "MP1.0"
+
+# These are the partition-level inputs that a Ferrix image must provide. The
+# kernel rows come only from the same pinned Kleaf build; the boot/rootfs rows
+# are produced by the target-local Linux image builder. A stock Android module
+# image is never an acceptable substitute for a row below.
+[partition.boot]
+source_manifest = "kernel"
+artifact_names = ["boot.img", "Image", "Image.lz4"]
+
+[partition.dtbo]
+source_manifest = "kernel"
+artifact_names = ["dtbo.img"]
+
+[partition.vendor_kernel_boot]
+source_manifest = "kernel"
+artifact_names = ["vendor_kernel_boot.img"]
+
+[partition.vendor_dlkm]
+source_manifest = "kernel"
+artifact_names = ["vendor_dlkm.img"]
+
+[partition.system_dlkm]
+source_manifest = "kernel"
+artifact_names = ["system_dlkm.img"]
+
+[partition.init_boot]
+source_manifest = "boot"
+artifact_names = ["init_boot", "init_boot.img"]
+
+[partition.vendor_boot]
+source_manifest = "boot"
+artifact_names = ["vendor_boot", "vendor_boot.img"]
+
+[partition.rootfs]
+source_manifest = "boot"
+artifact_names = ["rootfs_image", "rootfs.img"]
+
+[verified_boot]
+# AVB metadata is generated only after all image bytes are fixed. It is not
+# copied from the Android factory archive, because that would describe the
+# wrong kernel/rootfs contents.
+required = true
+artifacts = ["vbmeta.img", "vbmeta_vendor.img", "vbmeta_system.img"]
+
+[policy]
+temporary_boot_before_persistent_write = true
+stock_modules_may_be_reused = false
+android_userspace_required = false
+
+# `rootfs.tar` is the deterministic handoff produced by the native pmOS
+# substrate workflow; `rootfs.img` is the generated raw ext4 image derived from
+# that handoff. Neither is physical boot evidence, so the composed manifest
+# remains unbooted until the exact partition map and device gates pass.

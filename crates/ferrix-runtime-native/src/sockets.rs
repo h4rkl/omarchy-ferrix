@@ -49,7 +49,9 @@ pub fn socket_file_for(capability: AppCapability) -> Option<&'static str> {
         AppCapability::CoreState | AppCapability::CoreControl => Some(CORE_SOCKET_FILE),
         AppCapability::TelephonyState
         | AppCapability::TelephonyCall
-        | AppCapability::TelephonySms => Some(TELEPHONYD_SOCKET_FILE),
+        | AppCapability::TelephonySms
+        | AppCapability::TelephonyData
+        | AppCapability::TelephonyRadio => Some(TELEPHONYD_SOCKET_FILE),
         AppCapability::NetworkState | AppCapability::NetworkControl => Some(NETWORKD_SOCKET_FILE),
         AppCapability::ContactsRead | AppCapability::ContactsWrite => Some(CONTACTSD_SOCKET_FILE),
         AppCapability::Shell | AppCapability::Background => None,

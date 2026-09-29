@@ -29,6 +29,32 @@ sha256_prefix() {
   fi
 }
 
+# Replace the device serial as a literal byte string. Serial values must not be
+# interpolated into a sed regular expression: although Pixel serials are
+# normally simple ASCII, discovery must redact safely for every value emitted
+# by Platform Tools.
+redact_literal() {
+  REDACT_NEEDLE=$1 REDACT_REPLACEMENT=$2 awk '
+    BEGIN {
+      needle = ENVIRON["REDACT_NEEDLE"]
+      replacement = ENVIRON["REDACT_REPLACEMENT"]
+    }
+    {
+      if (needle == "") {
+        print
+        next
+      }
+      output = ""
+      rest = $0
+      while ((position = index(rest, needle)) != 0) {
+        output = output substr(rest, 1, position - 1) replacement
+        rest = substr(rest, position + length(needle))
+      }
+      print output rest
+    }
+  '
+}
+
 mkdir -p "$out"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 transcript="$out/discovery-$stamp.txt"
@@ -43,7 +69,7 @@ emit() {
   value=$2
   printf '%s=%s\n' "$key" "$value"
   if [ -n "$serial" ]; then
-    value=$(printf '%s' "$value" | sed "s/$serial/serial-sha256:$(sha256_prefix "$serial")/g")
+    value=$(printf '%s\n' "$value" | redact_literal "$serial" "serial-sha256:$(sha256_prefix "$serial")")
   fi
   printf '%s=%s\n' "$key" "$value" >> "$transcript"
 }

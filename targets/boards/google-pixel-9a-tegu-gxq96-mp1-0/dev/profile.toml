@@ -1,0 +1,34 @@
+# Target-local guest profile for staging as /etc/ferrix/profile.toml.
+#
+# This is not targets/qemu-aarch64/profile.toml and contains no synthetic
+# access points, mock telephony data, battery claims, or QEMU controls. The
+# strict profile schema requires the coarse sections below; on the physical
+# target their runtime values are supplied by the native Linux adapters.
+
+schema_version = 1
+name = "pixel-9a-native-linux"
+
+[display]
+width = 1080
+height = 2424
+scale = 1.0
+orientation = "portrait"
+
+[input]
+touch = true
+rotation = true
+
+# Neutral schema values only. ferrix-power and the production radio/audio
+# adapters are authoritative once the guest services are running.
+[power]
+battery_percent = 0
+charging = false
+
+[connectivity]
+wifi = "disconnected"
+bluetooth_present = true
+modem = "unregistered"
+sim = "absent"
+
+[audio]
+route = "speaker"

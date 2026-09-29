@@ -1,0 +1,524 @@
+# Native Linux enablement plan
+
+This plan covers only the exact Google Pixel 9a target identified as
+`tegu` / `GXQ96` / `MP1.0`. It does not generalize to another Pixel 9a
+revision or another Tensor device.
+
+## Product boundary
+
+Ferrix on this target is intended to be a native Linux system. Its root
+filesystem is built from the repository's postmarketOS substrate and, once the
+host-side inputs and physical gates are complete, will start the Rust Ferrix
+services, compositor, and applications. It does not use the Android framework,
+Android system applications, Android HALs, Google RIL, or Waydroid as the
+operating environment.
+
+The existing boot ROM and unlocked Google bootloader still define the image
+container and partition interfaces. Device firmware remains necessary for
+hardware controllers. Those interfaces are isolated in this board package and
+must not enter product crates or `ferrix-hardware-api`.
+
+## Checked-in package and evidence status
+
+The checked-in target-local package is an implementation scaffold with
+source-pinned native-Linux package inputs for this exact `tegu` / `GXQ96` /
+`MP1.0` device. It includes:
+
+- `pmos/device-google-tegu/`, a native-Linux postmarketOS device package with
+  target metadata, OpenRC service wiring, conservative early-boot inputs, and
+  split-boot metadata. It also carries the immutable external
+  `exynos-modem`/`sit-proxy` and SIT ModemManager recipes plus their source
+  manifest. Its `deviceinfo` sets `deviceinfo_flash_method="none"`; the
+  package is not a bootable image and does not authorize pmbootstrap flashing.
+- `adapter/`, the `ferrix-target-pixel9a` Rust composition seam selected by
+  session/bootstrap code. It is the only target-local adapter layer; product
+  crates receive target-neutral `ferrix-hardware-api` trait objects.
+- `tools/pixel-9a/` host-only kernel, firmware, rootfs, split-boot, and
+  artifact-manifest workflows. Their generated output is ignored and is not
+  evidence merely because it is hash-recorded.
+- `crates/ferrix-s5300-cpif/`, a bounded SIPC5/SIT link-frame slice described
+  below. The exact tegu DT selects SIT; this crate is not a modem backend and
+  is not wired into the Pixel adapter.
+
+The target manifest remains explicit about the current state:
+`kernel_build_status = "not-built"`, `rootfs_build_status = "not-built"`, and
+`boot_status = "not-attempted"`. The package's boot layout is
+`substrate-only-not-bootable`. No physical Ferrix Linux evidence exists: no
+physical boot, framebuffer/input result, live Linux service result, firmware
+runtime result, or target capability evidence has been captured. The earlier
+ADB/Fastboot identity, recovery, and bootloader-unlock observations are
+admission and recovery history only, not Linux evidence. The target-local
+`FERRIX_EVIDENCE=physical:<target-id>` value is a scope label required by the
+host profile, not proof of a physical run.
+
+## Kernel decision and pinned source baseline
+
+Mainline Linux and postmarketOS do not currently provide a Pixel 9a target.
+The initial board kernel must therefore use Google's published downstream
+Pixel 9a Linux 6.1 stack. Google's Pixel-kernel documentation maps `tegu` to
+`android-gs-tegu-6.1-android16` with the `android14-6.1` GKI base:
+
+<https://source.android.com/docs/setup/build/building-pixel-kernels>
+
+The source baseline inspected on 2026-09-28 is pinned below. A build workflow
+must resolve these exact objects and fail if any object differs.
+
+The pinned `dts/zumapro-tegu-mp.dts` root overlay identifies this board as
+model `ZUMA PRO TEGU MP on ZUMA PRO` with compatible strings
+`google,ZUMA PRO TEGU` and `google,ZUMA PRO`. The Rust target adapter and the
+post-boot radio workflow admit those exact strings; they do not use the
+lowercase marketing codename as a hardware identity check.
+
+| Component | Git object |
+| --- | --- |
+| Kernel manifest | `893fbfd2192bc1c4a921f5daf23ea8543c09670d` |
+| Kernel superproject | `ef85063e6f3c68fbd580eb7e41809b8b64f935ed` |
+| GKI common | `a4662a84a15f38b99cf597354edccf75988852de` |
+| `devices/google/tegu` | `6276884d9940694b25a6934671918ec8ac412ee8` |
+| `devices/google/zuma` | `42395e8adcb880aa336f0da6bb2a19ed53929c40` |
+| `devices/google/zumapro` | `8831630eee2ad095b85ed452944e6353940966a5` |
+| Google SoC modules | `204078758737776959ecc85c527a00fd2cabb62f` |
+| BCM4383 Wi-Fi | `3526a8cb8e13b7a72fca642c7b6411cd69e70d87` |
+| Broadcom Bluetooth | `d7bd4dd23cc52fedd2e36c6e45c12f0c2a595ae0` |
+| Samsung S5300 CPIF | `a8976934fe7f396627f9900958eb1457a74ebcca` |
+| Display common | `e34756e6205a16083c5c7c4e5cde2c899674a120` |
+| Tegu panel drivers | `e3a801fb038fdd1bbaec36d387f27bd99f10757a` |
+| Amplifiers | `33976d763bc0ace11603e7ecb207fc2b6e3f2608` |
+| AoC / AoC IPC | `ac69293d11343b47f0b2b758b0df9f936360dbd4` / `1fe9b9cf3a2954a4a0c0f9868aa04c9d88c902b9` |
+| BMS | `183509aff980610401869deca9f6ce8836980fe7` |
+| Touch common / Synaptics | `340d76ec988f2960427647e9ac4852f072a86c88` / `a5d225cc4034f3e98c6f7f0c0c7e182c254a517f` |
+
+The local verified `CP3A.260905.009` factory package contains a
+`6.1.162-android14-11-g2ec90535fa34-ab15810641` stock kernel. That observation
+does not make the published Android 16 branch byte-compatible with the stock
+Android 17 artifacts. Ferrix must build the kernel, DTBOs, and modules as one
+coherent source set; it must not mix stock modules with a differently built
+kernel.
+
+The target package preserves Google's exact `tegu_defconfig` fragment in
+[`kernel-config.tegu`](kernel-config.tegu). It includes the S5300
+`EXYNOS_MODEM_IF`/`SEC_MODEM_S5100`/`SHM_IPC` path, packet processing, PCIe
+IOCC/IOMMU, CP thermal support, and the display/touch fragments. The pinned
+kernel verification step compares this file byte-for-byte with the checked-out
+`private/devices/google/tegu/tegu_defconfig`; a mismatch stops before Kleaf
+build. This is a Linux kernel input, not Android userspace.
+
+### External native-Linux kernel candidate (radio-first backend)
+
+Read-only research found an independent native-Linux candidate in
+[`SteffenDE/linux-google-tegu`](https://github.com/SteffenDE/linux-google-tegu),
+branch `tegu-v7.2`, observed at commit
+`88335b765d920cc345cdffb9c1a6d77e3a531ff9`. Its public history includes the
+Zumapro PCIe/doorbell/MSI/shared-memory S5300 transport, SIT WWAN plumbing,
+BCM4383 PCIe support, and Tegu Bluetooth GPIO/serdev changes. Ferrix keeps the
+Google Kleaf tree as a comparison baseline, but the radio-first build backend
+pins this candidate separately. It has an independent source archive,
+configuration, device tree, and normal Linux `make` build contract; it has not
+yet been reproduced here and has no exact-device runtime evidence.
+
+The associated-radio audit pins the candidate's built-in `samsung,kepler`
+GNSS path (`CONFIG_SPI`, `CONFIG_GNSS`, and `CONFIG_GNSS_KEPLER`) into the
+radio-first route. It deliberately does not claim NFC/ST54 or UWB: the Google
+Kleaf source has Android-only comparison modules/DT for NFC, while the
+radio-first candidate has no reviewed native NFC binding and no enabled UWB
+driver. See [`associated-radio-audit.md`](associated-radio-audit.md) for the
+source links and promotion gates.
+
+The route metadata records KEPLER as `samsung,kepler` with a
+`drivers/gnss/kepler.c` source path and `raw-device-only` userspace status.
+Its preflight rejects Android comparison modules (`st21nfc`, `st54spi`, and
+`bcm47765`) in the radio-first initfs. This keeps the source-built GNSS kernel
+path available without claiming a location service, while NFC/ST54 remain
+unselected until a native Linux binding and secure-element boundary are
+reviewed.
+
+That candidate also makes the remaining modem gate explicit. Its DTS declares
+`tegu/cp_pbl.bin`, but the pinned transport driver does not request that file
+through the kernel firmware class. The paired `exynos-modem` helper extracts the
+`BOOT`/PBL section from the exact read-only current-slot (`modem_a` or
+`modem_b`) `modem.bin`, streams the
+MAIN/VSS/APM sections, and reads the EFS/replay inputs; it constructs handover
+bytes at runtime from the device tree, IMEIs, and persist `cpsha`. Ferrix must
+not manufacture a `cp_pbl.bin` or `cp_handover.bin` firmware alias, and must
+never commit the per-device handover data. The public kernel tree still does
+not provide a complete Ferrix-safe attach/data/SMS/voice protocol schema. The
+current Rust crate therefore remains transport/framing-only, and the target
+capability matrix stays `unsupported`. Adopting this candidate would require an
+owner-approved source proposal, license review, exact read-only partition and
+payload provenance, and a redacted SIT protocol corpus before changing the
+build baseline.
+
+The candidate's BCM4383 path uses `brcmfmac` firmware names
+(`brcmfmac4383-pcie.bin`, `.txt`, and `.clm_blob`), while the pinned Google
+`bcmdhd` path uses the five `fw_bcmdhd`/`bcmdhd_*` files in the current
+allowlist. These are alternative kernel contracts, not interchangeable files.
+The radio-first firmware allowlist must explicitly map the reviewed factory
+`bcmdhd` source members to those `brcmfmac` runtime names; the default Google
+allowlist must not silently rename or mix them.
+
+The ABI audit is decisive for cellular integration: the Google Kleaf CPIF
+surface (`cpif`/`umts_ipc*`) cannot feed the current `s5300_modem` WWAN SIT
+userspace by changing only init scripts or udev rules. The radio-first backend
+is therefore the checked-in route that preserves the reviewed
+`exynos-modem`/SIT ModemManager package boundary without importing Android RIL,
+HAL, Binder, or vendor services. Its host workflow is now checked in, but it
+remains `not-built` until a native Linux x86_64 host produces a hash-verified
+kernel and rootfs.
+
+The radio-first build handoff is explicit and device-free:
+
+```sh
+just pixel-9a-kernel-radio-check
+FERRIX_PIXEL9A_RADIO_SYNC=I-understand-this-downloads-the-radio-first-kernel \
+  just pixel-9a-kernel-radio-sync
+just pixel-9a-kernel-radio-verify
+FERRIX_PIXEL9A_RADIO_BUILD=I-understand-this-runs-the-radio-first-kernel-build \
+  just pixel-9a-kernel-radio-build
+```
+
+The radio sync workflow downloads the exact pinned source archive and verifies
+its byte count and SHA-256/SHA-512 before using the detached revision. The
+archive, checkout, and build output remain in the target cache/output roots;
+Kbuild is refused when the archive is missing, altered, or the checkout is
+not clean.
+
+The route pins the independent `linux-google-tegu` revision, config/DTS
+digests, the IP/WWAN/rmnet data path, Wi-Fi/Bluetooth/serdev symbols, and the
+explicit factory firmware-name mapping in `kernel-radio-route.toml` and
+`firmware-radio-route.tsv`. The candidate creates `wwan0sit0`/`wwan0sit1`, an
+AT WWAN port, and the `rmnet0`-`rmnet29` raw-IP data netdev range only after CP
+ONLINE; those are runtime gates, not build claims. The workflow never invokes
+ADB/Fastboot and its manifest stays `built-not-booted` / `bootable=false` until
+exact-device evidence exists.
+
+After a native build, the radio workflow also records hash-verified
+source-built DTB/DTBO inputs, the `modules_install` tree, and a partition-size
+status file. These handoffs are consumed by the rootfs and radio boot
+validators, but they are not `dtbo`, `vendor_dlkm`, or `system_dlkm` images and
+cannot authorize flashing until a split-image builder produces those exact
+partitions.
+
+The radio boot preflight now validates those handoffs as source-built inputs:
+the DTB/DTBO manifest must contain at least one real `.dtbo` overlay and every
+listed source file is rechecked for path safety, size, and SHA-256; the
+`modules_install` manifest is likewise rechecked against its materialized
+files. A DTB-only or stale/tampered handoff is refused before any boot
+container is composed. This still does not create the missing split partition
+images or establish boot evidence.
+
+The candidate's radio, Bluetooth, Wi-Fi, UFS, and filesystem paths are built in
+by the merged config. `kernel-radio-extra.config` pins device-mapper built in
+as well, because the radio-first image has no Android module partition. Its
+route-local `modules-initfs-radio` list is intentionally empty until a native
+Linux build proves a required `.ko`; the Google Kleaf `modules-initfs` list is
+kept separate and is never passed to the WWAN/SIT rootfs.
+
+## Boot composition
+
+The verified factory package declares this target's split boot layout:
+
+- `boot`: GKI kernel;
+- `init_boot`: generic ramdisk;
+- `vendor_boot`: vendor ramdisk and device tree data;
+- `vendor_kernel_boot`: early vendor kernel modules;
+- `dtbo`: board overlays, including the `zumapro-tegu-mp` family;
+- `vendor_dlkm` and `system_dlkm`: remaining kernel modules;
+- `vbmeta`, `vbmeta_vendor`, and `vbmeta_system`: verified-boot metadata.
+
+The first Ferrix artifact set must retain that separation and include a
+manifest containing every input revision, output size, and SHA-256. It must
+not run Google's `flash-all.sh`, update bootloader/radio firmware, wipe dynamic
+partitions, or overwrite the active slot.
+
+The canonical Google comparison workflow remains `tools/pixel-9a/boot.sh`:
+`just pixel-9a-boot-check` validates the exact target layout, pinned Kleaf
+manifest, native rootfs manifest, Linux initramfs/vendor-ramdisk/bootconfig
+inputs, `mkbootimg`, and `avbtool`; the explicitly confirmed
+`just pixel-9a-boot-build` route then copies only the hash-verified Google
+kernel artifacts, constructs fresh header-v4 `init_boot.img` and
+`vendor_boot.img`, creates fresh `vbmeta.img`, `vbmeta_vendor.img`, and
+`vbmeta_system.img`, and hands off both `rootfs.tar` and the generated ext4
+`rootfs.img`. It deliberately rejects the radio-first rootfs backend so the
+two incompatible kernel/userspace ABIs cannot be mixed.
+
+The radio-first composer is `tools/pixel-9a/boot-radio.sh`:
+
+```sh
+just pixel-9a-boot-radio-test
+just pixel-9a-boot-radio-check
+FERRIX_PIXEL9A_RADIO_BOOT_BUILD=I-understand-this-composes-pixel-9a-radio-first-boot-artifacts \
+  just pixel-9a-boot-radio-build
+```
+
+It verifies the radio kernel and matching SIT rootfs manifests, then writes a
+separate, hash-recorded handoff containing `Image`, `dtb.img`, header-v4
+`boot.img`/`init_boot.img`/`vendor_boot.img`, `vbmeta.img`, and the rootfs
+artifacts. This is intentionally not yet a complete persistent Pixel split
+image: `vendor_kernel_boot`, `dtbo`, `vendor_dlkm`, and `system_dlkm` are not
+generated, so the output remains `composed-not-booted` / `bootable=false` and
+is not accepted by the flash workflow.
+`just pixel-9a-artifacts-manifest` checks the resulting kernel/rootfs/boot
+manifests and the pinned factory archive without contacting a device. It does
+not establish that any generated artifact is bootable or that the candidate
+rootfs partition mapping is safe to flash.
+
+Before a boot attempt, a checked-in target workflow must prove whether this
+bootloader accepts a temporary `fastboot boot` artifact without persistent
+partition mutation. If it does not, an inactive-slot plan needs separate owner
+approval after backup and tested recovery gates pass. Either route must print
+and confirm the exact serial, product, hardware revision, current slot,
+partition targets, input hashes, and recovery hashes immediately before use.
+
+## Target-local root filesystem and adapter composition
+
+The target image uses postmarketOS for the Linux root filesystem and package
+manager. `pmos/device-google-tegu/APKBUILD` is a target-local package input,
+not a final image: it declares the native Linux dependencies (D-Bus, udev,
+NetworkManager, ModemManager, BlueZ, PipeWire/WirePlumber, UPower, seatd, and
+the pmOS base), installs the Ferrix OpenRC entry points, and enables the
+production service set. Its `ferrix-backends.env` selects NetworkManager,
+ModemManager, BlueZ, WirePlumber, and UPower. Those selections describe the
+intended composition; they do not claim that any service has run on this
+device.
+
+The target-local Rust adapter is selected only in session/bootstrap and returns
+a target-neutral `HardwareBundle`. Its checked-in Linux composition is:
+
+| `ferrix-hardware-api` capability | Target-local implementation input |
+| --- | --- |
+| Power | `ferrix-power-upower` over UPower's aggregate display device |
+| Display | local DRM mode discovery and kernel backlight sysfs access |
+| Input | local input-device and IIO-presence discovery |
+| Network | `ferrix-network-nm` / NetworkManager, folded into the coarse network contract |
+| Bluetooth | `ferrix-bluetooth-bluez` over BlueZ system D-Bus |
+| Audio | `ferrix-audio-wireplumber` through WirePlumber's `wpctl` surface |
+| Telephony | `ferrix-telephony-mm` / ModemManager, only for interfaces it can expose |
+| Lifecycle | Linux `/sys/power/state` suspend integration (OpenRC-safe) |
+
+An internal event hub bridges service-adapter events to the target-neutral
+event source. Product applications, `ferrix-core`, and `ferrix-hardware-api`
+do not import this target package or gain Google, Pixel, Tensor, Android-image,
+partition, or S5300 conditionals. The target adapter deliberately reports
+`unsupported` for every capability until exact-target Linux evidence exists.
+
+The device-free rootfs workflow is separate from split-boot composition. Its
+firmware input is the canonical manifest emitted by
+`pixel-9a-firmware-stage`: it carries the pinned factory archive hash plus
+every allow-listed source image/path and Linux runtime destination. Runtime-only
+or legacy rows are rejected.
+
+1. `just pixel-9a-rootfs-check` and `just pixel-9a-rootfs-test` check the
+   target package and write a `not-built` metadata manifest.
+2. `just pixel-9a-rootfs-validate` requires a pinned, clean pmaports checkout,
+   the completed radio-first Kbuild dist from
+   `just pixel-9a-kernel-radio-build`, the Ferrix product artifact directory,
+   and an external provenance-verified firmware directory. The rootfs builder
+   copies the target-local S5300 recipes into the clean pmaports staging tree;
+   the package sources are fetched and built there, never vendored into this
+   repository. The canonical Google Kleaf dist is a separate comparison route
+   and is rejected by this selected radio-first rootfs contract.
+3. The explicitly confirmed `just pixel-9a-rootfs-build` route runs
+   pmbootstrap on native Linux, stages the Ferrix binaries/descriptors,
+   `dev/profile.toml`, service configuration, and the allow-listed firmware,
+   then writes a deterministic `rootfs.tar`, a raw ext4 `rootfs.img`, and
+   `firmware-manifest.tsv` under ignored `out/pixel-9a/rootfs/tegu/`. The
+   resulting manifest is `built-substrate-only` and `bootable=false`.
+
+The product handoff is built directly by Cargo on a provisioned native Linux
+x86_64 host, using the target's pinned Rust toolchain and target-side Linux
+development inputs (`libudev`, `libseat`, DRM, libinput, and the software
+renderer). The physical-device playbook rejects macOS, containerized builders,
+and cross-build substitutes for product, kernel, firmware, rootfs, boot, and
+artifact stages. The Google Kleaf kernel and pmbootstrap rootfs remain separate
+privileged stages, each with distinct caches and outputs.
+
+The rootfs workflow never calls ADB, Fastboot, a pmbootstrap flasher, or a
+firmware extraction route. QEMU output contributes only cross-compiled product
+artifacts and descriptors; its synthetic radio, battery, network, or other
+mock state is not copied into this target profile.
+
+## Firmware policy
+
+Firmware and calibration data may be obtained only from an owner-supplied,
+size- and SHA-256-verified official Google factory package for the exact `tegu`
+build selected by `recovery.pins`. `firmware-policy.toml` requires the exact
+factory hash, local extraction, no unlisted paths, and no checked-in firmware
+bytes or device identifiers. Firmware, calibration, radio images, keys,
+partition dumps, and generated images remain ignored and must not be committed
+or redistributed.
+
+The device-free workflow is deliberately two-stage. `just
+pixel-9a-firmware-inventory` verifies the pinned factory archive and records an
+offline source inventory. The explicitly confirmed `just
+pixel-9a-firmware-stage` route accepts a reviewed controller/image/path
+allowlist, reads only allow-listed files from `vendor.img` or `vendor_dlkm.img`,
+and emits an external `firmware-manifest.tsv` containing source member/path,
+runtime path, byte count, and SHA-256. The rootfs workflow accepts only that
+manifest and rechecks every file; it never extracts firmware itself or copies
+the Android `/vendor` tree wholesale. The stage helper rejects `modem.img` as
+a raw radio payload. The checked-in allowlist now includes the directory
+inputs `vendor.img:/firmware/carrierconfig` and
+`vendor.img:/firmware/uecapconfig` required by the S5300 userspace package.
+The stager recursively expands each reviewed bundle into deterministic,
+destination-aware per-file rows and rejects symlinks, special files, unsafe
+paths, and empty bundles before the modem service can start.
+
+The default target-scoped allowlist is
+`firmware-stage-allowlist.tsv`. It records the five pinned BCM4383 paths, the
+factory-selected `vendor.img:/firmware/brcm/BCM.hcd` path, and the two reviewed
+S5300 directory bundles. A replacement allowlist remains an explicit override
+and is still subject to the same factory-hash and confirmation gates.
+
+The checked-in required allowlist names the five BCM4383 Wi-Fi files, the
+factory-selected Broadcom `BCM.hcd` destination, and the two S5300 directory
+bundles. Its source member/path/size/hash provenance is recorded in the
+external firmware manifest; the binary and bundle contents remain external. A
+physical controller result and complete Linux HCI/Nitrous integration are
+still required before Bluetooth is supported. The S5300 package and bundle
+staging are implementation inputs, not runtime evidence: CP boot, modem
+protocol, SIM, registration, and bearer evidence remain outstanding. The
+exact factory directory paths are recorded in `s5300-source-evidence.md`; no
+modem image or Android userspace is copied.
+
+The stock bootloader and radio firmware may remain installed while a future
+gated Ferrix boot is evaluated. That is not use of the Android operating
+system, and it is not evidence that a Linux controller works. Ferrix must not
+depend on Android framework or HAL processes to claim a Linux capability.
+
+## Bounded S5300 CPIF / SIT and SIPC5 slice
+
+The checked-in `crates/ferrix-s5300-cpif` crate is intentionally a small,
+source-pinned protocol slice based on the S5300 kernel source object
+`a8976934fe7f396627f9900958eb1457a74ebcca`. The exact pinned tegu DTS sets
+`mif,protocol = PROTOCOL_SIT`; the crate therefore includes a bounded Exynos
+SIT codec as well as a generic SIPC5 codec. Both are link-format primitives,
+not modem protocols. The crate also provides a payload-only transport for an
+explicitly supplied IPC node:
+
+| Exynos SIT field | Representation |
+| --- | --- |
+| sync | little-endian `0xabcd` |
+| header | 12 bytes, including the two-byte reserved gap |
+| sequence / length | little-endian `u16` |
+| channel / channel sequence | one byte each |
+| fragment config | bounded packet/frame flags |
+
+The userspace payload inside that link frame is the packed FMT envelope from
+the pinned S5300 `modem_prj.h`: a seven-byte header containing a little-endian
+`u16` total length followed by `msg_seq`, `ack_seq`, `main_cmd`, `sub_cmd`, and
+`cmd_type`. `ferrix-s5300-cpif::FmtCodec` bounds and validates this envelope,
+and `FmtTransport` applies it only to an explicitly supplied payload
+transport. The command tuple remains opaque; no Android RIL, HAL, or
+firmware-specific modem command map is brought into Ferrix.
+
+The target-local `pmos/device-google-tegu/s5300-channels.toml` records the
+complete source-derived I/O-device catalog, including the `umts_ipc0`/`umts_ipc1`
+node names, indexed FMT binding, and exact SIT numeric channel values from the
+pinned `exynos-cpif.h`. It is not runtime
+evidence and is not a telephony configuration. The Rust CPIF crate's
+read-only sysfs status reader can observe the exact `samsung,exynos-cp`
+platform node and `modem_state`; it never opens an IPC or boot node.
+
+| SIPC5 layout | Header and length |
+| --- | --- |
+| ordinary (`0b000`) | 4-byte header, little-endian `u16` total length |
+| multi-frame (`0b011`) | 5-byte header, little-endian `u16` plus the packed id/more control byte |
+| extended (`0b010`) | 6-byte header, little-endian `u32` total length |
+
+The slice handles the driver's eight-byte padding rule, strict single-frame
+decoding and stream-prefix parsing, a default 16 MiB allocation bound, and the
+reserved channel values `0`, `5`, `6`, `27`, and `255`. `ChannelDevice` keeps a
+target-supplied device path and channel as metadata. The framed transport
+remains typed-unsupported, while the explicit payload transport opens only a
+caller-supplied IPC node and relies on the kernel to add/remove the selected
+SIT or SIPC5 headers; it does not guess a `/dev` node, implement the CPIF
+shared-memory/PCIe rings or doorbells, discover device-tree channel bindings,
+or contain Samsung modem commands or ModemManager mapping.
+
+## Source-level S5300 channel metadata
+
+The target-local `pmos/device-google-tegu/s5300-channels.toml` records the
+complete pinned Zuma DTS I/O-device catalog and exact evidence for
+`PROTOCOL_SIT`: the `umts_ipc` I/O device uses
+`EXYNOS_CH_ID_FMT_0` with two indexed channels, represented as
+`/dev/umts_ipc0` and `/dev/umts_ipc1`. This is source evidence from
+`dts/zuma-cp-s5300-sit.dtsi`, not physical runtime evidence. It does not show
+that either node exists on the device, that the CPIF driver probed, that the
+modem link or firmware works, or that any modem protocol is usable. The
+read-only `ferrix_s5300_cpif::discover_at` seam observes `modem_state` without
+opening those nodes; `ONLINE` alone never promotes telephony support.
+
+This crate and the channel metadata are not connected to
+`ferrix-target-pixel9a`; the checked-in Pixel composition currently connects
+`ferrix-telephony-mm` to ModemManager. A real tegu-specific S5300 userspace
+backend or ModemManager plugin, physical channel/runtime validation,
+controller firmware evidence, modem protocol mapping, SIM/data/SMS/voice/IMS
+integration, and physical validation are all outstanding. SIPC5 codec tests
+and this source record therefore demonstrate only bounded source/codec
+information, not a modem or telephony capability.
+
+## Enablement and evidence order
+
+Each step starts unsupported and becomes supported only after exact-target
+evidence is captured and redacted. None of the physical Linux steps below has
+been completed; host compilation, mapping tests, package checks, and generated
+manifests do not substitute for physical evidence:
+
+1. bounded serial/USB console and orderly shutdown;
+2. UFS discovery and a disposable or explicitly allocated Linux rootfs;
+3. DRM framebuffer plus inspected capture, then touch/input;
+4. battery, charging limits, thermal readings, and safe shutdown;
+5. BCM4383 Wi-Fi firmware, scan, WPA association, DHCP, DNS, and traffic;
+6. Broadcom Bluetooth firmware, BlueZ adapter power, discovery, pairing, and
+   an audio/input profile as applicable;
+7. ALSA/PipeWire playback, capture, earpiece, speaker, and microphone routing;
+8. S5300 CPIF enumeration, SIM state, network registration, packet data, SMS,
+   and only then voice calls and call audio;
+9. repeated suspend/resume with charger, Wi-Fi, Bluetooth, and modem wake
+   cases.
+
+Cellular transport source is available, and the target package now carries a
+source-pinned native-Linux S5300 loader plus SIT ModemManager integration. No
+native build, modem object, registration, or bearer has yet been observed on
+this exact device. Modem enumeration alone is not phone support. Calls,
+VoLTE/IMS, emergency calling, carrier certification, and call audio remain
+unsupported until independently implemented and tested; no Android RIL/HAL or
+Binder service is part of this route.
+
+## Gates before physical boot or provisioning
+
+The checked-in manifest records some admission/recovery prerequisites, but
+those observations do not pass a physical Ferrix boot or capability gate. All
+physical Ferrix boot, provisioning, and capability gates remain outstanding.
+
+Recorded prerequisites (not physical Linux evidence):
+
+- [x] exact identity is established;
+- [x] official factory and OTA recovery inputs are pinned and verified;
+- [x] bootloader is unlocked through the gated workflow;
+- [x] factory metadata and partition image inventory are inspectable offline;
+
+Outstanding physical gates (all):
+
+- [ ] a personal-data/configuration backup outside the repository is verified
+  readable;
+- [ ] stock factory recovery is tested on this exact device;
+- [ ] the complete live partition inventory is captured read-only and
+  redacted;
+- [ ] the coherent kernel/module/DTBO build succeeds from pinned source;
+- [ ] a native postmarketOS rootfs is built with the exact product, firmware,
+  and target package inputs;
+- [ ] the Ferrix artifact manifest passes image-layout and size checks;
+- [ ] a temporary boot route is proven supported, or an inactive-slot plan is
+  explicitly approved;
+- [ ] exact Bluetooth firmware member/path/hash evidence and live Bluetooth
+  controller behavior are established;
+- [ ] the source-pinned S5300 userspace packages build on native Linux, the
+  exact tegu channel/device-tree binding and carrierconfig/UECAP directory
+  inputs are staged, and CP boot, modem protocol, SIM, registration, and bearer
+  evidence are captured;
+- [ ] the target-scoped command passes its identity, hash, backup, recovery,
+  ambiguity, and per-run confirmation checks.
+
+Until every applicable gate passes, no Ferrix image may be booted or flashed
+on the physical target.

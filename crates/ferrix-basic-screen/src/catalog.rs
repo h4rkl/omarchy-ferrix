@@ -198,6 +198,23 @@ mod tests {
     }
 
     #[test]
+    fn browser_tile_is_browser_and_not_the_retired_browser() {
+        let tiles = tiles_from_catalog(&repo_apps(), &[]);
+        let browser = tiles
+            .iter()
+            .find(|tile| tile.id.as_str() == "org.ferrix.browser")
+            .expect("browser tile");
+
+        assert_eq!(browser.name, "Browser");
+        assert_eq!(browser.icon.glyph, "B");
+        assert!(browser.launchable);
+        assert_eq!(
+            tiles.iter().filter(|tile| tile.name == "Browser").count(),
+            1
+        );
+    }
+
+    #[test]
     fn instances_mark_running_and_starting_tiles() {
         let apps = repo_apps();
         let terminal = AppId::new("org.ferrix.terminal").unwrap();

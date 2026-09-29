@@ -68,7 +68,7 @@ impl Server {
                 }
                 Err(e) => {
                     crate::emit(json!({
-                        "evidence": "mock",
+                        "evidence": crate::evidence_label(),
                         "event": "core-socket-error",
                         "error": e.to_string(),
                     }));

@@ -20,6 +20,9 @@
 # Physical-device artifacts (firmware, backups, identifiers, keys, dumps, and
 # captures are never safe to publish; keep only redacted checked-in metadata).
 /out/pixel-9a/
+# Generic device discovery transcripts and identity files (serial-redacted,
+# but still per-device; never commit).
+/out/device/
 /targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/recovery/
 /targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/backups/
 /targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/evidence/

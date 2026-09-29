@@ -53,9 +53,10 @@ services themselves.
 
 ## New `AppCapability` variants
 
-`telephony-state`, `telephony-call`, `telephony-sms`, `contacts-read`,
-`contacts-write`, `network-state`, `network-control` (existing: `core-state`,
-`core-control`, `shell`, `background`).
+`telephony-state`, `telephony-call`, `telephony-sms`, `telephony-data`,
+`telephony-radio`, `contacts-read`, `contacts-write`, `network-state`,
+`network-control` (existing: `core-state`, `core-control`, `shell`,
+`background`).
 
 ## Tests required
 

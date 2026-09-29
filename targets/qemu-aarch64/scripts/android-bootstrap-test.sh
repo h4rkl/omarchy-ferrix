@@ -13,6 +13,13 @@ mkdir -p "$work/bin" "$work/images" "$work/run" "$work/var/lib/waydroid" "$work/
 : > "$work/images/vendor.img"
 : > "$work/usr/share/ferrix/android/fulguris.apk"
 : > "$work/console"
+cat > "$work/properties.ini" <<'PROPS'
+[properties]
+ro.hardware.gralloc=default
+ro.hardware.egl=swiftshader
+persist.waydroid.multi_windows=false
+ro.sf.lcd_density=400
+PROPS
 
 cat > "$work/bin/rc-service" <<'EOF'
 #!/bin/sh
@@ -36,6 +43,7 @@ case "$1 ${2:-}" in
     cat > "${FERRIX_ANDROID_BASE_PROPS:?}" <<'PROPS'
 ro.hardware.gralloc=default
 ro.hardware.egl=swiftshader
+ro.sf.lcd_density=400
 PROPS
     ;;
   *) exit 1 ;;
@@ -57,8 +65,9 @@ run_bootstrap() {
 
 run_bootstrap
 grep -q '"event":"waydroid-init".*"status":"ok"' "$work/console"
-grep -q '"event":"waydroid-properties".*"status":"materialized"' "$work/console"
+grep -q '"event":"waydroid-properties".*"status":"materialized".*"density_dpi":400' "$work/console"
 grep -q '"event":"waydroid-container".*"status":"started"' "$work/console"
 grep -q '"event":"android-app-staged"' "$work/console"
+grep -q '^ro.sf.lcd_density=400$' "$work/var/lib/waydroid/waydroid_base.prop"
 run_bootstrap
 printf '%s\n' '{"evidence":"host","event":"android-bootstrap-tests","passed":2,"failed":0}'

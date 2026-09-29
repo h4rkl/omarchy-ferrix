@@ -49,7 +49,10 @@ Confirmation phrases the workflow will demand (I will type them only after your 
 ```
 
 If any line reads "unknown", "not verified", or the preflight refused, do not
-ask for a go-ahead. Report and stop.
+ask for a go-ahead. Report and stop. For guest-only radio state changes, use
+`tools/pixel-9a/radios.sh`'s exact device-tree model/compatible preflight and
+recheck as the identity fields; there is no storage or partition target, but
+the workflow still requires a fresh typed confirmation.
 
 ## Confirmation script
 

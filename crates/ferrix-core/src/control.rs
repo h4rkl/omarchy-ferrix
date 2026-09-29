@@ -90,7 +90,7 @@ fn serve(file: File, path: PathBuf, handler: Arc<dyn Handler>) {
         Ok(w) => w,
         Err(e) => {
             crate::emit(json!({
-                "evidence": "mock",
+                "evidence": crate::evidence_label(),
                 "event": "mock-control",
                 "status": "failed",
                 "path": path.display().to_string(),
@@ -122,7 +122,7 @@ fn serve(file: File, path: PathBuf, handler: Arc<dyn Handler>) {
                     .and_then(|()| writer.flush())
                 {
                     crate::emit(json!({
-                        "evidence": "mock",
+                        "evidence": crate::evidence_label(),
                         "event": "mock-control",
                         "status": "ack-failed",
                         "error": e.to_string(),
@@ -131,7 +131,7 @@ fn serve(file: File, path: PathBuf, handler: Arc<dyn Handler>) {
             }
             Err(e) => {
                 crate::emit(json!({
-                    "evidence": "mock",
+                    "evidence": crate::evidence_label(),
                     "event": "mock-control",
                     "status": "read-failed",
                     "error": e.to_string(),

@@ -19,8 +19,8 @@ use std::sync::mpsc::Sender;
 
 use ferrix_telephony_api::{
     AccessTechnology, AudioRoute, AudioRouteState, CallEndReason, CallState, Capabilities,
-    DataBearer, Direction, E164, ModemState, MultipartPart, Operator, RadioPower, Registration,
-    Signal, SimState, SmsFailure, SmsState, TelephonyError, TelephonyFeature,
+    DataBearer, DataProfile, Direction, E164, ModemState, MultipartPart, Operator, RadioPower,
+    Registration, Signal, SimState, SmsFailure, SmsState, TelephonyError, TelephonyFeature,
 };
 use serde::{Deserialize, Serialize};
 
@@ -272,6 +272,12 @@ pub trait ModemBackend: Send + Sync {
         digit: ferrix_telephony_api::Dtmf,
     ) -> Result<(), BackendError>;
     fn send_sms(&self, to: &E164, body: &str) -> Result<SmsHandle, BackendError>;
+    /// Starts a packet-data bearer. Progress and the resulting interface are
+    /// reported through [`BackendEvent::Data`].
+    fn connect_data(&self, profile: &DataProfile) -> Result<(), BackendError>;
+    /// Tears down all packet-data bearers owned by this modem. The operation
+    /// is idempotent when no bearer exists.
+    fn disconnect_data(&self) -> Result<(), BackendError>;
     fn set_radio_power(&self, power: RadioPower) -> Result<(), BackendError>;
     fn enter_pin(&self, pin: &str) -> Result<(), BackendError>;
     fn set_audio_route(&self, route: AudioRoute) -> Result<(), BackendError>;

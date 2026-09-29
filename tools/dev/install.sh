@@ -5,7 +5,8 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 toolchain=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' "$root/rust-toolchain.toml")
-target=aarch64-unknown-linux-gnu
+qemu_target=aarch64-unknown-linux-gnu
+pixel_target=aarch64-unknown-linux-musl
 just_version=1.58.0
 temporary_dir=
 docker_access_pending=0
@@ -80,10 +81,10 @@ install_macos() {
 
   brew install qemu just cpio python
   if ! docker info >/dev/null 2>&1; then
-    if [ ! -d /Applications/Docker.app ] && [ ! -d "$HOME/Applications/Docker.app" ]; then
-      brew install --cask docker
+    if [ ! -d /Applications/OrbStack.app ] && [ ! -d "$HOME/Applications/OrbStack.app" ]; then
+      brew install --cask orbstack
     fi
-    open -gja Docker >/dev/null 2>&1 || true
+    open -gja OrbStack >/dev/null 2>&1 || true
     attempts=30
     while [ "$attempts" -gt 0 ]; do
       docker info >/dev/null 2>&1 && break
@@ -153,7 +154,8 @@ if ! command -v rustup >/dev/null 2>&1; then
 fi
 
 rustup toolchain install "$toolchain" --profile minimal \
-  --component rustfmt --component clippy --target "$target"
+  --component rustfmt --component clippy \
+  --target "$qemu_target,$pixel_target"
 
 if ! command -v just >/dev/null 2>&1; then
   cargo +"$toolchain" install just --locked --version "$just_version"
@@ -173,8 +175,8 @@ if ! docker info >/dev/null 2>&1; then
     Darwin)
       printf '%s\n' \
         '' \
-        'Docker Desktop is installed but is not ready.' \
-        'Open Docker, complete its first-run license/configuration, then run:' \
+        'No Docker-compatible container engine is ready.' \
+        'Open OrbStack or start the configured container engine, then run:' \
         '  sh tools/dev/install.sh --check' >&2
       ;;
     *)

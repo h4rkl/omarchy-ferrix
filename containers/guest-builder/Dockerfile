@@ -9,8 +9,8 @@
 # seccomp/AppArmor profile, access to /dev/loop-control and to loop
 # partition nodes that appear only after the container has started (there is
 # no udev in the container, so the entrypoint mounts devtmpfs over /dev and
-# the kernel creates them). Docker exposes that combination only through
-# `--privileged`; the host script passes that single flag and nothing else
+# the kernel creates them). Docker-compatible engines expose that combination
+# through `--privileged`; the host script passes that single flag and nothing else
 # (no host PID/network namespaces, no host mounts beyond the work volume,
 # project and output directories). The entrypoint checks these prerequisites
 # and fails with a machine-readable record.
@@ -50,9 +50,10 @@ COPY entrypoint.sh /usr/local/bin/guest-builder-entrypoint
 RUN chmod 0755 /usr/local/bin/guest-builder-entrypoint
 
 # pmbootstrap work directory (chroots, apk cache, pmaports clone, images).
-# pmos-build.sh mounts a Docker volume here (a macOS bind mount cannot hold
-# chroots: virtiofs drops ownership, setuid bits and device nodes); on Linux
-# hosts FERRIX_PMOS_WORK_BIND=1 binds ${FERRIX_CACHE_DIR:-.cache/ferrix}/pmbootstrap.
+# pmos-build.sh mounts a named container volume here (a macOS bind mount may
+# not hold chroots: host sharing can drop ownership, setuid bits and device
+# nodes); on Linux hosts FERRIX_PMOS_WORK_BIND=1 binds
+# ${FERRIX_CACHE_DIR:-.cache/ferrix}/pmbootstrap.
 VOLUME ["/cache/pmbootstrap"]
 ENV FERRIX_PMBOOTSTRAP_CACHE=/cache/pmbootstrap
 ENTRYPOINT ["/usr/local/bin/guest-builder-entrypoint"]

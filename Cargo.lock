@@ -101,6 +101,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -572,6 +581,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -784,6 +804,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-audio-wireplumber"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+]
+
+[[package]]
 name = "ferrix-basic-screen"
 version = "0.1.0"
 dependencies = [
@@ -798,6 +825,14 @@ dependencies = [
  "ferrix-telephony-api",
  "ferrix-telephony-protocol",
  "ferrix-ui",
+]
+
+[[package]]
+name = "ferrix-bluetooth-bluez"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+ "zbus",
 ]
 
 [[package]]
@@ -966,6 +1001,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-pixel9a-tool"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "zip",
+]
+
+[[package]]
+name = "ferrix-power-upower"
+version = "0.1.0"
+dependencies = [
+ "ferrix-hardware-api",
+ "zbus",
+]
+
+[[package]]
 name = "ferrix-protocol"
 version = "0.1.0"
 dependencies = [
@@ -997,6 +1050,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-s5300-cpif"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-scenario"
 version = "0.1.0"
 dependencies = [
@@ -1012,6 +1069,7 @@ version = "0.1.0"
 dependencies = [
  "ferrix-hardware-api",
  "ferrix-hardware-emulator",
+ "ferrix-target-pixel9a",
  "ferrix-target-profile",
 ]
 
@@ -1044,6 +1102,22 @@ dependencies = [
  "smithay",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ferrix-target-pixel9a"
+version = "0.1.0"
+dependencies = [
+ "ferrix-audio-wireplumber",
+ "ferrix-bluetooth-bluez",
+ "ferrix-hardware-api",
+ "ferrix-network-adapter-api",
+ "ferrix-network-api",
+ "ferrix-network-nm",
+ "ferrix-power-upower",
+ "ferrix-telephony-adapter-api",
+ "ferrix-telephony-api",
+ "ferrix-telephony-mm",
 ]
 
 [[package]]
@@ -3748,6 +3822,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "zip"
+version = "4.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
 ]
 
 [[package]]

@@ -37,7 +37,8 @@ NetworkManager 1.x adapter for `ferrix-networkd` (ADR-002), built on the
   so guest IP evidence (DHCP, DNS, TLS) stays honest without any 802.11 claim.
 - **Joining.** `connect` uses `AddAndActivateConnection` with `key-mgmt`
   `none` (open), `wpa-psk` (WPA/WPA2), or `sae` (WPA3). WEP, enterprise, and
-  unknown security types return `Unsupported`; nothing imitates success.
+  OWE (not yet represented by the target-neutral security enum), and unknown
+  security types return `Unsupported`; nothing imitates success.
   The passphrase goes into the `psk` secret of that call and nowhere else.
 - **Scan completion** is detected by `Device.Wireless.LastScan` moving past
   the value read when the scan was requested.

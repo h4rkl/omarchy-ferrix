@@ -4,8 +4,8 @@
 //! environment: portrait, touch-first, fullscreen-only xdg-shell toplevels,
 //! software rendering by default (pixman into DRM dumb buffers on the QEMU
 //! virtio-gpu route) and a nested winit window for host development from the
-//! same versioned mock profile. Evidence is `QEMU` or `mock`, never a physical
-//! device claim.
+//! same versioned mock profile. Physical Linux evidence is selected by the
+//! target bootstrap through `FERRIX_EVIDENCE`.
 //!
 //! Applications are independent processes supervised by `ferrix_appd`; the
 //! compositor links to it (`appd_link`) to report which client pid owns each
@@ -39,6 +39,8 @@ fn main() -> ExitCode {
     let nested = args.iter().any(|a| a == "--nested");
     let evidence = if nested {
         Evidence::Mock
+    } else if std::env::var_os("FERRIX_EVIDENCE").is_some() {
+        Evidence::Physical
     } else {
         Evidence::Qemu
     };
@@ -105,7 +107,8 @@ fn run(args: Vec<String>, evidence: Evidence) -> Result<(), Failure> {
     // under every client comes from the same `colors.toml` the surfaces read
     // ($FERRIX_COLORS, then /etc/ferrix/colors.toml, then the built-in). This
     // emits the `theme-loaded` (and, for a bad file, `theme-invalid`) record.
-    ferrix_ui::theme::init(evidence.label(), None);
+    let evidence_label = evidence.label();
+    ferrix_ui::theme::init(&evidence_label, None);
 
     let core = ferrix_protocol::subscribe(
         std::path::Path::new(&args.core_socket),

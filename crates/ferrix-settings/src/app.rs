@@ -21,7 +21,7 @@ use ferrix_ui::evidence::{emit, json_escape, json_opt_str};
 use ferrix_ui::keymap::{self, Modifiers};
 
 use crate::interaction::{Input, key_press};
-use crate::model::{Action, Link, Model};
+use crate::model::{Action, Link, Model, data_profile_from_env};
 use crate::{APP_ID, EVIDENCE, screen};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
@@ -63,6 +63,8 @@ pub fn run(initial_size: (u32, u32), minute: u32, target: String) -> Result<(), 
             TeleReconnector::new(telephony_socket.clone(), TeleKind::Application, TIMEOUT)
                 .spawn(Arc::clone(&wake));
         let mut model = Model::new();
+        let apn = std::env::var(ferrix_app_api::TELEPHONY_APN_ENV).ok();
+        model.set_data_profile(data_profile_from_env(apn.as_deref()));
         model.target = target;
         Ok(Settings {
             ty: Type::load()?,
@@ -166,6 +168,19 @@ impl Settings {
             Action::Forget(profile) => self.network_action("forget", move |c| c.forget(&profile)),
             Action::SetRadioPower(power) => {
                 self.telephony_action("set-radio-power", TeleRequest::SetRadioPower { power })
+            }
+            Action::SetCellularData(enabled) => {
+                let (name, request) = if enabled {
+                    (
+                        "connect-data",
+                        TeleRequest::ConnectData {
+                            profile: self.model.data_profile.clone(),
+                        },
+                    )
+                } else {
+                    ("disconnect-data", TeleRequest::DisconnectData {})
+                };
+                self.telephony_action(name, request);
             }
         }
     }

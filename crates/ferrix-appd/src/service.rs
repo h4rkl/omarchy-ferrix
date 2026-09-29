@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use ferrix_app_api::{
     APP_ID_ENV, APP_INSTANCE_ENV, APPD_SOCKET_ENV, AppCapability, AppError, AppEvent, AppId,
     AppIdentity, AppInstance, DEFAULT_APPD_SOCKET, ExitReason, GrantsPolicy, LifecycleState,
-    RuntimeKind, SCHEMA_VERSION,
+    RuntimeKind, SCHEMA_VERSION, TELEPHONY_APN_ENV,
 };
 use ferrix_app_protocol::{ClientRole, Notification, Reply};
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
@@ -37,6 +37,10 @@ type Handle = Arc<Mutex<Box<dyn RunningApp>>>;
 pub struct ServiceOptions {
     /// Socket path handed to launched apps as `FERRIX_APPD_SOCKET`.
     pub socket: PathBuf,
+    /// Optional target-runtime APN for applications granted
+    /// [`AppCapability::TelephonyData`]. Runtime launch boundaries remove the
+    /// inherited process value and re-add it only for an authorized app.
+    pub telephony_apn: Option<String>,
     /// Grace period between the polite and the forced stop.
     pub terminate_grace: Duration,
     /// How often waiter threads poll a running instance.
@@ -51,6 +55,7 @@ impl Default for ServiceOptions {
     fn default() -> Self {
         Self {
             socket: PathBuf::from(DEFAULT_APPD_SOCKET),
+            telephony_apn: None,
             terminate_grace: Duration::from_secs(2),
             poll_interval: Duration::from_millis(20),
             restart: HomeRestartConfig::default(),
@@ -596,16 +601,26 @@ impl Service {
         // the runtime and every service see only the effective set.
         let granted = self.options.grants.effective(descriptor);
         let denied = self.options.grants.denied(descriptor);
+        let mut env = vec![
+            (APP_ID_ENV.to_owned(), id.to_string()),
+            (APP_INSTANCE_ENV.to_owned(), number.to_string()),
+            (
+                APPD_SOCKET_ENV.to_owned(),
+                self.options.socket.display().to_string(),
+            ),
+        ];
+        // APN is a target-runtime setting, not application metadata. Expose
+        // it only to callers with the explicit data capability, and never
+        // record it in appd evidence or lifecycle records.
+        if granted.contains(&AppCapability::TelephonyData)
+            && let Some(apn) = self.options.telephony_apn.as_deref()
+            && !apn.is_empty()
+        {
+            env.push((TELEPHONY_APN_ENV.to_owned(), apn.to_owned()));
+        }
         let context = LaunchContext {
             instance: number,
-            env: vec![
-                (APP_ID_ENV.to_owned(), id.to_string()),
-                (APP_INSTANCE_ENV.to_owned(), number.to_string()),
-                (
-                    APPD_SOCKET_ENV.to_owned(),
-                    self.options.socket.display().to_string(),
-                ),
-            ],
+            env,
             evidence: self.recorder.evidence().to_owned(),
             granted: granted.clone(),
         };
@@ -938,12 +953,22 @@ mod tests {
     }
 
     fn harness_with(catalog: Catalog, grants: GrantsPolicy, clock: Clock) -> Harness {
+        harness_with_apn(catalog, grants, clock, None)
+    }
+
+    fn harness_with_apn(
+        catalog: Catalog,
+        grants: GrantsPolicy,
+        clock: Clock,
+        telephony_apn: Option<String>,
+    ) -> Harness {
         let runtime = FakeRuntime::native();
         let tree = FakeProcessTree::default();
         let (recorder, records) = Recorder::capturing("mock");
         let options = ServiceOptions {
             socket: PathBuf::from("/tmp/ferrix-appd-test.sock"),
             poll_interval: Duration::from_millis(1),
+            telephony_apn,
             grants,
             ..ServiceOptions::default()
         };
@@ -1097,6 +1122,50 @@ mod tests {
         assert_eq!(
             captured_events(&h.records),
             ["app-launching", "app-started"]
+        );
+    }
+
+    #[test]
+    fn target_apn_reaches_only_a_data_granted_application() {
+        let home = descriptor("org.example.home", RuntimeKind::Native, AppRole::Home, true);
+        let mut data = descriptor(
+            "org.example.data",
+            RuntimeKind::Native,
+            AppRole::Application,
+            true,
+        );
+        data.capabilities = [AppCapability::TelephonyData].into_iter().collect();
+        let ordinary = descriptor(
+            "org.example.ordinary",
+            RuntimeKind::Native,
+            AppRole::Application,
+            true,
+        );
+        let catalog = Catalog::from_descriptors([home, data, ordinary]).unwrap();
+        let grants = GrantsPolicy::from_json(
+            r#"{"schema_version":1,"grants":{"org.example.data":["telephony-data"],"org.example.ordinary":["telephony-data"]}}"#,
+        )
+        .unwrap();
+        let h = harness_with_apn(
+            catalog,
+            grants,
+            Arc::new(Instant::now),
+            Some("internet.example".to_owned()),
+        );
+
+        h.service.launch(&id("org.example.data")).unwrap();
+        h.service.launch(&id("org.example.ordinary")).unwrap();
+
+        let data_env = h.runtime.last_env(&id("org.example.data")).unwrap();
+        assert!(data_env.contains(&(TELEPHONY_APN_ENV.to_owned(), "internet.example".to_owned())));
+        let ordinary_env = h.runtime.last_env(&id("org.example.ordinary")).unwrap();
+        assert!(!ordinary_env.iter().any(|(key, _)| key == TELEPHONY_APN_ENV));
+        assert!(
+            h.records
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|record| !record.to_string().contains("internet.example"))
         );
     }
 

@@ -760,6 +760,44 @@ impl DataBearer {
     }
 }
 
+/// Non-secret parameters for a cellular data connection.
+///
+/// An empty profile asks the backend to use its normal carrier/profile
+/// selection when that backend supports it.  Some modem plugins (including
+/// the target's Samsung-SIT plugin) require an explicit APN and will return a
+/// typed backend error for an empty profile.  The APN is intentionally the
+/// only parameter in this first contract: credentials and other modem-specific
+/// properties must not be carried through logs or the general telephony state
+/// API.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apn: Option<String>,
+}
+
+impl DataProfile {
+    /// Validates the user-supplied APN before it reaches a backend.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let Some(apn) = self.apn.as_deref() else {
+            return Ok(());
+        };
+        if apn.is_empty() {
+            return Err("apn must not be empty");
+        }
+        if apn.len() > 100 {
+            return Err("apn is too long");
+        }
+        if apn
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+        {
+            return Err("apn must not contain whitespace or control characters");
+        }
+        Ok(())
+    }
+}
+
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
@@ -1462,6 +1500,38 @@ mod tests {
         );
         assert_eq!(serde_json::to_string(&CallState::Held).unwrap(), "\"held\"");
         assert_eq!(serde_json::to_string(&RadioPower::Off).unwrap(), "\"off\"");
+    }
+
+    #[test]
+    fn data_profiles_allow_default_or_apn_and_reject_unsafe_values() {
+        assert!(DataProfile::default().validate().is_ok());
+        assert!(
+            DataProfile {
+                apn: Some("internet".into())
+            }
+            .validate()
+            .is_ok()
+        );
+        for apn in ["", "has whitespace", "has\nnewline", &"x".repeat(101)] {
+            assert!(
+                DataProfile {
+                    apn: Some(apn.to_owned())
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&DataProfile {
+                apn: Some("internet".into())
+            })
+            .unwrap(),
+            r#"{"apn":"internet"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&DataProfile::default()).unwrap(),
+            "{}"
+        );
     }
 
     #[test]

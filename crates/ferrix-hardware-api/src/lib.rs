@@ -282,7 +282,7 @@ pub trait Bluetooth: Send + Sync {
 // Audio route
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioRoute {
     Speaker,
@@ -302,9 +302,49 @@ impl AudioRoute {
     }
 }
 
+/// Routes currently exposed by the system audio policy service.
+///
+/// A fixed field set keeps the aggregate hardware snapshot copyable while
+/// still allowing controls to disable routes that are not currently usable.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AudioRouteAvailability {
+    pub speaker: bool,
+    pub earpiece: bool,
+    pub headphones: bool,
+    pub bluetooth: bool,
+}
+
+impl AudioRouteAvailability {
+    pub const ALL: Self = Self {
+        speaker: true,
+        earpiece: true,
+        headphones: true,
+        bluetooth: true,
+    };
+
+    pub fn contains(self, route: AudioRoute) -> bool {
+        match route {
+            AudioRoute::Speaker => self.speaker,
+            AudioRoute::Earpiece => self.earpiece,
+            AudioRoute::Headphones => self.headphones,
+            AudioRoute::Bluetooth => self.bluetooth,
+        }
+    }
+
+    pub fn insert(&mut self, route: AudioRoute) {
+        match route {
+            AudioRoute::Speaker => self.speaker = true,
+            AudioRoute::Earpiece => self.earpiece = true,
+            AudioRoute::Headphones => self.headphones = true,
+            AudioRoute::Bluetooth => self.bluetooth = true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AudioState {
     pub route: AudioRoute,
+    pub available: AudioRouteAvailability,
 }
 
 pub trait Audio: Send + Sync {
@@ -604,6 +644,7 @@ mod tests {
             },
             audio: AudioState {
                 route: AudioRoute::Speaker,
+                available: AudioRouteAvailability::ALL,
             },
             telephony: TelephonyState {
                 registration: ModemRegistration::Searching,

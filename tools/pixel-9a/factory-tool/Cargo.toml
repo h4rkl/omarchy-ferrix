@@ -1,0 +1,15 @@
+[package]
+name = "ferrix-pixel9a-tool"
+description = "Offline, target-scoped inspection of the pinned Pixel 9a factory package"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+zip = { version = "4", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[lints]
+workspace = true

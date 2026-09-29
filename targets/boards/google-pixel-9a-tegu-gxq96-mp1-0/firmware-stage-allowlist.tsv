@@ -1,0 +1,16 @@
+# controller	source-image	source-path-inside-image	runtime-path[+entry-type]
+# Source paths are relative to the filesystem root of the selected factory
+# image. They are not Android userspace paths and are copied only into the
+# Linux firmware-class tree after the explicit extraction confirmation.
+# A five-field row ending in `bundle` recursively enumerates the exact
+# allow-listed directory. Every extracted regular file gets its own
+# destination-aware manifest row with the same relative suffix. Symlinks and
+# special files fail closed; an empty required bundle is an error.
+wifi-bcm4383	vendor.img	/firmware/fw_bcmdhd.bin	lib/firmware/fw_bcmdhd.bin
+wifi-bcm4383	vendor.img	/firmware/bcmdhd.cal	lib/firmware/bcmdhd.cal
+wifi-bcm4383	vendor.img	/firmware/bcmdhd_clm.blob	lib/firmware/bcmdhd_clm.blob
+wifi-bcm4383	vendor.img	/firmware/fw_bcmdhd.map	lib/firmware/fw_bcmdhd.map
+wifi-bcm4383	vendor.img	/firmware/bcmdhd_txcap.blob	lib/firmware/bcmdhd_txcap.blob
+bluetooth-broadcom	vendor.img	/firmware/brcm/BCM.hcd	lib/firmware/brcm/BCM.hcd
+modem-s5300	vendor.img	/firmware/carrierconfig	lib/firmware/carrierconfig	bundle
+modem-s5300	vendor.img	/firmware/uecapconfig	lib/firmware/uecapconfig	bundle

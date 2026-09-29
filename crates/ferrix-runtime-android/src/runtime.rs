@@ -412,7 +412,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             id: AppId::new("org.ferrix.browser").unwrap(),
             runtime: RuntimeKind::Android,
-            name: "Fulguris".to_owned(),
+            name: "Browser".to_owned(),
             icon: IconRef::default(),
             launchable: true,
             autostart: false,

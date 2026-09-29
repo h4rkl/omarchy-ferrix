@@ -13,8 +13,8 @@ use ferrix_telephony_adapter_api::{
     BackendCall, BackendError, BackendEvent, BackendSnapshot, CallHandle, ModemBackend, SmsHandle,
 };
 use ferrix_telephony_api::{
-    AccessTechnology, AudioRoute, AudioRouteState, Capabilities, Dtmf, E164, ModemState, Operator,
-    RadioPower, Registration, Signal, SimState, TelephonyFeature,
+    AccessTechnology, AudioRoute, AudioRouteState, Capabilities, DataProfile, Dtmf, E164,
+    ModemState, Operator, RadioPower, Registration, Signal, SimState, TelephonyFeature,
 };
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -191,6 +191,17 @@ impl ModemBackend for FakeBackend {
         self.op(format!("send-sms {}", to.redacted()))?;
         let n = lock(&self.0).next_sms.fetch_add(1, Ordering::SeqCst);
         Ok(SmsHandle(format!("s{n}")))
+    }
+
+    fn connect_data(&self, profile: &DataProfile) -> Result<(), BackendError> {
+        self.op(format!(
+            "connect-data {}",
+            profile.apn.as_deref().unwrap_or("default")
+        ))
+    }
+
+    fn disconnect_data(&self) -> Result<(), BackendError> {
+        self.op("disconnect-data".to_owned())
     }
 
     fn set_radio_power(&self, power: RadioPower) -> Result<(), BackendError> {

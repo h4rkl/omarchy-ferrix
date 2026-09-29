@@ -1,0 +1,16 @@
+probe=read-only
+gnss_devices=0
+gnss_class_devices=0
+gnss_kepler_nodes=0
+gnss_kepler_bound=0
+gnss_kepler_module=absent
+nfc_class_devices=0
+nfc_st21_nodes=0
+nfc_st21_bound=0
+st21_module=absent
+st54_nodes=0
+st54_bound=0
+st54_module=absent
+uwb_class_devices=0
+uwb_nodes=0
+uwb_reset_nodes=0

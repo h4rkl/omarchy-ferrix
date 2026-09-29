@@ -7,12 +7,14 @@ postmarketOS image and CI route remain Android-free. Subordinate to
 `plans/baseline.md` and `plans/plan.md`.
 
 The current reference APK is Fulguris Web Browser, pinned and verified from
-F-Droid. No Fulguris graphical QEMU run has been recorded yet. The Brave
-provisioning and framebuffer run described in the historical evidence below
-predates this replacement and must not be treated as Fulguris evidence. This
-document therefore records the current Fulguris input boundary separately from
-the historical Brave run; neither is a claim of general APK compatibility,
-complete interaction, or physical-device support.
+F-Droid. A fresh QEMU run now reaches and has inspected its first-run
+onboarding framebuffer; interactive advancement beyond that screen remains
+partially unverified. The Brave provisioning and framebuffer run described in
+the historical evidence below predates this replacement and must not be
+treated as Fulguris evidence. This document therefore records the current
+Fulguris input boundary separately from the historical Brave run; neither is a
+claim of general APK compatibility, complete interaction, or physical-device
+support.
 
 Terminology: the reference application is "Fulguris Web Browser (Android application
 running in the Android compatibility runtime)". It is never described as a
@@ -55,7 +57,7 @@ Each row states what upstream documents or its source does, with the source.
 | Kernel configuration (pinned guest kernel) | `device/main/linux-postmarketos-stable` v26.06 = **7.0.12**, `config-stable.aarch64`: `CONFIG_ANDROID_BINDER_IPC=y`, `CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"`, `# CONFIG_ANDROID_BINDERFS is not set`, `CONFIG_PSI=y`, `CONFIG_MEMFD_CREATE=y`, `CONFIG_VETH=m`, `CONFIG_TUN=m`, `CONFIG_BRIDGE=m`, `CONFIG_BLK_DEV_LOOP=y`, `CONFIG_OVERLAY_FS=m`, `CONFIG_SQUASHFS=m`, `CONFIG_EROFS_FS=m`, nftables + iptables NAT/masquerade as modules, all namespaces, cgroups. The kernel carries `pmb:kconfigcheck-community`, whose alias includes `category:waydroid` in pmaports `kconfigcheck.toml` (`ANDROID_BINDERFS = "n"`, `ANDROID_BINDER_DEVICES = ["binder","hwbinder","vndbinder"]`, `ANDROID_BINDER_IPC = "y"`, `BLK_DEV_LOOP`, `BRIDGE`, `VETH`, `TUN`, `SQUASHFS*`, `FUSE_FS`, `IP_NF_MANGLE`, `NETFILTER_XT_MATCH_COMMENT`, …). **No kernel change is required**; `pmos-check` should still prove the three nodes exist. `CONFIG_RT_GROUP_SCHED` must stay disabled (pmOS wiki). `psi=1` on the command line is a documented workaround for "Service manager /dev/binder has died". | pmaports v26.06 raw config and `kconfigcheck.toml`; docs.waydro.id troubleshooting |
 | Container / process isolation | One LXC container (user, pid, uts, net, mount, ipc namespaces) for the whole Android userspace; all apps are processes inside it (visible from the host `/proc`). No per-app host process. LXC mounts the binder nodes, `/dev/fuse`, `/dev/net/tun`, DRI render node when present, `/dev/dma_heap/*`, the Wayland socket, and the PulseAudio socket into the container. Every passed device must be recorded before any claim (§8). | README; `lxc.py` |
 | Wayland integration | Host `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` is bind-mounted to `/run/xdg/wayland-0`; the container-side hwcomposer is the Wayland client. `xdg_toplevel` `app_id` is `"waydroid." + <package>` for apps and `"Waydroid"` for the full UI; title is the app name. `persist.waydroid.multi_windows` (default false) selects one surface vs. per-app windows. `waydroid session start` needs `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the compositor session and refuses `sudo`. | `wayland-hwc.cpp` (lineage-20), `session_manager.py`, docs |
-| Software rendering without virgl/host GPU | FAQ "Get Waydroid to work through a VM": add `ro.hardware.gralloc=default` and `ro.hardware.egl=swiftshader` to `[properties]` in `/var/lib/waydroid/waydroid.cfg`, then `waydroid upgrade -o`. `lxc.py` auto-selects the same pair when no DRI render node exists; with a render node it selects `gralloc=gbm`, `egl=mesa`. Upstream states only QEMU (and possibly crosvm) have working 3D acceleration in a VM and only with virtio-gpu 3D enabled. **Performance caveat:** SwiftShader is a CPU rasteriser; under TCG the guest CPU is itself emulated, so Android boot and Fulguris rendering are expected to be very slow. No upstream frame-rate numbers exist; a future QEMU check (§8) must measure boot-to-ready and time-to-first-frame and record them. Correctness (non-blank framebuffer) is the acceptance bar, not speed. | docs.waydro.id FAQ; `lxc.py` |
+| Software rendering without virgl/host GPU | FAQ "Get Waydroid to work through a VM": add `ro.hardware.gralloc=default` and `ro.hardware.egl=swiftshader` to `[properties]` in `/var/lib/waydroid/waydroid.cfg`, then `waydroid upgrade -o`. The QEMU Android image also sets `ro.sf.lcd_density=400`, a slightly relaxed Pixel-class logical density that makes the 1080-pixel panel approximately 432 dp wide; this setting is target-local and is not part of the shared Ferrix profile. `lxc.py` auto-selects the same renderer pair when no DRI render node exists; with a render node it selects `gralloc=gbm`, `egl=mesa`. Upstream states only QEMU (and possibly crosvm) have working 3D acceleration in a VM and only with virtio-gpu 3D enabled. **Performance caveat:** SwiftShader is a CPU rasteriser; under TCG the guest CPU is itself emulated, so Android boot and Fulguris rendering are expected to be very slow. No upstream frame-rate numbers exist; a future QEMU check (§8) must measure boot-to-ready and time-to-first-frame and record them. Correctness (non-blank framebuffer) is the acceptance bar, not speed. | docs.waydro.id FAQ; `lxc.py` |
 | Input and on-screen keyboard | Touch/mouse/keyboard arrive through the Wayland surface (`persist.waydroid.fake_touch` maps mouse to touch per package). Waydroid shows the **Android** virtual keyboard inside its surface by default; no host OSK/text-input integration is documented. Consequence: the product OSK (phase 3) and the Android keyboard would compete; the initial evaluation keeps Android's keyboard inside the Android surface and records this as a departure. | docs FAQ "Disable on-screen keyboard" |
 | Audio | Binds the host PulseAudio socket `$PULSE_RUNTIME_PATH/native` (default `$XDG_RUNTIME_DIR/pulse/native`) into the container. PipeWire is not mentioned by upstream; PipeWire's pulse compatibility server is the expected path but is **unverified**. pmOS wiki: the container fails to start when the socket is absent. | `lxc.py`, `config/__init__.py`; pmOS wiki |
 | Networking | `waydroid-net.sh` creates bridge `waydroid0` (192.168.240.1/24), runs `dnsmasq` (DHCP/DNS), enables `ip_forward`, and adds NAT masquerade via iptables-legacy/iptables or nftables (`waydroid-nftrules` ships `51_waydroid.nft` on Alpine). This sits **on top of** the guest's virtio-net user-mode networking: Android → `waydroid0` NAT → guest IP stack → QEMU slirp. Double NAT is acceptable for a browser; the container never sees `/run/ferrix` sockets (ADR-004 §5). `waydroid status` prints `IP address: UNKNOWN` when DHCP is blocked (pmOS wiki). | `data/scripts/waydroid-net.sh`; pmOS wiki |
@@ -83,11 +85,14 @@ route, under these conditions:
    compatibility.
 3. Software rendering forced explicitly (`ro.hardware.gralloc=default`,
    `ro.hardware.egl=swiftshader`) rather than relying on auto-detection, so
-   the QEMU route never silently depends on a render node.
+   the QEMU route never silently depends on a render node. The QEMU Android
+   image separately sets `ro.sf.lcd_density=400` for a slightly relaxed
+   Pixel-class mobile
+   logical viewport; this property is not shared with other targets.
 4. Claim levels are reported strictly per `architecture.md` §"APK
-   compatibility claims". Historical evidence reaches graphical for Brave;
-   the current Fulguris input has not reached a graphical claim. Interactive
-   input remains unverified.
+   compatibility claims". Current QEMU evidence reaches the Fulguris
+   onboarding framebuffer, while interactive advancement remains only
+   partially verified. This is not a general Android compatibility claim.
 
 Rejected alternatives: writing a Ferrix-owned container runtime (baseline:
 prefer maintained projects; Binder/ART/HAL surface is enormous); redroid
@@ -105,9 +110,10 @@ prefer maintained projects; Binder/ART/HAL surface is enormous); redroid
   source not audited for it.
 - Licence inventory of the shipped LineageOS/Waydroid image beyond the
   headline Apache-2.0/GPL-2.0 split.
-- Interactive touch/keyboard behavior and time-to-first-frame under TCG. The
-  inspected historical Brave graphical run used HVF; the bounded Android check
-  is headless and does not make a Fulguris rendering claim.
+- Interactive touch/keyboard behavior beyond the onboarding surface and
+  time-to-first-frame under TCG. The inspected Fulguris graphical run used
+  HVF; the bounded Android check is headless and does not establish full app
+  interaction.
 
 ## 6. Implemented guest inputs
 
@@ -170,10 +176,12 @@ offline (no `ota.waydro.id` access from the guest), then writes
 ro.hardware.gralloc=default
 ro.hardware.egl=swiftshader
 persist.waydroid.multi_windows=false
+ro.sf.lcd_density=400
 ```
 
 followed by `waydroid upgrade -o`. The manifest records image filenames,
-sizes, hashes, and the `waydroid` package version installed.
+sizes, hashes, the `waydroid` package version, and the QEMU-only
+`density_dpi` value.
 
 ### 6.4 Service start order (OpenRC, as pinned)
 

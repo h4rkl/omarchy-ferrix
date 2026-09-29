@@ -1,0 +1,10 @@
+# Native radio-first Linux route (linux-google-tegu-wwan).
+#
+# The candidate's tegu.config plus arm64 defconfig build the selected Wi-Fi
+# (brcmfmac), Bluetooth (hci_bcm/serdev), S5300 WWAN, UFS, ext4, and F2FS
+# paths in-kernel. kernel-radio-extra.config also makes device-mapper built in.
+# The candidate does not emit Google's bcmdhd4383, nitrous, cpif, or shm_ipc
+# modules, so the standard modules-initfs file remains the Google Kleaf
+# comparison contract. The radio rootfs workflow overlays this explicit list
+# into the staged device package; it stays empty until a native Kbuild output
+# proves that a module is required and records its hash.

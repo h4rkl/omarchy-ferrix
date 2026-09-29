@@ -1,0 +1,11 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+codename = "tegu"
+hardware_revision = "MP1.0"
+status = "substrate-only-not-bootable"
+header_version = 4
+required_kernel_artifacts = ["boot.img", "dtbo.img", "vendor_kernel_boot.img", "vendor_dlkm.img", "system_dlkm.img"]
+required_boot_container_inputs = ["init_boot.img", "vendor_boot.img", "vbmeta.img", "vbmeta_vendor.img", "vbmeta_system.img"]
+rootfs_artifact = "rootfs.img"
+rootfs_handoff_artifact = "rootfs.tar"
+firmware_manifest = "firmware-manifest.tsv"

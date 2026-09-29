@@ -65,13 +65,18 @@ rustup target add aarch64-unknown-linux-gnu
 rustup component add rustfmt clippy
 ```
 
-Install exactly one Linux-container runtime for building guest images. Docker Desktop is the documented initial option; OrbStack or Colima may be supported later only after the same checks pass:
+Install exactly one Linux-container runtime for building guest images. OrbStack
+is the documented macOS runtime; Docker Engine remains the Linux/CI runtime:
 
 ```sh
-brew install --cask docker
+brew install --cask orbstack
+orb
 ```
 
-Start the container runtime and confirm `docker run --rm hello-world` succeeds before attempting guest-image work.
+Start the container runtime and confirm `docker run --rm hello-world` succeeds
+before attempting guest-image work. OrbStack supplies this Docker-compatible
+CLI; when OrbStack is selected on macOS, `docker context show` should report
+`orbstack`.
 
 ### Required verification
 
@@ -83,6 +88,8 @@ qemu-system-aarch64 --version
 rustc --version
 cargo --version
 docker version
+# If OrbStack is selected on macOS:
+orb --version
 just --version
 dtc --version
 ```
@@ -91,7 +98,7 @@ Expected host architecture is `arm64`. QEMU must run with `-accel hvf` when supp
 
 ## Linux / CI reference profile
 
-Use Ubuntu LTS or another supported Linux image with these equivalents installed: QEMU system AArch64, Rust stable plus `aarch64-unknown-linux-gnu`, Docker or a compatible container engine, `just`, `dtc`, `cpio`, `lz4`, `xz`, `pkg-config`, `clang`, `make`, `ninja`, `rsync`, and Git.
+Use Ubuntu LTS or another supported Linux image with these equivalents installed: QEMU system AArch64, Rust stable plus `aarch64-unknown-linux-gnu`, Docker Engine or a compatible container engine, `just`, `dtc`, `cpio`, `lz4`, `xz`, `pkg-config`, `clang`, `make`, `ninja`, `rsync`, and Git.
 
 The CI workflow must not require a graphical display, KVM, HVF, USB access, `adb`, `fastboot`, proprietary firmware, or a physical phone. It runs the same QEMU smoke test with TCG and serial output.
 
@@ -120,7 +127,7 @@ Use these environment variables only as documented overrides. Defaults must work
 | `FERRIX_QEMU_ACCEL` | `auto` | `hvf`, `kvm`, `tcg`, or `auto`; `auto` resolves per host. |
 | `FERRIX_QEMU_GRAPHICS` | `off` | `off`, `cocoa`, `gtk`, or another documented backend. Serial remains mandatory. |
 | `FERRIX_QEMU_PROFILE` | `targets/qemu-aarch64/profile.toml` | Mock product profile path. |
-| `FERRIX_CONTAINER_RUNTIME` | `docker` | Container command used by image-build recipes. |
+| `FERRIX_CONTAINER_RUNTIME` | `docker` | Docker-compatible CLI namespace used by image-build recipes. OrbStack and Docker Engine both provide it. |
 
 Never put credentials, personal identifiers, or personal backups in `.env`, `out/`, or Git.
 

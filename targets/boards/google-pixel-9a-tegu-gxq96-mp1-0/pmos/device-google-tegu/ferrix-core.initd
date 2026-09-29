@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_NETWORK_BACKEND FERRIX_TELEPHONY_BACKEND FERRIX_BLUETOOTH_BACKEND FERRIX_AUDIO_BACKEND FERRIX_POWER_BACKEND
+# ferrix-core owns the target adapter composition, including the WirePlumber
+# bridge. PipeWire runs as the unprivileged `user` session below; point
+# wpctl at that runtime socket even though ferrix-core is supervised as root.
+export XDG_RUNTIME_DIR=/run/user/1000
+
+name="Ferrix core"
+command="/usr/bin/ferrix-core"
+command_args="/etc/ferrix/profile.toml"
+command_background="yes"
+pidfile="/run/ferrix-core.pid"
+output_log="/var/log/ferrix-core.log"
+error_log="/var/log/ferrix-core.err"
+
+depend() {
+	# ferrix-core composes the same typed service adapters that the target
+	# daemons expose. Start those providers first so a real OpenRC boot does
+	# not race NetworkManager, ModemManager, BlueZ, UPower, or WirePlumber.
+	# UPower is activated on demand over the system D-Bus; Alpine has no
+	# upower OpenRC service to order here.
+	need dbus networkmanager modemmanager bluetooth ferrix-radio-firmware ferrix-networkd ferrix-telephonyd ferrix-audio
+	after udev ferrix-s5300-mounts exynos-modem sit-proxy
+}
+
+start_pre() {
+	checkpath -d -m 0755 /run/ferrix /var/log
+	checkpath -f -m 0644 /etc/ferrix/profile.toml
+}

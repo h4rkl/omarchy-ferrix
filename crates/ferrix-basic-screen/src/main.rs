@@ -44,9 +44,12 @@ mod status;
 #[cfg(target_os = "linux")]
 mod app;
 
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::OnceLock;
 use std::time::Duration;
+use std::{fmt, str};
 
 use ferrix_hardware_api::{HardwareState, WifiState};
 use ferrix_session::{BootstrapOptions, bootstrap};
@@ -57,8 +60,39 @@ use ferrix_ui::theme;
 
 use crate::interaction::Page;
 
-/// Evidence label for every record this binary emits in a session.
-const EVIDENCE: &str = "QEMU";
+/// Runtime evidence label for every record this binary emits in a session.
+///
+/// A zero-sized displayable value lets the existing event templates remain
+/// compact while resolving the exact physical-target label from bootstrap
+/// environment at runtime. Preview mode still supplies its explicit `mock`
+/// records below.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EvidenceLabel;
+
+pub(crate) const EVIDENCE: EvidenceLabel = EvidenceLabel;
+
+static EVIDENCE_VALUE: OnceLock<String> = OnceLock::new();
+
+impl Deref for EvidenceLabel {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        EVIDENCE_VALUE
+            .get_or_init(|| {
+                std::env::var("FERRIX_EVIDENCE")
+                    .ok()
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or_else(|| "QEMU".to_owned())
+            })
+            .as_str()
+    }
+}
+
+impl fmt::Display for EvidenceLabel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self)
+    }
+}
 
 /// Initial quick-settings toggles derived from live hardware state.
 fn ui_toggles(hw: &HardwareState) -> (bool, bool) {
@@ -232,7 +266,7 @@ fn run() -> Result<(), String> {
 
     // Guest: geometry from the profile, state from the core. Theme first so
     // the first frame is already in the loaded palette.
-    theme::init(EVIDENCE, None);
+    theme::init(&EVIDENCE, None);
     let profile = Profile::load(&args.profile_path).map_err(|e| e.to_string())?;
     let core = ferrix_protocol::subscribe(&args.core_socket, Duration::from_secs(10))?;
     emit(format!(

@@ -42,9 +42,9 @@ Use these verdicts:
 - `DO NOT RUN`: a concrete risk makes ordinary use unreasonable.
 - `NOT ASSESSED`: static evidence is insufficient.
 
-Powerful tooling is not automatically unsafe. Docker, QEMU, package managers,
-and build systems may be acceptable when their effects are explicit, scoped,
-and consistent with the command the developer chose.
+Powerful tooling is not automatically unsafe. Container engines, QEMU, package
+managers, and build systems may be acceptable when their effects are explicit,
+scoped, and consistent with the command the developer chose.
 
 ## Developer-focused scope
 
@@ -59,9 +59,9 @@ enough to identify their material host effects. Focus on:
 3. Rust and other build inputs: lockfiles, Git dependencies, build scripts,
    procedural macros, native tooling, and whether normal builds execute remote
    or repository-controlled code.
-4. Docker, QEMU, and postmarketOS: privileged containers, host paths, ports,
-   networking, output placement, cleanup, and separation between host and
-   guest.
+4. Container engines, QEMU, and postmarketOS: privileged containers, host
+   paths, ports, networking, output placement, cleanup, and separation between
+   host and guest.
 5. Optional downloads and Android workflows: immutable pins, hashes,
    signatures, redirect restrictions, extraction, and where downloaded code
    executes.

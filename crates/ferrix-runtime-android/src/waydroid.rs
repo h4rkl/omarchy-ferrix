@@ -14,6 +14,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use ferrix_app_api::TELEPHONY_APN_ENV;
+
 use crate::host::{AndroidHost, HostError, LaunchedApp, RuntimeStatus};
 
 /// Default binary name resolved through `PATH`.
@@ -339,6 +341,10 @@ impl AndroidHost for WaydroidCli {
             let mut command = Command::new(self.binary());
             command
                 .args(["session", "start"])
+                // The APN is an application capability input, not a runtime
+                // daemon setting. Do not let the appd environment leak it to
+                // the compatibility-runtime supervisor.
+                .env_remove(TELEPHONY_APN_ENV)
                 .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
                 .stdin(Stdio::null())
                 .stdout(Stdio::inherit())

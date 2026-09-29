@@ -1,0 +1,13 @@
+# component	runtime destination relative to the rootfs	required
+#
+# The Google driver uses these exact BCM4383 names. The destination is kept
+# explicit because the Linux build may request the files through /lib/firmware
+# or one of the compatibility paths created by the target rootfs workflow.
+bcm4383	lib/firmware/fw_bcmdhd.bin	1
+bcm4383	lib/firmware/bcmdhd.cal	1
+bcm4383	lib/firmware/bcmdhd_clm.blob	1
+bcm4383	lib/firmware/fw_bcmdhd.map	1
+bcm4383	lib/firmware/bcmdhd_txcap.blob	1
+bluetooth-broadcom	lib/firmware/brcm/BCM.hcd	1
+modem-s5300	lib/firmware/carrierconfig	1
+modem-s5300	lib/firmware/uecapconfig	1

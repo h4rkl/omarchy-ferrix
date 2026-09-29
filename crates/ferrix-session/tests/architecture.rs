@@ -257,6 +257,9 @@ fn target_profile_is_the_only_toml_schema_parser() {
 /// Adapter implementations and internal adapter contracts that only a daemon
 /// binary may compose.
 const SERVICE_ADAPTER_CRATES: &[&str] = &[
+    "ferrix-audio-wireplumber",
+    "ferrix-bluetooth-bluez",
+    "ferrix-power-upower",
     "ferrix-telephony-mock",
     "ferrix-telephony-mm",
     "ferrix-telephony-adapter-api",

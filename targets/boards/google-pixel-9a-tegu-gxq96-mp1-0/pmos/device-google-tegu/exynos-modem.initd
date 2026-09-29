@@ -1,0 +1,84 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_TELEPHONY_BACKEND
+
+name="Exynos S5300 modem userspace"
+description="Serves native-Linux S5300 boot, RFS, and GEMS channels"
+supervisor=supervise-daemon
+command=/usr/sbin/exynos-modem
+# The reviewed exynos-modem CLI intentionally consumes the legacy kernel
+# endpoint /dev/umts_oem1 for its GEMS/OEM channel. The source-derived
+# s5300-channels.toml catalog expands the same OEM channel family as
+# oem_ipc0..oem_ipc7; it is metadata, not a request to invent a udev alias.
+# Keep this exact upstream CLI contract until a booted Tegu proves otherwise.
+command_args="--model 5300 --uecap-dir /vendor/firmware/uecapconfig --boot-dev /dev/umts_boot0 --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/umts_oem1"
+respawn_delay=2
+
+depend() {
+	need ferrix-s5300-mounts ferrix-radio-firmware
+	after udev
+	before sit-proxy modemmanager
+}
+
+wait_for_boot_channel() {
+	# The s5300_modem node is created by the built-in kernel driver and then
+	# named by udev.  OpenRC's `after udev` ordering does not guarantee that the
+	# final character node is visible at this exact instant, so tolerate the
+	# short probe/udev race while retaining the exact type and timeout gate.
+	attempt=0
+	while [ "$attempt" -lt 100 ]; do
+		[ -c /dev/umts_boot0 ] && return 0
+		sleep 0.1
+		attempt=$((attempt + 1))
+	done
+	eerror "s5300_modem boot channel is missing or is not a character device"
+	return 1
+}
+
+start_pre() {
+	command -v exynos-modem >/dev/null 2>&1 || {
+		eerror "exynos-modem binary is missing"
+		return 1
+	}
+	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = "linux-google-tegu-wwan" ] || {
+		eerror "exynos-modem requires the pinned linux-google-tegu-wwan kernel backend"
+		return 1
+	}
+	# The loader's boot/status ioctls are for the community s5300_modem
+	# transport.  Google's cpif module has a different ioctl ABI; fail closed
+	# before opening any modem character device on that route.  WWAN SIT ports
+	# are intentionally *not* required here: the pinned driver creates them
+	# only after the CP reaches ONLINE, while this daemon must first boot it
+	# through the pre-ONLINE umts_boot0 channel.
+	wait_for_boot_channel || return 1
+	[ -f /usr/share/ferrix/pixel-9a/s5300-userspace-sources.toml ] || {
+		eerror "S5300 userspace source manifest is missing"
+		return 1
+	}
+	[ -d /vendor/firmware/uecapconfig ] || {
+		eerror "external UECAP firmware directory is missing: /vendor/firmware/uecapconfig"
+		return 1
+	}
+	[ -d /vendor/firmware/carrierconfig ] || {
+		eerror "external carrier configuration directory is missing: /vendor/firmware/carrierconfig"
+		return 1
+	}
+	[ -r /mnt/vendor/modem_img/images/default/modem.bin ] || {
+		eerror "exact current-slot modem image is unavailable or unreadable"
+		return 1
+	}
+	[ -r /mnt/vendor/efs/nv_normal.bin ] || {
+		eerror "exact efs nv_normal.bin is unavailable or unreadable"
+		return 1
+	}
+	[ -r /mnt/vendor/efs/nv_protected.bin ] || {
+		eerror "exact efs nv_protected.bin is unavailable or unreadable"
+		return 1
+	}
+	[ -r /mnt/vendor/persist/modem/cpsha ] || {
+		eerror "exact persist modem/cpsha is unavailable or unreadable"
+		return 1
+	}
+	checkpath -d -m 0750 /var/lib/exynos-modem
+}

@@ -21,8 +21,8 @@ pub mod testing;
 
 pub use control::{HOST_TOOL_APP, LOCAL_COMMANDS, LocalCommand, LocalControl};
 pub use identity::{
-    AllowAll, AppdIdentity, CAP_CALL, CAP_SMS, CAP_STATE, DenyAll, Identity, IdentityInfo,
-    StaticIdentity,
+    AllowAll, AppdIdentity, CAP_CALL, CAP_DATA, CAP_RADIO, CAP_SMS, CAP_STATE, DenyAll, Identity,
+    IdentityInfo, StaticIdentity,
 };
 pub use records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder, emit};
 pub use server::{Connection, Outcome, Server, dispatch, required_capability};

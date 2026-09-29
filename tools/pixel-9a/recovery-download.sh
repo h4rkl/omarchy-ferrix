@@ -61,7 +61,16 @@ download_one() {
   part="$final.part"
   mkdir -p "$out"
 
+  [ ! -L "$part" ] || {
+    echo "refusing symlinked partial recovery artifact: $part" >&2
+    exit 1
+  }
+
   if [ -f "$final" ]; then
+    [ ! -L "$final" ] || {
+      echo "refusing symlinked recovery artifact: $final" >&2
+      exit 1
+    }
     actual_hash=$(sha256_of "$final")
     actual_bytes=$(wc -c < "$final" | tr -d '[:space:]')
     if [ "$actual_hash" = "$expected_hash" ] && [ "$actual_bytes" = "$expected_bytes" ]; then

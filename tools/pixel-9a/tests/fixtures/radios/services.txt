@@ -1,0 +1,9 @@
+dbus=* status: started
+networkmanager=* status: started
+modemmanager=* status: started
+bluetooth=* status: started
+upower=* status: started
+ferrix-core=* status: started
+ferrix-networkd=* status: started
+ferrix-telephonyd=* status: started
+ferrix-audio=* status: started

@@ -1,0 +1,91 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_NETWORK_BACKEND FERRIX_TELEPHONY_BACKEND FERRIX_AUDIO_BACKEND
+
+name="Ferrix product shell"
+description="Starts the target-neutral Ferrix compositor and application service"
+command="/bin/true"
+command_background="no"
+
+core_socket=/run/ferrix/core.sock
+appd_socket=/run/ferrix/ferrix-appd.sock
+wayland_socket=/run/user/1000/wayland-0
+appd_pidfile=/run/ferrix/ferrix-appd.pid
+shell_pidfile=/run/ferrix/ferrix-shell.pid
+
+depend() {
+	need ferrix-core ferrix-networkd ferrix-telephonyd ferrix-audio ferrix-radio-firmware seatd
+	after dbus udev networkmanager modemmanager bluetooth ferrix-s5300-mounts exynos-modem sit-proxy
+}
+
+start_pre() {
+	for binary in ferrix-shell ferrix-appd ferrix-sandbox; do
+		command -v "$binary" >/dev/null 2>&1 || {
+			eerror "required product binary is missing: $binary"
+			return 1
+		}
+	done
+	[ -d /usr/share/ferrix/apps ] || {
+		eerror "Ferrix app catalog is missing: /usr/share/ferrix/apps"
+		return 1
+	}
+	[ -f /usr/share/ferrix/apps/grants.json ] || {
+		eerror "Ferrix grants policy is missing: /usr/share/ferrix/apps/grants.json"
+		return 1
+	}
+	checkpath -d -o user:user -m 0755 /run/ferrix
+	checkpath -d -m 0755 /var/log/ferrix
+	checkpath -d -o user:user -m 0700 /run/user/1000
+	checkpath -f -m 0644 /etc/ferrix/profile.toml
+	checkpath -f -m 0644 /etc/ferrix/colors.toml
+}
+
+wait_for_socket() {
+	socket=$1
+	label=$2
+	for _ in $(seq 1 200); do
+		[ -S "$socket" ] && return 0
+		sleep 0.1
+	done
+	eerror "$label did not become ready: $socket"
+	return 1
+}
+
+start() {
+	ebegin "Starting Ferrix product shell"
+	export HOME=/home/user
+	export USER=user
+	export XDG_RUNTIME_DIR=/run/user/1000
+	export WAYLAND_DISPLAY=wayland-0
+	export FERRIX_CORE_SOCKET=$core_socket
+	export FERRIX_APPD_SOCKET=$appd_socket
+
+	wait_for_socket "$core_socket" ferrix-core || { eend 1; return 1; }
+	start-stop-daemon --start --background --make-pidfile --pidfile "$shell_pidfile" \
+		--chuid user:user --env HOME=/home/user --env USER=user \
+		--env XDG_RUNTIME_DIR=/run/user/1000 --env WAYLAND_DISPLAY=wayland-0 \
+		--env FERRIX_CORE_SOCKET="$core_socket" --env FERRIX_APPD_SOCKET="$appd_socket" \
+		--exec /usr/bin/ferrix-shell -- --core "$core_socket" \
+		--ferrix-appd "$appd_socket" /etc/ferrix/profile.toml
+	wait_for_socket "$wayland_socket" ferrix-shell || { eend 1; return 1; }
+
+	start-stop-daemon --start --background --make-pidfile --pidfile "$appd_pidfile" \
+		--chuid user:user --env HOME=/home/user --env USER=user \
+		--env XDG_RUNTIME_DIR=/run/user/1000 --env WAYLAND_DISPLAY=wayland-0 \
+		--env FERRIX_EVIDENCE="$FERRIX_EVIDENCE" --env FERRIX_TARGET="$FERRIX_TARGET" \
+		--env FERRIX_TELEPHONY_APN="${FERRIX_TELEPHONY_APN:-}" \
+		--exec /usr/bin/ferrix-appd -- --socket "$appd_socket" \
+		--app-dir /usr/share/ferrix/apps --grants /usr/share/ferrix/apps/grants.json \
+		--sandbox /usr/bin/ferrix-sandbox
+	wait_for_socket "$appd_socket" ferrix-appd || { eend 1; return 1; }
+	eend 0
+}
+
+stop() {
+	ebegin "Stopping Ferrix product shell"
+	start-stop-daemon --stop --pidfile "$appd_pidfile" --retry TERM/5/KILL/5 2>/dev/null || true
+	start-stop-daemon --stop --pidfile "$shell_pidfile" --retry TERM/5/KILL/5 2>/dev/null || true
+	rm -f "$appd_pidfile" "$shell_pidfile"
+	eend 0
+}

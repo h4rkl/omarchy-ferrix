@@ -1,0 +1,1 @@
+{"reply":"state","schema_version":1,"target":"google-pixel-9a-tegu-gxq96-mp1-0","profile":"pixel-9a-native-linux","capabilities":{"bluetooth":"unsupported","network":"unsupported"},"state":{"network":{"wifi":"connected"},"bluetooth":{"present":true,"enabled":true}}}

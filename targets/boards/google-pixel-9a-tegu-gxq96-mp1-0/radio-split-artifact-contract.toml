@@ -1,0 +1,72 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+route_id = "experimental-linux-google-tegu-s5300-wwan"
+status = "source-build-required"
+
+# This is a source-only contract for the independent native-Linux route.  It
+# records the exact split image boundaries without supplying Android blobs,
+# stock kernel modules, or generated AVB metadata.  Every artifact remains
+# not-built until a coherent source build produces and hashes it.
+source_only = true
+stock_modules_may_be_reused = false
+android_userspace_required = false
+boot_header_version = 4
+boot_page_size = 4096
+dtbo_tool = "mkdtboimg.py"
+dtbo_page_size = 4096
+dynamic_partition_transport = "fastbootd"
+
+[artifact.boot]
+partition = "boot"
+status = "not-built"
+source_inputs = ["kernel Image", "Ferrix initramfs"]
+
+[artifact.init_boot]
+partition = "init_boot"
+status = "not-built"
+source_inputs = ["Ferrix initramfs"]
+
+[artifact.vendor_boot]
+partition = "vendor_boot"
+status = "not-built"
+source_inputs = ["source-built DTB", "Ferrix vendor ramdisk", "Ferrix bootconfig"]
+
+[artifact.vendor_kernel_boot]
+partition = "vendor_kernel_boot"
+status = "not-built"
+source_inputs = ["source-built early module cpio"]
+
+[artifact.dtbo]
+partition = "dtbo"
+status = "not-built"
+source_inputs = ["source-built DTS overlays", "source-built DTBO table"]
+
+[artifact.vendor_dlkm]
+partition = "vendor_dlkm"
+status = "not-built"
+transport = "fastbootd"
+source_inputs = ["source-built vendor modules", "source-built depmod metadata"]
+
+[artifact.system_dlkm]
+partition = "system_dlkm"
+status = "not-built"
+transport = "fastbootd"
+source_inputs = ["source-built system modules", "source-built depmod metadata"]
+
+[artifact.vbmeta]
+partition = "vbmeta"
+status = "not-built"
+source_inputs = ["final split image bytes", "AVB descriptors"]
+
+[artifact.vbmeta_vendor]
+partition = "vbmeta_vendor"
+status = "not-built"
+source_inputs = ["final vendor image bytes", "AVB descriptors"]
+
+[artifact.vbmeta_system]
+partition = "vbmeta_system"
+status = "not-built"
+source_inputs = ["final system image bytes", "AVB descriptors"]
+
+[verification]
+required_rows = ["source_revision", "source_archive", "split_artifact_contract", "dtbo_source_set", "module_install", "partition_sizes", "artifact"]

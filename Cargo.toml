@@ -4,7 +4,9 @@ members = [
     "crates/ferrix-app-protocol",
     "crates/ferrix-app-runtime-api",
     "crates/ferrix-appd",
+    "crates/ferrix-audio-wireplumber",
     "crates/ferrix-basic-screen",
+    "crates/ferrix-bluetooth-bluez",
     "crates/ferrix-contacts",
     "crates/ferrix-contacts-api",
     "crates/ferrix-contacts-protocol",
@@ -21,9 +23,11 @@ members = [
     "crates/ferrix-network-protocol",
     "crates/ferrix-networkd",
     "crates/ferrix-phone",
+    "crates/ferrix-power-upower",
     "crates/ferrix-protocol",
     "crates/ferrix-runtime-android",
     "crates/ferrix-runtime-native",
+    "crates/ferrix-s5300-cpif",
     "crates/ferrix-scenario",
     "crates/ferrix-session",
     "crates/ferrix-settings",
@@ -37,6 +41,8 @@ members = [
     "crates/ferrix-telephonyd",
     "crates/ferrix-terminal",
     "crates/ferrix-ui",
+    "targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/adapter",
+    "tools/pixel-9a/factory-tool",
 ]
 resolver = "2"
 

@@ -1,0 +1,68 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+codename = "tegu"
+hardware_revision = "MP1.0"
+source_policy = "official-google-factory-package-only"
+source_archive_kind = "factory"
+source_archive_pin = "recovery.pins"
+runtime_root = "/lib/firmware"
+compatibility_roots = ["/vendor/firmware", "/etc/wifi"]
+
+# The exact firmware member paths are discovered from the pinned package and
+# recorded in the generated ignored manifest. This checked-in policy lists
+# the controller families and prevents a broad Android /vendor copy from
+# silently becoming a Linux firmware dependency.
+[[controller]]
+id = "wifi-bcm4383"
+# This is the exact Kleaf module basename emitted by the pinned
+# `wifi-bcm4383` source (`BUILD.bazel` -> `bcmdhd4383.ko`), not the source
+# repository's broader `bcmdhd` family name.
+kernel_driver = "bcmdhd4383"
+source_images = ["vendor.img", "vendor_dlkm.img"]
+runtime_paths = ["bcmdhd", "brcm"]
+required_names = ["fw_bcmdhd.bin", "bcmdhd.cal", "bcmdhd_clm.blob", "fw_bcmdhd.map", "bcmdhd_txcap.blob"]
+
+[[controller]]
+id = "bluetooth-broadcom"
+# The pinned Broadcom source's Kleaf output is `nitrous.ko`; it owns the
+# Tegu GPIO/UART power path. The HCI transport and HCD blob are separate.
+kernel_driver = "nitrous"
+source_images = ["vendor.img", "vendor_dlkm.img"]
+runtime_paths = ["brcm", "broadcom"]
+# The CP3A.260905.009 factory package's Bluetooth configuration selects this
+# exact patchram blob. The source-image path is vendor.img:/firmware/brcm/BCM.hcd;
+# the Linux firmware-class destination is /lib/firmware/brcm/BCM.hcd. See the
+# target-local source-evidence record for the verified package and hash.
+required_names = ["BCM.hcd"]
+
+[[controller]]
+id = "modem-s5300"
+# The pinned S5300 source emits `cpif.ko`, `cpif_page.ko`, `shm_ipc.ko`, and
+# `cp_thermal_zone.ko`; `cpif` is the primary module basename. The CP image
+# is not a Linux firmware-class file and is intentionally not staged here.
+kernel_driver = "cpif"
+source_images = ["vendor.img", "modem.img"]
+runtime_paths = ["s5300", "modem"]
+# These are directory bundles from the exact factory vendor filesystem. The
+# firmware workflow expands each regular file to /lib/firmware with a
+# destination-aware manifest row; Android framework/RIL/HAL files remain out
+# of scope. The candidate s5300_modem transport does not request a separate
+# Linux firmware-class CP PBL: the paired userspace loader extracts the BOOT
+# section from the read-only current-slot modem.bin and builds handover data from
+# runtime device inputs. No cp_pbl.bin or cp_handover.bin bytes are staged here.
+bundle_runtime_paths = ["carrierconfig", "uecapconfig"]
+required_names = []
+
+[[controller]]
+id = "display-audio-touch"
+kernel_driver = "tegu-board-kernel"
+source_images = ["vendor.img", "vendor_dlkm.img"]
+runtime_paths = ["firmware", "dsp", "audio"]
+required_names = []
+
+[policy]
+extract_locally = true
+commit_firmware_bytes = false
+commit_device_identifiers = false
+allow_unlisted_paths = false
+require_exact_factory_hash = true

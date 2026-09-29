@@ -1,0 +1,11 @@
+radio_backend=google-cpif
+cpif_platform=present
+cpif_driver=bound
+cpif_state=ONLINE
+s5300_modem_module=absent
+s5300_modem_driver=unbound
+wwan_devices=0
+fmt_channels=2
+sit_ports=2
+at_ports=1
+rmnet_count=30

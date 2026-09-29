@@ -1,0 +1,23 @@
+[package]
+name = "ferrix-target-pixel9a"
+description = "Google Pixel 9a target composition seam for Ferrix Linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-hardware-api = { path = "../../../../crates/ferrix-hardware-api" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ferrix-audio-wireplumber = { path = "../../../../crates/ferrix-audio-wireplumber", features = ["production"] }
+ferrix-bluetooth-bluez = { path = "../../../../crates/ferrix-bluetooth-bluez", features = ["production"] }
+ferrix-network-adapter-api = { path = "../../../../crates/ferrix-network-adapter-api" }
+ferrix-network-api = { path = "../../../../crates/ferrix-network-api" }
+ferrix-network-nm = { path = "../../../../crates/ferrix-network-nm", features = ["production"] }
+ferrix-power-upower = { path = "../../../../crates/ferrix-power-upower", features = ["production"] }
+ferrix-telephony-adapter-api = { path = "../../../../crates/ferrix-telephony-adapter-api" }
+ferrix-telephony-api = { path = "../../../../crates/ferrix-telephony-api" }
+ferrix-telephony-mm = { path = "../../../../crates/ferrix-telephony-mm", features = ["production"] }
+
+[lints]
+workspace = true

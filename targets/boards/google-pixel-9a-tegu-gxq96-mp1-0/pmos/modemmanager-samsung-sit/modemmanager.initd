@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+
+supervisor=supervise-daemon
+command=/usr/sbin/ModemManager
+command_args="${modemmanager_opts}"
+description="ModemManager Samsung SIT daemon"
+
+depend() {
+	need dbus
+	need ferrix-s5300-mounts exynos-modem sit-proxy
+	after udev ferrix-s5300-mounts exynos-modem sit-proxy
+}

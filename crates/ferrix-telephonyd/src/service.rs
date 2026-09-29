@@ -20,9 +20,9 @@ use ferrix_telephony_adapter_api::{
     BackendEvent, BackendSnapshot, CallHandle, ModemBackend, SmsHandle,
 };
 use ferrix_telephony_api::{
-    AudioRoute, Call, CallEndReason, CallId, CallState, Direction, Dtmf, E164, MessageId,
-    ModemState, MultipartPart, PartRef, PartyRef, RadioPower, SCHEMA_VERSION, Sms, SmsFailure,
-    SmsState, TelephonyError, TelephonyEvent, TelephonyFeature, TelephonyState,
+    AudioRoute, Call, CallEndReason, CallId, CallState, DataProfile, Direction, Dtmf, E164,
+    MessageId, ModemState, MultipartPart, PartRef, PartyRef, RadioPower, SCHEMA_VERSION, Sms,
+    SmsFailure, SmsState, TelephonyError, TelephonyEvent, TelephonyFeature, TelephonyState,
 };
 use ferrix_telephony_protocol::{Event, Reply, SmsFilter, StateView};
 
@@ -687,6 +687,19 @@ impl Service {
     pub fn set_radio_power(&self, power: RadioPower) -> Result<(), TelephonyError> {
         self.require_feature(TelephonyFeature::RadioPower)?;
         self.backend.set_radio_power(power)?;
+        Ok(())
+    }
+
+    pub fn connect_data(&self, profile: &DataProfile) -> Result<(), TelephonyError> {
+        self.require_feature(TelephonyFeature::Data)?;
+        profile.validate().map_err(TelephonyError::protocol)?;
+        self.backend.connect_data(profile)?;
+        Ok(())
+    }
+
+    pub fn disconnect_data(&self) -> Result<(), TelephonyError> {
+        self.require_feature(TelephonyFeature::Data)?;
+        self.backend.disconnect_data()?;
         Ok(())
     }
 

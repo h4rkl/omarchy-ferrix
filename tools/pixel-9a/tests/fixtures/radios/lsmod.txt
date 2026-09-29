@@ -1,0 +1,4 @@
+Module                  Size  Used by
+bcmdhd4383           2359296  0
+btbcm                  32768  1 hci_uart
+bluetooth             1048576  9 btbcm,hci_uart

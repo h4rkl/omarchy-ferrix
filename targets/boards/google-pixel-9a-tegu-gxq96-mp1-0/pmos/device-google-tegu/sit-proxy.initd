@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_TELEPHONY_BACKEND FERRIX_S5300_KERNEL_BACKEND
+
+name="Exynos SIT port multiplexer"
+description="Owns S5300 SIT ports and exposes root-only Unix sockets"
+supervisor=supervise-daemon
+command=/usr/sbin/sit-proxy
+command_args="--dev /dev/wwan0sit0 --dev /dev/wwan0sit1 --socket-dir /run/sit-proxy"
+respawn_delay=2
+
+depend() {
+	need ferrix-s5300-mounts exynos-modem
+	need ferrix-radio-firmware
+	after udev exynos-modem
+	before modemmanager
+}
+
+start_pre() {
+	command -v sit-proxy >/dev/null 2>&1 || {
+		eerror "sit-proxy binary is missing"
+		return 1
+	}
+	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = "linux-google-tegu-wwan" ] || {
+		eerror "S5300 userspace requires the pinned linux-google-tegu-wwan kernel backend"
+		return 1
+	}
+	# The community driver exports WWAN SIT character nodes only after the
+	# exynos-modem daemon boots the CP to ONLINE.  Do not require /sys/class/wwan
+	# here: doing so would race the boot daemon and prevent those ports from ever
+	# being created.  supervise-daemon retries sit-proxy until the nodes appear;
+	# the backend gate above still refuses Google's incompatible cpif ABI.
+	checkpath -d -m 0755 /run/sit-proxy
+}
+
+stop_post() {
+	for socket in /run/sit-proxy/0 /run/sit-proxy/1; do
+		[ -S "$socket" ] || continue
+		rm -f "$socket"
+	done
+}

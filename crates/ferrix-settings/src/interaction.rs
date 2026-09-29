@@ -26,6 +26,7 @@ pub enum Target {
     Airplane,
     Wifi,
     Cellular,
+    CellularData,
 }
 
 pub struct Layout {
@@ -186,6 +187,16 @@ impl Layout {
             h: s(150),
         }
     }
+
+    pub fn cellular_data_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(48),
+            y: s(1000),
+            w: self.w() - s(96),
+            h: s(150),
+        }
+    }
 }
 
 pub fn keyboard_visible(model: &Model) -> bool {
@@ -248,7 +259,10 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
             if contains(l.wifi_rect(), position) {
                 return Some(Target::Wifi);
             }
-            contains(l.cellular_rect(), position).then_some(Target::Cellular)
+            if contains(l.cellular_rect(), position) {
+                return Some(Target::Cellular);
+            }
+            contains(l.cellular_data_rect(), position).then_some(Target::CellularData)
         }
         Page::About => None,
     }
@@ -283,6 +297,7 @@ pub fn activate(model: &mut Model, target: Target) {
         Target::Key(key) => key_press(model, key),
         Target::Airplane => model.toggle_airplane(),
         Target::Cellular => model.toggle_cellular(),
+        Target::CellularData => model.toggle_cellular_data(),
     }
 }
 
@@ -451,6 +466,11 @@ mod tests {
         m.pending.clear();
         tap(&mut input, &mut m, center(l.cellular_rect()));
         assert!(matches!(m.pending.pop(), Some(Action::SetRadioPower(_))));
+        tap(&mut input, &mut m, center(l.cellular_data_rect()));
+        assert!(matches!(
+            m.pending.pop(),
+            Some(Action::SetCellularData(true))
+        ));
         tap(&mut input, &mut m, (80.0, 160.0));
         assert_eq!(m.page, Page::Network);
         tap(&mut input, &mut m, (80.0, 160.0));

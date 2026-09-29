@@ -14,7 +14,7 @@ use std::thread;
 use ferrix_telephony_api::{SCHEMA_VERSION, TelephonyError};
 use ferrix_telephony_protocol::{Reply, Request};
 
-use crate::identity::{CAP_CALL, CAP_SMS, CAP_STATE, Identity, IdentityInfo};
+use crate::identity::{CAP_CALL, CAP_DATA, CAP_RADIO, CAP_SMS, CAP_STATE, Identity, IdentityInfo};
 use crate::service::Service;
 
 /// Per-connection protocol state.
@@ -74,12 +74,13 @@ pub fn required_capability(request: &Request) -> &'static str {
         | Request::Resume { .. }
         | Request::Dtmf { .. }
         | Request::SetAudioRoute { .. }
-        | Request::SetRadioPower { .. }
         | Request::EnterPin { .. } => CAP_CALL,
+        Request::SetRadioPower { .. } => CAP_RADIO,
         Request::SendSms { .. }
         | Request::ListSms { .. }
         | Request::MarkRead { .. }
         | Request::DeleteSms { .. } => CAP_SMS,
+        Request::ConnectData { .. } | Request::DisconnectData {} => CAP_DATA,
     }
 }
 
@@ -188,6 +189,8 @@ pub fn dispatch(
         }
         Request::MarkRead { id } => sms_reply(service.mark_read(&id)),
         Request::DeleteSms { id } => sms_reply(service.delete_sms(&id)),
+        Request::ConnectData { profile } => ok_reply(service.connect_data(&profile)),
+        Request::DisconnectData {} => ok_reply(service.disconnect_data()),
     };
     Outcome::Reply(Box::new(reply))
 }

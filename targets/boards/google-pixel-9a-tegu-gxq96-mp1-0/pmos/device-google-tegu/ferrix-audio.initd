@@ -1,0 +1,61 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_NETWORK_BACKEND FERRIX_TELEPHONY_BACKEND FERRIX_BLUETOOTH_BACKEND FERRIX_AUDIO_BACKEND FERRIX_POWER_BACKEND
+
+name="Ferrix PipeWire/WirePlumber session"
+description="Starts the native PipeWire and WirePlumber user session"
+command="/bin/true"
+command_background="no"
+
+runtime_dir=/run/user/1000
+pipewire_pid=/run/ferrix-pipewire.pid
+wireplumber_pid=/run/ferrix-wireplumber.pid
+
+depend() {
+	need dbus seatd ferrix-radio-firmware
+	after bluetooth
+}
+
+start_pre() {
+	for binary in pipewire wireplumber wpctl; do
+		command -v "$binary" >/dev/null 2>&1 || {
+			eerror "$binary is not installed"
+			return 1
+		}
+	done
+	checkpath -d -o user:user -m 0700 "$runtime_dir"
+	checkpath -d -m 0755 /run
+}
+
+wait_for_wireplumber() {
+	# OpenRC can start ferrix-core immediately after this script returns.  Wait
+	# until the user PipeWire session answers a harmless status query so the
+	# target adapter does not lose its first connection to WirePlumber.
+	for _ in $(seq 1 100); do
+		if su -s /bin/sh user -c "XDG_RUNTIME_DIR=$runtime_dir wpctl status >/dev/null 2>&1"; then
+			return 0
+		fi
+		sleep 0.1
+	done
+	eerror "WirePlumber did not answer within 10 seconds"
+	return 1
+}
+
+start() {
+	ebegin "Starting PipeWire/WirePlumber"
+	start-stop-daemon --start --background --make-pidfile --pidfile "$pipewire_pid" \
+		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/pipewire -- --no-daemon
+	start-stop-daemon --start --background --make-pidfile --pidfile "$wireplumber_pid" \
+		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/wireplumber -- --no-daemon
+	wait_for_wireplumber
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping PipeWire/WirePlumber"
+	start-stop-daemon --stop --pidfile "$wireplumber_pid" --retry TERM/5/KILL/5 2>/dev/null || true
+	start-stop-daemon --stop --pidfile "$pipewire_pid" --retry TERM/5/KILL/5 2>/dev/null || true
+	rm -f "$wireplumber_pid" "$pipewire_pid"
+	eend 0
+}

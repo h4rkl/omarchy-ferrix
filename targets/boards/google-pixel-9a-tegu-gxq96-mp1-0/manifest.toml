@@ -10,21 +10,25 @@ codename = "tegu"
 hardware_revision = "MP1.0"
 sku = "GXQ96"
 
-discovered_utc = "2026-09-27T20:25:21Z"
+discovered_utc = "2026-09-28T05:57:17Z"
 discovery_transport = "adb"
 discovery_workflow = "just pixel-9a-discover"
+partition_inventory_utc = "2026-09-28T05:57:22Z"
+partition_inventory_workflow = "just pixel-9a-partition-inventory"
+partition_inventory_completeness = "partial"
 
 stock_build_fingerprint = "google/tegu/tegu:15/BD4A.240925.111/12859276:user/release-keys"
 stock_android_release = "15"
 stock_security_patch = "2025-01-05"
 bootloader_version = "tegu-16.0-12754673"
-# These two stock-state fields were captured before the gated unlock. The
-# current Fastboot state is recorded below; post-unlock Android Verified Boot
-# state has not been observed because the device remains in Fastboot.
+# The stock fields above were captured before the gated unlock. A fresh,
+# read-only ADB discovery after unlock re-observed the exact identity and
+# current Android boot state; this is still admission evidence, not Ferrix
+# Linux evidence.
 stock_bootloader_state = "locked"
 stock_verified_boot_state = "green"
 bootloader_state = "unlocked"
-verified_boot_state = "not-observed-after-unlock"
+verified_boot_state = "orange"
 current_slot = "_a"
 slot_count = 2
 dynamic_partitions = true
@@ -40,6 +44,37 @@ unlock_result = "verified"
 # implemented.
 capability_matrix = "capabilities.toml"
 recovery_pins = "recovery.pins"
+image_layout = "image-layout.toml"
+firmware_policy = "firmware-policy.toml"
+wifi_firmware_source_evidence = "wifi-firmware-source-evidence.md"
+linux_plan = "linux-plan.md"
+kernel_sources = "kernel-sources.toml"
+kernel_config_fragment = "kernel-config.tegu"
+kernel_radio_route = "kernel-radio-route.toml"
+associated_radio_audit = "associated-radio-audit.md"
+rootfs_package = "pmos/device-google-tegu"
+boot_layout = "pmos/device-google-tegu/boot-layout.toml"
+product_workflow = "just pixel-9a-product-build"
+product_output = "out/pixel-9a/product/tegu"
+rootfs_workflow = "just pixel-9a-rootfs-build"
+rootfs_manifest = "out/pixel-9a/rootfs/tegu/manifest.tsv"
+s5300_channel_metadata = "pmos/device-google-tegu/s5300-channels.toml"
+s5300_userspace_sources = "pmos/device-google-tegu/s5300-userspace-sources.toml"
+s5300_source_evidence = "s5300-source-evidence.md"
+
+[linux]
+substrate = "postmarketos"
+userspace = "native-linux"
+android_framework = false
+kernel_family = "android14-6.1"
+kernel_manifest_branch = "android-gs-tegu-6.1-android16"
+kernel_manifest_commit = "893fbfd2192bc1c4a921f5daf23ea8543c09670d"
+kernel_superproject_commit = "ef85063e6f3c68fbd580eb7e41809b8b64f935ed"
+kernel_build_status = "not-built"
+radio_kernel_build_status = "not-built"
+radio_kernel_backend = "experimental-linux-google-tegu-s5300-wwan"
+rootfs_build_status = "not-built"
+boot_status = "not-attempted"
 
 [gates]
 identity = "passed"

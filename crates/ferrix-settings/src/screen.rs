@@ -283,13 +283,26 @@ fn radios(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         model.cellular_on(),
         input.pressed == Some(Target::Cellular),
     );
+    toggle_row(
+        c,
+        ty,
+        l.cellular_data_rect(),
+        "Cellular data",
+        &format!(
+            "{} · {}",
+            model.cellular_data_label(),
+            model.telephony_label()
+        ),
+        model.cellular_data_on(),
+        input.pressed == Some(Target::CellularData),
+    );
     if let Some(error) = &model.last_error {
         notice(
             c,
             ty,
             Rect {
                 x: l.s(48),
-                y: l.s(1000),
+                y: l.s(1200),
                 w: c.width() - l.s(96),
                 h: l.s(90),
             },
@@ -300,9 +313,9 @@ fn radios(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
     ty.text(
         c,
         Style::regular(l.s(26) as f32, t.fg_dim),
-        "cellular power needs the telephony-call grant; a refusal shows here as a typed error",
+        "radio needs telephony-radio; data needs telephony-data",
         l.s(96),
-        l.s(1150),
+        l.s(1400),
     );
 }
 

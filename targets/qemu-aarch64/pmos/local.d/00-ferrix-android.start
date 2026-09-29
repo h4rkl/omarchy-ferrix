@@ -13,6 +13,7 @@ base_props=${FERRIX_ANDROID_BASE_PROPS:-${cfg%/*}/waydroid_base.prop}
 fulguris_apk=${FERRIX_ANDROID_FULGURIS_APK:-/usr/share/ferrix/android/fulguris.apk}
 console=${FERRIX_ANDROID_CONSOLE:-/dev/console}
 run_dir=${FERRIX_ANDROID_RUN_DIR:-/run/ferrix}
+density_dpi=400
 rec() { printf '%s\n' "$1" >> "$console"; logger -t ferrix "$1" 2>/dev/null || true; }
 dev_state() { if [ -e "$1" ]; then ls -l "$1" 2>/dev/null | awk '{print $1" "$5" "$6}' | tr ',' ' '; else printf 'absent'; fi; }
 mkdir -p "$run_dir"
@@ -39,9 +40,10 @@ else
 fi
 # Software-rendering properties (docs/android-runtime.md section 6.3), added
 # once; waydroid init rewrites the file without them.
-if [ -f "$cfg" ] && [ -f "$props" ] && ! grep -q '^ro.hardware.egl' "$cfg"; then
+if [ -f "$cfg" ] && [ -f "$props" ] && { ! grep -q '^ro.hardware.egl' "$cfg" \
+  || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$cfg"; }; then
   { grep -q '^\[properties\]' "$cfg" || printf '\n[properties]\n'; grep -v '^\[' "$props"; } >> "$cfg"
-  rec '{"evidence":"QEMU","event":"waydroid-properties","status":"applied","path":"/var/lib/waydroid/waydroid.cfg"}'
+  rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-properties\",\"status\":\"applied\",\"density_dpi\":${density_dpi},\"path\":\"/var/lib/waydroid/waydroid.cfg\"}"
 fi
 # `waydroid init` creates waydroid_base.prop before the overrides above exist.
 # A plain container start reuses that file, silently selecting Mesa/GBM from
@@ -49,9 +51,10 @@ fi
 # not GPU-writeable. Regenerate the offline container configuration whenever
 # its effective renderer does not match the product configuration.
 if [ -f "$cfg" ] && { ! grep -q '^ro.hardware.gralloc=default$' "$base_props" 2>/dev/null \
-  || ! grep -q '^ro.hardware.egl=swiftshader$' "$base_props" 2>/dev/null; }; then
+  || ! grep -q '^ro.hardware.egl=swiftshader$' "$base_props" 2>/dev/null \
+  || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null; }; then
   if timeout 300 waydroid upgrade -o >"$run_dir/waydroid-upgrade.log" 2>&1; then
-    rec '{"evidence":"QEMU","event":"waydroid-properties","status":"materialized","renderer":"swiftshader"}'
+    rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-properties\",\"status\":\"materialized\",\"renderer\":\"swiftshader\",\"density_dpi\":${density_dpi}}"
   else
     rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-properties\",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\"}"
   fi

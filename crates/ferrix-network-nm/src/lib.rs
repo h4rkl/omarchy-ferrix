@@ -77,8 +77,12 @@ pub mod map {
         } else if wpa_flags & NM_802_11_AP_SEC_KEY_MGMT_PSK != 0 {
             SecurityType::WpaPsk
         } else if rsn_flags & NM_802_11_AP_SEC_KEY_MGMT_OWE != 0 {
-            // Opportunistic wireless encryption needs no passphrase.
-            SecurityType::Open
+            // OWE needs no passphrase, but it is not an open `key-mgmt`:
+            // NetworkManager requires `owe`, whereas the target-neutral
+            // contract has no OWE variant.  Preserve a conservative
+            // unsupported classification instead of making connect() send
+            // `key-mgmt=none` and falsely treating the AP as open.
+            SecurityType::Unknown
         } else if flags & NM_802_11_AP_FLAGS_PRIVACY != 0 && wpa_flags == 0 && rsn_flags == 0 {
             SecurityType::Wep
         } else if flags & NM_802_11_AP_FLAGS_PRIVACY == 0 {
@@ -279,7 +283,7 @@ mod tests {
         );
         assert_eq!(
             security(p, 0, NM_802_11_AP_SEC_KEY_MGMT_OWE),
-            SecurityType::Open
+            SecurityType::Unknown
         );
         assert_eq!(security(p, 0, 0x1), SecurityType::Unknown);
         assert_eq!(key_mgmt(SecurityType::Wpa2Psk), Some("wpa-psk"));

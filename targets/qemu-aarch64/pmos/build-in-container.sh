@@ -67,7 +67,7 @@ log "pmaports $PMAPORTS_BRANCH @ $aports_commit (channel $channel)"
 pmb() { pmbootstrap --config "$cfg" -y --details-to-stdout "$@"; }
 pmb status || true
 # Detach loop devices and mounts a previous (possibly aborted) run left behind
-# in the Docker VM before touching the chroots.
+# in the container engine's Linux VM before touching the chroots.
 pmb shutdown
 if [ "${FERRIX_PMOS_KEEP_CHROOTS:-0}" != 1 ]; then
   log "zapping existing chroots (packages and caches are kept)"

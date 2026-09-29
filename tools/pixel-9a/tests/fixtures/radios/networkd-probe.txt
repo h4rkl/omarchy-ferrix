@@ -1,0 +1,2 @@
+{"reply":"hello","schema_version":1}
+{"reply":"state","schema_version":1,"state":{"connection":"connected","radio":"enabled"}}

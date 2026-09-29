@@ -1343,7 +1343,7 @@ mod tests {
         // A failed launch uses the same banner with the "could not start" line.
         state.crash_notice = Some(CrashNotice::launch_failed(
             state.tiles[index].id.clone(),
-            "Fulguris".to_owned(),
+            "Browser".to_owned(),
             "no android runtime is available".to_owned(),
         ));
         let failed = compose(&p, 600, &ty, 1080, 2340, &state);

@@ -24,14 +24,18 @@ use serde_json::{Value, json};
 
 /// Capability string required for `state` and `subscribe`.
 pub const CAP_STATE: &str = "telephony-state";
-/// Capability string required for call verbs, audio route, radio power, PIN.
+/// Capability string required for call verbs, audio route, and PIN.
 pub const CAP_CALL: &str = "telephony-call";
 /// Capability string required for SMS verbs.
 pub const CAP_SMS: &str = "telephony-sms";
+/// Capability string required for cellular data bearer control.
+pub const CAP_DATA: &str = "telephony-data";
+/// Capability string required for cellular radio power control.
+pub const CAP_RADIO: &str = "telephony-radio";
 
 /// Every telephony capability, for fully trusted peers.
 pub fn all_capabilities() -> BTreeSet<String> {
-    [CAP_STATE, CAP_CALL, CAP_SMS]
+    [CAP_STATE, CAP_CALL, CAP_SMS, CAP_DATA, CAP_RADIO]
         .into_iter()
         .map(str::to_owned)
         .collect()
@@ -68,6 +72,10 @@ impl IdentityInfo {
 
     pub fn has_sms(&self) -> bool {
         self.has(CAP_SMS)
+    }
+
+    pub fn has_data(&self) -> bool {
+        self.has(CAP_DATA)
     }
 }
 

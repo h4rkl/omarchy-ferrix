@@ -1,0 +1,17 @@
+[package]
+name = "ferrix-audio-wireplumber"
+description = "Target-neutral WirePlumber adapter for the Ferrix audio hardware contract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# The real transport shells out to WirePlumber's maintained wpctl control
+# surface. Keep it opt-in so mapping and mocked-transport tests need no daemon.
+production = []
+
+[dependencies]
+ferrix-hardware-api = { path = "../ferrix-hardware-api" }
+
+[lints]
+workspace = true

@@ -1,5 +1,214 @@
 # Status
 
+## 2026-09-28 (latest read-only transport retry)
+
+- **Pixel transport:** `just pixel-9a-tools-check` found ADB 37.0.1 and
+  Fastboot 37.0.1. A fresh `just pixel-9a-discover` attempt remained blocked
+  before enumeration: macOS ADB could not create its USB interface plug-in
+  (`e00002be`) and could not start the daemon (`Operation not permitted`).
+  The checked-in workflow recorded `adb_devices=0`, `fastboot_devices=0`,
+  `result=no-device`, and issued no device mutation. The prior redacted exact
+  target admission/inventory transcript remains the authoritative identity
+  evidence until transport is restored.
+- **Rust validation:** `cargo check --workspace --all-targets`, workspace
+  Clippy with `-D warnings`, and `cargo test -p ferrix-target-pixel9a` passed
+  on the host. These are host/static checks only and do not promote any Pixel
+  Linux or radio capability.
+- **Capacity handoff:** Added the read-only
+  `just pixel-9a-partition-capacity` workflow and stub test. With ADB it can
+  collect all ten exact-target static/dynamic byte capacities from Android
+  sysfs; with exactly one owner-entered Fastbootd device it can instead read
+  independent A/B `partition-size:*` getvars. Both paths retain
+  `inventory_completeness=partial`; neither was run on hardware in this
+  session because transport failed before enumeration.
+
+## 2026-09-28 (native builder tool gate)
+
+- **Handoff completeness:** The authoritative Pixel build profile now requires
+  `mkdtboimg.py` and `cpio`, which are needed by the source-built DTBO and
+  ramdisk stages but are easy to omit from an otherwise complete kernel/product
+  tool installation. `just pixel-9a-env-test` and
+  `just pixel-9a-env-validate` pass; the Darwin/arm64 host still refuses the
+  physical build before tool probing.
+
+## 2026-09-28 (OrbStack local container runtime)
+
+- **Local container runtime:** macOS is configured to use OrbStack. Its
+  Docker-compatible `docker` CLI remains the intentional command surface for
+  QEMU and postmarketOS image builds; the selected macOS context is
+  `orbstack`, but the daemon was stopped/unreachable during this validation.
+  A non-destructive build-session start attempt (`orbctl start`) did not bring the
+  VM online; `orbctl status` remained `Stopped` and the Docker socket stayed
+  inaccessible. No image or container state was changed by the repository
+  workflows.
+  Linux and CI continue to use a Docker-compatible engine without changing
+  their evidence boundaries.
+
+## 2026-09-28 (QEMU/artifact validation continuation)
+
+- **QEMU contract:** `just qemu-scenario-validate` passed all 25 checked-in
+  mock telephony/Wi-Fi scenarios. `just qemu-check` remains unclaimable in
+  this workspace because the generated guest artifacts are absent; the
+  subsequent `just qemu-build` could not reach the running container-engine
+  socket from this restricted host session. This does not change the physical
+  Pixel claim boundary.
+- **Artifact gate:** `tools/pixel-9a/artifacts.sh` now rejects unsafe artifact
+  paths and requires exact Pixel 9a identity, Google Kleaf kernel metadata,
+  postmarketOS rootfs metadata, header-v4 boot metadata, and an explicit AVB
+  mode before writing the final artifact manifest. The offline artifact test
+  covers a hash-valid traversal path and passes.
+- **Firmware gate:** the Pixel radio init script now validates every manifest
+  destination against the reviewed firmware allowlist before checking payload
+  hashes, including descendants of the explicitly allowlisted modem config
+  directories. An unreviewed firmware row is rejected by the runtime fixture;
+  no new firmware payload was added.
+- **Radio split handoff:** `pixel-9a-radio-split-check/build` now provides a
+  device-free composer for the missing source-built `dtbo`,
+  `vendor_kernel_boot`, `vendor_dlkm`, `system_dlkm`, and split AVB handoff
+  artifacts. It requires all ten exact-target, redacted partition capacities
+  and hash-verified source inputs. After the final images are composed, native
+  `avbtool add_hash_footer` generates salted descriptors from those exact bytes
+  and `make_vbmeta_image --include_descriptors_from_image` creates fresh
+  `vbmeta`, `vbmeta_vendor`, and `vbmeta_system`; external or stock AVB input
+  manifests are refused. The offline workflow test covers the fresh-generation
+  calls and binding rows. It keeps the result `composed-not-booted` /
+  `bootable=false`; no physical flash route consumes it.
+- **OrbStack candidate:** OrbStack 2.2.3 is installed, but its service start
+  timed out in this session and the Docker socket is not usable from the
+  restricted host shell. Its Apple-Silicon x86 path is emulation rather than a
+  native Linux `x86_64` host (see the [OrbStack architecture
+  notes](https://docs.orbstack.dev/architecture)), so it remains unsuitable
+  for the physical Pixel build gate. It may still be used for generic
+  QEMU/container work once its service is available.
+
+## 2026-09-28 (serial transport and build-host audit)
+
+- **USB/ADB:** A serial `just pixel-9a-discover` retry completed at
+  `2026-09-28T06:46:24Z`; a separate `ADB_LIBUSB=0 just pixel-9a-discover`
+  retry completed at `2026-09-28T06:46:43Z`. Both failed before enumeration
+  with the macOS ADB 37.0.1 USB plug-in error `e00002be` and recorded
+  `adb_devices=0`, `fastboot_devices=0`, and `result=no-device`. macOS I/O
+  Registry still sees a Google `Pixel 9a` USB product, so the failure is the
+  host ADB USB interface/permission boundary rather than an identity result.
+  Both workflows were read-only and issued no device mutation.
+- **Build host:** `uname` reports `Darwin/arm64`; `just pixel-9a-env-check`
+  refuses the physical build as required. No local native Linux `x86_64`
+  builder, UTM x86_64 guest, OrbStack/Lima builder, or running Docker engine
+  is available. The next valid build action remains handoff to a provisioned
+  native Linux `x86_64` host; emulation and container substitutes remain
+  disallowed by the physical-target contract.
+
+## 2026-09-28 (latest read-only Pixel transport retry)
+
+- **ADB transport:** `just pixel-9a-discover` was retried at
+  `2026-09-28T06:40:32Z`. The macOS ADB daemon still cannot create its USB
+  interface plugin (`e00002be`) and exits before device enumeration. The
+  checked-in workflow recorded `adb_devices=0`, `fastboot_devices=0`, and
+  `result=no-device`; it issued no device mutation. Earlier exact-target
+  admission evidence remains the authoritative identity record until USB
+  transport is restored. A legacy-path retry with `ADB_LIBUSB=0` at
+  `2026-09-28T06:43:51Z` failed with the same plugin/daemon error.
+
+## 2026-09-28 (fresh Pixel 9a admission recheck)
+
+- **Read-only identity:** `just pixel-9a-discover` re-observed one exact Google
+  Pixel 9a (`tegu` / `GXQ96` / `MP1.0`) over ADB after unlock. The current
+  Android state is `orange` verified boot, `unlocked`, slot `_a`, and dynamic
+  partitions enabled; no storage, slot, boot, or firmware mutation was issued.
+- **Evidence timestamps:** The latest discovery completed at
+  `2026-09-28T05:57:17Z`; the partition inventory completed at
+  `2026-09-28T05:57:22Z`. Both transcripts remain serial-redacted and ignored
+  under `out/pixel-9a/`.
+- **Partition topology:** `just pixel-9a-partition-inventory` re-observed both
+  A/B by-name suffixes and recorded `slot_count_source=block-by-name`. Android
+  still denies `/proc/partitions` and `/proc/cmdline`, so the ignored inventory
+  remains `inventory_completeness=partial` and cannot authorize a rootfs flash.
+  This is admission/recovery evidence only; no Ferrix Linux or radio capability
+  claim changes.
+- **A/B modem safety:** The target modem mount service now resolves the exact
+  `modem_a`/`modem_b` label from the bootloader's single
+  `androidboot.slot_suffix` value and refuses a missing, duplicate, or unknown
+  slot. This keeps an inactive-slot Ferrix boot paired with its matching modem
+  partition instead of silently using `_a` calibration data.
+- **Radio split handoff:** The source-only radio kernel workflow now records
+  hash-verified DTB/DTBO source inputs, `modules_install` output, and explicit
+  `status=not-built` partition-size rows. Boot/rootfs validators consume those
+  rows and fail closed; no stock modules, Android userspace, or fabricated
+  split images were introduced.
+- **Associated-radio boundary:** The target-local audit now records the
+  candidate `samsung,kepler` GNSS binding as a raw `/dev/gnss*` kernel
+  surface only. The radio-first initfs rejects unreviewed `kepler`, `st21nfc`,
+  `st54spi`, and `bcm47765` module names; NFC/ST54 and UWB remain unselected
+  until a native Linux binding and runtime evidence exist. No location/NFC
+  product API or physical capability claim was added.
+- **Latest transport check:** A subsequent read-only `just pixel-9a-discover`
+  attempt at `2026-09-28T06:26:25Z` could not start the macOS ADB daemon
+  (`Unable to create an interface plug-in (e00002be)` / `Operation not
+  permitted`). It issued no device mutation and does not invalidate the
+  earlier exact-target admission transcript; a native Linux build and
+  physical Ferrix boot remain outstanding.
+
+## 2026-09-28 (QEMU Android Pixel-class display density)
+
+- **Target-local display profile:** The opt-in `FERRIX_PMOS_ANDROID=1` QEMU
+  image now sets `ro.sf.lcd_density=400`, giving the 1080-pixel panel an
+  approximately 432 dp logical width with a slightly less zoomed-in
+  Pixel-class Android composition.
+  The property is emitted only inside the QEMU Android finalize branch and is
+  recorded as `guest.android.density_dpi`; it is absent from the default pmOS
+  image and physical-target workflows.
+- **Why:** The previous image was physically portrait but exposed a very wide
+  logical viewport, which made Google Images choose a four-column layout. The
+  target keeps its 1080×2340 physical geometry for Ferrix and changes only the
+  Android logical density.
+- **Validation:** `just android-bootstrap-test` covers the density property in
+  the materialized Waydroid properties; the Android image was rebuilt and its
+  manifest records `density_dpi: 400`. A fresh HVF graphical boot also
+  emitted QEMU records for applying and materializing `density_dpi: 400` and
+  produced an inspected 830×1800 framebuffer capture at
+  `out/qemu-aarch64/pmos-android/verification-density-400.png`. The setting
+  is QEMU-only evidence, not a Pixel hardware claim.
+
+## 2026-09-28 (Browser tile and Android onboarding input)
+
+- **Launcher identity:** The `org.ferrix.browser` home tile now presents as
+  `Browser` with a `B` glyph. The runtime-private Android package remains the
+  pinned `net.slions.fulguris.full.fdroid`; the product label does not expose
+  that implementation name.
+- **Onboarding input:** The compositor's Home-start zone is now only the
+  bottom 3% of the output (`START_ZONE = 0.97`), keeping the Android browser's
+  onboarding arrow above the system navigation strip available to the app. A
+  regression test covers both sides of that boundary.
+- **Graphical evidence (QEMU, pmOS Android, 1080×2340, HVF):** A fresh
+  Android-enabled image was built and booted with the Fulguris APK installed.
+  Inspected framebuffer captures show the home tile as `Browser` and the real
+  Fulguris onboarding surface with its arrow above the navigation bar. The
+  ignored captures are `out/qemu-aarch64/pmos-android/verification-home-browser.png`
+  and `out/qemu-aarch64/pmos-android/verification-fulguris-onboarding.png`;
+  the matching serial log is `out/qemu-aarch64/pmos-android/verification-serial.log`.
+  The automated QMP tap path moved the pointer but did not produce a reliable
+  Android button activation, so the next onboarding page is not claimed as
+  independently captured here; the input boundary is covered by the
+  compositor regression test.
+- **Validation:** Affected Rust tests, `just qemu-build`,
+  `APKSIGNER=/Library/Android/sdk/build-tools/36.0.0/apksigner just
+  pmos-android-build`, `just pmos-android-check`, and `just qemu-check` pass.
+  The Android check is headless TCG evidence and does not broaden the
+  graphical or physical-device claim.
+
+## 2026-09-28 (Fulguris launcher identity)
+
+- **Launcher:** The stable `org.ferrix.browser` home tile now displays
+  `Fulguris` with a distinct `F` glyph and blue descriptor tone. Its launch
+  package remains the pinned `net.slions.fulguris.full.fdroid` replacement;
+  no active app, runtime, or QEMU target source references the retired browser.
+- **Mock graphical evidence:** The 1080×2340 `ferrix-basic-screen` launcher
+  preview was rendered and inspected with the Fulguris tile visible. `just
+  qemu-build` regenerated the product descriptor with the same metadata. The
+  headless TCG `just qemu-check` now passes with the smoke runner's
+  `FERRIX_QEMU_MEMORY=2048` MiB default; this remains emulator/mock evidence,
+  not Pixel hardware evidence.
+
 ## 2026-09-28 (F-Droid Fulguris browser input)
 
 - **Browser replacement:** The Android browser descriptor remains
@@ -23,6 +232,293 @@
   build plus headless `just qemu-check` pass. That QEMU check covers the
   emulator's mocked core/service readiness and power transition; it does not
   claim Fulguris graphical rendering or touch behavior.
+## 2026-09-28 (mobile-device-provisioning skill and gated Pixel 9a provisioning workflows)
+
+- **Skill:** `skills/mobile-device-provisioning/` is an LLM-agnostic playbook
+  (open Agent Skills layout: `SKILL.md` plus `references/`) that takes any
+  attached Android phone from ADB/Fastboot identification through recovery
+  images, backup and unlock, stock recovery, Ferrix image build, gated flash,
+  and radio evidence. It encodes the owner's 2026-09-28 decisions: generic
+  read-only discovery and proposal scaffolding for any device, mutation only
+  through checked-in target-scoped workflows, and per-run human confirmation
+  in chat before an agent types any confirmation phrase. `AGENTS.md` points
+  to it.
+- **Generic device front door:** `tools/device/{discover,match-target,
+  propose-board,recovery-download}.sh` (`just device-discover`, `device-match`,
+  `device-propose`, `device-recovery-download`) are vendor-agnostic and
+  read-only against the device. Discovery uses only `adb devices/getprop` and
+  `fastboot devices/getvar`, refuses zero or multiple devices, and writes a
+  serial-redacted transcript plus `out/device/identity-latest.env`. Matching
+  requires manufacturer, codename, and hardware revision (and SKU when both
+  sides have it) and reports same-codename/different-revision as `none` with
+  an explicit do-not-reuse note. Proposal scaffolding writes an unapproved
+  board package and proposal document with every required section and never
+  writes a serial. `just device-tools-test` passes 175 offline stub checks
+  (synthetic non-Google fixtures prove vendor independence).
+- **Pixel 9a stock recovery workflows (not device-tested):**
+  `tools/pixel-9a/sideload-ota.sh` and `tools/pixel-9a/factory-restore.sh`
+  implement the gated full-OTA sideload and Fastboot factory restore with
+  exact-identity, pinned-hash, single-device, vendor-sequence, and typed
+  per-run confirmation gates and serial-redacted transcripts. The restore
+  path verifies the archive's own `flash-all.sh` against the reviewed
+  sequence and re-checks bootloader/baseband versions between stages. Offline
+  stub tests (49 and 69 checks, now part of `just pixel-9a-tools-test`) prove
+  the exact mutation order, refusal paths, and redaction. Neither workflow has
+  been executed against the physical device.
+- **Pixel 9a flash workflow (not device-tested):** `tools/pixel-9a/flash.sh`
+  adds `preflight`, `boot-temp` (`fastboot boot` of the manifest `boot.img`),
+  and `flash` (slot-explicit writes of boot, init_boot, vendor_boot,
+  vendor_kernel_boot, dtbo, and vbmeta images, then vendor_dlkm/system_dlkm
+  from fastbootd). Every mode re-hashes all composed artifacts, verifies the
+  pinned factory archive, requires exactly one Fastboot device reporting
+  `product=tegu`, `hw-revision=MP1.0`, `unlocked=yes`, and prints serial,
+  slot, partition targets, and input hashes before each announced mutation.
+  Persistent flashing requires a matching `boot-temp` evidence transcript
+  (image-layout policy) and a typed per-stage phrase; the rootfs stage now
+  accepts the generated ext4 `rootfs.img` only after the target package
+  explicitly selects `userdata` and the operator supplies a matching,
+  redacted read-only ADB partition inventory proving the exact target,
+  revision, SKU, slot state, and live `userdata` mapping. The checked-in
+  target intentionally leaves that partition selection unset, so no rootfs
+  flash is currently authorized.
+  `just pixel-9a-flash-test` passes its offline checks; no Ferrix boot or flash
+  has occurred. `boot.sh` now records final artifact paths in
+  `boot-manifest.tsv` instead of the staging directory that is renamed away.
+- **Pixel 9a radio workflow (not device-tested):** `tools/pixel-9a/radios.sh`
+  connects over the postmarketOS USB network/SSH to a guest already running
+  Ferrix Linux, refuses any guest whose device tree is not the pinned
+  `google,ZUMA PRO TEGU` / `ZUMA PRO TEGU MP on ZUMA PRO` identity
+  (QEMU `linux,dummy-virt` is refused explicitly), inventories rfkill,
+  NetworkManager, BlueZ, ModemManager, firmware presence, and the
+  `ferrix-core`/`ferrix-networkd`/`ferrix-telephonyd` adapter records and
+  sockets, gates radio enablement behind one typed confirmation, joins Wi-Fi
+  with the PSK fed over stdin, and writes redacted transcripts plus
+  `evidence-latest.tsv` (`status` is only `supported|unsupported`, matching
+  `CapabilityStatus`; nuance is in a `progress` column). `just
+  pixel-9a-radios-test` passes its offline checks, including degraded-state
+  refusal coverage. No Wi-Fi, Bluetooth, or
+  modem has been observed working on the device; `capabilities.toml` is
+  unchanged and the `evidence` command only prints a fragment for the owner.
+- **Associated radios and cellular data boundary:** `just
+  pixel-9a-radios-associated` now performs a focused, read-only exact-target
+  probe for GNSS/KEPLER, NFC/ST21, ST54, and UWB and writes a separate
+  `associated-evidence-latest.tsv`; all four remain `unsupported` until a
+  native binding and Ferrix adapter are evidenced. Cellular data evidence now
+  records the typed `connect-data`/`disconnect-data` and `telephony-data`
+  grant boundary, APN fail-closed policy, and bearer/`rmnet*` requirements;
+  SSH cannot bypass appd authorization.
+- **Flash-slot safety resolved:** persistent `flash` now requires an explicit
+  inactive `--slot a|b` and refuses both an omitted slot and the active slot;
+  `preflight` may still omit it for read-only inspection. The workflow never
+  issues `set_active`, so the first artifact set remains safely inactive until
+  a separately approved slot change.
+- **Validation:** `just device-tools-test`, `just pixel-9a-tools-test`,
+  `just pixel-9a-firmware-test`, `just pixel-9a-flash-test`,
+  `just pixel-9a-radios-test` (including the focused associated-radio and
+  cellular-data boundary checks), `just pixel-9a-kernel-radio-test`,
+  `just pixel-9a-boot-radio-test`, and `just pixel-9a-boot-test` pass on macOS
+  with strict `adb`/`fastboot`/`ssh` stubs;
+  `tests/inspect-factory.sh` no longer needs `rg`. No device-facing command
+  reached a phone during these offline tests; the previously recorded
+  physical discovery/unlock evidence is unchanged. Evidence from this
+  validation remains offline-test evidence only; no physical Linux or radio
+  claim changes.
+- **Live read-only inventory:** With one exact Pixel 9a attached, `just
+  pixel-9a-partition-inventory` passed on 2026-09-28 and matched `tegu` /
+  `GXQ96` / `MP1.0`, slot `_a`, and the A/B `/dev/block/by-name` topology.
+  Android returned an empty `ro.boot.slot_count`, so the workflow recorded
+  `slot_count_source=block-by-name` only after observing both slot suffixes.
+  Android denied `/proc/partitions` and `/proc/cmdline`; the ignored,
+  serial-redacted transcript is exact-target/topology admission evidence, not
+  proof of a Ferrix Linux boot or radio functionality.
+
+## 2026-09-28 (Pixel 9a native-Linux package boundary)
+
+- **Target-local package:** The checked-in
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/` package now includes the
+  native-Linux postmarketOS package at `pmos/device-google-tegu/`, the typed
+  target composition crate at `adapter/` (`ferrix-target-pixel9a`), the target
+  manifest and unsupported capability matrix, the pinned downstream-kernel and
+  image-layout records, and the exact-source firmware policy. These are
+  implementation inputs for `tegu` / `GXQ96` / `MP1.0`, not a bootable image
+  or a support claim. The package's `deviceinfo` deliberately sets
+  `deviceinfo_flash_method="none"`; its boot layout remains
+  `substrate-only-not-bootable`.
+- **Adapter composition:** Session/bootstrap selects the target-local seam and
+  gives product code only a target-neutral `HardwareBundle`. On Linux, the
+  composition maps UPower to power, BlueZ to Bluetooth, WirePlumber to audio,
+  NetworkManager to network, and ModemManager to the existing telephony
+  contract, with local DRM/backlight, input/IIO-presence, and the Linux
+  `/sys/power/state` suspend ABI for display, input, and lifecycle. Connection
+  first verifies that the running device tree identifies the pinned
+  `google,ZUMA PRO TEGU` board model, which
+  prevents accidental composition on QEMU or another board. `ferrix-target-pixel9a` returns an
+  all-`unsupported` capability matrix; composing or compiling these adapters
+  is not physical hardware evidence.
+- **pmOS service dependencies:** The target package now pulls the Alpine
+  OpenRC companions for D-Bus, udev, NetworkManager, ModemManager, BlueZ, and
+  seatd, plus `pipewire-spa-bluez` for Bluetooth audio. UPower remains
+  D-Bus-activated and is not incorrectly linked into an OpenRC runlevel; the
+  rootfs workflow has regression assertions for this wiring.
+- **Native Pixel build boundary:** The physical product handoff now builds
+  directly through Cargo on a provisioned native Linux x86_64 host, with
+  target-side libudev/libseat/DRM inputs and production
+  NetworkManager/ModemManager features. The physical-device playbook rejects
+  macOS, containerized builders, and cross-build substitutes for product,
+  kernel, firmware, rootfs, boot, and artifact stages; product, kernel, and
+  rootfs caches and outputs remain distinct.
+  The physical product profile targets `aarch64-unknown-linux-musl`; its
+  preflight now requires the pinned Rust target standard library and an
+  explicit target linker (`aarch64-linux-musl-gcc` by default), without
+  installing either host tool automatically.
+- **Pinned kernel configuration contract:** The board package now preserves
+  Google's exact `tegu_defconfig` as `kernel-config.tegu`. Kernel source
+  verification compares it byte-for-byte with the pinned checkout before
+  Kleaf builds, and the kernel manifest records its SHA-256. The fragment
+  explicitly enables the S5300 CPIF S5100/PCIe/shared-memory/packet-processing
+  path and CP thermal support; it is a native Linux kernel input, not Android
+  userspace and not physical evidence.
+- **Build provenance corrections:** The kernel workflow now resolves the
+  BCM4383 checkout at the exact manifest path
+  `private/google-modules/wlan/bcm4383` (distinct from its upstream URL), and
+  the composed artifact manifest preserves path, byte count, and SHA-256 for
+  every layout/kernel/rootfs input. Focused kernel, artifact, and rootfs
+  workflow tests cover both contracts; rootfs validation also re-hashes the
+  staged product profile, binaries, colors, and app descriptors before any
+  image is made.
+- **Native-radio research:** An external `linux-google-tegu` branch provides a
+  plausible non-Android S5300/BCM4383/BT kernel direction. The target now has
+  a separate, source-pinned radio-first Kbuild workflow
+  (`kernel-radio-route.toml`, `kernel-radio.sh`) plus explicit
+  `bcmdhd`→`brcmfmac4383-pcie.*` firmware copy/rename rows. Its paired
+  userspace loader extracts the CP BOOT/PBL section from the read-only
+  `modem_a` `modem.bin` and builds the handover block from runtime device
+  inputs; Ferrix deliberately does not invent or stage `cp_pbl.bin`/
+  `cp_handover.bin` aliases. It still requires the exact read-only modem/EFS/
+  persist payload contract and a new SIT/GEMS userspace stack; the route is
+  `experimental-not-adopted`, not built here, and supplies no physical
+  evidence. Radio sync now verifies the pinned archive byte count and
+  SHA-256/SHA-512 before the clean detached checkout is accepted. The
+  canonical Google Kleaf/CPIF path and the radio-first WWAN/SIT path remain
+  deliberately incompatible.
+- **Rootfs and split boot:** The device-free `pixel-9a-rootfs-*` workflow
+  validates the target package, a pinned clean pmaports checkout, the
+  separately built radio-first Kbuild handoff, the native-Linux product
+  handoff, and an external canonical source/path provenance manifest for
+  firmware before a native-Linux pmbootstrap build. `pixel-9a-product-*` uses
+  its own `out/pixel-9a/product/tegu` and Cargo target/cache roots and enables
+  the production NetworkManager and ModemManager features; it never reuses the
+  QEMU product. Rootfs stages the product binaries/descriptors, target profile,
+  service wiring, canonical firmware, and explicit radio firmware aliases into
+  deterministic `rootfs.tar`/`rootfs.img` artifacts whose manifest remains
+  `built-substrate-only` / `bootable=false`. The canonical
+  `pixel-9a-boot-*` workflow remains a Google Kleaf comparison route and
+  rejects this radio-first rootfs; `pixel-9a-boot-radio-*` composes the
+  independent Image/DTB/boot handoff but currently omits persistent
+  `vendor_kernel_boot`, `dtbo`, `vendor_dlkm`, and `system_dlkm` images, so it
+  remains `composed-not-booted` / `bootable=false` and is not flashable.
+  Neither workflow calls ADB/Fastboot or boots, flashes, or changes a device.
+- **Firmware policy:** Firmware is accepted only from the exact hash-verified
+  official Google factory archive named by `recovery.pins`; bytes remain local
+  and ignored. Inventory is offline, and explicit staging requires a reviewed
+  allowlist plus an external `firmware-manifest.tsv`; broad Android `/vendor`
+  copying is prohibited. The checked-in required allowlist names the five
+  BCM4383 Wi-Fi files, the exact factory-selected Broadcom `BCM.hcd` path, and
+  the `carrierconfig`/`uecapconfig` directory bundles required by the native
+  S5300 loader. Bundle extraction expands only regular files into
+  destination-aware rows and rejects symlinks, special entries, unsafe names,
+  empty bundles, and destination overwrite attempts.
+  The target now records the exact pinned Kleaf module basenames
+  (`bcmdhd4383`, `nitrous`, and `cpif`) and the BCM4383 request/path contract
+  in `wifi-firmware-source-evidence.md`; malformed or duplicate staging rows
+  fail before archive extraction. The guest radio inventory now re-hashes every
+  manifest row and refuses network promotion on a missing, symlinked, size-,
+  or SHA-256-mismatched file. The canonical `bcmdhd` contract and the
+  radio-first `brcmfmac` contract are not interchangeable; the latter is
+  admitted only through the explicit hash-pinned alias manifest. Bluetooth
+  provenance is now source- and hash-documented,
+  but the Linux HCI/Nitrous integration and physical controller result remain
+  unverified. The target-local package's source-pinned `exynos-modem` and
+  Samsung-SIT ModemManager recipes now provide the native Linux userspace
+  boundary, read-only modem/efs/persist mounts, SIT proxy, and OpenRC ordering;
+  they still require a native Linux build and exact-device runtime evidence.
+  S5300 cellular and display/audio controller families remain policy entries
+  without a complete physical capability result.
+- **Bounded S5300 slice:** `crates/ferrix-s5300-cpif` is a source-pinned,
+  target-independent SIPC5/SIT link-frame codec and channel metadata
+  boundary. The exact tegu DTS selects Exynos SIT; the crate covers its
+  bounded 12-byte header/fragment codec alongside the generic SIPC5
+  ordinary, multi-frame, and extended-length layouts, plus bounded parsing,
+  padding, reserved-channel checks, and a bounded payload-only transport for
+  an explicitly supplied IPC character node. It does not
+  implement CPIF rings/doorbells, device-tree channel binding, device
+  discovery, modem commands, SIM/SMS/data/voice/IMS, or modem protocol
+  mapping. It now also bounds the seven-byte userspace FMT envelope and can
+  wrap an explicitly supplied payload transport, while preserving the raw
+  command tuple without interpreting it. The Pixel adapter does not wire this
+  crate: its telephony slot is still ModemManager. A real S5300 userspace
+  backend or ModemManager plugin, exact
+  `tegu` DT/channel evidence, firmware, and protocol integration remain
+  outstanding. The target-local package's `s5300-channels.toml` now records the
+  complete source-derived I/O-device catalog (including 30 symbolic `rmnet`
+  channels and eight `oem_ipc` expansions), exact SIT numeric channel values,
+  plus the exact `umts_ipc0`/`umts_ipc1` names and indexed FMT binding, but is
+  not runtime evidence. The crate's
+  read-only `discover_at` status seam observes only the exact platform
+  compatible, driver binding, and kernel `modem_state`; `ONLINE` is not treated
+  as telephony support.
+- **Android modem boundary:** Google's public `gs-common` `modem_svc_sit`
+  metadata names a vendor `shared_modem_platform` Binder service with RIL,
+  radio-device, firmware, and modem-userdata access, but publishes neither
+  its implementation nor a SIT/GEMS command ABI. Ferrix records this in
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-source-evidence.md`
+  and deliberately does not import that Android service, RIL, Binder contract,
+  or policy into the native Linux guest.
+- **ModemManager cellular data:** The production adapter reads standard
+  `Modem.Simple`/`Bearer` D-Bus objects and folds bearer lifecycle plus the
+  kernel-facing interface name into `DataBearer` snapshots. The privileged
+  telephony service now exposes target-neutral `connect-data` and
+  `disconnect-data` operations under the separate `telephony-data` grant;
+  `Modem.Simple.Connect`/`Disconnect` are used when that interface exists.
+  This still does not make the S5300 CPIF path a ModemManager modem, and no
+  physical-device evidence is implied by the contract or adapter tests. The
+  pinned Samsung-SIT plugin requires a carrier-specific APN; Settings now
+  accepts the non-secret `FERRIX_TELEPHONY_APN` runtime value from the target
+  environment and sends it only in the typed connect request. The privileged
+  ModemManager adapter also accepts that value as a daemon-only fallback when
+  a client submits the default profile; explicit APNs win and malformed
+  configured values fail closed. The checked-in target leaves it empty rather
+  than guessing a carrier profile.
+- **Radio inventory boundary:** The target-scoped SSH inventory now requires
+  the exact `ZUMA PRO TEGU MP on ZUMA PRO` model (after trimming device-tree
+  NUL padding) and records a read-only CPIF surface probe for the pinned
+  `samsung,exynos-cp` platform, driver binding, kernel `modem_state`,
+  `umts_ipc0`/`umts_ipc1`, and `rmnet*` nodes. This only makes the next
+  cellular gate observable; it does not open CPIF character devices, create a
+  modem backend, or promote cellular support.
+- **Radio evidence promotion:** Wi-Fi is promoted only when NetworkManager
+  reports full connectivity, the exact Wi-Fi device is associated with an IPv4
+  address, and both the Ferrix network service and core return successful typed
+  state replies. Bluetooth likewise requires a powered BlueZ controller and an
+  explicit `present=true, enabled=true` state from the Ferrix core socket.
+  Daemon startup, an error envelope, or a disconnected core state can no longer produce a false
+  `supported` row; the offline workflow test covers the degraded case.
+- **Tegu Wi-Fi guard:** External Tegu Linux bring-up evidence reports an
+  `aware_nmi*` auxiliary interface that must not be touched by NetworkManager.
+  The native device package now installs a target-local unmanaged-device guard
+  for that interface while retaining normal management of the primary Wi-Fi
+  link. The external port uses an Android/Halium cellular bridge, so its radio
+  matrix remains correlation only and is not Ferrix physical evidence.
+- **Evidence and gates:** No physical Ferrix Linux evidence exists: there is
+  no physical boot, framebuffer/input result, live service result, exact
+  Bluetooth firmware result, S5300 result, or capability evidence. The
+  ADB/Fastboot identity, recovery, and unlock observations in the existing
+  entry below are admission/recovery history only. The target manifest still
+  records `kernel_build_status = "not-built"`, `rootfs_build_status =
+  "not-built"`, and `boot_status = "not-attempted"`; all physical Ferrix
+  boot, provisioning, and capability gates remain outstanding. Any
+  `FERRIX_EVIDENCE=physical:<target-id>` value in target-local environment or
+  generated metadata is an exact-target scope label, not evidence.
 
 ## 2026-09-28 (Pixel 9a exact-target admission and stock recovery preparation)
 

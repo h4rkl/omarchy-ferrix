@@ -1,0 +1,28 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+source_policy = "exact-official-google-factory-archive-only"
+# The package is copied into pmaports during rootfs construction.  This source
+# tree-relative path resolves to the target root's pin file; the installed
+# policy is provenance metadata and is not a runtime extraction path.
+source_pin_file = "../../recovery.pins"
+bytes_checked_in = false
+extraction_by_workflow = false
+staging_requires_external_manifest = true
+generated_destination = "/lib/firmware"
+compatibility_roots = ["/vendor/firmware", "/etc/wifi"]
+required_directory_bundles = [
+  "/lib/firmware/carrierconfig",
+  "/lib/firmware/uecapconfig",
+]
+
+[components]
+wlan = "BCM4383 driver firmware and calibration"
+bluetooth = "Broadcom Bluetooth controller firmware"
+cellular = "Samsung S5300 CPIF firmware and calibration"
+display_audio = "Google display/audio controller firmware"
+
+# The radio-first s5300_modem transport does not request a separate Linux
+# firmware-class CP PBL. Its paired userspace loader extracts the BOOT/PBL
+# section from the read-only current-slot modem.bin and builds handover data from
+# runtime device inputs. Never stage cp_pbl.bin or cp_handover.bin bytes here:
+# the latter may contain device identifiers.

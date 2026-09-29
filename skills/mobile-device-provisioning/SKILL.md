@@ -32,14 +32,55 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
 6. Human makes and verifies a backup outside Git.
 7. `just pixel-9a-unlock-bootloader --preflight` `[ro]`; `--confirm-unlock` `[confirm]` (wipes data).
 8. Stock paths when needed: `just pixel-9a-sideload-ota --preflight` `[ro]` / `--confirm-sideload` `[confirm]`; `just pixel-9a-factory-restore --preflight` `[ro]` / `--confirm-restore` `[confirm]`.
-9. Build chain `[linux]` `[opt-in]`: kernel-check, kernel-sync, kernel-verify, kernel-build, firmware-check/inventory/stage, rootfs-check/validate/build, boot-check/build, artifacts-check/manifest.
-10. `just pixel-9a-flash-check` `[ro]`; `just pixel-9a-flash-boot-temp` `[confirm]`; `just pixel-9a-flash --stage kernel --slot <a|b>` `[confirm]`.
-11. Guest booted over USB network: `just pixel-9a-radios-check` `[ro]`; `just pixel-9a-radios-inventory` `[ro]`; `just pixel-9a-radios-enable all` `[confirm]`; `just pixel-9a-radios-connect-wifi <SSID>` `[confirm]`; `just pixel-9a-radios-evidence` `[ro]`.
+9. Build the selected radio-first chain on native Linux `[linux]` `[opt-in]`:
+   `pixel-9a-kernel-radio-check/sync/verify/build`,
+   `pixel-9a-product-check/build`, firmware
+   `check/inventory/stage`, rootfs `check/validate/build`, and
+   `pixel-9a-boot-radio-check/build`. The canonical Google Kleaf
+   `pixel-9a-kernel-*`/`pixel-9a-boot-*` chain is a separate comparison route;
+   never mix its CPIF, modules, DTB, or manifests into this WWAN/SIT route.
+   If the exact-target, redacted partition-capacity handoff and all
+   source-built split inputs are available, continue with
+   `pixel-9a-radio-split-check` and the opt-in `pixel-9a-radio-split-build`.
+   This device-free composer fills the reviewed `vendor_kernel_boot`, `dtbo`,
+   `vendor_dlkm`, and `system_dlkm` handoff, then generates fresh salted AVB
+   descriptors from the final image bytes; external or stock AVB metadata is
+   rejected. It still emits
+   `composed-not-booted` / `bootable=false`.
+10. `just pixel-9a-partition-inventory` `[ro]`; when the exact Android
+    transport is available, also run `just pixel-9a-partition-capacity` `[ro]`
+    to record the ten static/dynamic partition capacities used by the
+    radio-first split handoff. If Android hides inactive dynamic mappings,
+    the same capacity workflow may be run in an owner-entered Fastbootd
+    session with exactly one device and `is-userspace=yes`; it never enters
+    Fastbootd itself. This capacity file may succeed while the broader `/proc`
+    inventory remains `partial`; it never upgrades that broader inventory gate
+    or authorizes a flash. Do not pass either
+    `images/tegu-wwan` or `images/tegu-wwan-split` to `pixel-9a-flash-*`:
+    they are unbooted radio-first handoffs, not an approved physical route.
+    A route-specific flash workflow must still pass the same identity, backup,
+    recovery, inactive-slot, image-hash, and confirmation gates before any
+    physical boot or flash is attempted.
+11. For the canonical Google route only, once a complete, reviewed image set
+    exists and the owner authorizes the physical operation:
+    `just pixel-9a-flash-check` `[ro]`; `just pixel-9a-flash-boot-temp`
+    `[confirm]`; then the explicit inactive-slot flash `[confirm]`. The
+    radio-first route has no physical boot command yet; never substitute these
+    canonical commands for it. After a future route-specific workflow is
+    checked in and authorized, a guest booted over USB network may use
+    `pixel-9a-radios-check/inventory` `[ro]`,
+    `pixel-9a-radios-enable all` `[confirm]`,
+    `pixel-9a-radios-connect-wifi <SSID>` `[confirm]`, and
+    `pixel-9a-radios-evidence` `[ro]`.
 12. Record redacted evidence and docs (Phase 8); owner pastes the `capabilities.toml` fragment.
 
 Offline test recipes that must pass before any hardware session:
-`just device-tools-test`, `just pixel-9a-tools-test`, `just pixel-9a-flash-test`,
-`just pixel-9a-radios-test`.
+`just device-tools-test`, `just pixel-9a-tools-test`,
+`just pixel-9a-kernel-radio-test`, `just pixel-9a-product-test`,
+`just pixel-9a-firmware-test`, `just pixel-9a-rootfs-test`,
+`just pixel-9a-boot-radio-test`, `just pixel-9a-radio-split-test`,
+`just pixel-9a-artifacts-test`, `just pixel-9a-flash-test`,
+`just pixel-9a-partition-capacity-test`, and `just pixel-9a-radios-test`.
 
 ## Purpose and boundaries
 
@@ -61,10 +102,28 @@ Offline test recipes that must pass before any hardware session:
 2. Check the host: run `uname -s` and `uname -m`.
    - Discovery, recovery download, inspection, unlock, sideload, restore,
      flash, and radio SSH workflows run on macOS or Linux.
-   - Kernel, firmware staging, rootfs, artifact, and boot build workflows need
-     native Linux x86_64 (`tools/pixel-9a/env.sh check build` and
-     `tools/pixel-9a/kernel.sh preflight` refuse other hosts). On macOS, stop
-     at Phase 5 and hand the build off; do not emulate or work around.
+   - Kernel, firmware staging, rootfs, artifact, boot, and radio-split build
+     build workflows need native Linux x86_64 (`tools/pixel-9a/env.sh check
+     build` and build paths refuse other hosts; static checks/tests may run
+     locally). On this Apple Silicon
+     Mac, the ARM64 UTM guest is not a compliant builder; an x86_64 UTM guest
+     would use CPU emulation, and OrbStack/Lima/Docker containers or a cross
+     build are not native-host substitutes. UTM may still be used for a
+     separate Linux smoke test or QEMU workflow. On macOS, stop at Phase 5
+     and hand the Pixel build off to provisioned native Linux x86_64.
+   - The build preflight must also resolve the physical profile's Rust target
+     in the pinned toolchain. The repository declaration retains
+     `aarch64-unknown-linux-gnu` for QEMU/CI and now also declares
+     `aarch64-unknown-linux-musl` for the physical profile. The Pixel workflow
+     still verifies that the musl standard library is installed and refuses a
+     missing target; do not silently switch to the GNU target or a
+     cross/container substitute.
+   - The same preflight requires an explicit AArch64 musl linker: the
+     canonical `aarch64-linux-musl-gcc` command or an equivalent command named
+     by `FERRIX_PIXEL9A_RUST_LINKER`. `just pixel-9a-env-check build` and
+     `just pixel-9a-product-check` must find that linker before the opt-in
+     build; do not let Cargo select the host x86_64 linker or install one
+     implicitly through the workflow.
 3. Cable and mode: data-capable USB cable; USB debugging on, screen unlocked,
    RSA prompt accepted, or the phone in Fastboot. One phone attached at a time.
 4. Ask the human for: owner authorization for this device, whether a verified
@@ -79,11 +138,16 @@ Apply these rules for the whole session. They have the force of `AGENTS.md`.
    Read-only verbs (`adb devices -l`, `adb shell getprop`, `fastboot devices
    -l`, `fastboot getvar`) are what the checked-in discovery scripts already
    run; prefer the scripts over typing even those.
-2. Mutation runs only through a checked-in workflow under `tools/<target>/`
-   (today: `tools/pixel-9a/`). Such a workflow prints the exact serial,
-   product/codename, hardware revision, current slot, partition target, input
-   image hash, and recovery artifact hash, refuses zero or multiple devices,
-   and requires typed per-run confirmation on stdin.
+2. Destructive bootloader/storage mutation runs only through a checked-in
+   workflow under `tools/<target>/` (today: `tools/pixel-9a/`). Such a
+   workflow prints the exact serial, product/codename, hardware revision,
+   current slot, partition target, input image hash, and recovery artifact
+   hash, refuses zero or multiple devices, and requires typed per-run
+   confirmation on stdin. Guest-only radio state changes use the checked-in
+   `tools/pixel-9a/radios.sh` workflow instead: its preflight and
+   pre-mutation recheck require the exact pinned device-tree model/compatible,
+   it never changes storage, partitions, slots, or the bootloader, and it
+   still requires a typed confirmation for each state change.
 3. Per-run human confirmation is mandatory. Before each mutating run: show the
    human the complete preflight/gate output, state the consequences (data
    wipe, brick risk, device left in Fastboot), and get an explicit go-ahead in
@@ -141,6 +205,30 @@ All `tools/device/` scripts honour `FERRIX_OUT_DIR`, `FERRIX_BOARDS_DIR`, and
      approval is required first. Follow `references/new-target-playbook.md`.
    - Same codename, different revision -> treat as `none`.
 
+Before a build or flash route, run `just pixel-9a-partition-inventory`
+`[ro]` while exactly one ADB or Fastboot transport is visible. It records the
+redacted exact-target slot and partition evidence under ignored `out/`. Some
+Android builds expose an empty `ro.boot.slot_count` over ADB; the workflow may
+derive `slot_count=2` only after a read-only `/dev/block/by-name` listing shows
+both `_a`/`.a` and `_b`/`.b` partition names, and records
+`slot_count_source=block-by-name`. It never guesses a slot count. Treat this
+pre-boot inventory as topology/admission evidence, not as proof that Ferrix
+Linux or any radio works; capture a fresh guest inventory for any later rootfs
+mapping gate. If Android denies `/proc/partitions` or `/proc/cmdline`, the
+workflow records `inventory_completeness=partial`; rootfs flashing requires
+`complete`, so stop and obtain a complete read-only guest inventory first.
+The separate `just pixel-9a-partition-capacity` workflow reads only the
+read-only `/sys/class/block/*/size` values behind both A/B by-name entries and
+independent active/inactive dynamic-partition mapper entries. It writes a
+serial-free `out/pixel-9a/partition-capacities-latest.tsv` handoff with ten
+4096-byte-aligned byte capacities; it does not open block devices, change
+storage, or promote the broader inventory from `partial` to `complete`.
+If Android does not expose an inactive dynamic mapper, the same workflow may
+be run with exactly one owner-entered Fastbootd device; it reads independent
+`partition-size:*` getvars, requires `is-userspace=yes`, and refuses the
+ordinary bootloader. It never reboots into Fastbootd, changes slots, or writes
+storage.
+
 ## Phase 2 - Recovery images
 
 **Status:** Pixel 9a download and offline inspection Implemented and Run
@@ -185,7 +273,8 @@ All `tools/device/` scripts honour `FERRIX_OUT_DIR`, `FERRIX_BOARDS_DIR`, and
 2. Unlock preflight (read-only): `just pixel-9a-unlock-bootloader --preflight`
    re-verifies both recovery archives, requires exactly one transport, re-reads
    identity, and prints serial, codename, revision, slot, partition target,
-   both recovery hashes, and `preflight=passed`.
+   both recovery hashes, and `preflight=passed`. If the route reaches
+   Fastboot, it also requires `variant=GXQ96` as the bootloader SKU invariant.
 3. Unlock (wipes all user data): after the checklist and the human's
    go-ahead, `just pixel-9a-unlock-bootloader --confirm-unlock`. Phrases:
    `CONFIRM PIXEL 9A REBOOT AND UNLOCK (WIPES ALL USER DATA)`, then after the
@@ -224,7 +313,8 @@ Choose by device state:
   unless the archive's own `flash-all.sh` equals the reviewed sequence (flash
   bootloader, reboot-bootloader, flash radio, reboot-bootloader,
   `fastboot -w update <image zip>`). Requires one Fastboot device with
-  `product=tegu`, `hw-revision=MP1.0`, `unlocked=yes`, `is-userspace=no`;
+  `product=tegu`, `variant=GXQ96` (the bootloader SKU invariant),
+  `hw-revision=MP1.0`, `unlocked=yes`, `is-userspace=no`;
   `--from-adb` adds a gated `adb reboot bootloader`. Phrases:
   `CONFIRM PIXEL 9A FLASH BOOTLOADER AND RADIO (WIPES ALL USER DATA)`, then
   `CONFIRM PIXEL 9A FASTBOOT UPDATE (WIPES ALL USER DATA)`; with `--keep-data`
@@ -242,55 +332,164 @@ Choose by device state:
 **Status:** Implemented and Stub-tested only; nothing has been built
 (`kernel_build_status`, `rootfs_build_status` = `not-built`). Native Linux
 x86_64 only. On macOS: run the `*-check`/`*-test` recipes if useful, then
-stop and hand off with the exact commands below. Do not try Docker or
-cross-compilation substitutes; the pinned Google prebuilts and
-`pmbootstrap` are Linux-only by design.
+stop and hand off with the exact commands below. Do not use an ARM64 UTM
+guest, an x86_64 UTM guest under CPU emulation, OrbStack/Lima, Docker, or a
+cross-compilation substitute; the pinned native kernel source, toolchain, and
+`pmbootstrap` are Linux-only by design. UTM remains acceptable for a separate
+Linux smoke test or QEMU workflow, not for this Pixel build gate.
 
 Load the host profile first: `. tools/pixel-9a/env.sh`, then
 `just pixel-9a-env-validate` and `just pixel-9a-env-check build`.
 
-Chain, in order (each token needs the human's OK in this session):
+The pinned kernel and pmaports source checkouts must be clean before they are
+used: no tracked, staged, or untracked changes. The main Ferrix repository
+worktree may contain the owner's staged or unstaged edits; do not reset, clean,
+or otherwise discard them to satisfy an external-source cleanliness gate.
+Keep generated artifacts, firmware, and physical-device evidence in the
+ignored output paths.
+
+The selected radio-first route is a separately pinned native Kbuild tree. It
+is the only route in this playbook that pairs the `s5300_modem` WWAN driver,
+the SIT userspace packages, and the `brcmfmac` firmware-name aliases. The
+canonical Google Kleaf route remains useful for comparison, but its CPIF,
+module, DTB/DTBO, and firmware contracts are incompatible with the radio-first
+route. Use one route end to end.
+
+Chain, in order (each opt-in token needs the human's OK in this session):
 
 ```sh
-just pixel-9a-kernel-check
-FERRIX_PIXEL9A_KERNEL_SYNC=I-understand-this-downloads-large-kernel-sources just pixel-9a-kernel-sync
-just pixel-9a-kernel-verify
-FERRIX_PIXEL9A_KERNEL_BUILD=I-understand-this-runs-a-large-kleaf-build just pixel-9a-kernel-build
+just pixel-9a-kernel-radio-check
+FERRIX_PIXEL9A_RADIO_SYNC=I-understand-this-downloads-the-radio-first-kernel \
+  just pixel-9a-kernel-radio-sync
+just pixel-9a-kernel-radio-verify
+FERRIX_PIXEL9A_RADIO_BUILD=I-understand-this-runs-the-radio-first-kernel-build \
+  just pixel-9a-kernel-radio-build
+just pixel-9a-product-check
+FERRIX_PIXEL9A_PRODUCT_BUILD=I-understand-this-builds-the-pixel-9a-product \
+  just pixel-9a-product-build
 just pixel-9a-firmware-check
 just pixel-9a-firmware-inventory
 FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware \
   FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST=<reviewed TSV> just pixel-9a-firmware-stage
 just pixel-9a-rootfs-check
-just pixel-9a-rootfs-validate
+FERRIX_PIXEL9A_RADIO_KERNEL_DIST=out/pixel-9a/kernel-radio/tegu-wwan/dist \
+  FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST=out/pixel-9a/kernel-radio/tegu-wwan/build-manifest.tsv \
+  FERRIX_PIXEL9A_PRODUCT_DIR=out/pixel-9a/product/tegu \
+  FERRIX_PIXEL9A_FIRMWARE_DIR=out/pixel-9a/firmware/tegu/staged \
+  just pixel-9a-rootfs-validate
 FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap \
   FERRIX_PIXEL9A_PMAPORTS_DIR=<pinned pmaports checkout> \
-  FERRIX_PIXEL9A_KERNEL_DIST=out/pixel-9a/kernel/tegu/dist \
-  FERRIX_PIXEL9A_FIRMWARE_DIR=<staged firmware dir with firmware-manifest.tsv> \
+  FERRIX_PIXEL9A_RADIO_KERNEL_DIST=out/pixel-9a/kernel-radio/tegu-wwan/dist \
+  FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST=out/pixel-9a/kernel-radio/tegu-wwan/build-manifest.tsv \
+  FERRIX_PIXEL9A_PRODUCT_DIR=out/pixel-9a/product/tegu \
+  FERRIX_PIXEL9A_FIRMWARE_DIR=out/pixel-9a/firmware/tegu/staged \
   just pixel-9a-rootfs-build
-just pixel-9a-boot-check
-FERRIX_PIXEL9A_BOOT_BUILD=I-understand-this-composes-pixel-9a-boot-artifacts \
+just pixel-9a-boot-radio-check
+FERRIX_PIXEL9A_RADIO_BOOT_BUILD=I-understand-this-composes-pixel-9a-radio-first-boot-artifacts \
   FERRIX_PIXEL9A_INITRAMFS=<cpio> FERRIX_PIXEL9A_VENDOR_RAMDISK=<cpio> \
   FERRIX_PIXEL9A_VENDOR_BOOTCONFIG=<bootconfig> \
-  just pixel-9a-boot-build
-just pixel-9a-artifacts-check
-just pixel-9a-artifacts-manifest
+  just pixel-9a-boot-radio-build
 ```
 
-Outputs (all ignored) land under `out/pixel-9a/{kernel,firmware,rootfs,images}/tegu/`
-with a manifest each; the boot manifest is `composed-not-booted` /
-`bootable false`. Kernel sync needs Google's `repo` and about 80 GiB under
-`.cache/ferrix/pixel-9a/kernel/`; build refuses a non-empty dist. Never mix
-stock Android modules with a Ferrix kernel (`image-layout.toml` policy).
+The radio sync step downloads the pinned source archive before creating the
+checkout and verifies its recorded byte count plus SHA-256 and SHA-512. The
+archive and checkout stay under the target cache; a missing or mismatched
+archive fails closed before Kbuild runs.
+
+When the exact-target redacted partition-capacity handoff and source-built
+`vendor_kernel_boot`, DTBO, and module inputs are available, run
+`just pixel-9a-radio-split-check` followed by the explicitly confirmed
+`just pixel-9a-radio-split-build`. The split composer re-hashes those inputs,
+requires all ten reviewed partition capacities, and never contacts a device or
+reuses stock modules. Its manifest is a handoff only: `partition_contract` is
+`complete-source-built`, while `status=composed-not-booted` and
+`bootable=false` remain mandatory. AVB metadata is generated only after the
+final split images exist: native `avbtool add_hash_footer` creates salted
+descriptors from those exact bytes, and `make_vbmeta_image` includes those
+descriptors. External or stock vbmeta inputs are rejected. A physical boot
+route still requires independent target, recovery, and owner gates.
+The read-only capacity workflow's output can be supplied as
+`FERRIX_PIXEL9A_RADIO_PARTITION_SIZES=out/pixel-9a/partition-capacities-latest.tsv`
+after its exact-target transcript has been reviewed.
+
+The radio-first outputs (all ignored) land under
+`out/pixel-9a/kernel-radio/tegu-wwan/`,
+`out/pixel-9a/firmware/tegu/`, `out/pixel-9a/product/tegu/`,
+`out/pixel-9a/rootfs/tegu/`, and `out/pixel-9a/images/tegu-wwan/` with
+manifests; the optional completed split handoff is under
+`out/pixel-9a/images/tegu-wwan-split/`. The firmware stage starts from the
+official factory archive and
+the checked-in allowlist; `firmware-radio-route.tsv` then records the explicit
+copy/rename from the canonical `bcmdhd` names to the candidate
+`brcmfmac4383-pcie.*` names. No firmware bytes, images, or device evidence
+may enter Git.
+
+The build-time firmware manifest is not runtime evidence. In the guest,
+`ferrix-radio-firmware` must pass before NetworkManager, BlueZ, the S5300
+mount/loader chain, ModemManager, or Ferrix adapters start. It re-validates the
+target/schema rows, validates every manifest destination against the reviewed
+firmware allowlist (including descendants of the explicitly allow-listed modem
+configuration directories), rechecks every allow-listed file's size and
+SHA-256, rejects missing or symlinked files, and verifies all four reviewed
+radio-first aliases exactly once each (duplicate or missing alias pairs are
+rejected). A missing, changed, unreviewed, or malformed manifest
+fails closed; successful staging or a passing host test never proves that a
+physical controller loaded.
+
+The radio-first kernel manifest is `built-not-booted` / `bootable false`; the
+radio-first boot manifest is `composed-not-booted` / `bootable false`. The
+current `pixel-9a-boot-radio-*` composer emits `Image`, `dtb.img`,
+`boot.img`, `init_boot.img`, `vendor_boot.img`, `rootfs.tar`, `rootfs.img`,
+and `vbmeta.img`, but not the complete `vendor_kernel_boot`, `dtbo`,
+`vendor_dlkm`, `system_dlkm`, and slot-specific artifact manifest required by
+`pixel-9a-flash-*`. The separate `pixel-9a-radio-split-*` composer can fill
+those source-built split artifacts when its exact capacity and descriptor
+handoffs are present,
+but it still produces `images/tegu-wwan-split/` as
+`composed-not-booted` / `bootable=false` and has no physical flash adapter.
+Stop at either handoff; do not boot or flash it by hand. The target's canonical
+Google `pixel-9a-boot-*`, `pixel-9a-artifacts-*`, and `pixel-9a-flash-*`
+workflows reject both radio-first backends rather than mixing contracts.
+
+The canonical `pixel-9a-artifacts-manifest` route has its own hard gate: it
+accepts only exact Pixel 9a Google Kleaf kernel metadata
+(`schema_version=1`, `build_system=google-kleaf-bazel`, `kernel_package=@//aosp`),
+the exact postmarketOS rootfs identity/substrate, and a header-v4
+`composed-not-booted` boot manifest with a non-empty AVB mode. It rejects
+unsafe or traversing artifact paths and rechecks every listed size and
+SHA-256 before writing its manifest. These checks validate provenance; they do
+not turn a manifest into boot or physical radio evidence.
+
+The separate Google Kleaf comparison chain remains available as
+`pixel-9a-kernel-check/sync/verify/build` plus `pixel-9a-boot-check/build`,
+but it must consume only its own kernel-sources, modules, and rootfs manifest.
+Never mix stock Android modules with either Ferrix kernel
+(`image-layout.toml` policy).
+
+The target's GrapheneOS source-correlation record may corroborate module names,
+device-tree wiring, and load ordering, but the authoritative inputs remain the
+pinned Google sources in `kernel-sources.toml`. Do not copy GrapheneOS/AOSP
+prebuilts, vendor blobs, Android HAL/RIL/Binder services, or SELinux policy
+into the native Linux guest.
 
 ## Phase 6 - Flash
 
 **Status:** Implemented, Stub-tested only (`just pixel-9a-flash-test`, 64
 checks). Not run on hardware; `boot_status = "not-attempted"`.
 
+This workflow consumes only the canonical Google Kleaf split-boot manifest.
+It is not a radio-first workflow. The device-free `pixel-9a-radio-split-*`
+composer may produce a complete source-built handoff, but it is not a flash
+adapter; `pixel-9a-flash-*` must continue to refuse both radio-first backends
+until a separately reviewed route-specific destructive workflow exists. Never
+rename or copy radio-first artifacts into a canonical manifest to get past this
+boundary.
+
 Every mode re-hashes all composed artifacts against `boot-manifest.tsv`,
 verifies the pinned factory archive (refuses if absent: no restore path, no
 flash), and requires exactly one Fastboot device with `product=tegu`,
-`hw-revision=MP1.0`, `unlocked=yes`, `slot-count=2`.
+`variant=GXQ96` (the bootloader SKU invariant), `hw-revision=MP1.0`,
+`unlocked=yes`, `slot-count=2`.
 
 1. `just pixel-9a-flash-check [--stage kernel|rootfs|all] [--slot a|b]`
    (read-only): prints serial, current and target slot, `is_userspace=`, one
@@ -320,15 +519,19 @@ flash), and requires exactly one Fastboot device with `product=tegu`,
    images with the slot suffix, hops to fastbootd for `vendor_dlkm` and
    `system_dlkm`, and returns to the bootloader. Each write re-hashes its image
    and re-checks transport, serial, and product.
-5. Rootfs stage (`--stage rootfs` or `all`) currently REFUSES: the rootfs
-   manifest provides `rootfs.tar`, a handoff archive, not a flashable
-   `rootfs.img`. Do not build one ad hoc; report the refusal.
-6. Slot: default is the current slot; `--slot` overrides. The workflow never
-   issues `set_active`, so images written to the inactive slot cannot be
-   booted by it, and it prints a `slot_warning` either way. `linux-plan.md`
-   says the first artifact set must not overwrite the active slot; the flash
-   default disagrees. Put that choice to the owner before the run; do not
-   resolve it yourself.
+5. Rootfs stage (`--stage rootfs` or `all`) remains fail-closed for the current
+   target: although the native rootfs build emits a verified `rootfs.img`,
+   `deviceinfo_flash_fastboot_partition_rootfs` is intentionally unset until
+   the exact live partition mapping is reviewed. It also requires a complete,
+   redacted read-only ADB partition inventory. `rootfs.tar` is only a handoff
+   archive and is never a partition image; do not build a partition mapping ad
+   hoc or flash the archive.
+6. Slot: read-only preflight may display the current slot, but a persistent
+   flash requires an explicit `--slot a|b` and refuses the active slot. The
+   workflow never issues `set_active`, so images written to the inactive slot
+   cannot be booted by it, and it prints a `slot_warning` either way. Choose
+   and confirm the inactive target slot before the run; do not infer it from a
+   default.
 7. Result semantics: success prints `result=flashed-not-booted`. It is not
    boot evidence; `bootable` stays false until a Linux boot is observed.
    Transcript `out/pixel-9a/flash/flash-<stamp>-<pid>.txt`.
@@ -351,14 +554,25 @@ mismatch. Transcripts: `out/pixel-9a/radios/<command>-<stamp>.txt`.
 
 1. `just pixel-9a-radios-check`: reads `/proc/device-tree/compatible`,
    hostname, kernel, OS. Requires `FERRIX_PIXEL9A_DT_COMPATIBLE` (default
-   `google,tegu`); override only after the first physical transcript shows
-   the exact string. `linux,dummy-virt` (QEMU) is refused.
+   `google,ZUMA PRO TEGU`); override only after a new pinned target source
+   revision is reviewed and its exact device-tree string is recorded.
+   `linux,dummy-virt` (QEMU) is refused.
 2. `just pixel-9a-radios-inventory` (read-only): `rfkill`, NetworkManager,
-   BlueZ, ModemManager, modules, `dmesg` firmware lines, allow-listed firmware
-   presence, OpenRC service state, and the Ferrix adapter path
+   BlueZ, ModemManager, modules, `dmesg` firmware lines, the guest
+   `firmware-manifest.tsv` with per-file size/SHA-256 verification, OpenRC
+   service state, and the Ferrix adapter path
    (`ferrix-networkd` readiness record or socket reply; `ferrix-core` socket
-   state). Writes `out/pixel-9a/radios/evidence-latest.tsv` with columns
-   `subsystem status progress evidence`.
+   state). For the selected radio-first backend, the inventory must also
+   distinguish the candidate `brcmfmac`/`btbcm` drivers from the canonical
+   Google `bcmdhd` path and record the WWAN/SIT readiness surface (`s5300`
+   driver, `/dev/wwan0sit*`/AT ports, `rmnet*`, and ModemManager D-Bus).
+   Writes `out/pixel-9a/radios/evidence-latest.tsv` with columns `subsystem
+   status progress evidence`.
+   It also runs a read-only associated-radio probe for GNSS/KEPLER, NFC/ST21,
+   ST54, and UWB sysfs/device-node surfaces. Those rows remain unsupported and
+   are written separately to `associated-evidence-latest.tsv`; use
+   `just pixel-9a-radios-associated` for the focused probe without the broad
+   NetworkManager/BlueZ inventory.
 3. `just pixel-9a-radios-enable [wifi|bluetooth|modem|all]`: phrase
    `CONFIRM PIXEL 9A ENABLE RADIOS: <list>`; then `rfkill unblock`, `nmcli
    radio wifi on`, `bluetoothctl power on`, `mmcli -m any --enable`. Modem is
@@ -368,18 +582,61 @@ mismatch. Transcripts: `out/pixel-9a/radios/<command>-<stamp>.txt`.
    `FERRIX_PIXEL9A_WIFI_PSK` or a no-echo prompt, piped to `nmcli --ask` over
    stdin; it never appears in argv, history, chat, or transcripts. SSID is
    stored only as a hash. Result `wifi_connected=yes|no`.
-5. `just pixel-9a-radios-evidence`: runs inventory, prints a
+5. Cellular data operations use the typed `ferrix-telephonyd` requests
+   `connect-data` and `disconnect-data` under the separate `telephony-data`
+   grant; do not substitute an ad-hoc ModemManager or AT command. The host
+   radio workflow does not bypass appd authorization from an SSH shell: issue
+   these requests through an authorized Ferrix Settings/app client, and use
+   the workflow's inventory only to record the resulting state and bearer
+   evidence. The
+   Samsung-SIT backend requires an APN. An explicit `DataProfile.apn` wins;
+   otherwise the non-secret `FERRIX_TELEPHONY_APN` target value is used as a
+   daemon-only fallback. The checked-in target leaves it empty rather than
+   guessing a carrier profile, and malformed APNs fail closed. The backend
+   calls ModemManager `Modem.Simple.Connect`/`Disconnect`; data evidence must
+   include the resulting bearer, `rmnet*` interface, and Ferrix adapter/service
+   readiness in addition to modem/SIM/registration checks. An APN accepted by
+   the backend or modem enumeration alone is not evidence; APNs and
+   credentials do not belong in evidence records.
+6. The guest's `ferrix-s5300-mounts` service reads exactly one
+   `androidboot.slot_suffix` (`_a` or `_b`) and maps it to the matching
+   `modem_a` or `modem_b` partition. It mounts that modem image plus `efs`,
+   `persist`, and `modem_userdata` read-only, and refuses a missing, duplicate,
+   unknown, foreign, or writable source; it never guesses `_a` for slot B.
+   `exynos-modem` consequently consumes only the current-slot `modem.bin` and
+   exact read-only calibration inputs. This pairing is a runtime safety gate,
+   not physical radio evidence; persistent flash still requires the explicit
+   inactive-slot rule in Phase 6.
+7. `just pixel-9a-radios-evidence`: runs inventory, prints a
    `capabilities.toml` fragment labelled
    `physical: google-pixel-9a-tegu-gxq96-mp1-0`. The OWNER pastes it; the
    workflow never edits `capabilities.toml` and neither do you.
-6. Vocabulary: `status` is only `supported` or `unsupported`
+8. Vocabulary: `status` is only `supported` or `unsupported`
    (`CapabilityStatus` has no `Partial`; `mocked` is never used for a
    physical target). Nuance lives in `progress` and `evidence`. `supported`
    requires the Ferrix adapter path observed, not just Linux tools working.
-7. Telephony never becomes `supported` from this workflow: the Samsung S5300
-   CPIF modem exposes no ModemManager modem and no CPIF backend exists;
-   `ferrix-s5300-cpif` is only a SIPC5 frame codec. Modem enumeration is not
-   phone support. See `references/radios-and-evidence.md`.
+9. Physical evidence boundary: source correlations, offline manifests,
+   native builds, firmware staging/runtime-gate success, driver or CP ONLINE
+   lines, modem enumeration, and host/stub tests are prerequisites or
+   implementation evidence only. A physical capability requires the exact
+   target guest boot plus the Linux service and Ferrix adapter path observed
+   repeatedly in redacted records; QEMU/mock output never promotes it. With
+   the checked-in target baseline, telephony remains `unsupported`: the
+   Google Kleaf Samsung S5300 CPIF modem exposes no ModemManager modem because
+   its `cpif`/`umts_ipc*` ABI is not the WWAN SIT ABI expected by the reviewed
+   loader/plugin. The radio-first backend pins the community `s5300_modem`
+   WWAN driver so that package boundary can be tested as one coherent kernel
+   and userspace set. The Rust `ferrix-s5300-cpif` crate remains only a SIPC5
+   frame codec, while the reviewed external loader/plugin is a target-local
+   package boundary.
+   The reviewed `exynos-modem` and SIT ModemManager sources are now fetched by
+   target-local, source-pinned native-Linux package recipes; they remain outside
+   Ferrix Rust crates and are not physical evidence. Runtime adoption still
+   requires a successful native build, exact factory carrierconfig/UECAP
+   inputs, exact-target runtime evidence, and a public ModemManager D-Bus
+   readiness result. The route must not import Android RIL/HAL/Binder/SELinux/
+   vendor services. Modem enumeration alone is not phone support. See
+   `references/radios-and-evidence.md`.
 
 ## Phase 8 - Record evidence and docs
 
@@ -394,6 +651,9 @@ After any hardware session, update only what the evidence supports:
 - `docs/board-support/<codename>-attached.md`: checklist statuses and a
   discovery-log row per session.
 - `targets/boards/<id>/linux-plan.md`: tick a gate only with evidence.
+- Target source-correlation records (including the S5300 external-source and
+  GrapheneOS records): update only reviewed pins, licensing boundaries, and
+  implementation limits; they never promote a physical capability.
 - `capabilities.toml`: owner-only, from the radios fragment.
 
 Redaction checklist before `git add`: no serial (prefix hash only), no IMEI,
@@ -418,6 +678,7 @@ target subfolders listed in `.gitignore`. Run `git status` and read the diff.
 | Device stays in Fastboot after unlock | Expected; next step is stock restore or a gated boot, decided by owner |
 | Temp boot hangs or loops | Power-cycle per owner instruction; restore stock via Phase 4; record as failed boot evidence |
 | radios exit `3`/`4`/`5` | Wrong host, wrong device tree, or a QEMU guest; you are not talking to the phone; stop |
+| External modem source/archive/license metadata changes or cannot be verified | Fail the target-local package build; do not fetch, build, or package the source until the exact native-Linux source and license gates are restored |
 | Build host is macOS | Stop at Phase 5 and hand off; do not emulate |
 | Asked to relock | Refuse until a verified stock restore exists on this exact device |
 
@@ -446,3 +707,7 @@ Next step needing owner decision: <...>
 - `references/new-target-playbook.md` - unknown device to approved target.
 - `references/radios-and-evidence.md` - radio stack, evidence vocabulary, redaction.
 - `references/troubleshooting.md` - cables, authorization, fastbootd, slots, recovery.
+- `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-source-evidence.md`
+  and `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/grapheneos-radio-correlation.md`
+  - reviewed source boundaries and reuse limits; neither is physical radio
+  evidence.

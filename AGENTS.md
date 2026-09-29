@@ -1,6 +1,6 @@
 # Repository instructions
 
-These rules apply repository-wide. Load only task-relevant detail: `docs/status.md` for implemented state/limitations; `targets/qemu-aarch64/README.md` for QEMU operation; and both `plans/baseline.md` (implementation authority) and `plans/plan.md` (long-term direction) before changing architecture, targets, guest construction, hardware APIs, or the product shell. Baseline wins conflicts.
+These rules apply repository-wide. Load only task-relevant detail: `docs/status.md` for implemented state/limitations; `targets/qemu-aarch64/README.md` for QEMU operation; and both `plans/baseline.md` (implementation authority) and `plans/plan.md` (long-term direction) before changing architecture, targets, guest construction, hardware APIs, or the product shell. Baseline wins conflicts. For any attached phone (ADB/Fastboot identification, recovery images, unlock, flashing Ferrix, radio bring-up), follow `skills/mobile-device-provisioning/SKILL.md`; it is the LLM-agnostic playbook and encodes the gates below.
 
 ## Boundaries
 

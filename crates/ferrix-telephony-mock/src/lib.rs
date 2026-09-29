@@ -30,8 +30,8 @@ use ferrix_telephony_adapter_api::{
 };
 use ferrix_telephony_api::{
     AccessTechnology, AudioRoute, AudioRouteState, CallEndReason, CallState, Capabilities,
-    DataBearer, Direction, Dtmf, E164, ModemState, MultipartPart, Operator, RadioPower,
-    Registration, Signal, SimLock, SimState, SmsFailure, SmsState, TelephonyFeature,
+    DataBearer, DataProfile, Direction, Dtmf, E164, ModemState, MultipartPart, Operator,
+    RadioPower, Registration, Signal, SimLock, SimState, SmsFailure, SmsState, TelephonyFeature,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -268,6 +268,7 @@ struct Inner {
     access: AccessTechnology,
     signal: Signal,
     radio: RadioPower,
+    data: DataBearer,
     audio: AudioRouteState,
     capabilities: Capabilities,
     calls: BTreeMap<CallHandle, MockCall>,
@@ -322,6 +323,11 @@ impl MockModem {
                 0
             }),
             radio: RadioPower::On,
+            data: if config.features.contains(&TelephonyFeature::Data) {
+                DataBearer::Disconnected
+            } else {
+                DataBearer::Unsupported
+            },
             audio,
             capabilities: config.features.clone(),
             config,
@@ -793,6 +799,14 @@ impl Inner {
             self.signal = Signal::bars(0);
             out.push(BackendEvent::Signal(self.signal));
         }
+        self.set_data(DataBearer::Disconnected, out);
+    }
+
+    fn set_data(&mut self, data: DataBearer, out: &mut Emitter) {
+        if self.data != DataBearer::Unsupported && self.data != data {
+            self.data = data.clone();
+            out.push(BackendEvent::Data(data));
+        }
     }
 
     /// Modem ready + SIM ready + radio on: search now, register on tick.
@@ -976,7 +990,7 @@ impl Inner {
             access: self.access,
             signal: self.signal,
             radio: self.radio,
-            data: DataBearer::Unsupported,
+            data: self.data.clone(),
             audio: self.audio.clone(),
             capabilities: self.capabilities.clone(),
             calls: self
@@ -1004,6 +1018,7 @@ impl Inner {
             "access": self.access.name(),
             "signal_bars": self.signal.bars,
             "radio": self.radio.name(),
+            "data": self.data.name(),
             "audio": self.audio.active.name(),
             "outgoing_result": self.outgoing_result,
             "sms_result": self.sms_result,
@@ -1228,6 +1243,40 @@ impl ModemBackend for MockModem {
             ),
         }
         Ok(handle)
+    }
+
+    fn connect_data(&self, _profile: &DataProfile) -> Result<(), BackendError> {
+        let mut inner = lock(&self.0);
+        if !inner.capabilities.contains(&TelephonyFeature::Data) {
+            return Err(BackendError::Unsupported(TelephonyFeature::Data));
+        }
+        inner.service_check()?;
+        if matches!(
+            inner.data,
+            DataBearer::Connected { .. } | DataBearer::Connecting
+        ) {
+            return Ok(());
+        }
+        let mut out = Emitter::default();
+        inner.set_data(
+            DataBearer::Connected {
+                interface: Some("mock-cellular0".to_owned()),
+            },
+            &mut out,
+        );
+        inner.flush(out);
+        Ok(())
+    }
+
+    fn disconnect_data(&self) -> Result<(), BackendError> {
+        let mut inner = lock(&self.0);
+        if !inner.capabilities.contains(&TelephonyFeature::Data) {
+            return Err(BackendError::Unsupported(TelephonyFeature::Data));
+        }
+        let mut out = Emitter::default();
+        inner.set_data(DataBearer::Disconnected, &mut out);
+        inner.flush(out);
+        Ok(())
     }
 
     fn set_radio_power(&self, power: RadioPower) -> Result<(), BackendError> {
@@ -1618,6 +1667,35 @@ mod tests {
         assert!(!snapshot.capabilities.contains(&TelephonyFeature::Data));
         assert_eq!(snapshot.data, DataBearer::Unsupported);
         assert_eq!(modem.name(), "mock");
+    }
+
+    #[test]
+    fn data_feature_controls_a_deterministic_mock_bearer() {
+        let mut config = MockTelephonyConfig::default();
+        config.features.insert(TelephonyFeature::Data);
+        let modem = MockModem::new(config);
+        let (tx, rx) = channel();
+        modem.subscribe(tx);
+
+        assert_eq!(modem.snapshot().data, DataBearer::Disconnected);
+        modem
+            .connect_data(&DataProfile {
+                apn: Some("internet".into()),
+            })
+            .unwrap();
+        assert_eq!(
+            modem.snapshot().data,
+            DataBearer::Connected {
+                interface: Some("mock-cellular0".into())
+            }
+        );
+        assert!(
+            drain(&rx).contains(&BackendEvent::Data(DataBearer::Connected {
+                interface: Some("mock-cellular0".into())
+            }))
+        );
+        modem.disconnect_data().unwrap();
+        assert_eq!(modem.snapshot().data, DataBearer::Disconnected);
     }
 
     #[test]
