@@ -144,6 +144,21 @@ run_gate() {
 
 run_gate
 
+# A hash-valid row with an unreviewed source-image label must still be
+# rejected: runtime provenance is part of the firmware contract, not a free
+# text field that can be changed without rebuilding the staged manifest.
+cp "$manifest" "$work/good-manifest"
+awk -F '\t' -v OFS='\t' '
+	$1 == "firmware" { $3 = "modem.img" }
+	{ print }
+' "$manifest" >"$work/wrong-source-manifest"
+cp "$work/wrong-source-manifest" "$manifest"
+if run_gate; then
+	echo 'FAIL: accepted a firmware row from an unreviewed source image' >&2
+	exit 1
+fi
+cp "$work/good-manifest" "$manifest"
+
 # A hash-preserving alias with a different destination must still be rejected:
 # runtime validation binds the manifest to the reviewed radio route, not just
 # to four arbitrary copies.

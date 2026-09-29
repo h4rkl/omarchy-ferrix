@@ -1,5 +1,31 @@
 # Status
 
+## 2026-09-29 (factory-version reconciliation and native-build handoff)
+
+- **Factory version:** Google's current official `tegu` factory-image table
+  lists `17.0.0 (CP3A.260905.009, Sep 2026)` with SHA-256
+  `0c2f9053bf064b09483c937cf16f4824371afe92fa057029d6f9237668d1c0d7`.
+  That value matches the exact locally staged archive recorded in
+  `recovery.pins`; no older factory build was substituted.
+- **Firmware/product stages:** The authorized native Linux builder completed
+  the exact-target firmware stage from the verified factory archive and the
+  separate Ferrix product build. Firmware remains ignored/generated output;
+  the product manifest is `status=built` / `bootable=false`.
+- **Route reconciliation:** The A3 BCM4383 source mapping changed the checked-
+  in `firmware-radio-route.tsv` hash to
+  `3a4f62ec18691401723e434c159abdd6c85eb9a4bb6f9b9f50107fc6bbb3f5e3`.
+  Commit `ebe2319` updates `kernel-radio-route.toml` to that hash. The prior
+  radio-kernel manifest is therefore not reused; a corrected native Kbuild
+  handoff must be inspected before rootfs construction.
+- **Current boundary:** The corrected radio-kernel build was launched on the
+  native `x86_64` builder, but the build host is temporarily unreachable from
+  this session (`deba` DNS/Tailscale transport failure). Its completion is
+  intentionally unclaimed, and the radio-first rootfs remains unbuilt. No
+  temporary boot, persistent flash, or physical radio evidence exists.
+- **Local validation:** The target-scoped environment, kernel-route, firmware,
+  rootfs, and radio safety workflows pass after the reconciliation. These are
+  source/workflow tests, not physical-device capability evidence.
+
 ## 2026-09-29 (native remote builder handoff and radio-first flash route)
 
 - **Build host:** The supplied `ezy@deba` endpoint is a native Linux

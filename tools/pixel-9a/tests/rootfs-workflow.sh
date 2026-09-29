@@ -78,6 +78,11 @@ grep -q 'cargo test --frozen --target="\$_cargo_target" --no-run' "$pmos_dir/exy
 	fail 'exynos-modem cross-builder checks must compile target tests without executing them'
 grep -q 'cargo test --frozen --target="\$_host_target"' "$pmos_dir/exynos-modem/APKBUILD" ||
 	fail 'exynos-modem recipe must execute tests for the package-builder target'
+if grep -q -- '-p samsung-sit\([[:space:]]\|$\)' "$pmos_dir/exynos-modem/APKBUILD"; then
+	fail 'exynos-modem recipe names the obsolete samsung-sit workspace package'
+fi
+grep -q -- '-p samsung-sit-ffi' "$pmos_dir/exynos-modem/APKBUILD" ||
+	fail 'exynos-modem recipe must test the pinned samsung-sit-ffi workspace package'
 for label in efs persist modem_userdata; do
 	grep -q "$label" "$package_dir/s5300-userspace-sources.toml" || fail "S5300 source manifest is missing partition label: $label"
 done

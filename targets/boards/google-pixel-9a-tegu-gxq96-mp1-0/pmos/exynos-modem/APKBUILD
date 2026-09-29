@@ -40,12 +40,12 @@ check() {
 	[ -n "$_host_target" ] || die "could not determine the Rust package-builder target"
 	if [ "$_host_target" = "$_cargo_target" ]; then
 		RUSTC_WRAPPER= cargo test --frozen --target="$_cargo_target" \
-			-p exynos-modem -p samsung-sit -p sit-proxy
+			-p exynos-modem -p samsung-sit-ffi -p sit-proxy
 	else
 		RUSTC_WRAPPER= cargo test --frozen --target="$_cargo_target" --no-run \
-			-p exynos-modem -p samsung-sit -p sit-proxy
+			-p exynos-modem -p samsung-sit-ffi -p sit-proxy
 		RUSTC_WRAPPER= cargo test --frozen --target="$_host_target" \
-			-p exynos-modem -p samsung-sit -p sit-proxy
+			-p exynos-modem -p samsung-sit-ffi -p sit-proxy
 	fi
 }
 

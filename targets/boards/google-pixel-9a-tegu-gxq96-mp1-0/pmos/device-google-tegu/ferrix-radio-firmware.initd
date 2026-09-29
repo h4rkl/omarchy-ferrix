@@ -120,6 +120,10 @@ validate_firmware_manifest() {
 					die_gate "firmware row has extra fields"
 					return 1
 				}
+				case "${field3:-}" in
+					vendor.img|vendor_dlkm.img) ;;
+					*) die_gate "unsupported firmware source image: ${field3:-missing}"; return 1 ;;
+				esac
 				case "${field4:-}" in /*) ;; *) die_gate "firmware source path is not absolute"; return 1 ;; esac
 				safe_relative "${field5:-}" || {
 					die_gate "unsafe firmware runtime path: ${field5:-missing}"
