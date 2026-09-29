@@ -72,6 +72,7 @@ manifest_begin() {
 		printf 'pmaports_commit\t%s\n' "${FERRIX_PIXEL9A_PMAPORTS_COMMIT:-$(pinned_pmaports_commit)}"
 		printf 'pmaports_channel\t%s\n' "$(pinned_pmaports_channel)"
 		printf 'pmaports_branch\t%s\n' "$(pinned_pmaports_branch)"
+		printf 'initramfs_policy\texternal-kernel-owned-not-generated\n'
 		printf 'firmware_mapping\tfirmware-radio-route.tsv\t%s\n' "$(hash_file "$radio_firmware_route")"
 		printf 'split_artifact_contract\tradio-split-artifact-contract.toml\t%s\n' "$radio_split_contract_hash"
 		printf 'status\t%s\n' "$1"
@@ -130,6 +131,7 @@ check_static_inputs() {
 	for file in APKBUILD deviceinfo kernel-cmdline.conf modules-initfs modules-initfs-radio boot-layout.toml firmware-policy.toml firmware-allowlist.tsv s5300-channels.toml s5300-userspace-sources.toml ferrix-backends.env ferrix-core.initd ferrix-networkd.initd ferrix-telephonyd.initd ferrix-audio.initd ferrix-product.initd ferrix-s5300-mounts.initd ferrix-radio-firmware.initd exynos-modem.initd sit-proxy.initd 99-google-tegu-sit.rules; do
 		required_file "$package_dir/$file"
 	done
+	required_file "$root/tools/pixel-9a/pmbootstrap-rootfs.py"
 	required_file "$radio_firmware_route"
 	required_file "$radio_route"
 	required_file "$radio_split_contract"
@@ -874,7 +876,10 @@ build_rootfs() {
 	mkdir -p "$pmb_work/cache_git"
 	chmod 0700 "$pmb_work"
 	[ -f "$pmb_work/version" ] || printf '%s\n' "$pmbootstrap_work_version" >"$pmb_work/version"
-	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --details-to-stdout --config "$config" -y install --password "$rootfs_password" --no-image --no-fde --no-sshd --no-firewall --no-recommends
+	printf '%s\n' 'running pmbootstrap rootfs install with external-kernel initramfs boundary'
+	FERRIX_PMB_EXTERNAL_KERNEL=1 PMB_CHANNELS_CFG="$channels_cfg" python3 \
+		"$root/tools/pixel-9a/pmbootstrap-rootfs.py" --details-to-stdout --config "$config" -y install \
+		--password "$rootfs_password" --no-image --no-fde --no-sshd --no-firewall --no-recommends
 	rootfs_dir=$(find "$pmb_work" -maxdepth 2 -type d -name 'chroot_rootfs-*' -print -quit)
 	[ -n "$rootfs_dir" ] || die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}

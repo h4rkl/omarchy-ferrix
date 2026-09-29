@@ -504,7 +504,10 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 	printf '%s\n' 'esac'
 } >"$fake_bin/uname"
 {
-	printf '%s\n' '#!/bin/sh' 'set -eu' '[ "$1" = -c ]' 'printf "%s\\n" 8'
+	printf '%s\n' '#!/bin/sh' 'set -eu'
+	printf '%s\n' '[ "$1" = -c ] && { printf "%s\\n" 8; exit 0; }'
+	printf '%s\n' 'case "$1" in */pmbootstrap-rootfs.py) shift; exec "$(dirname "$0")/pmbootstrap" "$@" ;; esac'
+	printf '%s\n' 'exit 2'
 } >"$fake_bin/python3"
 {
 	printf '%s\n' '#!/bin/sh' 'set -eu' 'config=' 'action=' 'while [ "$#" -gt 0 ]; do' \
