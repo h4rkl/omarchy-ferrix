@@ -88,8 +88,11 @@ assert module.normalize_link_args([
     "-Wl,-z,relro",
     "-Xlinker",
     "--fix-cortex-a53-843419",
+    "-nostartfiles",
+    "-nodefaultlibs",
+    "-lc",
     "-static",
-]) == ["-Wl,-z,relro", "-static"]
+]) == ["-z", "relro", "-lc", "-static"]
 assert module.normalize_link_args(["--fix-cortex-a53-843419", "-lc"]) == ["-lc"]
 PY
 
