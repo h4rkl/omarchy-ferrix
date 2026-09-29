@@ -85,10 +85,11 @@ Expected. `unlock-bootloader.sh` leaves the phone in Fastboot on purpose so
 the verified factory archive can be restored. The unlock erased user data.
 Next steps are the owner's decision: factory restore (Phase 4) to return to
 stock Android, or, once a complete checked-in Ferrix route passes every gate,
-a temporary Ferrix boot (Phase 6). The current radio-first composer is only an
-unbooted handoff and has no approved temporary-boot or persistent-flash route.
-`fastboot reboot` by hand is not permitted; the restore and flash workflows
-reboot as part of their confirmed sequence.
+a temporary Ferrix boot (Phase 6). The radio-first composer is only a
+device-free handoff until its `pixel-9a-flash-radio-*` preflight passes; use
+that checked-in route for the temporary boot or persistent flash, never a raw
+`fastboot` command. `fastboot reboot` by hand is not permitted; the restore
+and flash workflows reboot as part of their confirmed sequence.
 
 ## Getting back to stock
 
@@ -145,10 +146,14 @@ idempotent).
 - `env.sh check build`, `kernel.sh preflight`, and the radio-first split/build
   preflights require native Linux x86_64. On Apple Silicon, an ARM64 UTM
   guest is the wrong architecture, an x86_64 UTM guest uses rejected CPU
-  emulation, and OrbStack/Lima/Docker containers or a cross build are not
-  native-host substitutes. Hand the Pixel build off to provisioned native
-  Linux x86_64; UTM is still fine for a separate Linux smoke test or QEMU
-  workflow.
+  emulation, and OrbStack/Lima or a cross build are not native-host
+  substitutes. A digest-pinned `linux/amd64` Docker tool container is allowed only
+  when Docker runs on a native Linux x86_64 host; it cannot make an ARM64,
+  OrbStack, Lima, or emulated UTM host compliant. Keep ADB/Fastboot and USB
+  transport on the host-side physical workflow; do not forward the phone or
+  ADB socket into the build container. Hand the Pixel build off to provisioned
+  native Linux x86_64; UTM is still fine for a separate Linux smoke test or
+  QEMU workflow.
 - `repo` missing or under 80 GiB free: report; do not install or free disk on
   your own.
 - `pmbootstrap` needs a clean pmaports checkout at the pinned commit
@@ -166,14 +171,52 @@ idempotent).
   exact-target partition capacities plus source-built DTBO/module inputs. It
   generates salted AVB descriptors from the final staged bytes and rejects
   external or stock vbmeta inputs. Its `complete-source-built` manifest is
-  still not boot or flash authorization; `pixel-9a-flash-*` has no radio-first
-  adapter and must refuse it.
+  consumed only by the separate `pixel-9a-flash-radio-*` adapter, which still
+  requires exact identity, recovery, backup, inactive-slot, image-hash,
+  temporary-boot, and per-run confirmation gates. The canonical
+  `pixel-9a-flash-*` route must continue to refuse it.
 - If `ferrix-radio-firmware` refuses, stop before NetworkManager, BlueZ,
   ModemManager, or Ferrix adapters start. The runtime gate checks every
   manifest destination against the reviewed allowlist (including descendants
   of the modem configuration directories), file size/SHA-256, regular-file
   status, and all four radio aliases. Missing, changed, unreviewed, or
   symlinked rows are a fail-closed condition, not a reason to bypass the gate.
+
+## Radio-first flash route (Phase 6)
+
+- `pixel-9a-flash-radio-check` is the only preflight for
+  `images/tegu-wwan-split/boot-manifest.tsv`. Do not pass that manifest to the
+  canonical `pixel-9a-flash-*` route; it will refuse the WWAN/SIT backend by
+  design. Conversely, do not relabel a Google Kleaf manifest as radio-first.
+- A refusal about route, contract, artifact count, AVB binding, source
+  handoff, capacity, or recovery means the split output is stale, incomplete,
+  or mismatched. Rebuild into a fresh ignored output and re-run the checked-in
+  checks; never edit the manifest or copy stock modules/vbmeta to make it
+  pass.
+- The radio-first preflight needs exactly one Fastboot device and no ADB
+  device, with `tegu`, `GXQ96`, `MP1.0`, `unlocked=yes`, and two slots. If the
+  phone is in fastbootd (`is-userspace=yes`), let the checked-in workflow
+  report the mode; start the route from the bootloader, and never enter or
+  leave fastbootd with a raw command.
+- If secure boot reports `secure=yes` and the manifest uses
+  `avb_algorithm=NONE`, re-run preflight with `--allow-unsigned-avb` only
+  after the owner explicitly accepts unlocked-only boot and the risk in this
+  session. Never relock the phone. Signed AVB still requires fresh descriptors
+  from the exact final images.
+- Persistent radio-first flash refuses without
+  `FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE` from a successful matching
+  `pixel-9a-flash-radio-boot-temp` transcript. Review that transcript and
+  observe the kernel; do not bypass the gate. If the temporary boot hangs or
+  loops, use the verified stock recovery route and record the failed evidence.
+- A rootfs-stage refusal for the inventory means the exact-target ADB
+  inventory is absent, partial, from another serial, or lacks the reviewed
+  `userdata` mapping. Obtain a fresh complete redacted inventory while the
+  device is in Android; never invent a rootfs partition or flash `rootfs.tar`.
+- A successful radio-first flash prints `result=flashed-not-booted`. It does
+  not prove Linux boot, Wi-Fi, Bluetooth, GNSS, NFC, or telephony. Observe the
+  exact target boot, then use the read-only guest inventory/evidence workflow;
+  capability status remains unsupported until the Ferrix adapter paths and
+  repeated radio evidence are present.
 
 ## When to stop and ask the owner
 

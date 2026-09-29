@@ -56,18 +56,24 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
     Fastbootd itself. This capacity file may succeed while the broader `/proc`
     inventory remains `partial`; it never upgrades that broader inventory gate
     or authorizes a flash. Do not pass either
-    `images/tegu-wwan` or `images/tegu-wwan-split` to `pixel-9a-flash-*`:
-    they are unbooted radio-first handoffs, not an approved physical route.
-    A route-specific flash workflow must still pass the same identity, backup,
-    recovery, inactive-slot, image-hash, and confirmation gates before any
-    physical boot or flash is attempted.
+    `images/tegu-wwan` or `images/tegu-wwan-split` to the canonical
+    `pixel-9a-flash-*` commands: they are radio-first handoffs with a separate
+    manifest contract. Once `images/tegu-wwan-split/boot-manifest.tsv` is
+    complete, use only the checked-in route-specific adapter below; it still
+    requires the same identity, backup, recovery, inactive-slot, image-hash,
+    and confirmation gates before any physical boot or flash is attempted.
 11. For the canonical Google route only, once a complete, reviewed image set
     exists and the owner authorizes the physical operation:
     `just pixel-9a-flash-check` `[ro]`; `just pixel-9a-flash-boot-temp`
     `[confirm]`; then the explicit inactive-slot flash `[confirm]`. The
-    radio-first route has no physical boot command yet; never substitute these
-    canonical commands for it. After a future route-specific workflow is
-    checked in and authorized, a guest booted over USB network may use
+    never substitute these canonical commands for the radio-first route. For
+    the complete source-built radio-first split handoff, use
+    `just pixel-9a-flash-radio-check` `[ro]`, then
+    `just pixel-9a-flash-radio-boot-temp` `[confirm]`, and, only after the
+    temporary-boot evidence gate passes, the explicit inactive-slot
+    `just pixel-9a-flash-radio` `[confirm]`. The route never changes the active
+    slot, bootloader lock state, or factory firmware. After a guest is actually
+    booted over USB network, use
     `pixel-9a-radios-check/inventory` `[ro]`,
     `pixel-9a-radios-enable all` `[confirm]`,
     `pixel-9a-radios-connect-wifi <SSID>` `[confirm]`, and
@@ -80,6 +86,7 @@ Offline test recipes that must pass before any hardware session:
 `just pixel-9a-firmware-test`, `just pixel-9a-rootfs-test`,
 `just pixel-9a-boot-radio-test`, `just pixel-9a-radio-split-test`,
 `just pixel-9a-artifacts-test`, `just pixel-9a-flash-test`,
+`just pixel-9a-flash-radio-test`,
 `just pixel-9a-partition-capacity-test`, and `just pixel-9a-radios-test`.
 
 ## Purpose and boundaries
@@ -103,13 +110,16 @@ Offline test recipes that must pass before any hardware session:
    - Discovery, recovery download, inspection, unlock, sideload, restore,
      flash, and radio SSH workflows run on macOS or Linux.
    - Kernel, firmware staging, rootfs, artifact, boot, and radio-split build
-     build workflows need native Linux x86_64 (`tools/pixel-9a/env.sh check
+     workflows need native Linux x86_64 (`tools/pixel-9a/env.sh check
      build` and build paths refuse other hosts; static checks/tests may run
-     locally). On this Apple Silicon
-     Mac, the ARM64 UTM guest is not a compliant builder; an x86_64 UTM guest
-     would use CPU emulation, and OrbStack/Lima/Docker containers or a cross
-     build are not native-host substitutes. UTM may still be used for a
-     separate Linux smoke test or QEMU workflow. On macOS, stop at Phase 5
+     locally). On this Apple Silicon Mac, an ARM64 UTM guest is not a
+     compliant builder and an x86_64 UTM guest would use CPU emulation. A
+     digest-pinned `linux/amd64` Docker tool container is allowed only when Docker is
+     running on a native Linux x86_64 host; it does not make an ARM64 host,
+     OrbStack VM, Lima VM, or emulated UTM guest compliant. Keep ADB/Fastboot
+     on the host-side physical-device workflow: do not expose USB transport
+     or an ADB server socket to the build container. UTM may still be used for
+     a separate Linux smoke test or QEMU workflow. On macOS, stop at Phase 5
      and hand the Pixel build off to provisioned native Linux x86_64.
    - The build preflight must also resolve the physical profile's Rust target
      in the pinned toolchain. The repository declaration retains
@@ -117,7 +127,8 @@ Offline test recipes that must pass before any hardware session:
      `aarch64-unknown-linux-musl` for the physical profile. The Pixel workflow
      still verifies that the musl standard library is installed and refuses a
      missing target; do not silently switch to the GNU target or a
-     cross/container substitute.
+     cross-build substitute. A container may provide pinned Linux build tools
+     only under the native-host Docker exception above.
    - The same preflight requires an explicit AArch64 musl linker: the
      canonical `aarch64-linux-musl-gcc` command or an equivalent command named
      by `FERRIX_PIXEL9A_RUST_LINKER`. `just pixel-9a-env-check build` and
@@ -333,10 +344,13 @@ Choose by device state:
 (`kernel_build_status`, `rootfs_build_status` = `not-built`). Native Linux
 x86_64 only. On macOS: run the `*-check`/`*-test` recipes if useful, then
 stop and hand off with the exact commands below. Do not use an ARM64 UTM
-guest, an x86_64 UTM guest under CPU emulation, OrbStack/Lima, Docker, or a
+guest, an x86_64 UTM guest under CPU emulation, OrbStack/Lima, or a
 cross-compilation substitute; the pinned native kernel source, toolchain, and
-`pmbootstrap` are Linux-only by design. UTM remains acceptable for a separate
-Linux smoke test or QEMU workflow, not for this Pixel build gate.
+`pmbootstrap` are Linux-only by design. Docker is permitted only as a digest-pinned
+`linux/amd64` tool container running on a native Linux x86_64 host; it cannot
+substitute for that host, and it must not carry the phone's USB transport or
+ADB server. UTM remains acceptable for a separate Linux smoke test or QEMU
+workflow, not for this Pixel build gate.
 
 Load the host profile first: `. tools/pixel-9a/env.sh`, then
 `just pixel-9a-env-validate` and `just pixel-9a-env-check build`.
@@ -442,14 +456,14 @@ current `pixel-9a-boot-radio-*` composer emits `Image`, `dtb.img`,
 `boot.img`, `init_boot.img`, `vendor_boot.img`, `rootfs.tar`, `rootfs.img`,
 and `vbmeta.img`, but not the complete `vendor_kernel_boot`, `dtbo`,
 `vendor_dlkm`, `system_dlkm`, and slot-specific artifact manifest required by
-`pixel-9a-flash-*`. The separate `pixel-9a-radio-split-*` composer can fill
-those source-built split artifacts when its exact capacity and descriptor
-handoffs are present,
-but it still produces `images/tegu-wwan-split/` as
-`composed-not-booted` / `bootable=false` and has no physical flash adapter.
-Stop at either handoff; do not boot or flash it by hand. The target's canonical
-Google `pixel-9a-boot-*`, `pixel-9a-artifacts-*`, and `pixel-9a-flash-*`
-workflows reject both radio-first backends rather than mixing contracts.
+the physical route. The separate `pixel-9a-radio-split-*` composer fills those
+source-built split artifacts when its exact capacity and descriptor handoffs
+are present. Its `images/tegu-wwan-split/` manifest remains
+`composed-not-booted` / `bootable=false`; it may be consumed only by the
+checked-in `pixel-9a-flash-radio-*` adapter after its independent preflight.
+Do not boot or flash the handoff by hand. The target's canonical Google
+`pixel-9a-boot-*`, `pixel-9a-artifacts-*`, and `pixel-9a-flash-*` workflows
+continue to reject both radio-first backends rather than mixing contracts.
 
 The canonical `pixel-9a-artifacts-manifest` route has its own hard gate: it
 accepts only exact Pixel 9a Google Kleaf kernel metadata
@@ -474,16 +488,16 @@ into the native Linux guest.
 
 ## Phase 6 - Flash
 
-**Status:** Implemented, Stub-tested only (`just pixel-9a-flash-test`, 64
-checks). Not run on hardware; `boot_status = "not-attempted"`.
+**Status:** Canonical Google route and the separately gated radio-first route
+are Implemented, Stub-tested only (`just pixel-9a-flash-test` and
+`just pixel-9a-flash-radio-test`). Neither has run on hardware;
+`boot_status = "not-attempted"`.
 
-This workflow consumes only the canonical Google Kleaf split-boot manifest.
-It is not a radio-first workflow. The device-free `pixel-9a-radio-split-*`
-composer may produce a complete source-built handoff, but it is not a flash
-adapter; `pixel-9a-flash-*` must continue to refuse both radio-first backends
-until a separately reviewed route-specific destructive workflow exists. Never
-rename or copy radio-first artifacts into a canonical manifest to get past this
-boundary.
+The canonical `pixel-9a-flash-*` workflow consumes only the Google Kleaf
+split-boot manifest. It continues to refuse both radio-first backends. Never
+rename or copy radio-first artifacts into a canonical manifest to get past
+this boundary. The complete radio-first handoff has its own
+`pixel-9a-flash-radio-*` adapter below.
 
 Every mode re-hashes all composed artifacts against `boot-manifest.tsv`,
 verifies the pinned factory archive (refuses if absent: no restore path, no
@@ -537,6 +551,57 @@ flash), and requires exactly one Fastboot device with `product=tegu`,
    Transcript `out/pixel-9a/flash/flash-<stamp>-<pid>.txt`.
 8. `--skip-temp-boot-gate` changes the phrase to end in
    `WITHOUT TEMP BOOT GATE`. Owner-directed debugging only.
+
+### Radio-first split route (`flash-radio.sh`)
+
+The separately checked-in route consumes only the exact
+`out/pixel-9a/images/tegu-wwan-split/boot-manifest.tsv` produced by
+`pixel-9a-radio-split-build`. It is a source-built WWAN/SIT route, not a
+Google Kleaf/CPIF route, and it never flashes bootloader or radio firmware.
+The route is Implemented and Stub-tested only; no physical boot, flash, or
+radio evidence exists yet.
+
+1. Read-only preflight:
+   `just pixel-9a-flash-radio-check [--stage kernel|rootfs|all] [--slot a|b]
+   [--allow-unsigned-avb]`. It verifies the radio route and split-contract
+   hashes, all 14 artifact rows and seven fresh AVB bindings, the exact ten
+   partition capacities, source handoff manifests, the pinned recovery
+   artifact, and exact Fastboot identity (`tegu`/`GXQ96`/`MP1.0`, unlocked,
+   two slots). It refuses ADB-present or multiple-device states.
+2. AVB: the route requires `--allow-unsigned-avb` when the fresh AVB
+   manifest says `avb_algorithm=NONE` and Fastboot reports `secure=yes`.
+   Explain that unsigned images are usable only with the bootloader unlocked;
+   never relock this device. Signed modes still require the reviewed key and
+   fresh descriptor provenance from the source-built split composer.
+3. Temporary boot first:
+   `just pixel-9a-flash-radio-boot-temp [--allow-unsigned-avb]`. The typed
+   phrase is `CONFIRM PIXEL 9A RADIO TEMPORARY BOOT boot.img@<first 8 hex>`.
+   The workflow re-checks identity and recovery immediately before
+   `fastboot boot`, writes a serial-redacted transcript under
+   `out/pixel-9a/flash-radio/`, and records `result=temporary-boot-issued`.
+   Header-v4 temporary boot still uses the device's currently flashed
+   `vendor_boot`, `init_boot`, and `dtbo`; observe the kernel and stop on a
+   hang or loop.
+4. Persistent kernel stage: after reviewing the temporary-boot transcript,
+   set `FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE` to that ignored path and run
+   `just pixel-9a-flash-radio --stage kernel --slot <a|b>
+   [--allow-unsigned-avb]`. The slot is mandatory and must be inactive; the
+   workflow never issues `set_active`. The typed phrase is
+   `CONFIRM PIXEL 9A RADIO FLASH KERNEL STAGE TO SLOT <A|B>`. It writes the
+   eight bootloader partitions, enters fastbootd only for `vendor_dlkm` and
+   `system_dlkm`, returns to bootloader, and re-checks the exact device and
+   image hash before every write. Success means only
+   `result=flashed-not-booted`.
+5. Rootfs stage (`--stage rootfs` or `all`) additionally requires the
+   complete, redacted exact-target ADB partition inventory in
+   `FERRIX_PIXEL9A_PARTITION_INVENTORY`, including the reviewed `userdata`
+   mapping. `rootfs.tar` is never flashed; only the hash-verified
+   `rootfs.img` is sent to the allow-listed target partition. The route does
+   not invent a mapping when this gate is absent.
+6. The route never unlocks/locks, erases, formats, wipes, changes slots,
+   flashes bootloader/radio firmware, or accepts the canonical Google
+   manifest. `--skip-temp-boot-gate` is an owner-directed exception only;
+   explain the risk and require the phrase ending `WITHOUT TEMP BOOT GATE`.
 
 ## Phase 7 - Radios
 
@@ -674,9 +739,11 @@ target subfolders listed in `.gitignore`. Run `git status` and read the diff.
 | Any gate `die`/`REFUSING`/`provisioning-refused` | Report verbatim; stop; no workaround |
 | Restore stops between stages (version mismatch) | Device is still in Fastboot; report; re-run only with a fresh go-ahead |
 | Wrong `is-userspace` for the step | Let the workflow hop; never `fastboot reboot ...` by hand |
-| Flash refuses without temp-boot evidence | Run `pixel-9a-flash-boot-temp` first; never use `--skip-temp-boot-gate` on your own |
+| Flash refuses without temp-boot evidence | Run the matching route's `pixel-9a-flash-boot-temp` or `pixel-9a-flash-radio-boot-temp` first; never use `--skip-temp-boot-gate` on your own |
 | Device stays in Fastboot after unlock | Expected; next step is stock restore or a gated boot, decided by owner |
 | Temp boot hangs or loops | Power-cycle per owner instruction; restore stock via Phase 4; record as failed boot evidence |
+| Radio-first flash refuses a canonical manifest | Keep the route separation; feed only `images/tegu-wwan-split/boot-manifest.tsv` to `pixel-9a-flash-radio-*` and only the Google Kleaf manifest to `pixel-9a-flash-*` |
+| Radio-first flash refuses rootfs inventory | Stop; obtain a complete redacted exact-target ADB partition inventory and do not invent a `userdata` mapping |
 | radios exit `3`/`4`/`5` | Wrong host, wrong device tree, or a QEMU guest; you are not talking to the phone; stop |
 | External modem source/archive/license metadata changes or cannot be verified | Fail the target-local package build; do not fetch, build, or package the source until the exact native-Linux source and license gates are restored |
 | Build host is macOS | Stop at Phase 5 and hand off; do not emulate |

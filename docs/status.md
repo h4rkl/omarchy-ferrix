@@ -1,5 +1,29 @@
 # Status
 
+## 2026-09-29 (native remote builder handoff and radio-first flash route)
+
+- **Build host:** The supplied `ezy@deba` endpoint is a native Linux
+  `x86_64` host (`Linux 7.2.5-3-omarchy`) with roughly 893 GiB free under
+  `/home`. The repository is cloned at
+  `/home/ezy/github-projects/omarchy-ferrix`. This satisfies the physical
+  architecture and disk-space gate; it is distinct from the rejected
+  Apple-Silicon OrbStack/UTM emulation path. Docker is installed but the
+  `ezy` account currently cannot access `/var/run/docker.sock`; no remote
+  build has started until the account is granted Docker access or a rootless
+  socket is provided.
+- **Radio-first physical adapter:** `flash-radio.sh` and its strict offline
+  test now provide the separate physical route for the
+  `linux-google-tegu-wwan` split manifest. It validates the route/contract
+  hashes, source-built artifact origins and fresh AVB binding rows, exact
+  target identity, recovery and backup gates, inactive-slot selection,
+  fastbootd handling, temporary-boot evidence, serial-redacted transcripts,
+  and typed confirmations. The canonical Google Kleaf `flash.sh` route still
+  refuses radio-first manifests. `just pixel-9a-flash-radio-test` passes; no
+  physical boot or flash has been attempted.
+- **Phone state:** The exact Pixel 9a remains unproven for Ferrix Linux and
+  all radios. The current Mac ADB transport failure and incomplete Android
+  partition inventory still block the capacity handoff and physical route.
+
 ## 2026-09-28 (latest read-only transport retry)
 
 - **Pixel transport:** `just pixel-9a-tools-check` found ADB 37.0.1 and

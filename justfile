@@ -234,6 +234,25 @@ pixel-9a-flash *args:
 pixel-9a-flash-test:
     @sh "{{root}}/tools/pixel-9a/tests/flash-workflow.sh"
 
+# Separately reviewed physical route for the source-built WWAN/SIT radio
+# backend. It never accepts the canonical Google Kleaf/CPIF manifest. Like the
+# canonical route, preflight is read-only and boot/flash require exact identity,
+# recovery, backup, inactive-slot, image-hash, and typed confirmation gates.
+[positional-arguments]
+pixel-9a-flash-radio-check *args:
+    @"{{root}}/tools/pixel-9a/flash-radio.sh" preflight "$@"
+
+[positional-arguments]
+pixel-9a-flash-radio-boot-temp *args:
+    @"{{root}}/tools/pixel-9a/flash-radio.sh" boot-temp "$@"
+
+[positional-arguments]
+pixel-9a-flash-radio *args:
+    @"{{root}}/tools/pixel-9a/flash-radio.sh" flash "$@"
+
+pixel-9a-flash-radio-test:
+    @sh "{{root}}/tools/pixel-9a/tests/flash-radio-workflow.sh"
+
 # Radios on a Pixel 9a already running Ferrix/pmOS over the USB network
 # (172.16.42.1, SSH). preflight/inventory/evidence are read-only; enable and
 # connect-wifi change radio state only, after a typed confirmation. Stub-tested

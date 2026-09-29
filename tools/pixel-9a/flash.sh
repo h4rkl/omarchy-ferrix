@@ -60,7 +60,6 @@ image_out=${FERRIX_PIXEL9A_BOOT_OUT:-"$out_root/pixel-9a/images/tegu"}
 manifest=${FERRIX_PIXEL9A_BOOT_MANIFEST:-"$image_out/boot-manifest.tsv"}
 evidence_dir="$out_root/pixel-9a/flash"
 wait_seconds=${FERRIX_PIXEL9A_FLASH_WAIT_SECONDS:-90}
-flash_route=${FERRIX_PIXEL9A_FLASH_ROUTE:-canonical}
 tab=$(printf '\t')
 
 expected_target_id=google-pixel-9a-tegu-gxq96-mp1-0
@@ -115,7 +114,6 @@ environment:
   FERRIX_OUT_DIR                     output root (default: <repo>/out)
   FERRIX_PIXEL9A_BOOT_OUT            composed image directory
   FERRIX_PIXEL9A_BOOT_MANIFEST       boot-manifest.tsv path
-  FERRIX_PIXEL9A_FLASH_ROUTE         canonical (default) or radio (wrapper sets this)
   FERRIX_PIXEL9A_TARGET_DIR          board package directory
   FERRIX_PIXEL9A_PINS                recovery.pins path
   FERRIX_PIXEL9A_TEMP_BOOT_EVIDENCE  boot-temp transcript for the flash gate

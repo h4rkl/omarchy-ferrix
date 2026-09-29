@@ -55,7 +55,7 @@ printf 'factory\tSYN\t0\ttegu-synthetic-factory.zip\thttps://example.invalid\t%s
 printf 'source-image\n' >"$work/images/Image"
 printf 'source-dtb\n' >"$work/images/dtb.img"
 printf 'schema_version\t1\ntarget_id\t%s\nroute_id\texperimental-linux-google-tegu-s5300-wwan\nkernel_backend\tlinux-google-tegu-wwan\nstatus\tbuilt-not-booted\nbootable\tfalse\n' "$expected_target_id" >"$work/kernel.tsv"
-printf 'target_id\t%s\nkernel_backend\tlinux-google-tegu-wwan\nstatus\tbuilt-substrate-only\nbootable\tfalse\n' "$expected_target_id" >"$work/rootfs.tsv"
+printf 'schema_version\t1\ntarget_id\t%s\nkernel_backend\tlinux-google-tegu-wwan\nstatus\tbuilt-substrate-only\nbootable\tfalse\n' "$expected_target_id" >"$work/rootfs.tsv"
 printf 'early-cpio\n' >"$work/vendor-kernel-boot.cpio"
 {
 	printf 'schema_version\t1\ntarget_id\t%s\n' 'google-pixel-9a-tegu-gxq96-mp1-0'

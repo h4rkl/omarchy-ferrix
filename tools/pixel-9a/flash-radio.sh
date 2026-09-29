@@ -422,6 +422,16 @@ verify_manifest() {
 	for name in $all_artifacts; do
 		verify_artifact "$name" >/dev/null
 	done
+	# Do not let an otherwise hash-valid hand-edited manifest smuggle an
+	# unreviewed artifact into the route. The exact fourteen names are the
+	# complete source-built split contract; every row must be one of them.
+	while IFS="$tab" read -r kind name _rest; do
+		[ "$kind" = artifact ] || continue
+		case " $all_artifacts " in
+			*" $name "*) ;;
+			*) die "radio-first manifest contains an unknown artifact: $name" ;;
+		esac
+	done <"$manifest"
 	for name in $bound_artifacts; do
 		manifest_binding_row "$name" >/dev/null || die "radio-first manifest lacks AVB binding row: $name"
 	done
@@ -431,13 +441,19 @@ verify_manifest() {
 	verify_source_handoff rootfs_manifest >/dev/null
 	verify_source_handoff vendor_kernel_boot_input >/dev/null
 	# The handoff manifests must retain the selected native Linux ABI and the
-	# pre-observation status.  This prevents a hand-edited split manifest from
+	# pre-observation status. This prevents a hand-edited split manifest from
 	# turning an Android or already-claimed boot into the radio route.
-	for handoff in "$(manifest_value kernel_manifest)" "$(manifest_value rootfs_manifest)"; do
+	kernel_handoff=$(manifest_value kernel_manifest)
+	rootfs_handoff_manifest=$(manifest_value rootfs_manifest)
+	for handoff in "$kernel_handoff" "$rootfs_handoff_manifest"; do
+		require_file "$handoff" 'radio-first source handoff'
+		[ "$(awk -F "$tab" '$1 == "schema_version" { print $2; exit }' "$handoff")" = 1 ] || die 'radio-first source handoff schema is not 1'
 		[ "$(awk -F "$tab" '$1 == "target_id" { print $2; exit }' "$handoff")" = "$expected_target_id" ] || die 'radio-first source handoff target is not exact Pixel 9a'
 		[ "$(awk -F "$tab" '$1 == "kernel_backend" { print $2; exit }' "$handoff")" = "$expected_backend" ] || die 'radio-first source handoff backend is not linux-google-tegu-wwan'
 		[ "$(awk -F "$tab" '$1 == "bootable" { print $2; exit }' "$handoff")" = false ] || die 'radio-first source handoff is not bootable=false'
 	done
+	[ "$(awk -F "$tab" '$1 == "status" { print $2; exit }' "$kernel_handoff")" = built-not-booted ] || die 'radio-first kernel handoff status is not built-not-booted'
+	[ "$(awk -F "$tab" '$1 == "status" { print $2; exit }' "$rootfs_handoff_manifest")" = built-substrate-only ] || die 'radio-first rootfs handoff status is not built-substrate-only'
 }
 
 pin() { awk -F "$tab" -v wanted="$1" -v number="$2" '$1 == wanted { print $number; exit }' "$pins"; }

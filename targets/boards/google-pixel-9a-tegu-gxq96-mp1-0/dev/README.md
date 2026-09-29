@@ -20,8 +20,10 @@ tools/pixel-9a/env.sh check build
 
 `check` requires a native Linux `x86_64` host and checks the selected workflow's
 tools. Product, Google Kleaf kernel, firmware, rootfs, boot, and artifact
-inputs all run on that host; macOS, containerized builders, and cross-build
-substitutes are intentionally rejected by the physical-device playbook.
+inputs all run on that host. A pinned `linux/amd64` Docker tool container is
+allowed only when its Docker engine is running on native Linux `x86_64`; it is
+not a substitute for an Apple-Silicon/ARM64 host, an emulated VM, or a
+cross-build, and it must never receive ADB/Fastboot USB access.
 The product profile targets `aarch64-unknown-linux-musl`, so a native build
 host must explicitly provision that Rust standard library and the configured
 `aarch64-linux-musl-gcc` linker (or set an equivalent
@@ -180,9 +182,43 @@ Android vbmeta image is accepted. Set `FERRIX_PIXEL9A_AVB_ALGORITHM` to a
 supported signing algorithm and provide `FERRIX_PIXEL9A_AVB_KEY` when signing;
 `NONE` is allowed only as the explicit unlocked-device development mode. All
 inputs use the pinned 4 KiB/header-v4 contract. The output remains
-`composed-not-booted` / `bootable=false`; no physical route consumes it yet,
-and no capacity fixture is checked in because the current Android inventory is
-incomplete.
+`composed-not-booted` / `bootable=false`. The checked-in
+`tools/pixel-9a/flash-radio.sh` route now consumes this exact six-field
+radio-first manifest through its own identity, recovery, backup, inactive-slot,
+AVB, and confirmation gates; it is not accepted by the canonical
+`pixel-9a-flash-*` route. A complete, redacted capacity handoff is still
+required, and no physical boot or flash has been run on the target.
+
+## Radio-first physical handoff
+
+After the split composer has produced `out/pixel-9a/images/tegu-wwan-split/`
+and the exact target is in bootloader Fastboot, inspect the route without a
+state change:
+
+```sh
+just pixel-9a-flash-radio-check --stage kernel --slot b --allow-unsigned-avb
+```
+
+The route prints the exact product/variant/hardware revision, serial hash,
+current and inactive target slot, every partition image hash, recovery hash,
+and the fastbootd transition plan. A temporary boot must be issued first:
+
+```sh
+just pixel-9a-flash-radio-boot-temp --allow-unsigned-avb
+```
+
+Only after observing and retaining its redacted transcript may the owner
+authorize the inactive-slot write:
+
+```sh
+FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE=out/pixel-9a/flash-radio/boot-temp-<stamp>-<pid>.txt \
+just pixel-9a-flash-radio --stage kernel --slot b --allow-unsigned-avb
+```
+
+The route never unlocks/locks, erases, formats, wipes, changes the active
+slot, flashes bootloader/radio firmware, or exposes the phone to the build
+container. It remains stub-tested only until this exact Pixel 9a has a
+successful observed Linux boot and radio evidence.
 
 The pinned Rust channel and target declarations are read from
 `rust-toolchain.toml`; the default developer install provisions both the QEMU
