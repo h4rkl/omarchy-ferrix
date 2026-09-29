@@ -428,7 +428,7 @@ build() {
 	"$mkbootimg" --header_version 4 --pagesize 4096 --ramdisk "$initramfs" --output "$stage/init_boot.img"
 	"$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_ramdisk" --dtb "$stage/dtb.img" --vendor_bootconfig "$bootconfig" --output "$stage/vendor_boot.img"
 	dtbo_inputs="$stage/.dtbo-inputs"
-	awk -F "$tab" '$1 == "source" && $2 ~ /\\.dtbo$/ { print $2 }' "$kernel_dist/split-inputs/dtbo-source-set.tsv" | while IFS= read -r relative; do
+	awk -F "$tab" '$1 == "source" && $2 ~ /\.dtbo$/ { print $2 }' "$kernel_dist/split-inputs/dtbo-source-set.tsv" | while IFS= read -r relative; do
 		printf '%s\n' "$kernel_dist/split-inputs/dtbo-source-set/$relative"
 	done >"$dtbo_inputs"
 	# mkdtboimg.py accepts the output followed by source-built DTBO blobs. The
