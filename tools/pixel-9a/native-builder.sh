@@ -109,13 +109,13 @@ run_workflow() {
 			--mount "type=bind,src=$root,dst=/workspace,readonly" \
 			--mount "type=bind,src=$root/.cache/ferrix/pixel-9a,dst=/workspace/.cache/ferrix/pixel-9a" \
 			--mount "type=bind,src=$root/out/pixel-9a,dst=/workspace/out/pixel-9a" \
-			--env-file "$env_file" "$image" sh -c 'cd /workspace && exec "$@"' -- "$script" "$verb" "$@"
+			--env-file "$env_file" "$image" sh -c 'cd /workspace && exec "$@"' -- "$@"
 	fi
 	exec docker run --rm --platform linux/amd64 --init \
 		--mount "type=bind,src=$root,dst=/workspace,readonly" \
 		--mount "type=bind,src=$root/.cache/ferrix/pixel-9a,dst=/workspace/.cache/ferrix/pixel-9a" \
 		--mount "type=bind,src=$root/out/pixel-9a,dst=/workspace/out/pixel-9a" \
-		--env-file "$env_file" "$image" sh -c 'cd /workspace && exec "$@"' -- "$script" "$verb" "$@"
+		--env-file "$env_file" "$image" sh -c 'cd /workspace && exec "$@"' -- "$@"
 }
 
 usage() {
