@@ -70,6 +70,8 @@ for associated_radio in 'samsung,kepler' 'st21nfc' 'st54spi' 'AOC_UWB_DRIVER'; d
 	grep -q "$associated_radio" "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/associated-radio-audit.md" || fail "associated-radio audit omits $associated_radio"
 done
 grep -q '^CONFIG_BLK_DEV_DM=y$' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/kernel-radio-extra.config" || fail 'radio extra config does not make device-mapper built in'
+grep -q '^# CONFIG_KVM is not set$' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/kernel-radio-extra.config" || fail 'radio extra config does not disable unused KVM nVHE route'
+grep -q 'R_AARCH64_ADR_GOT_PAGE/R_AARCH64_LD64_GOT_LO12_NC' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/kernel-radio-extra.config" || fail 'radio KVM disable rationale does not record the rejected relocation types'
 if grep -Eiq '(^|[^[:alnum:]_-])(adb|fastboot)([^[:alnum:]_-]|$)' "$workflow"; then
 	fail 'radio kernel workflow contains device transport tooling'
 fi

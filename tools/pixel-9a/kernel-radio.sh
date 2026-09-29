@@ -414,6 +414,11 @@ check_built_config() {
 	done <<EOF
 $(required_config)
 EOF
+	# This physical phone does not host virtual machines. Keep KVM disabled in
+	# the target-local route; otherwise Zig's nVHE objects produce GOT
+	# relocations 311/312 that gen-hyprel intentionally rejects.
+	grep -qx '# CONFIG_KVM is not set' "$config_file" ||
+		die 'radio kernel .config must keep CONFIG_KVM disabled for the physical route'
 }
 
 write_dtbo_source_set() {
