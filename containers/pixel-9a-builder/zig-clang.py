@@ -23,7 +23,13 @@ def normalize_compile_args(args: list[str]) -> list[str]:
     # LLVM target table exposes that baseline as `generic`; preserve the
     # intended baseline instead of allowing an otherwise unrelated helper
     # build to fail on the spelling difference.
-    return ["-mcpu=generic" if arg == "-mcpu=armv8" else arg for arg in args]
+    normalized: list[str] = []
+    for arg in args:
+        if arg in ("-mcpu=armv8", "-march=armv8-a"):
+            normalized.append("-mcpu=generic")
+        else:
+            normalized.append(arg)
+    return normalized
 
 
 def split_dependency_flag(args: list[str]) -> tuple[list[str], str | None]:

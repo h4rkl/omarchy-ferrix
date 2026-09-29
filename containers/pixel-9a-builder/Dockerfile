@@ -102,10 +102,10 @@ RUN curl --fail --location --retry 3 --connect-timeout 30 --output /tmp/zig.tar.
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig c++ "$@"' > /usr/local/bin/clang++ \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig ld.lld "$@"' > /usr/local/bin/ld.lld \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig ar "$@"' > /usr/local/bin/llvm-ar \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig nm "$@"' > /usr/local/bin/llvm-nm \
+    && printf '%s\n' '#!/bin/sh' 'exec /usr/bin/llvm-nm "$@"' > /usr/local/bin/llvm-nm \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig objcopy "$@"' > /usr/local/bin/llvm-objcopy \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig objdump "$@"' > /usr/local/bin/llvm-objdump \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig readelf "$@"' > /usr/local/bin/llvm-readelf \
+    && printf '%s\n' '#!/bin/sh' 'exec /usr/bin/llvm-readelf "$@"' > /usr/local/bin/llvm-readelf \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig strip "$@"' > /usr/local/bin/llvm-strip \
     && chmod 0755 /usr/local/bin/clang /usr/local/bin/clang++ \
         /usr/local/bin/ld.lld /usr/local/bin/llvm-ar /usr/local/bin/llvm-nm \
