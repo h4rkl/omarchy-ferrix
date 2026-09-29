@@ -34,6 +34,35 @@ ARG MKDTBOIMG_COMMIT=51befeeee29e8ea2cac77305451e9d781db2fd1a
 ARG AVB_REPO=https://android.googlesource.com/platform/external/avb
 ARG AVB_COMMIT=8201543ece1316d20f8a2002f70f8c076e28c7cb
 
+# The physical product is linked for Alpine/postmarketOS musl userspace.  The
+# Rust udev/libinput/Smithay crates need the target-side development files at
+# build time, while libudev-sys also probes a host library from its build
+# script.  Keep both sides explicit: Debian's libudev-dev is host-only and
+# these aarch64 APKs are the target sysroot inputs.  They are extracted as
+# archives rather than installed or executed, so no foreign-architecture
+# package scripts run in the x86_64 builder.
+ARG ALPINE_VERSION=3.24
+ARG ALPINE_EUDEV_DEV_VERSION=3.2.14-r6
+ARG ALPINE_EUDEV_DEV_SHA256=39e5d3c9adfef77cf7c40b71a0cc16ab2358923404cf6c1832693f3b00df15b7
+ARG ALPINE_EUDEV_LIBS_VERSION=3.2.14-r6
+ARG ALPINE_EUDEV_LIBS_SHA256=330022dcf23de371d8df9b08f9bf9c9e98ced062b7352b518ee977dcaf977956
+ARG ALPINE_LIBSEAT_DEV_VERSION=0.9.3-r0
+ARG ALPINE_LIBSEAT_DEV_SHA256=b7bf7485a3f0d2f48f84609e96a99b70e51cc629daa1fd4b22e722a4ca2aa105
+ARG ALPINE_LIBSEAT_VERSION=0.9.3-r0
+ARG ALPINE_LIBSEAT_SHA256=f8875ed580a6525ad8faf0cec95f4aa70f1388f08a9eb43bae2d905be67e2d31
+ARG ALPINE_MESA_DEV_VERSION=26.1.6-r0
+ARG ALPINE_MESA_DEV_SHA256=d6b92af5fdad93988cf07cb62a10214bf191e3f5911b33c7dccb9e96397babbc
+ARG ALPINE_MESA_GBM_VERSION=26.1.6-r0
+ARG ALPINE_MESA_GBM_SHA256=3a5487b688e3f072f134133b8a6538d552c9ebc86dedb5f0d54e2566f110f5da
+ARG ALPINE_LIBINPUT_DEV_VERSION=1.31.3-r0
+ARG ALPINE_LIBINPUT_DEV_SHA256=0f0fd646ab78b5bbdde09d85a5948d4d935fa87fbb5e13a993ff1478a942a10f
+ARG ALPINE_LIBINPUT_LIBS_VERSION=1.31.3-r0
+ARG ALPINE_LIBINPUT_LIBS_SHA256=9ce9a0d51f442ecee0ba370795c1dc6813115d3f271cbcb3ec12c9bd28732ab4
+ARG ALPINE_PIXMAN_DEV_VERSION=0.46.4-r0
+ARG ALPINE_PIXMAN_DEV_SHA256=c74cfa9a982fbf9a73d52cc3e88dab44273cef74334198f13ed1d54b1b0c7d51
+ARG ALPINE_PIXMAN_VERSION=0.46.4-r0
+ARG ALPINE_PIXMAN_SHA256=022ab7d2b766f3893e6c457a03c723fe3e79e9f009d8a62d06f1692d9f2fc77f
+
 COPY zig-clang.py /usr/local/bin/ferrix-zig-clang.py
 COPY zig-musl-link.py /usr/local/bin/ferrix-zig-musl-link.py
 
@@ -66,6 +95,7 @@ RUN apt-get update \
         kmod \
         libelf-dev \
         libncurses-dev \
+        libudev-dev \
         libssl-dev \
         lld \
         llvm \
@@ -83,6 +113,48 @@ RUN apt-get update \
         xz-utils \
         zstd \
     && rm -rf /var/lib/apt/lists/*
+
+# Install only the target development/runtime archives needed by the native
+# Linux product compositor.  The package URLs and bytes are pinned above;
+# extracting them under one sysroot keeps pkg-config from accidentally
+# resolving the host x86_64 libraries for the aarch64-musl Cargo build.
+RUN set -eux; \
+    sysroot=/opt/ferrix/aarch64-linux-musl-sysroot; \
+    mkdir -p "$sysroot" /tmp/alpine-pkgs; \
+    fetch_apk() { \
+      package=$1; \
+      sha256=$2; \
+      repo=$3; \
+      url="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/${repo}/aarch64/${package}"; \
+      curl --fail --location --retry 3 --connect-timeout 30 --output "/tmp/alpine-pkgs/${package}" "$url"; \
+      printf '%s  %s\n' "$sha256" "/tmp/alpine-pkgs/${package}" | sha256sum --check --status; \
+      tar --extract --gzip --file "/tmp/alpine-pkgs/${package}" --directory "$sysroot" \
+        --no-same-owner --no-same-permissions --warning=no-unknown-keyword; \
+    }; \
+    fetch_apk "eudev-dev-${ALPINE_EUDEV_DEV_VERSION}.apk" "$ALPINE_EUDEV_DEV_SHA256" main; \
+    fetch_apk "eudev-libs-${ALPINE_EUDEV_LIBS_VERSION}.apk" "$ALPINE_EUDEV_LIBS_SHA256" main; \
+    fetch_apk "libseat-dev-${ALPINE_LIBSEAT_DEV_VERSION}.apk" "$ALPINE_LIBSEAT_DEV_SHA256" community; \
+    fetch_apk "libseat-${ALPINE_LIBSEAT_VERSION}.apk" "$ALPINE_LIBSEAT_SHA256" community; \
+    fetch_apk "mesa-dev-${ALPINE_MESA_DEV_VERSION}.apk" "$ALPINE_MESA_DEV_SHA256" main; \
+    fetch_apk "mesa-gbm-${ALPINE_MESA_GBM_VERSION}.apk" "$ALPINE_MESA_GBM_SHA256" main; \
+    fetch_apk "libinput-dev-${ALPINE_LIBINPUT_DEV_VERSION}.apk" "$ALPINE_LIBINPUT_DEV_SHA256" community; \
+    fetch_apk "libinput-libs-${ALPINE_LIBINPUT_LIBS_VERSION}.apk" "$ALPINE_LIBINPUT_LIBS_SHA256" community; \
+    fetch_apk "pixman-dev-${ALPINE_PIXMAN_DEV_VERSION}.apk" "$ALPINE_PIXMAN_DEV_SHA256" main; \
+    fetch_apk "pixman-${ALPINE_PIXMAN_VERSION}.apk" "$ALPINE_PIXMAN_SHA256" main; \
+    test -f "$sysroot/usr/include/libudev.h"; \
+    test -f "$sysroot/usr/lib/pkgconfig/libudev.pc"; \
+    test -f "$sysroot/usr/lib/pkgconfig/libseat.pc"; \
+    test -f "$sysroot/usr/lib/pkgconfig/gbm.pc"; \
+    test -f "$sysroot/usr/lib/libudev.so"; \
+    test -f "$sysroot/usr/lib/libseat.so"; \
+    test -f "$sysroot/usr/lib/libgbm.so"; \
+    test -f "$sysroot/usr/lib/libinput.so"; \
+    test -f "$sysroot/usr/lib/libpixman-1.so"; \
+    rm -rf /tmp/alpine-pkgs
+
+ENV PKG_CONFIG_PATH_aarch64_unknown_linux_musl=/opt/ferrix/aarch64-linux-musl-sysroot/usr/lib/pkgconfig \
+    PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_musl=/opt/ferrix/aarch64-linux-musl-sysroot \
+    PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_musl=1
 
 # Zig supplies a deterministic aarch64-musl C linker without making the
 # physical route depend on a host cross-toolchain.  The wrapper is named as
@@ -170,6 +242,17 @@ RUN useradd --create-home --uid 1000 --shell /bin/sh ferrix-builder \
         "mkdtboimg=$MKDTBOIMG_COMMIT" \
         "avb=$AVB_COMMIT" \
         "repo=$REPO_VERSION" \
+        "alpine=$ALPINE_VERSION" \
+        "alpine-eudev-dev=$ALPINE_EUDEV_DEV_VERSION:$ALPINE_EUDEV_DEV_SHA256" \
+        "alpine-eudev-libs=$ALPINE_EUDEV_LIBS_VERSION:$ALPINE_EUDEV_LIBS_SHA256" \
+        "alpine-libseat-dev=$ALPINE_LIBSEAT_DEV_VERSION:$ALPINE_LIBSEAT_DEV_SHA256" \
+        "alpine-libseat=$ALPINE_LIBSEAT_VERSION:$ALPINE_LIBSEAT_SHA256" \
+        "alpine-mesa-dev=$ALPINE_MESA_DEV_VERSION:$ALPINE_MESA_DEV_SHA256" \
+        "alpine-mesa-gbm=$ALPINE_MESA_GBM_VERSION:$ALPINE_MESA_GBM_SHA256" \
+        "alpine-libinput-dev=$ALPINE_LIBINPUT_DEV_VERSION:$ALPINE_LIBINPUT_DEV_SHA256" \
+        "alpine-libinput-libs=$ALPINE_LIBINPUT_LIBS_VERSION:$ALPINE_LIBINPUT_LIBS_SHA256" \
+        "alpine-pixman-dev=$ALPINE_PIXMAN_DEV_VERSION:$ALPINE_PIXMAN_DEV_SHA256" \
+        "alpine-pixman=$ALPINE_PIXMAN_VERSION:$ALPINE_PIXMAN_SHA256" \
       > /usr/share/doc/ferrix-pixel9a-builder/pins.txt \
     && rustup target add --toolchain 1.98.1 aarch64-unknown-linux-musl
 

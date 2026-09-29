@@ -34,6 +34,24 @@ grep -F -- 'exec /opt/zig/zig ld.lld "$@"' "$dockerfile" >/dev/null || {
   echo 'builder image no longer routes ld.lld through pinned Zig LLVM' >&2
   exit 1
 }
+grep -F -- 'libudev-dev \' "$dockerfile" >/dev/null || {
+  echo 'builder image no longer installs the host libudev probe dependency' >&2
+  exit 1
+}
+for sysroot_input in \
+  'PKG_CONFIG_PATH_aarch64_unknown_linux_musl=/opt/ferrix/aarch64-linux-musl-sysroot/usr/lib/pkgconfig' \
+  'PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_musl=/opt/ferrix/aarch64-linux-musl-sysroot' \
+  'PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_musl=1' \
+  'eudev-dev-${ALPINE_EUDEV_DEV_VERSION}.apk' \
+  'libseat-dev-${ALPINE_LIBSEAT_DEV_VERSION}.apk' \
+  'mesa-dev-${ALPINE_MESA_DEV_VERSION}.apk' \
+  'libinput-dev-${ALPINE_LIBINPUT_DEV_VERSION}.apk' \
+  'pixman-dev-${ALPINE_PIXMAN_DEV_VERSION}.apk'; do
+  grep -F -- "$sysroot_input" "$dockerfile" >/dev/null || {
+    echo "builder image is missing target musl sysroot input: $sysroot_input" >&2
+    exit 1
+  }
+done
 if grep -F -- 'exec /opt/zig/zig objcopy' "$dockerfile" >/dev/null; then
   echo 'builder image still routes objcopy through unsupported Zig subcommand' >&2
   exit 1
