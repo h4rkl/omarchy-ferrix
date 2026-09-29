@@ -1,5 +1,76 @@
 # Status
 
+## 2026-09-30 (recovery transport observed, Fastbootd still pending)
+
+- Following the owner's next mode-change confirmation, the local,
+  USB-enabled `just pixel-9a-partition-capacity` check returned exit 1:
+  `REFUSING pixel-9a partition capacity handoff: ADB state is 'recovery',
+  not device`. The transport is now visible as ADB recovery, not the
+  Fastbootd mode required by the capacity workflow.
+- No new exact-target identity or capacities were established by this
+  attempt, no complete handoff was published, and no device mutation or
+  gate change occurred. The provisioning playbook stopped further device
+  operations pending owner-controlled entry into Fastbootd.
+
+## 2026-09-30 (local USB access restored outside sandbox)
+
+- After the owner demonstrated local Fastboot enumeration, the checked-in
+  `just pixel-9a-partition-capacity` workflow was run on the Mac with approved
+  sandbox escalation. It detected a single Fastboot transport and passed the
+  target identity/slot checks, then returned exit 1:
+  `REFUSING pixel-9a partition capacity handoff: Fastboot capacity handoff
+  requires fastbootd (is-userspace=yes) so both dynamic A/B logical partitions
+  are independently observable; no reboot was issued`.
+- This narrows the immediate blocker to transport mode, not a demonstrated
+  cable fault: the workflow can access the local phone outside the sandbox,
+  but it is not reporting userspace Fastboot. No capacity handoff was
+  published and no reboot, flash, slot change, or gate bypass occurred.
+  Per the provisioning playbook, the run stopped pending owner-entered
+  Fastbootd. Deba was not used for any USB/device operation.
+
+## 2026-09-30 (owner-entered Fastbootd, transport not visible)
+
+- The owner reported enabling Fastbootd for the admitted
+  `google-pixel-9a-tegu-gxq96-mp1-0` device. The read-only
+  `just pixel-9a-partition-capacity` workflow returned exit 1:
+  `REFUSING pixel-9a partition capacity handoff: capacity handoff requires
+  exactly one ADB or one Fastboot device (adb=0 fastboot=0)`.
+- No live identity, userspace-mode flag, or partition capacity could be
+  verified in this attempt. No complete handoff was published, no phone
+  operation was performed, and no gate was changed. The provisioning session
+  stopped pending restored USB visibility; no automatic retry was attempted.
+
+## 2026-09-30 (owner-reported recovery and live partition refusal)
+
+- **Recovery report:** the owner reports having tested recovery using
+  `tools/pixel-9a/factory-restore.sh` and requests continued Ferrix delivery.
+  The restored build and completed execution transcript remain unconfirmed;
+  the existing local restore records contain preflight evidence only. No
+  additional recovery rehearsal was scheduled. The reported workflow is
+  recorded as owner testimony, not independently verified execution, and the
+  machine-enforced recovery gate was not changed without the missing details.
+- **Physical identity:** read-only discovery at `2026-09-29T23:27:59Z` and
+  exact-target discovery at `2026-09-29T23:28:01Z` matched
+  `google-pixel-9a-tegu-gxq96-mp1-0` over ADB. The phone runs stock Android 15
+  build `BD4A.240925.111`, with an unlocked bootloader, orange verified boot,
+  and current slot `_a`. This corroborates current stock Android operation,
+  not the procedure or image used in the owner's recovery test.
+- **Partition blocker:** the fresh read-only inventory at
+  `2026-09-29T23:28:12Z` observed both slots but remained `partial` because
+  Android denies `/proc/partitions` and `/proc/cmdline`. The capacity workflow
+  then stopped with `REFUSING pixel-9a partition capacity handoff: boot_a
+  capacity is not readable from /sys/class/block/sda13/size`. No complete
+  capacity handoff was published. The supported next capacity acquisition
+  requires owner-entered Fastbootd; it does not replace the separate complete
+  inventory and reviewed rootfs mapping gates. No reboot, temporary boot,
+  flash, slot change, or gate bypass occurred.
+- **Validation and builder:** host/tool checks and all provisioning-playbook
+  prerequisite workflow tests passed (stub evidence only). Deba remains at
+  `26fc9f9` with the previously verified boot-input manifest; it has no final
+  split boot manifest or complete capacity handoff. Device transcripts remain
+  ignored under `out/device/` and `out/pixel-9a/`; no generated output or
+  unique identifiers are included in this record.
+
 ## 2026-09-30 (native boot-input retry passed)
 
 - **Source synchronization:** selector correction `206b41f` was pushed and
