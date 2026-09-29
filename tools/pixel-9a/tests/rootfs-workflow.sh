@@ -495,6 +495,9 @@ real_tar=$(command -v tar)
 	printf '%s\n' 'esac'
 } >"$fake_bin/uname"
 {
+	printf '%s\n' '#!/bin/sh' 'set -eu' '[ "$1" = -c ]' 'printf "%s\\n" 8'
+} >"$fake_bin/python3"
+{
 	printf '%s\n' '#!/bin/sh' 'set -eu' 'config=' 'action=' 'while [ "$#" -gt 0 ]; do' \
 		'  case "$1" in' '    --config) config=$2; shift 2 ;;' '    init|install) action=$1; shift ;;' '    *) shift ;;' '  esac' \
 		'done' '[ -n "$config" ]' 'build_work=$(sed -n "s/^work = //p" "$config")' \
@@ -531,7 +534,7 @@ real_tar=$(command -v tar)
 		'  esac' \
 		'done' '[ -n "$output" ]' 'printf "%s\\n" synthetic-ext4-rootfs >"$output"'
 } >"$fake_bin/mke2fs"
-chmod 0755 "$fake_bin/uname" "$fake_bin/pmbootstrap" "$fake_bin/tar" "$fake_bin/mke2fs"
+chmod 0755 "$fake_bin/uname" "$fake_bin/python3" "$fake_bin/pmbootstrap" "$fake_bin/tar" "$fake_bin/mke2fs"
 
 pmaports="$work/pmaports"
 mkdir -p "$pmaports"
@@ -557,6 +560,7 @@ FERRIX_PIXEL9A_PRODUCT_DIR="$product" \
 FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
 FERRIX_PIXEL9A_PROFILE="$product/profile.toml" \
 FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap \
+FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
 FERRIX_PIXEL9A_PMAPORTS_DIR="$work/missing-pmaports" \
 FERRIX_PIXEL9A_PMAPORTS_COMMIT="$pmaports_commit" \
 FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB=256 \
@@ -581,6 +585,7 @@ FERRIX_PIXEL9A_PRODUCT_DIR="$product" \
 FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
 FERRIX_PIXEL9A_PROFILE="$product/profile.toml" \
 FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap \
+FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
 FERRIX_PIXEL9A_PMAPORTS_DIR="$pmaports" \
 FERRIX_PIXEL9A_PMAPORTS_COMMIT="$pmaports_commit" \
 FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB=256 \
@@ -601,6 +606,7 @@ FERRIX_PIXEL9A_PRODUCT_DIR="$product" \
 FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
 FERRIX_PIXEL9A_PROFILE="$product/profile.toml" \
 FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap \
+FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
 FERRIX_PIXEL9A_PMAPORTS_DIR="$pmaports" \
 FERRIX_PIXEL9A_PMAPORTS_COMMIT="$pmaports_commit" \
 FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB=256 \

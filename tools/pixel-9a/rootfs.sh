@@ -32,6 +32,7 @@ radio_split_contract_hash=''
 build_token=I-understand-this-runs-pmbootstrap
 rootfs_image_size_mib=${FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB:-2048}
 rootfs_uuid=${FERRIX_PIXEL9A_ROOTFS_UUID:-9a9a9a9a-9a9a-49a9-9a9a-9a9a9a9a9a9a}
+rootfs_password=${FERRIX_PIXEL9A_ROOTFS_PASSWORD:-}
 tab=$(printf '\t')
 
 die() {
@@ -690,7 +691,7 @@ require_linux_build_host() {
 	host_arch=$(uname -m)
 	[ "$host_os" = Linux ] && [ "$host_arch" = x86_64 ] ||
 		die "rootfs build requires native Linux x86_64; detected $host_os/$host_arch"
-	for command_name in git mke2fs pmbootstrap tar; do
+	for command_name in git mke2fs pmbootstrap python3 tar; do
 		command -v "$command_name" >/dev/null 2>&1 || die "missing native Linux prerequisite '$command_name'"
 	done
 }
@@ -740,6 +741,7 @@ build_rootfs() {
 	preflight >/dev/null
 	require_linux_build_host
 	[ "${FERRIX_PIXEL9A_ROOTFS_BUILD:-}" = "$build_token" ] || die "rootfs build is opt-in; set FERRIX_PIXEL9A_ROOTFS_BUILD=$build_token"
+	[ -n "$rootfs_password" ] || die 'FERRIX_PIXEL9A_ROOTFS_PASSWORD is required; use a one-time non-empty password for the generated guest user'
 	validate_kernel_dist
 	validate_product_dir
 	validate_firmware_dir
@@ -813,18 +815,17 @@ build_rootfs() {
 	# The target package set includes two local, source-pinned aports. Keep
 	# local package installation enabled so pmbootstrap builds and installs
 	# those recipes from the staged aports tree.
-	# pmbootstrap v3's -y flag covers confirmations but still reads ordinary
-	# default-valued prompts during init. Feed a finite newline-only answer file
-	# so this checked-in route remains noninteractive without guessing a value.
-	init_input="$build_dir/pmbootstrap-init.input"
-	: >"$init_input"
-	init_input_count=0
-	while [ "$init_input_count" -lt 64 ]; do
-		printf '\n' >>"$init_input"
-		init_input_count=$((init_input_count + 1))
-	done
-	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --details-to-stdout --config "$config" -y init <"$init_input"
-	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --details-to-stdout --config "$config" -y install --no-image --no-fde --no-sshd --no-firewall --no-recommends
+	# pmbootstrap init's v3.11.1 systemd warning assumes every device package
+	# carries a Linux subpackage. This target deliberately keeps its external
+	# Google/WWAN kernel outside pmbootstrap, so initialize only the work-folder
+	# state that init would create and run install from the fully checked-in
+	# config. This is the same noninteractive config boundary used by the QEMU
+	# postmarketOS workflow.
+	pmbootstrap_work_version=$(python3 -c 'import pmb.config; print(pmb.config.work_version)')
+	mkdir -p "$pmb_work/cache_git"
+	chmod 0700 "$pmb_work"
+	[ -f "$pmb_work/version" ] || printf '%s\n' "$pmbootstrap_work_version" >"$pmb_work/version"
+	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --details-to-stdout --config "$config" -y install --password "$rootfs_password" --no-image --no-fde --no-sshd --no-firewall --no-recommends
 	rootfs_dir=$(find "$pmb_work" -maxdepth 2 -type d -name 'chroot_rootfs-*' -print -quit)
 	[ -n "$rootfs_dir" ] || die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
