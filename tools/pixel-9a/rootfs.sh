@@ -48,6 +48,11 @@ hash_file() {
 	fi
 }
 
+sha512_file() {
+	command -v sha512sum >/dev/null 2>&1 || die 'missing sha512sum for staged APKBUILD checksum rewriting'
+	sha512sum "$1" | awk '{ print $1 }'
+}
+
 file_size() {
 	wc -c <"$1" | tr -d '[:space:]'
 }
@@ -830,11 +835,22 @@ build_rootfs() {
 	git -C "$aports" rev-parse HEAD >/dev/null 2>&1 || die 'staged pmaports metadata is not a valid Git repository'
 	mkdir -p "$aports/device/testing"
 	cp -R "$package_dir" "$aports/device/testing/device-google-tegu"
+	staged_device_package="$aports/device/testing/device-google-tegu"
 	# The checked-in package keeps Google's Kleaf module list for the comparison
 	# route. The selected radio-first candidate has a different ABI and builds
 	# its radio/storage paths in-kernel, so overlay the explicit route-local list
-	# before pmbootstrap consumes the device package.
-	cp "$radio_initfs_module_list" "$aports/device/testing/device-google-tegu/modules-initfs"
+	# before pmbootstrap consumes the device package. Its APKBUILD checksum must
+	# follow that deliberate route selection rather than the comparison list.
+	cp "$radio_initfs_module_list" "$staged_device_package/modules-initfs"
+	radio_initfs_module_sha512=$(sha512_file "$radio_initfs_module_list")
+	staged_apkbuild_tmp="$staged_device_package/APKBUILD.tmp.$$"
+	if ! awk -v radio_hash="$radio_initfs_module_sha512" \
+		'$2 == "modules-initfs" { sub(/^[^[:space:]]+/, radio_hash); found=1 } { print } END { if (!found) exit 1 }' \
+		"$staged_device_package/APKBUILD" >"$staged_apkbuild_tmp"; then
+		rm -f "$staged_apkbuild_tmp"
+		die 'staged device package APKBUILD is missing the modules-initfs checksum'
+	fi
+	mv "$staged_apkbuild_tmp" "$staged_device_package/APKBUILD"
 	# These are target-local external package recipes. Keep them alongside the
 	# copied device package so pmbootstrap cannot silently resolve generic
 	# ModemManager or an unreviewed modem helper from the host checkout.

@@ -20,6 +20,14 @@ hash_file() {
 	fi
 }
 
+sha512_file() {
+	if command -v sha512sum >/dev/null 2>&1; then
+		sha512sum "$1" | awk '{print $1}'
+	else
+		shasum -a 512 "$1" | awk '{print $1}'
+	fi
+}
+
 sh -n "$script"
 if grep -q 'targets/qemu-aarch64/pmos/pins.env' "$script"; then
 	fail 'physical rootfs workflow must not inherit the QEMU pmaports pin'
@@ -486,6 +494,7 @@ fi
 fake_bin="$work/fake-bin"
 mkdir -p "$fake_bin"
 real_tar=$(command -v tar)
+radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 {
 	printf '%s\n' '#!/bin/sh'
 	printf '%s\n' 'case "$1" in'
@@ -511,9 +520,10 @@ real_tar=$(command -v tar)
 		'if [ "$action" = init ]; then mkdir -p "$build_work"; printf "%s\\n" 6 >"$build_work/version"; exit 0; fi' \
 		'[ -f "$aports/device/testing/exynos-modem/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/modemmanager-samsung-sit/APKBUILD" ]' \
-	'[ -f "$aports/device/testing/device-google-tegu/s5300-userspace-sources.toml" ]' \
-	'[ -f "$aports/device/testing/device-google-tegu/modules-initfs-radio" ]' \
-	'awk '\''! /^[[:space:]]*#/ && NF { bad=1 } END { exit bad }'\'' "$aports/device/testing/device-google-tegu/modules-initfs"' \
+		'[ -f "$aports/device/testing/device-google-tegu/s5300-userspace-sources.toml" ]' \
+		'[ -f "$aports/device/testing/device-google-tegu/modules-initfs-radio" ]' \
+		'awk '\''! /^[[:space:]]*#/ && NF { bad=1 } END { exit bad }'\'' "$aports/device/testing/device-google-tegu/modules-initfs"' \
+		"grep -q \"^$radio_initfs_sha512  modules-initfs\\$\" \"\$aports/device/testing/device-google-tegu/APKBUILD\"" \
 		'grep -q "634e8eb404c3fcf959dce6a0b0d97b33ba0fc346" "$aports/device/testing/exynos-modem/APKBUILD"' \
 		'grep -q "14a0013a28e5d5eec513c65e75d7549678ecc61e" "$aports/device/testing/modemmanager-samsung-sit/APKBUILD"' \
 		'grep -q "^build_pkgs_on_install = True$" "$config"' \
