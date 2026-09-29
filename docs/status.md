@@ -1,5 +1,73 @@
 # Status
 
+## 2026-09-30 (capacity diagnostics fixed; physical layout blockers identified)
+
+- **Owner-authorized read-only fix:** capacity queries now retain their
+  serial-redacted raw responses and process exit status. Missing-size
+  refusals point to this evidence instead of incorrectly suggesting another
+  Fastbootd transition. Success status is emitted only after the complete
+  capacity handoff is published. Literal serial redaction also handles
+  regex-special characters.
+- **Diagnostic route:** `just pixel-9a-partition-capacity-diagnose` checks
+  exact identity and userspace mode before collecting all twenty fixed A/B
+  size queries. It records failures and zero values without creating any
+  capacity TSV or changing a gate. A completed scan is explicitly
+  `diagnostic-only`, not installation readiness.
+- **Validation:** capacity and radio-split regression suites pass, as do
+  shell syntax, `cargo fmt --check`, and `git diff --check`. New fixtures
+  cover failed queries with either zero or nonzero CLI exit, zero inactive
+  capacity rejection, complete diagnostic scanning without TSV publication,
+  literal serial redaction, and wrong-transport/identity refusals. Rust
+  runtime and QEMU suites were not rerun for these shell-only changes.
+- **Physical evidence:** the local USB-enabled scan at
+  `2026-09-29T23:46:50Z` verified the exact Pixel 9a target, current slot `a`,
+  two slots, and userspace Fastboot. Twelve queries (both slots of
+  `vendor_boot`, `vendor_kernel_boot`, `dtbo`, `vbmeta`, `vbmeta_vendor`,
+  and `vbmeta_system`) returned
+  `FAILED (remote: 'Could not open partition')`, despite process exit zero.
+  Both boot sizes were `0x4000000`; both init_boot sizes were `0x800000`.
+  `vendor_dlkm_a` was `0x1310000`, `system_dlkm_a` was `0xB2B000`, and both
+  corresponding `_b` sizes were `0x0`. The ignored transcript is
+  `out/pixel-9a/partition-capacity-diagnostic-20260929T234650Z-57156.txt`.
+- **Boundary:** missing static sizes and zero inactive logical capacities
+  independently prevent a complete positive/equal A/B handoff. No capacities
+  were guessed or copied between slots, and no prior bootloader observations
+  were silently combined with current evidence. Any cross-mode acquisition
+  or logical-partition allocation change needs a reviewed target plan;
+  allocation changes additionally require fresh per-run mutation approval.
+  No phone reboot, flash, resize, slot change, or recovery/rootfs gate change
+  was performed. Stock restore remains owner-reported, not newly verified.
+
+## 2026-09-30 (Fastbootd identity correction passed; capacity still incomplete)
+
+- **Owner-authorized correction:** only the read-only capacity workflow now
+  handles Google's `MSM USF` placeholder after live userspace-mode, exact
+  product/revision, and A/B slot checks. Complete matching serial-bound ADB
+  discovery must still prove `GXQ96`. Observed variant and verified SKU are
+  recorded separately; shared flashing/restoration/activation gates are
+  unchanged.
+- **Regression evidence:** the new fixture reproduced the original refusal
+  before the fix. Capacity and radio-split tests now pass, including rejection
+  of absent/incomplete/wrong-SKU/wrong-serial evidence, bootloader mode,
+  unknown variants, wrong product/revision/slot fields, and multiple devices.
+  A direct shared-helper test confirms that mutating workflows did not gain
+  the placeholder exception. Shell syntax, formatting, and diff checks pass;
+  no Rust product or QEMU behavior changed.
+- **Physical retry:** the authorized local read-only run at
+  `2026-09-29T23:40:28Z` passed identity correlation for
+  `google-pixel-9a-tegu-gxq96-mp1-0`, with `is-userspace=yes`, current slot
+  `a`, and two slots. Both boot capacities were 67,108,864 bytes and both
+  init_boot capacities were 8,388,608 bytes. It then stopped with
+  `REFUSING pixel-9a partition capacity handoff: partition-size:vendor_boot_a
+  is not reported by Fastboot; dynamic partitions require fastbootd and
+  independent A/B getvar rows`.
+- **Boundary:** no complete capacity file was published. The partial ignored
+  transcript is `out/pixel-9a/partition-capacity-20260929T234028Z.txt`, not a
+  usable ten-partition handoff. No further device calls, reboot, flash, slot
+  selection, recovery-gate change, or rootfs mapping change followed the
+  refusal. The next blocker is obtaining the missing capacities through a
+  reviewed read-only workflow; no partition size may be guessed.
+
 ## 2026-09-30 (Fastbootd variant compatibility refusal)
 
 - The owner supplied `is-userspace: yes` after manually entering Fastbootd.

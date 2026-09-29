@@ -80,6 +80,31 @@ requires complete redacted ADB identity for the same serial hash proving
 SKU. This exception is limited to capacity reads: the shared identity gate
 used by flashing, restoration, and activation remains unchanged.
 
+For an owner-authorized read-only investigation of missing capacities in
+Fastbootd, use:
+
+```sh
+just pixel-9a-partition-capacity-diagnose
+```
+
+This uses the same exact-target identity checks, then records all twenty
+independent A/B size responses, including device failures and zero values,
+in an ignored, serial-redacted diagnostic transcript. It never publishes a
+capacity TSV; `result=diagnostic-only` means the scan finished, not that the
+installation gates passed. Normal capacity runs also retain the raw query
+responses and only mark capacities observed after publishing a complete
+handoff. Do not treat a zero CLI exit as a successful query: the local CLI
+has returned exit zero with `FAILED (remote: 'Could not open partition')`.
+
+The physical diagnostic on 2026-09-30 found that Fastbootd could not open
+either slot of `vendor_boot`, `vendor_kernel_boot`, `dtbo`, `vbmeta`,
+`vbmeta_vendor`, or `vbmeta_system`. It separately reported zero bytes for
+`vendor_dlkm_b` and `system_dlkm_b`. Missing static sizes and zero inactive
+logical sizes are distinct blockers; neither may be replaced with guessed
+or mirrored values. A reviewed acquisition/layout plan is required before
+changing the capacity contract or partition allocation. This diagnostic
+workflow performs no reboot, resize, slot selection, or flash.
+
 This is an owner-declared new development device with no personal data. The
 checked-in gate records `backup = "not-required-dev-device"` and
 `data_policy = "dev-device-no-user-data"`; it deliberately does not claim a

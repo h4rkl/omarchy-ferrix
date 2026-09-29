@@ -28,6 +28,13 @@ die() {
 	exit 1
 }
 
+mode=handoff
+case "$#:${1:-}" in
+	0:) ;;
+	1:--diagnose-fastboot) mode=diagnose-fastboot ;;
+	*) die 'usage: partition-capacity.sh [--diagnose-fastboot]' ;;
+esac
+
 need() {
 	command -v "$1" >/dev/null 2>&1 || die "missing $1; install Android Platform Tools"
 }
@@ -43,6 +50,7 @@ sha256_prefix() {
 mkdir -p "$out"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 transcript="$out/partition-capacity-$stamp.txt"
+[ "$mode" != diagnose-fastboot ] || transcript="$out/partition-capacity-diagnostic-$stamp-$$.txt"
 handoff="$out/partition-capacities-$stamp.tsv"
 latest="$out/partition-capacities-latest.tsv"
 handoff_tmp="$out/.partition-capacities-latest.$$"
@@ -62,7 +70,16 @@ emit() {
 	value=$2
 	if [ -n "$serial" ]; then
 		case "$value" in
-			*"$serial"*) value=$(printf '%s\n' "$value" | sed "s/$serial/serial-sha256:$(sha256_prefix "$serial")/g") ;;
+			*"$serial"*) value=$(printf '%s\n' "$value" | REDACT_NEEDLE="$serial" REDACT_REPLACEMENT="serial-sha256:$(sha256_prefix "$serial")" awk '
+				BEGIN { needle=ENVIRON["REDACT_NEEDLE"]; replacement=ENVIRON["REDACT_REPLACEMENT"] }
+				{
+					line=$0; redacted=""
+					while ((pos=index(line, needle)) != 0) {
+						redacted=redacted substr(line, 1, pos-1) replacement
+						line=substr(line, pos+length(needle))
+					}
+					print redacted line
+				}') ;;
 		esac
 	fi
 	printf '%s=%s\n' "$key" "$value" >>"$transcript"
@@ -195,7 +212,17 @@ parse_fastboot_capacity() {
 # names below; this function is read-only and never invokes a mutation verb.
 fastboot_getvar() {
 	variable=$1
-	output=$(fastboot -s "$serial" getvar "$variable" 2>&1) || return 1
+	if output=$(fastboot -s "$serial" getvar "$variable" 2>&1); then
+		query_status=0
+	else
+		query_status=$?
+	fi
+	# Preserve the real device/CLI failure, not just a generic missing-value
+	# message. These exact-variable responses remain in the ignored transcript.
+	emit getvar_query "$variable"
+	emit getvar_exit_status "$query_status"
+	emit getvar_response "$output"
+	[ "$query_status" -eq 0 ] || return 1
 	printf '%s\n' "$output" | awk -v key="$variable" '
 		{
 			line = $0
@@ -218,9 +245,9 @@ fastboot_capacity_for_partition() {
 	active_name="partition-size:${partition}${active_suffix}"
 	inactive_name="partition-size:${partition}${inactive_suffix}"
 	active_raw=$(fastboot_getvar "$active_name") ||
-		die "$active_name is not reported by Fastboot; dynamic partitions require fastbootd and independent A/B getvar rows"
+		die "$active_name is not reported by Fastboot; see redacted getvar response in $transcript"
 	inactive_raw=$(fastboot_getvar "$inactive_name") ||
-		die "$inactive_name is not reported by Fastboot; dynamic partitions require fastbootd and independent A/B getvar rows"
+		die "$inactive_name is not reported by Fastboot; see redacted getvar response in $transcript"
 	active_bytes=$(parse_fastboot_capacity "$active_raw") ||
 		die "$active_name has an invalid hex/decimal byte capacity: $active_raw"
 	inactive_bytes=$(parse_fastboot_capacity "$inactive_raw") ||
@@ -329,7 +356,26 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 	emit inventory_completeness partial
 	emit capacity_source fastboot-getvar-partition-size
 	emit capacity_unit bytes
-	emit handoff_status exact-capacities-observed
+	if [ "$mode" = diagnose-fastboot ]; then
+		# This is an explicit diagnostic scan, never a capacity handoff. A
+		# missing/zero response is retained as evidence, not substituted or
+		# accepted by the handoff's positive/equal/aligned capacity gates.
+		emit handoff_status not-produced-diagnostic-only
+		diagnostic_missing=0
+		for partition in boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta vbmeta_vendor vbmeta_system vendor_dlkm system_dlkm; do
+			for suffix in _a _b; do
+				if diagnostic_value=$(fastboot_getvar "partition-size:$partition$suffix"); then
+					emit "diagnostic_${partition}${suffix}_raw" "$diagnostic_value"
+				else
+					diagnostic_missing=$((diagnostic_missing + 1))
+					emit "diagnostic_${partition}${suffix}_query" unavailable
+				fi
+			done
+		done
+		emit result diagnostic-only
+		printf 'result=diagnostic-only\nunavailable_queries=%s\ntranscript=%s\n' "$diagnostic_missing" "$transcript"
+		exit 0
+	fi
 
 	{
 		printf '# source=Fastboot getvar partition-size:<partition>_<slot>; values are bytes (hex or decimal)\n'
@@ -350,6 +396,7 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 
 	mv "$handoff_tmp" "$handoff"
 	cp "$handoff" "$latest"
+	emit handoff_status exact-capacities-observed
 	trap - EXIT HUP INT TERM
 	printf 'capacity_handoff=%s\n' "$handoff"
 	printf 'capacity_handoff_latest=%s\n' "$latest"
@@ -357,6 +404,8 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 	printf 'transcript=%s\n' "$transcript" >&2
 	exit 0
 fi
+
+[ "$mode" != diagnose-fastboot ] || die 'diagnostic mode requires exactly one Fastbootd device and no ADB transport'
 
 [ "$adb_count" -eq 1 ] && [ "$fastboot_count" -eq 0 ] ||
 	die "capacity handoff requires exactly one ADB or one Fastboot device (adb=$adb_count fastboot=$fastboot_count)"
@@ -401,7 +450,6 @@ emit slot_scope both-a-and-b
 emit inventory_completeness "$inventory_completeness"
 emit capacity_source 'sysfs-size-512-byte-sectors'
 emit capacity_unit bytes
-emit handoff_status exact-capacities-observed
 
 {
 	printf '# source=sysfs:/sys/class/block/*/size; each value is 512-byte sectors\n'
@@ -454,6 +502,7 @@ done
 
 mv "$handoff_tmp" "$handoff"
 cp "$handoff" "$latest"
+emit handoff_status exact-capacities-observed
 trap - EXIT HUP INT TERM
 printf 'capacity_handoff=%s\n' "$handoff"
 printf 'capacity_handoff_latest=%s\n' "$latest"

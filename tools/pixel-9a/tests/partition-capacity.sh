@@ -100,8 +100,11 @@ STUB
 
 cat >"$work/bin/fastboot" <<'STUB'
 #!/bin/sh
+[ -z "${STUB_FASTBOOT_LOG:-}" ] || printf '%s\n' "$*" >>"$STUB_FASTBOOT_LOG"
+device_serial=''
 if [ "$1" = -s ]; then
 	[ -n "${2:-}" ] || exit 98
+	device_serial=$2
 	shift 2
 fi
 case "$1" in
@@ -111,6 +114,10 @@ devices)
 	;;
 getvar)
 	variable=$2
+	if [ "${STUB_FAIL_VENDOR_BOOT:-0}" = 1 ] && [ "$variable" = partition-size:vendor_boot_a ]; then
+		printf "FAILED (remote: 'Could not open partition') device=%s\n" "$device_serial" >&2
+		exit "${STUB_VENDOR_BOOT_EXIT:-1}"
+	fi
 	case "$variable" in
 	product) value=${STUB_FASTBOOT_PRODUCT:-tegu} ;;
 	hw-revision) value=${STUB_FASTBOOT_REVISION:-MP1.0} ;;
@@ -135,7 +142,10 @@ getvar)
 	partition-size:vbmeta_system_a) value=0x00400000 ;;
 	partition-size:vbmeta_system_b) value=4194304 ;;
 	partition-size:vendor_dlkm_a) value=0x00800000 ;;
-	partition-size:vendor_dlkm_b) [ "${STUB_FASTBOOT_MISSING_DYNAMIC_B:-0}" = 1 ] && exit 1 || value=8388608 ;;
+	partition-size:vendor_dlkm_b)
+		[ "${STUB_FASTBOOT_MISSING_DYNAMIC_B:-0}" = 1 ] && exit 1
+		value=${STUB_FASTBOOT_DYNAMIC_B_SIZE:-8388608}
+		;;
 	partition-size:system_dlkm_a) value=0x00800000 ;;
 	partition-size:system_dlkm_b) [ "${STUB_FASTBOOT_MISSING_DYNAMIC_B:-0}" = 1 ] && exit 1 || value=8388608 ;;
 	*) exit 1 ;;
@@ -296,5 +306,74 @@ if STUB_ADB_DEVICES_EMPTY=1 STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB
 	exit 1
 fi
 grep -q 'partition-size:vendor_dlkm_b is not reported' "$work/missing-fastboot-dynamic.err"
+
+# Retain the real response on a normal handoff refusal and never claim that
+# all capacities were observed before all ten partitions passed.
+if FERRIX_OUT_DIR="$work/query-failure" STUB_ADB_DEVICES_EMPTY=1 \
+	STUB_FASTBOOT_DEVICES='SERIAL.[F] fastboot usb:1' STUB_FAIL_VENDOR_BOOT=1 \
+	"$workflow" >"$work/query-failure.out" 2>"$work/query-failure.err"; then
+	echo 'handoff accepted failed vendor_boot query' >&2
+	exit 1
+fi
+grep -Fq 'see redacted getvar response' "$work/query-failure.err"
+grep -Fq 'Could not open partition' "$work/query-failure"/pixel-9a/partition-capacity-*.txt
+! grep -R -Fq 'SERIAL.[F]' "$work/query-failure"
+! grep -Rq '^handoff_status=exact-capacities-observed$' "$work/query-failure"
+[ ! -e "$work/query-failure/pixel-9a/partition-capacities-latest.tsv" ]
+
+# The local Fastboot CLI can exit zero even when the device reports FAILED.
+# A successful process exit must not substitute for an exact size response.
+if FERRIX_OUT_DIR="$work/query-failure-zero-exit" STUB_ADB_DEVICES_EMPTY=1 \
+	STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB_FAIL_VENDOR_BOOT=1 \
+	STUB_VENDOR_BOOT_EXIT=0 "$workflow" >"$work/zero-exit.out" 2>"$work/zero-exit.err"; then
+	echo 'handoff accepted device failure with successful CLI exit' >&2
+	exit 1
+fi
+grep -Fq 'partition-size:vendor_boot_a is not reported' "$work/zero-exit.err"
+[ -z "$(find "$work/query-failure-zero-exit" -name '*.tsv' -print)" ]
+
+if FERRIX_OUT_DIR="$work/zero-capacity" STUB_ADB_DEVICES_EMPTY=1 \
+	STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB_FASTBOOT_DYNAMIC_B_SIZE=0x0 \
+	"$workflow" >"$work/zero-capacity.out" 2>"$work/zero-capacity.err"; then
+	echo 'handoff accepted zero inactive logical capacity' >&2
+	exit 1
+fi
+grep -Fq 'partition-size:vendor_dlkm_b has an invalid hex/decimal byte capacity: 0x0' "$work/zero-capacity.err"
+[ -z "$(find "$work/zero-capacity" -name '*.tsv' -print)" ]
+
+# Diagnostic mode collects all responses without treating a missing query or
+# a zero-sized logical slot as acceptable installation capacity.
+FERRIX_OUT_DIR="$work/diagnostic" STUB_ADB_DEVICES_EMPTY=1 \
+	STUB_FASTBOOT_DEVICES='SERIAL.[F] fastboot usb:1' STUB_FAIL_VENDOR_BOOT=1 \
+	STUB_VENDOR_BOOT_EXIT=0 \
+	STUB_FASTBOOT_DYNAMIC_B_SIZE=0x0 STUB_FASTBOOT_LOG="$work/diagnostic.commands" \
+	"$workflow" --diagnose-fastboot >"$work/diagnostic.out" 2>"$work/diagnostic.err"
+diagnostic=$(awk -F= '$1 == "transcript" { print $2 }' "$work/diagnostic.out")
+grep -q '^result=diagnostic-only$' "$work/diagnostic.out"
+grep -q '^unavailable_queries=1$' "$work/diagnostic.out"
+grep -q '^handoff_status=not-produced-diagnostic-only$' "$diagnostic"
+grep -q '^diagnostic_vendor_dlkm_b_raw=0x0$' "$diagnostic"
+grep -Fq 'Could not open partition' "$diagnostic"
+[ "$(grep -c '^getvar_query=partition-size:' "$diagnostic")" -eq 20 ]
+[ "$(grep -c ' getvar partition-size:' "$work/diagnostic.commands")" -eq 20 ]
+! grep -Fq 'SERIAL.[F]' "$diagnostic"
+! grep -q '^handoff_status=exact-capacities-observed$' "$diagnostic"
+[ -z "$(find "$work/diagnostic" -name '*.tsv' -print)" ]
+
+for bad_diagnostic in adb bootloader wrong-identity; do
+	set -- STUB_ADB_DEVICES_EMPTY=1 'STUB_FASTBOOT_DEVICES=SERIAL-F fastboot usb:1'
+	case "$bad_diagnostic" in
+		adb) set -- ;;
+		bootloader) set -- "$@" STUB_FASTBOOT_IS_USERSPACE=no ;;
+		wrong-identity) set -- "$@" STUB_FASTBOOT_REVISION=MP2.0 ;;
+	esac
+	if env FERRIX_OUT_DIR="$work/diagnostic-$bad_diagnostic" \
+		STUB_FASTBOOT_LOG="$work/diagnostic-$bad_diagnostic.commands" "$@" \
+		"$workflow" --diagnose-fastboot >"$work/diagnostic-$bad_diagnostic.out" 2>"$work/diagnostic-$bad_diagnostic.err"; then
+		echo "diagnostic mode accepted $bad_diagnostic" >&2
+		exit 1
+	fi
+	! grep -q ' getvar partition-size:' "$work/diagnostic-$bad_diagnostic.commands"
+done
 
 printf '%s\n' 'pixel-9a partition capacity tests passed'

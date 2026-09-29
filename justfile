@@ -115,6 +115,11 @@ pixel-9a-partition-inventory:
 pixel-9a-partition-capacity:
     @"{{root}}/tools/pixel-9a/partition-capacity.sh"
 
+# Read-only exact-target Fastbootd diagnostics. Saves raw getvar responses,
+# including failures; never publishes a capacity handoff or changes the phone.
+pixel-9a-partition-capacity-diagnose:
+    @"{{root}}/tools/pixel-9a/partition-capacity.sh" --diagnose-fastboot
+
 pixel-9a-partition-test:
     @sh "{{root}}/tools/pixel-9a/tests/partition-inventory.sh"
 
