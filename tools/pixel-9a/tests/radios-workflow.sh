@@ -204,7 +204,7 @@ check "inventory: evidence never claims QEMU or mock" sh -c '! grep -Eiq "	(qemu
 transcript=$(find "$work/inventory/pixel-9a/radios" -name 'inventory-*.txt' -type f | head -1)
 check "inventory: transcript exists" [ -n "$transcript" ]
 check "inventory: all staged firmware rows are hash-verified" \
-  sh -c 'grep -q "firmware present 9/9" "$1" && grep -q "firmware_manifest=verified" "$2"' sh "$tsv" "$transcript"
+  sh -c 'grep -q "firmware present 14/14" "$1" && grep -q "firmware_manifest=verified" "$2"' sh "$tsv" "$transcript"
 check "inventory: transcript queried Linux services and Ferrix adapters" \
   sh -c 'grep -q "^## nm-devices" "$1" && grep -q "^## bluetoothctl-show" "$1" && grep -q "^## mm-list" "$1" && grep -q "^## ferrix-logs" "$1" && grep -q "^## ferrix-core-state" "$1" && grep -q "^## ferrix-networkd-state" "$1" && grep -q "^## cpif-surface" "$1" && grep -q "^## associated-radios" "$1"' sh "$transcript"
 check "privacy: inventory transcript has no plaintext MAC" \

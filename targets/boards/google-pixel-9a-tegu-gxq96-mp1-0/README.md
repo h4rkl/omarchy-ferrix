@@ -422,21 +422,25 @@ substitute `BTFW_B.hcd` or `BTFW_D.hcd`: the factory configuration does not
 select either one for this target.
 
 The default target-scoped extraction allowlist is
-`firmware-stage-allowlist.tsv`. It records the five pinned BCM4383 paths, the
-exact `BCM.hcd` source path, and the two exact S5300 factory directory bundles
-(`carrierconfig` and `uecapconfig`). Bundle rows are expanded to
-destination-aware per-file manifest rows; symlinks, special files, unsafe
-components, and empty bundles fail closed. `FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST`
-may point to a separately reviewed replacement, but extraction still requires
-the explicit firmware confirmation and the exact factory hash.
-The pinned BCM4383 module name, firmware request basenames, and Linux
-firmware-class path contract are recorded in
+`firmware-stage-allowlist.tsv`. It maps the factory's generic BCM4383 firmware
+and map files, their `_4383_a3` variants, and the available A3 calibration,
+CLM, and TXCAP variants to explicit Linux runtime names. A3 calibration/CLM/
+TXCAP bytes are retained under their suffixed names and exposed under the base
+driver request names as fallback copies. The allowlist also records the exact
+`BCM.hcd` source path and two S5300 factory directory bundles (`carrierconfig`
+and `uecapconfig`). Bundle rows are expanded to destination-aware per-file
+manifest rows; symlinks, special files, unsafe components, and empty bundles
+fail closed. `FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST` may point to a separately
+reviewed replacement, but extraction still requires the explicit firmware
+confirmation and the exact factory hash.
+The pinned BCM4383 module name, firmware request basenames, and platform
+variant lookup contract are recorded in
 [`wifi-firmware-source-evidence.md`](wifi-firmware-source-evidence.md);
-the radio-first route maps the reviewed factory `bcmdhd` source files to the
-candidate's `brcmfmac4383-pcie.*` names only through the explicit,
-hash-pinned `firmware-radio-route.tsv` copy/rename manifest. The canonical
-Google route keeps its original names; neither route silently treats the two
-contracts as interchangeable.
+the radio-first route maps the reviewed A3 factory variants to the candidate's
+`brcmfmac4383-pcie.*` names only through the explicit, hash-pinned
+`firmware-radio-route.tsv` copy/rename manifest. The canonical Google route
+keeps the `bcmdhd` request names and variant suffixes; neither route silently
+treats the two contracts as interchangeable.
 
 The canonical Google comparison composer (`tools/pixel-9a/boot.sh`) validates
 the Kleaf contract and deliberately rejects a radio-first rootfs. Its offline

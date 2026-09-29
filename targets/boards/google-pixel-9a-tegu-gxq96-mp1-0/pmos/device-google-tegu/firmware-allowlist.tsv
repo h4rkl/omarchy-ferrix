@@ -8,6 +8,11 @@ bcm4383	lib/firmware/bcmdhd.cal	1
 bcm4383	lib/firmware/bcmdhd_clm.blob	1
 bcm4383	lib/firmware/fw_bcmdhd.map	1
 bcm4383	lib/firmware/bcmdhd_txcap.blob	1
+bcm4383	lib/firmware/fw_bcmdhd.bin_4383_a3	1
+bcm4383	lib/firmware/bcmdhd.cal_4383_a3	1
+bcm4383	lib/firmware/bcmdhd_clm.blob_4383_a3	1
+bcm4383	lib/firmware/fw_bcmdhd.map_4383_a3	1
+bcm4383	lib/firmware/bcmdhd_txcap.blob_4383_a3	1
 bluetooth-broadcom	lib/firmware/brcm/BCM.hcd	1
 modem-s5300	lib/firmware/carrierconfig	1
 modem-s5300	lib/firmware/uecapconfig	1

@@ -30,10 +30,15 @@ write_file() {
 }
 
 write_file lib/firmware/fw_bcmdhd.bin wifi-bin
-write_file lib/firmware/bcmdhd.cal wifi-cal
-write_file lib/firmware/bcmdhd_clm.blob wifi-clm
+write_file lib/firmware/bcmdhd.cal wifi-cal-a3
+write_file lib/firmware/bcmdhd.cal_4383_a3 wifi-cal-a3
+write_file lib/firmware/bcmdhd_clm.blob wifi-clm-a3
+write_file lib/firmware/bcmdhd_clm.blob_4383_a3 wifi-clm-a3
 write_file lib/firmware/fw_bcmdhd.map wifi-map
-write_file lib/firmware/bcmdhd_txcap.blob wifi-txcap
+write_file lib/firmware/bcmdhd_txcap.blob wifi-txcap-a3
+write_file lib/firmware/bcmdhd_txcap.blob_4383_a3 wifi-txcap-a3
+write_file lib/firmware/fw_bcmdhd.bin_4383_a3 wifi-bin-a3
+write_file lib/firmware/fw_bcmdhd.map_4383_a3 wifi-map-a3
 write_file lib/firmware/brcm/BCM.hcd bluetooth-patchram
 write_file lib/firmware/carrierconfig/carrier.conf carrier-config
 write_file lib/firmware/carrierconfig/carrier-extra.conf carrier-extra
@@ -58,10 +63,15 @@ manifest_row() {
 }
 
 manifest_row wifi-bcm4383 /firmware/fw_bcmdhd.bin lib/firmware/fw_bcmdhd.bin
-manifest_row wifi-bcm4383 /firmware/bcmdhd.cal lib/firmware/bcmdhd.cal
-manifest_row wifi-bcm4383 /firmware/bcmdhd_clm.blob lib/firmware/bcmdhd_clm.blob
+manifest_row wifi-bcm4383 /firmware/bcmdhd.cal_4383_a3 lib/firmware/bcmdhd.cal
+manifest_row wifi-bcm4383 /firmware/bcmdhd_clm.blob_4383_a3 lib/firmware/bcmdhd_clm.blob
 manifest_row wifi-bcm4383 /firmware/fw_bcmdhd.map lib/firmware/fw_bcmdhd.map
-manifest_row wifi-bcm4383 /firmware/bcmdhd_txcap.blob lib/firmware/bcmdhd_txcap.blob
+manifest_row wifi-bcm4383 /firmware/bcmdhd_txcap.blob_4383_a3 lib/firmware/bcmdhd_txcap.blob
+manifest_row wifi-bcm4383 /firmware/fw_bcmdhd.bin_4383_a3 lib/firmware/fw_bcmdhd.bin_4383_a3
+manifest_row wifi-bcm4383 /firmware/bcmdhd.cal_4383_a3 lib/firmware/bcmdhd.cal_4383_a3
+manifest_row wifi-bcm4383 /firmware/bcmdhd_clm.blob_4383_a3 lib/firmware/bcmdhd_clm.blob_4383_a3
+manifest_row wifi-bcm4383 /firmware/fw_bcmdhd.map_4383_a3 lib/firmware/fw_bcmdhd.map_4383_a3
+manifest_row wifi-bcm4383 /firmware/bcmdhd_txcap.blob_4383_a3 lib/firmware/bcmdhd_txcap.blob_4383_a3
 manifest_row bluetooth-broadcom /firmware/brcm/BCM.hcd lib/firmware/brcm/BCM.hcd
 manifest_row modem-s5300 /firmware/carrierconfig/carrier.conf lib/firmware/carrierconfig/carrier.conf
 manifest_row modem-s5300 /firmware/carrierconfig/carrier-extra.conf lib/firmware/carrierconfig/carrier-extra.conf
@@ -75,16 +85,21 @@ bcm4383	lib/firmware/bcmdhd.cal	1
 bcm4383	lib/firmware/bcmdhd_clm.blob	1
 bcm4383	lib/firmware/fw_bcmdhd.map	1
 bcm4383	lib/firmware/bcmdhd_txcap.blob	1
+bcm4383	lib/firmware/fw_bcmdhd.bin_4383_a3	1
+bcm4383	lib/firmware/bcmdhd.cal_4383_a3	1
+bcm4383	lib/firmware/bcmdhd_clm.blob_4383_a3	1
+bcm4383	lib/firmware/fw_bcmdhd.map_4383_a3	1
+bcm4383	lib/firmware/bcmdhd_txcap.blob_4383_a3	1
 bluetooth-broadcom	lib/firmware/brcm/BCM.hcd	1
 modem-s5300	lib/firmware/carrierconfig	1
 modem-s5300	lib/firmware/uecapconfig	1
 EOF
 
 for mapping in \
-	'lib/firmware/fw_bcmdhd.bin lib/firmware/brcm/brcmfmac4383-pcie.bin' \
-	'lib/firmware/bcmdhd.cal lib/firmware/brcm/brcmfmac4383-pcie.txt' \
-	'lib/firmware/bcmdhd_clm.blob lib/firmware/brcm/brcmfmac4383-pcie.clm_blob' \
-	'lib/firmware/bcmdhd_txcap.blob lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob'; do
+	'lib/firmware/fw_bcmdhd.bin_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.bin' \
+	'lib/firmware/bcmdhd.cal_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.txt' \
+	'lib/firmware/bcmdhd_clm.blob_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.clm_blob' \
+	'lib/firmware/bcmdhd_txcap.blob_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob'; do
 	set -- $mapping
 	cp "$guest/$1" "$guest/$2"
 done
@@ -99,10 +114,10 @@ write_radio_manifest() {
 		printf 'source_policy\tcanonical-factory-manifest-explicit-aliases\n'
 	} >"$radio_manifest"
 	for mapping in \
-		'lib/firmware/fw_bcmdhd.bin lib/firmware/brcm/brcmfmac4383-pcie.bin' \
-		'lib/firmware/bcmdhd.cal lib/firmware/brcm/brcmfmac4383-pcie.txt' \
-		'lib/firmware/bcmdhd_clm.blob lib/firmware/brcm/brcmfmac4383-pcie.clm_blob' \
-		'lib/firmware/bcmdhd_txcap.blob lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob'; do
+		'lib/firmware/fw_bcmdhd.bin_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.bin' \
+		'lib/firmware/bcmdhd.cal_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.txt' \
+		'lib/firmware/bcmdhd_clm.blob_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.clm_blob' \
+		'lib/firmware/bcmdhd_txcap.blob_4383_a3 lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob'; do
 		set -- $mapping
 		bytes=$(wc -c <"$guest/$2" | tr -d '[:space:]')
 		hash=$(hash_file "$guest/$2")
@@ -147,7 +162,7 @@ cp "$work/good-radio-manifest" "$radio_manifest"
 # otherwise hide a missing firmware alias. The runtime gate must require one
 # row for every checked-in source/destination mapping.
 awk -F '\t' -v OFS='\t' '
-	$1 == "alias" && $2 == "lib/firmware/bcmdhd.cal" { next }
+	$1 == "alias" && $2 == "lib/firmware/bcmdhd.cal_4383_a3" { next }
 	{ print }
 ' "$radio_manifest" >"$work/missing-radio-manifest"
 cp "$work/missing-radio-manifest" "$radio_manifest"
@@ -159,7 +174,7 @@ write_radio_manifest
 
 awk -F '\t' -v OFS='\t' '
 	{ print }
-	$1 == "alias" && $2 == "lib/firmware/fw_bcmdhd.bin" { print }
+	$1 == "alias" && $2 == "lib/firmware/fw_bcmdhd.bin_4383_a3" { print }
 ' "$radio_manifest" >"$work/duplicate-radio-manifest"
 cp "$work/duplicate-radio-manifest" "$radio_manifest"
 if run_gate; then

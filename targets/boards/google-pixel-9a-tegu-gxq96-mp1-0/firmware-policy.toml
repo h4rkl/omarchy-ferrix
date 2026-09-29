@@ -20,7 +20,18 @@ id = "wifi-bcm4383"
 kernel_driver = "bcmdhd4383"
 source_images = ["vendor.img", "vendor_dlkm.img"]
 runtime_paths = ["bcmdhd", "brcm"]
-required_names = ["fw_bcmdhd.bin", "bcmdhd.cal", "bcmdhd_clm.blob", "fw_bcmdhd.map", "bcmdhd_txcap.blob"]
+required_names = [
+  "fw_bcmdhd.bin",
+  "bcmdhd.cal",
+  "bcmdhd_clm.blob",
+  "fw_bcmdhd.map",
+  "bcmdhd_txcap.blob",
+  "fw_bcmdhd.bin_4383_a3",
+  "bcmdhd.cal_4383_a3",
+  "bcmdhd_clm.blob_4383_a3",
+  "fw_bcmdhd.map_4383_a3",
+  "bcmdhd_txcap.blob_4383_a3",
+]
 
 [[controller]]
 id = "bluetooth-broadcom"

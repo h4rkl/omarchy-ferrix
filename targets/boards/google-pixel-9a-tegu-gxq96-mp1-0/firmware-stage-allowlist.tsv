@@ -7,10 +7,15 @@
 # destination-aware manifest row with the same relative suffix. Symlinks and
 # special files fail closed; an empty required bundle is an error.
 wifi-bcm4383	vendor.img	/firmware/fw_bcmdhd.bin	lib/firmware/fw_bcmdhd.bin
-wifi-bcm4383	vendor.img	/firmware/bcmdhd.cal	lib/firmware/bcmdhd.cal
-wifi-bcm4383	vendor.img	/firmware/bcmdhd_clm.blob	lib/firmware/bcmdhd_clm.blob
+wifi-bcm4383	vendor.img	/firmware/bcmdhd.cal_4383_a3	lib/firmware/bcmdhd.cal
+wifi-bcm4383	vendor.img	/firmware/bcmdhd_clm.blob_4383_a3	lib/firmware/bcmdhd_clm.blob
 wifi-bcm4383	vendor.img	/firmware/fw_bcmdhd.map	lib/firmware/fw_bcmdhd.map
-wifi-bcm4383	vendor.img	/firmware/bcmdhd_txcap.blob	lib/firmware/bcmdhd_txcap.blob
+wifi-bcm4383	vendor.img	/firmware/bcmdhd_txcap.blob_4383_a3	lib/firmware/bcmdhd_txcap.blob
+wifi-bcm4383	vendor.img	/firmware/fw_bcmdhd.bin_4383_a3	lib/firmware/fw_bcmdhd.bin_4383_a3
+wifi-bcm4383	vendor.img	/firmware/bcmdhd.cal_4383_a3	lib/firmware/bcmdhd.cal_4383_a3
+wifi-bcm4383	vendor.img	/firmware/bcmdhd_clm.blob_4383_a3	lib/firmware/bcmdhd_clm.blob_4383_a3
+wifi-bcm4383	vendor.img	/firmware/fw_bcmdhd.map_4383_a3	lib/firmware/fw_bcmdhd.map_4383_a3
+wifi-bcm4383	vendor.img	/firmware/bcmdhd_txcap.blob_4383_a3	lib/firmware/bcmdhd_txcap.blob_4383_a3
 bluetooth-broadcom	vendor.img	/firmware/brcm/BCM.hcd	lib/firmware/brcm/BCM.hcd
 modem-s5300	vendor.img	/firmware/carrierconfig	lib/firmware/carrierconfig	bundle
 modem-s5300	vendor.img	/firmware/uecapconfig	lib/firmware/uecapconfig	bundle

@@ -486,9 +486,14 @@ manifests; the optional completed split handoff is under
 `out/pixel-9a/images/tegu-wwan-split/`. The firmware stage starts from the
 official factory archive and
 the checked-in allowlist; `firmware-radio-route.tsv` then records the explicit
-copy/rename from the canonical `bcmdhd` names to the candidate
-`brcmfmac4383-pcie.*` names. No firmware bytes, images, or device evidence
-may enter Git.
+copy/rename to the candidate `brcmfmac4383-pcie.*` names. For this factory
+build, keep the BCM4383 `_4383_a3` files under their full suffixed runtime
+names in `staged/` and in the firmware manifest; do not normalize those names
+away. The A3 calibration, CLM, and TXCAP sources also populate the unsuffixed
+`bcmdhd` paths, while the `brcmfmac` aliases must source the suffixed A3
+firmware, calibration, CLM, and TXCAP entries (not their generic counterparts).
+Keep both name sets in the reviewed runtime allowlist and route contract. No
+firmware bytes, images, or device evidence may enter Git.
 
 The build-time firmware manifest is not runtime evidence. In the guest,
 `ferrix-radio-firmware` must pass before NetworkManager, BlueZ, the S5300

@@ -277,6 +277,7 @@ printf '{"contacts":[]}\n' >"$product/contacts/mock-contacts.json"
 firmware="$work/firmware"
 mkdir -p "$firmware"
 allowlist="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/firmware-allowlist.tsv"
+stage_allowlist="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/firmware-stage-allowlist.tsv"
 factory_archive="$work/tegu-synthetic-factory.zip"
 printf 'synthetic-factory-archive\n' >"$factory_archive"
 factory_hash=$(hash_file "$factory_archive")
@@ -291,6 +292,11 @@ lib/firmware/bcmdhd.cal
 lib/firmware/bcmdhd_clm.blob
 lib/firmware/fw_bcmdhd.map
 lib/firmware/bcmdhd_txcap.blob
+lib/firmware/fw_bcmdhd.bin_4383_a3
+lib/firmware/bcmdhd.cal_4383_a3
+lib/firmware/bcmdhd_clm.blob_4383_a3
+lib/firmware/fw_bcmdhd.map_4383_a3
+lib/firmware/bcmdhd_txcap.blob_4383_a3
 lib/firmware/brcm/BCM.hcd'
 firmware_paths="$stage_file_paths
 lib/firmware/carrierconfig/carrier.conf
@@ -342,22 +348,21 @@ fi
 	printf 'source\tvendor.img\t1\t%s\n' "$(printf '%064d' 0)"
 	printf 'factory_archive\t%s\t%s\n' "$factory_archive" "$factory_hash"
 } >"$firmware/firmware-manifest.tsv"
-while IFS="$tab" read -r component path required; do
+while IFS="$tab" read -r component source_image source_path path entry_type extra; do
 	case "$component" in ''|'#'*) continue ;; esac
 	case "$component" in modem-s5300) continue ;; esac
-	filename=${path##*/}
-	source_path=$(printf '%s\n' "$path" | sed 's#^lib/firmware/#/firmware/#')
+	[ "${entry_type:-file}" = file ] || fail "unexpected non-file firmware staging row: $component $source_path"
 	hash=$(hash_file "$firmware/$path")
 	case "$component" in
-		bcm4383) manifest_controller=wifi-bcm4383 ;;
+		wifi-bcm4383|bcm4383) manifest_controller=wifi-bcm4383 ;;
 		bluetooth-broadcom) manifest_controller=$component ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
 	printf 'firmware\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-		"$manifest_controller" vendor.img "$source_path" "$path" \
+		"$manifest_controller" "$source_image" "$source_path" "$path" \
 		"$(wc -c <"$firmware/$path" | tr -d '[:space:]')" "$hash" \
 		>>"$firmware/firmware-manifest.tsv"
-done <"$allowlist"
+done <"$stage_allowlist"
 for path in lib/firmware/carrierconfig/carrier.conf lib/firmware/carrierconfig/carrier-extra.conf lib/firmware/uecapconfig/capability.conf; do
 	mkdir -p "$firmware/$(dirname -- "$path")"
 	printf 'fixture-%s\n' "$path" >"$firmware/$path"
@@ -375,7 +380,7 @@ awk -F "$tab" '
 			$6 !~ /^[0-9]+$/ || length($7) != 64 || $7 ~ /[^0-9a-f]/) exit 1
 		count++
 	}
-		END { exit(count == 9 ? 0 : 1) }
+		END { exit(count == 14 ? 0 : 1) }
 ' "$firmware/firmware-manifest.tsv"
 awk -F "$tab" '$1 == "firmware" { print $5 }' "$firmware/firmware-manifest.tsv" >"$work/manifest-firmware-paths"
 cmp -s "$work/expected-firmware-paths" "$work/manifest-firmware-paths" ||

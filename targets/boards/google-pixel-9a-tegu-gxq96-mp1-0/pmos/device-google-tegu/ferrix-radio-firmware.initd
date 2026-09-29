@@ -176,10 +176,15 @@ validate_firmware_manifest() {
 	# an unrelated Broadcom file to replace the factory-selected BCM.hcd.
 	for row in \
 		'wifi-bcm4383 /firmware/fw_bcmdhd.bin lib/firmware/fw_bcmdhd.bin' \
-		'wifi-bcm4383 /firmware/bcmdhd.cal lib/firmware/bcmdhd.cal' \
-		'wifi-bcm4383 /firmware/bcmdhd_clm.blob lib/firmware/bcmdhd_clm.blob' \
+		'wifi-bcm4383 /firmware/bcmdhd.cal_4383_a3 lib/firmware/bcmdhd.cal' \
+		'wifi-bcm4383 /firmware/bcmdhd_clm.blob_4383_a3 lib/firmware/bcmdhd_clm.blob' \
 		'wifi-bcm4383 /firmware/fw_bcmdhd.map lib/firmware/fw_bcmdhd.map' \
-		'wifi-bcm4383 /firmware/bcmdhd_txcap.blob lib/firmware/bcmdhd_txcap.blob' \
+		'wifi-bcm4383 /firmware/bcmdhd_txcap.blob_4383_a3 lib/firmware/bcmdhd_txcap.blob' \
+		'wifi-bcm4383 /firmware/fw_bcmdhd.bin_4383_a3 lib/firmware/fw_bcmdhd.bin_4383_a3' \
+		'wifi-bcm4383 /firmware/bcmdhd.cal_4383_a3 lib/firmware/bcmdhd.cal_4383_a3' \
+		'wifi-bcm4383 /firmware/bcmdhd_clm.blob_4383_a3 lib/firmware/bcmdhd_clm.blob_4383_a3' \
+		'wifi-bcm4383 /firmware/fw_bcmdhd.map_4383_a3 lib/firmware/fw_bcmdhd.map_4383_a3' \
+		'wifi-bcm4383 /firmware/bcmdhd_txcap.blob_4383_a3 lib/firmware/bcmdhd_txcap.blob_4383_a3' \
 		'bluetooth-broadcom /firmware/brcm/BCM.hcd lib/firmware/brcm/BCM.hcd'; do
 		set -- $row
 		require_manifest_row "$1" "$2" "$3" || return 1
@@ -257,10 +262,10 @@ validate_radio_aliases() {
 				# unrelated destination must not become a new firmware contract
 				# merely because it has the expected row count.
 				case "$field2:$field3" in
-					lib/firmware/fw_bcmdhd.bin:lib/firmware/brcm/brcmfmac4383-pcie.bin|\
-					lib/firmware/bcmdhd.cal:lib/firmware/brcm/brcmfmac4383-pcie.txt|\
-					lib/firmware/bcmdhd_clm.blob:lib/firmware/brcm/brcmfmac4383-pcie.clm_blob|\
-					lib/firmware/bcmdhd_txcap.blob:lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob)
+					lib/firmware/fw_bcmdhd.bin_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.bin|\
+					lib/firmware/bcmdhd.cal_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.txt|\
+					lib/firmware/bcmdhd_clm.blob_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.clm_blob|\
+					lib/firmware/bcmdhd_txcap.blob_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob)
 						;;
 					*) die_gate "radio alias is not one of the reviewed source/destination pairs: ${field2:-missing} -> ${field3:-missing}"; return 1 ;;
 				 esac
@@ -295,10 +300,10 @@ validate_radio_aliases() {
 		return 1
 	}
 	for required_pair in \
-		'lib/firmware/fw_bcmdhd.bin:lib/firmware/brcm/brcmfmac4383-pcie.bin' \
-		'lib/firmware/bcmdhd.cal:lib/firmware/brcm/brcmfmac4383-pcie.txt' \
-		'lib/firmware/bcmdhd_clm.blob:lib/firmware/brcm/brcmfmac4383-pcie.clm_blob' \
-		'lib/firmware/bcmdhd_txcap.blob:lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob'; do
+		'lib/firmware/fw_bcmdhd.bin_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.bin' \
+		'lib/firmware/bcmdhd.cal_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.txt' \
+		'lib/firmware/bcmdhd_clm.blob_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.clm_blob' \
+		'lib/firmware/bcmdhd_txcap.blob_4383_a3:lib/firmware/brcm/brcmfmac4383-pcie.txcap_blob'; do
 		case " $seen_aliases " in
 			*" $required_pair "*) ;;
 			*)

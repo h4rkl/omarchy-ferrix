@@ -150,11 +150,12 @@ build baseline.
 
 The candidate's BCM4383 path uses `brcmfmac` firmware names
 (`brcmfmac4383-pcie.bin`, `.txt`, and `.clm_blob`), while the pinned Google
-`bcmdhd` path uses the five `fw_bcmdhd`/`bcmdhd_*` files in the current
-allowlist. These are alternative kernel contracts, not interchangeable files.
-The radio-first firmware allowlist must explicitly map the reviewed factory
-`bcmdhd` source members to those `brcmfmac` runtime names; the default Google
-allowlist must not silently rename or mix them.
+`bcmdhd` path uses five base request names plus factory `_4383_a3` variants
+for revision-aware lookup. These are alternative kernel contracts, not
+interchangeable files. The radio-first firmware allowlist explicitly maps the
+reviewed A3 factory members to the `brcmfmac` runtime names; the default Google
+allowlist preserves the base and suffixed names and does not silently mix the
+contracts.
 
 The ABI audit is decisive for cellular integration: the Google Kleaf CPIF
 surface (`cpif`/`umts_ipc*`) cannot feed the current `s5300_modem` WWAN SIT
@@ -364,14 +365,16 @@ destination-aware per-file rows and rejects symlinks, special files, unsafe
 paths, and empty bundles before the modem service can start.
 
 The default target-scoped allowlist is
-`firmware-stage-allowlist.tsv`. It records the five pinned BCM4383 paths, the
-factory-selected `vendor.img:/firmware/brcm/BCM.hcd` path, and the two reviewed
-S5300 directory bundles. A replacement allowlist remains an explicit override
-and is still subject to the same factory-hash and confirmation gates.
+`firmware-stage-allowlist.tsv`. It records explicit BCM4383 source/runtime
+mappings, including preserved A3 variants, the factory-selected
+`vendor.img:/firmware/brcm/BCM.hcd` path, and the two reviewed S5300 directory
+bundles. A replacement allowlist remains an explicit override and is still
+subject to the same factory-hash and confirmation gates.
 
-The checked-in required allowlist names the five BCM4383 Wi-Fi files, the
-factory-selected Broadcom `BCM.hcd` destination, and the two S5300 directory
-bundles. Its source member/path/size/hash provenance is recorded in the
+The checked-in required allowlist names the five base BCM4383 Wi-Fi files and
+their available A3-suffixed runtime variants, the factory-selected Broadcom
+`BCM.hcd` destination, and the two S5300 directory bundles. Its source
+member/path/size/hash provenance is recorded in the
 external firmware manifest; the binary and bundle contents remain external. A
 physical controller result and complete Linux HCI/Nitrous integration are
 still required before Bluetooth is supported. The S5300 package and bundle
