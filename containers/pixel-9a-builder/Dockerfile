@@ -50,6 +50,10 @@ ARG ALPINE_LIBSEAT_DEV_VERSION=0.9.3-r0
 ARG ALPINE_LIBSEAT_DEV_SHA256=b7bf7485a3f0d2f48f84609e96a99b70e51cc629daa1fd4b22e722a4ca2aa105
 ARG ALPINE_LIBSEAT_VERSION=0.9.3-r0
 ARG ALPINE_LIBSEAT_SHA256=f8875ed580a6525ad8faf0cec95f4aa70f1388f08a9eb43bae2d905be67e2d31
+ARG ALPINE_ELOGIND_DEV_VERSION=255.24-r0
+ARG ALPINE_ELOGIND_DEV_SHA256=f0fcf8e0d68b86ac5f1ae2556e8182fa0b52a66114e1c7631da3521c215f23c9
+ARG ALPINE_LIBELOGIND_VERSION=255.24-r0
+ARG ALPINE_LIBELOGIND_SHA256=11627ee58762791a7fe97eb71019c7cd8a318dee2ef7de7555dbe3319413aca3
 ARG ALPINE_MESA_DEV_VERSION=26.1.6-r0
 ARG ALPINE_MESA_DEV_SHA256=d6b92af5fdad93988cf07cb62a10214bf191e3f5911b33c7dccb9e96397babbc
 ARG ALPINE_MESA_GBM_VERSION=26.1.6-r0
@@ -135,6 +139,8 @@ RUN set -eux; \
     fetch_apk "eudev-libs-${ALPINE_EUDEV_LIBS_VERSION}.apk" "$ALPINE_EUDEV_LIBS_SHA256" main; \
     fetch_apk "libseat-dev-${ALPINE_LIBSEAT_DEV_VERSION}.apk" "$ALPINE_LIBSEAT_DEV_SHA256" community; \
     fetch_apk "libseat-${ALPINE_LIBSEAT_VERSION}.apk" "$ALPINE_LIBSEAT_SHA256" community; \
+    fetch_apk "elogind-dev-${ALPINE_ELOGIND_DEV_VERSION}.apk" "$ALPINE_ELOGIND_DEV_SHA256" community; \
+    fetch_apk "libelogind-${ALPINE_LIBELOGIND_VERSION}.apk" "$ALPINE_LIBELOGIND_SHA256" community; \
     fetch_apk "mesa-dev-${ALPINE_MESA_DEV_VERSION}.apk" "$ALPINE_MESA_DEV_SHA256" main; \
     fetch_apk "mesa-gbm-${ALPINE_MESA_GBM_VERSION}.apk" "$ALPINE_MESA_GBM_SHA256" main; \
     fetch_apk "libinput-dev-${ALPINE_LIBINPUT_DEV_VERSION}.apk" "$ALPINE_LIBINPUT_DEV_SHA256" community; \
@@ -144,6 +150,7 @@ RUN set -eux; \
     test -f "$sysroot/usr/include/libudev.h"; \
     test -f "$sysroot/usr/lib/pkgconfig/libudev.pc"; \
     test -f "$sysroot/usr/lib/pkgconfig/libseat.pc"; \
+    test -f "$sysroot/usr/lib/pkgconfig/libelogind.pc"; \
     test -f "$sysroot/usr/lib/pkgconfig/gbm.pc"; \
     test -f "$sysroot/usr/lib/libudev.so"; \
     test -f "$sysroot/usr/lib/libseat.so"; \
@@ -247,6 +254,8 @@ RUN useradd --create-home --uid 1000 --shell /bin/sh ferrix-builder \
         "alpine-eudev-libs=$ALPINE_EUDEV_LIBS_VERSION:$ALPINE_EUDEV_LIBS_SHA256" \
         "alpine-libseat-dev=$ALPINE_LIBSEAT_DEV_VERSION:$ALPINE_LIBSEAT_DEV_SHA256" \
         "alpine-libseat=$ALPINE_LIBSEAT_VERSION:$ALPINE_LIBSEAT_SHA256" \
+        "alpine-elogind-dev=$ALPINE_ELOGIND_DEV_VERSION:$ALPINE_ELOGIND_DEV_SHA256" \
+        "alpine-libelogind=$ALPINE_LIBELOGIND_VERSION:$ALPINE_LIBELOGIND_SHA256" \
         "alpine-mesa-dev=$ALPINE_MESA_DEV_VERSION:$ALPINE_MESA_DEV_SHA256" \
         "alpine-mesa-gbm=$ALPINE_MESA_GBM_VERSION:$ALPINE_MESA_GBM_SHA256" \
         "alpine-libinput-dev=$ALPINE_LIBINPUT_DEV_VERSION:$ALPINE_LIBINPUT_DEV_SHA256" \

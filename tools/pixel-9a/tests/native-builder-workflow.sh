@@ -44,6 +44,7 @@ for sysroot_input in \
   'PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_musl=1' \
   'eudev-dev-${ALPINE_EUDEV_DEV_VERSION}.apk' \
   'libseat-dev-${ALPINE_LIBSEAT_DEV_VERSION}.apk' \
+  'elogind-dev-${ALPINE_ELOGIND_DEV_VERSION}.apk' \
   'mesa-dev-${ALPINE_MESA_DEV_VERSION}.apk' \
   'libinput-dev-${ALPINE_LIBINPUT_DEV_VERSION}.apk' \
   'pixman-dev-${ALPINE_PIXMAN_DEV_VERSION}.apk'; do
