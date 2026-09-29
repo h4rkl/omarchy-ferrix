@@ -154,6 +154,14 @@ assert module.normalize_link_args([
 ]) == ["-z", "relro", "-lc", "-static"]
 assert module.normalize_link_args(["--fix-cortex-a53-843419", "-lc"]) == ["-lc"]
 assert module.TARGET_SYSROOT == "/opt/ferrix/aarch64-linux-musl-sysroot"
+assert module.link_args(["-pie", "-lc"])[0:4] == [
+    module.MUSL_CRT1,
+    module.MUSL_CRTI,
+    "-dynamic-linker",
+    module.MUSL_DYNAMIC_LINKER,
+]
+assert module.link_args(["-pie", "-lc"])[-2:] == ["-lc", module.MUSL_CRTN]
+assert module.link_args(["-static", "-lc"]) == ["-static", "-lc"]
 PY
 
 cat >"$work/bin/docker" <<'EOF'

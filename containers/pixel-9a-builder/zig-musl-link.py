@@ -22,6 +22,10 @@ import sys
 
 ZIG = "/opt/zig/zig"
 TARGET_SYSROOT = "/opt/ferrix/aarch64-linux-musl-sysroot"
+MUSL_CRT1 = f"{TARGET_SYSROOT}/usr/lib/crt1.o"
+MUSL_CRTI = f"{TARGET_SYSROOT}/usr/lib/crti.o"
+MUSL_CRTN = f"{TARGET_SYSROOT}/usr/lib/crtn.o"
+MUSL_DYNAMIC_LINKER = "/lib/ld-musl-aarch64.so.1"
 LEGACY_CORTEX_A53_FIX = "--fix-cortex-a53-843419"
 
 
@@ -58,6 +62,29 @@ def normalize_link_args(args: list[str]) -> list[str]:
     return normalized
 
 
+def link_args(args: list[str]) -> list[str]:
+    """Add the musl process entry point for a dynamic Rust executable.
+
+    Rust's target specification delegates C runtime startup to the linker
+    driver.  Calling lld directly means that ``crt1.o``/``crti.o``/``crtn.o``
+    and the ELF interpreter must be supplied by this wrapper.  Keep static
+    links unchanged: Rust's static target libraries already provide their
+    valid entry point and adding a dynamic interpreter would be incorrect.
+    """
+
+    normalized = normalize_link_args(args)
+    if "-static" in normalized:
+        return normalized
+    return [
+        MUSL_CRT1,
+        MUSL_CRTI,
+        "-dynamic-linker",
+        MUSL_DYNAMIC_LINKER,
+        *normalized,
+        MUSL_CRTN,
+    ]
+
+
 def main() -> int:
     return subprocess.run(
         [
@@ -67,7 +94,7 @@ def main() -> int:
             "aarch64elf",
             f"--sysroot={TARGET_SYSROOT}",
             f"-L{TARGET_SYSROOT}/usr/lib",
-            *normalize_link_args(sys.argv[1:]),
+            *link_args(sys.argv[1:]),
         ],
         check=False,
     ).returncode
