@@ -1,5 +1,35 @@
 # Status
 
+## 2026-09-30 (native boot-input retry passed)
+
+- **Source synchronization:** selector correction `206b41f` was pushed and
+  fast-forwarded into the clean `deba` build checkout. The checked-in native
+  builder's boot-input preflight and build both passed. No phone operation
+  ran and no recovery or hardware capability was promoted.
+- **Unchanged substrate:** the rootfs archive remains SHA-256
+  `fef00f97a511c752d6480fc46e4b3f7c9b48eff18f1876636782b14eee83a16c`;
+  its manifest remains
+  `3398822910ab9bbfa390d4beac3d51b0629824132a80c49538584c52b33530c5`.
+  The architecture, regular-file, and handoff hash gates remain intact.
+- **Published build evidence:**
+  `out/pixel-9a/boot-inputs/tegu-wwan/manifest.tsv` is SHA-256
+  `14026948e3ea66354675b50543655a239605d0727b5d3a429a88fdef451d099f`.
+  All four published artifact sizes and hashes were independently rechecked.
+  Native `readelf` identifies the extracted BusyBox as ELF64 AArch64 with
+  `/lib/ld-musl-aarch64.so.1`; the copied libc alias matches the loader bytes.
+  Outputs remain ignored, `built-source-inputs`, and `bootable=false`.
+- **Validation:** boot-input and radio-split workflow tests passed, along
+  with shell syntax, `cargo fmt --check`, and diff checks. These regression
+  tests use stubs; the native result above is real artifact construction,
+  not boot or recovery evidence. Workspace tests, Clippy, and QEMU were not
+  rerun for this shell-only selector correction.
+- **Remaining delivery gates:** first stock-recovery rehearsal still needs
+  a reviewed bootstrap procedure that does not falsely assert prior testing.
+  Complete partition evidence, reviewed rootfs mapping, final split-image
+  construction/AVB checks, observed temporary boot, installation, and guest
+  validation remain pending. This build result authorizes none of those
+  physical operations.
+
 ## 2026-09-30 (source synchronization and native boot-input failure)
 
 - **Source synchronization:** `7075934` was committed, pushed to the canonical
@@ -22,8 +52,8 @@
   archive members are refused. The regression fixture reproduced the
   original failure with metadata ordered first and now passes, including
   duplicate-member, missing-executable, and invalid-ELF refusal cases.
-  Native retry results remain pending; no physical operation is authorized
-  by this build-only approval.
+  The subsequently authorized native retry is recorded above; no physical
+  operation is authorized by this build-only approval.
 - **Recovery lifecycle review:** both factory restore and OTA execution
   currently require `recovery_procedure=tested|passed|verified`, while the
   exact target still records `documented-not-tested`. This prevents the
