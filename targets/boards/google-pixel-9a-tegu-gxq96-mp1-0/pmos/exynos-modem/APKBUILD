@@ -36,20 +36,21 @@ build() {
 }
 
 check() {
-	# `cargo test --target=...` executes the produced test binaries.  A native
-	# x86_64 pmbootstrap builder cannot execute the target's aarch64 binaries
-	# without an explicit qemu/binfmt setup, so compile those tests with
-	# --no-run and execute the same unit-test set for the builder host target.
-	# Native aarch64 builders run the target tests directly instead.
+	# `cargo test --tests --target=...` selects the unit/integration test
+	# targets without cross-linking doctests. A native x86_64 pmbootstrap
+	# builder cannot execute the target's aarch64 binaries without an explicit
+	# qemu/binfmt setup, so compile those tests with --no-run and execute the
+	# same test set for the builder host target. Native aarch64 builders run the
+	# target tests directly instead.
 	_host_target=$(rustc -vV | sed -n 's/^host: //p')
 	[ -n "$_host_target" ] || die "could not determine the Rust package-builder target"
 	if [ "$_host_target" = "$_cargo_target" ]; then
-		RUSTC_WRAPPER= cargo test --frozen --target="$_cargo_target" \
+		RUSTC_WRAPPER= cargo test --frozen --tests --target="$_cargo_target" \
 			-p exynos-modem -p samsung-sit-ffi -p sit-proxy
 	else
-		RUSTC_WRAPPER= cargo test --frozen --target="$_cargo_target" --no-run \
+		RUSTC_WRAPPER= cargo test --frozen --tests --target="$_cargo_target" --no-run \
 			-p exynos-modem -p samsung-sit-ffi -p sit-proxy
-		RUSTC_WRAPPER= cargo test --frozen --target="$_host_target" \
+		RUSTC_WRAPPER= cargo test --frozen --tests --target="$_host_target" \
 			-p exynos-modem -p samsung-sit-ffi -p sit-proxy
 	fi
 }

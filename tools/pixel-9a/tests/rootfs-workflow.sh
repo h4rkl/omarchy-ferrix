@@ -74,9 +74,9 @@ grep -q 'aarch64-alpine-linux-musl' "$pmos_dir/exynos-modem/APKBUILD" ||
 	fail 'exynos-modem recipe does not pin the Alpine target Rust output'
 grep -q '[[:space:]]modules-initfs-radio$' "$package_dir/APKBUILD" ||
 	fail 'device package does not carry the radio-first initfs module list'
-grep -q 'cargo test --frozen --target="\$_cargo_target" --no-run' "$pmos_dir/exynos-modem/APKBUILD" ||
+grep -q 'cargo test --frozen --tests --target="\$_cargo_target" --no-run' "$pmos_dir/exynos-modem/APKBUILD" ||
 	fail 'exynos-modem cross-builder checks must compile target tests without executing them'
-grep -q 'cargo test --frozen --target="\$_host_target"' "$pmos_dir/exynos-modem/APKBUILD" ||
+grep -q 'cargo test --frozen --tests --target="\$_host_target"' "$pmos_dir/exynos-modem/APKBUILD" ||
 	fail 'exynos-modem recipe must execute tests for the package-builder target'
 if grep -q -- '-p samsung-sit\([[:space:]]\|$\)' "$pmos_dir/exynos-modem/APKBUILD"; then
 	fail 'exynos-modem recipe names the obsolete samsung-sit workspace package'
