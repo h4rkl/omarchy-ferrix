@@ -14,7 +14,7 @@
 # commit or SHA-256 before installation.
 
 ARG BUILDER_BASE=rust:1.98.1-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730
-FROM --platform=linux/amd64 ${BUILDER_BASE}
+FROM ${BUILDER_BASE}
 
 ARG ZIG_VERSION=0.14.1
 ARG ZIG_SHA256=24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c
@@ -98,16 +98,16 @@ RUN curl --fail --location --retry 3 --connect-timeout 30 --output /tmp/zig.tar.
 RUN mkdir -p /opt/android/mkbootimg /opt/android/libufdt /opt/android/avb \
     && git clone --quiet --filter=blob:none --no-checkout "$MKBOOTIMG_REPO" /tmp/mkbootimg \
     && git -C /tmp/mkbootimg checkout --quiet "$MKBOOTIMG_COMMIT" \
-    && test "$(git -C /tmp/mkbootimg rev-parse HEAD)" = "$MKBOOTIMG_COMMIT" \
+    && test "$(git -C /tmp/mkbootimg rev-parse HEAD)" = "$(git -C /tmp/mkbootimg rev-parse "${MKBOOTIMG_COMMIT}^{commit}")" \
     && cp /tmp/mkbootimg/mkbootimg.py /opt/android/mkbootimg/mkbootimg.py \
     && cp -R /tmp/mkbootimg/gki /opt/android/mkbootimg/gki \
     && git clone --quiet --filter=blob:none --no-checkout "$MKDTBOIMG_REPO" /tmp/libufdt \
     && git -C /tmp/libufdt checkout --quiet "$MKDTBOIMG_COMMIT" \
-    && test "$(git -C /tmp/libufdt rev-parse HEAD)" = "$MKDTBOIMG_COMMIT" \
+    && test "$(git -C /tmp/libufdt rev-parse HEAD)" = "$(git -C /tmp/libufdt rev-parse "${MKDTBOIMG_COMMIT}^{commit}")" \
     && cp /tmp/libufdt/utils/src/mkdtboimg.py /opt/android/libufdt/mkdtboimg.py \
     && git clone --quiet --filter=blob:none --no-checkout "$AVB_REPO" /tmp/avb \
     && git -C /tmp/avb checkout --quiet "$AVB_COMMIT" \
-    && test "$(git -C /tmp/avb rev-parse HEAD)" = "$AVB_COMMIT" \
+    && test "$(git -C /tmp/avb rev-parse HEAD)" = "$(git -C /tmp/avb rev-parse "${AVB_COMMIT}^{commit}")" \
     && cp /tmp/avb/avbtool.py /opt/android/avb/avbtool.py \
     && printf '%s\n' '#!/bin/sh' 'exec python3 /opt/android/mkbootimg/mkbootimg.py "$@"' > /usr/local/bin/mkbootimg \
     && printf '%s\n' '#!/bin/sh' 'exec python3 /opt/android/libufdt/mkdtboimg.py "$@"' > /usr/local/bin/mkdtboimg.py \
