@@ -41,15 +41,17 @@ source-pinned native-Linux package inputs for this exact `tegu` / `GXQ96` /
   is not wired into the Pixel adapter.
 
 The target manifest remains explicit about the current state:
-`kernel_build_status = "not-built"`, `rootfs_build_status = "not-built"`, and
-`boot_status = "not-attempted"`. The package's boot layout is
-`substrate-only-not-bootable`. No physical Ferrix Linux evidence exists: no
-physical boot, framebuffer/input result, live Linux service result, firmware
-runtime result, or target capability evidence has been captured. The earlier
-ADB/Fastboot identity, recovery, and bootloader-unlock observations are
-admission and recovery history only, not Linux evidence. The target-local
-`FERRIX_EVIDENCE=physical:<target-id>` value is a scope label required by the
-host profile, not proof of a physical run.
+`kernel_build_status = "not-built"` for the comparison Google Kleaf route,
+`radio_kernel_build_status = "built-not-booted"`,
+`rootfs_build_status = "built-substrate-only"`, and
+`boot_status = "not-attempted"`. The package's boot layout is still
+`substrate-only-not-bootable`. The native build is a source/package handoff,
+not physical evidence: no physical boot, framebuffer/input result, live Linux
+service result, firmware runtime result, or target capability evidence has
+been captured. The earlier ADB/Fastboot identity, recovery, and
+bootloader-unlock observations are admission and recovery history only, not
+Linux evidence. The target-local `FERRIX_EVIDENCE=physical:<target-id>` value
+is a scope label required by the host profile, not proof of a physical run.
 
 ## Kernel decision and pinned source baseline
 
@@ -162,9 +164,9 @@ surface (`cpif`/`umts_ipc*`) cannot feed the current `s5300_modem` WWAN SIT
 userspace by changing only init scripts or udev rules. The radio-first backend
 is therefore the checked-in route that preserves the reviewed
 `exynos-modem`/SIT ModemManager package boundary without importing Android RIL,
-HAL, Binder, or vendor services. Its host workflow is now checked in, but it
-remains `not-built` until a native Linux x86_64 host produces a hash-verified
-kernel and rootfs.
+HAL, Binder, or vendor services. Its native Linux x86_64 workflow has now
+produced a hash-verified kernel handoff and rootfs substrate; both remain
+unbooted and provide no physical radio evidence.
 
 The radio-first build handoff is explicit and device-free:
 
@@ -508,18 +510,20 @@ Outstanding physical gates (all):
 - [ ] stock factory recovery is tested on this exact device;
 - [ ] the complete live partition inventory is captured read-only and
   redacted;
-- [ ] the coherent kernel/module/DTBO build succeeds from pinned source;
-- [ ] a native postmarketOS rootfs is built with the exact product, firmware,
-  and target package inputs;
+- [ ] the complete coherent kernel/module/DTBO split-boot build succeeds from
+  pinned source;
+- [x] a native postmarketOS rootfs substrate is built with the exact product,
+  firmware, pmaports, and target package inputs; bootability remains unproven;
 - [ ] the Ferrix artifact manifest passes image-layout and size checks;
 - [ ] a temporary boot route is proven supported, or an inactive-slot plan is
   explicitly approved;
 - [ ] exact Bluetooth firmware member/path/hash evidence and live Bluetooth
   controller behavior are established;
-- [ ] the source-pinned S5300 userspace packages build on native Linux, the
-  exact tegu channel/device-tree binding and carrierconfig/UECAP directory
-  inputs are staged, and CP boot, modem protocol, SIM, registration, and bearer
-  evidence are captured;
+- [x] the source-pinned S5300 userspace packages build on native Linux and
+  their protocol test passes;
+- [ ] the exact tegu channel/device-tree binding and carrierconfig/UECAP
+  directory inputs are exercised on the device, with CP boot, modem protocol,
+  SIM, registration, and bearer evidence captured;
 - [ ] the target-scoped command passes its identity, hash, backup, recovery,
   ambiguity, and per-run confirmation checks.
 

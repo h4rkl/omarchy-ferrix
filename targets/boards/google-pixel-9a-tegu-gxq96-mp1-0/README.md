@@ -194,8 +194,10 @@ S5300 CPIF modem is not a standard ModemManager transport. The target package
 carries immutable native-Linux `exynos-modem`/`sit-proxy` and SIT ModemManager
 recipes behind the public ModemManager D-Bus boundary; their ABI requires the
 separately pinned radio-first `s5300_modem` WWAN kernel backend, not Google's
-stock `cpif` character-device surface. That backend has not yet been built,
-booted, or observed to create a modem on this device. The Rust
+stock `cpif` character-device surface. The native Linux radio-first kernel and
+target-local userspace packages have now been built on the authorized x86_64
+builder, but the route remains unbooted and has not been observed to create a
+modem on this device. The Rust
 CPIF crate remains a bounded SIT link and seven-byte userspace FMT envelope
 codec, keeps the firmware-specific command tuple opaque, and does not import
 Android RIL/HAL code. The package records the exact source-level SIT channel
@@ -226,8 +228,9 @@ unsafe or special entries. Public Tegu extraction metadata corroborates the
 two factory paths
 ([`proprietary-files-vendor.txt`](https://gitlab.com/CalyxOS/device_google_tegu/-/raw/android17/tegu/proprietary-files-vendor.txt));
 it is a path reference, not permission to copy Android userspace or commit
-proprietary bytes. The package and staged inputs remain unverified until a
-native Linux rootfs build and exact-device boot produce runtime evidence.
+proprietary bytes. The package and staged inputs have now passed the native
+Linux rootfs build and hash-manifest handoff; exact-device boot is still
+required before they provide runtime evidence.
 
 Build the physical product handoff separately from QEMU:
 
@@ -297,7 +300,7 @@ refuse this host before creating build output. Static target checks and
 device-free workflow tests may still run locally. UTM may still be used for a separate
 Linux smoke-test or QEMU workflow, but the Pixel kernel, firmware, rootfs,
 product, and boot handoff must run on a provisioned native Linux `x86_64`
-machine before this target can move beyond `not-built`.
+machine; the target is now built-but-not-booted rather than `not-built`.
 
 ## Pinned downstream kernel build (comparison route)
 
@@ -400,6 +403,15 @@ just pixel-9a-firmware-inventory
 just pixel-9a-rootfs-check
 just pixel-9a-rootfs-test
 ```
+
+The authorized native Linux x86_64 build completed these handoffs on
+2026-09-30: the radio-first kernel is `built-not-booted`, the product is
+`built`, and the pmOS rootfs manifest is `built-substrate-only` with
+`bootable=false`. The generated outputs remain ignored on the builder under
+`out/pixel-9a/`; their hashes are recorded in `docs/status.md`. This confirms
+the source, package, firmware-manifest, and image-construction handoff only;
+it does not confirm a boot, display, input, service, or radio capability on
+the phone.
 
 ### Broadcom Bluetooth / Nitrous firmware provenance
 

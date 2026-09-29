@@ -71,9 +71,9 @@ kernel_manifest_branch = "android-gs-tegu-6.1-android16"
 kernel_manifest_commit = "893fbfd2192bc1c4a921f5daf23ea8543c09670d"
 kernel_superproject_commit = "ef85063e6f3c68fbd580eb7e41809b8b64f935ed"
 kernel_build_status = "not-built"
-radio_kernel_build_status = "not-built"
+radio_kernel_build_status = "built-not-booted"
 radio_kernel_backend = "experimental-linux-google-tegu-s5300-wwan"
-rootfs_build_status = "not-built"
+rootfs_build_status = "built-substrate-only"
 boot_status = "not-attempted"
 
 [gates]

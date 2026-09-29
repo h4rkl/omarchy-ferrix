@@ -1,5 +1,51 @@
 # Status
 
+## 2026-09-30 (native Pixel 9a substrate completed)
+
+- **Exact recovery input:** The official `tegu` factory package remains
+  `CP3A.260905.009` with SHA-256
+  `0c2f9053bf064b09483c937cf16f4824371afe92fa057029d6f9237668d1c0d7`.
+  Firmware is still ignored/generated and was consumed only through its
+  verified external manifest.
+- **Native build host:** The exact-target product, radio-first kernel, and
+  postmarketOS rootfs were built on the authorized native Linux x86_64 `deba`
+  builder. No ADB, Fastboot, USB, temporary boot, or physical-device command
+  was used by the build.
+- **Radio-first kernel handoff:** The source-pinned Kbuild revision is
+  `88335b765d920cc345cdffb9c1a6d77e3a531ff9`. The manifest SHA-256 is
+  `87d7a398e47daffe6713d5d424bb4d5ec051d2fb462224d01a3c378887f2faab`;
+  `Image` is 45,173,248 bytes with SHA-256
+  `b6ccbdb8bc30854dce44c31c7182230a3dff7b2c3bad8f2a6da5bc99384bce75`, and
+  `dtb.img` is 68,753 bytes with SHA-256
+  `d248f800b76d55376021b1f1e73778b00dcae6722f3061d54b8f4dd768d0d9d0`.
+  This remains `built-not-booted` / `bootable=false` and is not a complete
+  split-boot handoff.
+- **Product and rootfs handoff:** The product manifest SHA-256 is
+  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e4`.
+  The rootfs manifest SHA-256 is
+  `3398822910ab9bbfa390d4beac3d51b0629824132a80c49538584c52b33530c5`;
+  `rootfs.tar` is 611,676,160 bytes with SHA-256
+  `fef00f97a511c752d6480fc46e4b3f7c9b48eff18f1876636782b14eee83a16c`, and
+  the 2 GiB `rootfs.img` has SHA-256
+  `56eeff4de8e5a90dae2169f4def73e9a4f904f06db583114b9dd8120ab8497c6`.
+  Its manifest records `status=built-substrate-only`,
+  `bootable=false`, pmaports `v26.06` at commit
+  `368093c7a882637ee00d32932fb0dafd24cfc4d4`, and
+  `initramfs_policy=external-kernel-owned-not-generated`. The archive was
+  checked after build: `dev`, `proc`, and `sys` contain only empty mount-point
+  directories.
+- **S5300 package gate:** The target-local `exynos-modem`, `samsung-sit-ffi`,
+  `sit-proxy`, and SIT ModemManager packages built from their pinned sources;
+  the native package test suite, including `samsung-sit-protocol`, passed.
+  This is build/protocol evidence only. There is still no physical boot,
+  modem, SIM, bearer, Wi-Fi, Bluetooth, display, input, or capability
+  evidence.
+- **Remaining gates:** The complete partition-capacity handoff, verified
+  personal-data backup, tested recovery procedure, complete split-boot
+  artifacts, exact-device temporary boot, and any persistent flash remain
+  pending. QEMU remains the passing development/CI baseline; no QEMU result
+  is promoted to the Pixel target.
+
 ## 2026-09-29 (factory-version reconciliation and native-build handoff)
 
 - **Factory version:** Google's current official `tegu` factory-image table
