@@ -778,7 +778,14 @@ build_rootfs() {
 
 	build_dir=$(mktemp -d "$rootfs_cache_root/rootfs.XXXXXX")
 	rootfs_image_tmp=''
+	config=''
 	cleanup() {
+		# pmbootstrap owns root-created chroot files and mount points. Detach
+		# them before the container removes this temporary build directory;
+		# otherwise a failed package build can strand a privileged cache tree.
+		if [ -n "$config" ]; then
+			PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y shutdown >/dev/null 2>&1 || true
+		fi
 		rm -rf "$build_dir"
 		[ -z "$rootfs_image_tmp" ] || rm -f "$rootfs_image_tmp"
 	}

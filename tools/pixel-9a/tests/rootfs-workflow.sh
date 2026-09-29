@@ -499,7 +499,7 @@ real_tar=$(command -v tar)
 } >"$fake_bin/python3"
 {
 	printf '%s\n' '#!/bin/sh' 'set -eu' 'config=' 'action=' 'while [ "$#" -gt 0 ]; do' \
-		'  case "$1" in' '    --config) config=$2; shift 2 ;;' '    init|install) action=$1; shift ;;' '    *) shift ;;' '  esac' \
+		'  case "$1" in' '    --config) config=$2; shift 2 ;;' '    init|install|shutdown) action=$1; shift ;;' '    *) shift ;;' '  esac' \
 		'done' '[ -n "$config" ]' 'build_work=$(sed -n "s/^work = //p" "$config")' \
 		'aports=$(sed -n "s/^aports = //p" "$config")' \
 		'git -C "$aports" rev-parse HEAD >/dev/null' \
@@ -507,6 +507,7 @@ real_tar=$(command -v tar)
 		'[ "${PMB_CHANNELS_CFG##*/}" = channels.cfg ]' \
 		'[ -f "$PMB_CHANNELS_CFG" ]' \
 		'[ "$action" = init ] || [ "$action" = install ]' \
+		'if [ "$action" = shutdown ]; then exit 0; fi' \
 		'if [ "$action" = init ]; then mkdir -p "$build_work"; printf "%s\\n" 6 >"$build_work/version"; exit 0; fi' \
 		'[ -f "$aports/device/testing/exynos-modem/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/modemmanager-samsung-sit/APKBUILD" ]' \
