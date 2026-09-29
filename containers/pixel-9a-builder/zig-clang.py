@@ -18,6 +18,14 @@ import sys
 ZIG = "/opt/zig/zig"
 
 
+def normalize_compile_args(args: list[str]) -> list[str]:
+    # The kernel's arm32 VDSO helper uses the spelling -mcpu=armv8.  Zig's
+    # LLVM target table exposes that baseline as `generic`; preserve the
+    # intended baseline instead of allowing an otherwise unrelated helper
+    # build to fail on the spelling difference.
+    return ["-mcpu=generic" if arg == "-mcpu=armv8" else arg for arg in args]
+
+
 def split_dependency_flag(args: list[str]) -> tuple[list[str], str | None]:
     compile_args: list[str] = []
     dependency_path: str | None = None
@@ -49,6 +57,7 @@ def dependency_args(args: list[str]) -> list[str]:
 
 def main() -> int:
     compile_args, dependency_path = split_dependency_flag(sys.argv[1:])
+    compile_args = normalize_compile_args(compile_args)
     command = [ZIG, "cc", *compile_args]
     completed = subprocess.run(command, check=False)
     if completed.returncode != 0 or dependency_path is None:
@@ -65,7 +74,11 @@ def main() -> int:
         "-o",
         os.devnull,
     ]
-    return subprocess.run(dependency_command, check=False).returncode
+    return subprocess.run(
+        dependency_command,
+        check=False,
+        stdout=subprocess.DEVNULL,
+    ).returncode
 
 
 if __name__ == "__main__":
