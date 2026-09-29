@@ -225,6 +225,20 @@ if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
   exit 1
 fi
 
+: >"$log"
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
+  FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
+  FERRIX_PIXEL9A_FIRMWARE_DIR="$root/out/pixel-9a/firmware/tegu/staged" \
+  "$script" run rootfs finalize >/dev/null
+grep -F -- 'tools/pixel-9a/rootfs.sh finalize' "$log" >/dev/null || {
+  echo 'builder did not dispatch rootfs finalize' >&2
+  exit 1
+}
+if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
+  echo 'builder finalize workflow exposed a physical transport' >&2
+  exit 1
+fi
+
 if PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" "$script" run flash preflight >/dev/null 2>&1; then
   echo 'builder accepted a device-facing workflow' >&2
   exit 1

@@ -53,7 +53,7 @@ run_workflow() {
 	shift 2
 
 	case "$workflow:$verb" in
-		env:check|kernel-radio:preflight|kernel-radio:sync|kernel-radio:verify|kernel-radio:build|product:preflight|product:build|firmware:preflight|firmware:inventory|firmware:inspect|firmware:stage|rootfs:preflight|rootfs:validate|rootfs:build|boot-radio:preflight|boot-radio:build|radio-split:preflight|radio-split:build|artifacts:check|artifacts:manifest) ;;
+		env:check|kernel-radio:preflight|kernel-radio:sync|kernel-radio:verify|kernel-radio:build|product:preflight|product:build|firmware:preflight|firmware:inventory|firmware:inspect|firmware:stage|rootfs:preflight|rootfs:validate|rootfs:build|rootfs:finalize|boot-radio:preflight|boot-radio:build|radio-split:preflight|radio-split:build|artifacts:check|artifacts:manifest) ;;
 		*) die "unsupported or device-facing workflow: $workflow $verb" ;;
 	esac
 
