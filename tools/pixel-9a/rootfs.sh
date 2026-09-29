@@ -813,6 +813,7 @@ build_rootfs() {
 	# The target package set includes two local, source-pinned aports. Keep
 	# local package installation enabled so pmbootstrap builds and installs
 	# those recipes from the staged aports tree.
+	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y init
 	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y install --no-image --no-fde --no-sshd --no-firewall --no-recommends
 	rootfs_dir=$(find "$pmb_work" -maxdepth 2 -type d -name 'chroot_rootfs-*' -print -quit)
 	[ -n "$rootfs_dir" ] || die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
