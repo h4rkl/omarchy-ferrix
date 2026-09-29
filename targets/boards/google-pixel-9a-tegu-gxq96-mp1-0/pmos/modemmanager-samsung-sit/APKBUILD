@@ -1,5 +1,5 @@
 # Target-local native-Linux ModemManager fork with Samsung SIT support.
-maintainer="Omarchy Ferrix maintainers"
+maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260731
 pkgrel=1

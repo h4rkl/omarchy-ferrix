@@ -1,7 +1,7 @@
 # Target-local native-Linux package for the reviewed Pixel 9a S5300 userspace.
 # The source archive is external and immutable; no modem image, NV, UECAP, or
 # other device data is included in this repository.
-maintainer="Omarchy Ferrix maintainers"
+maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 pkgname=exynos-modem
 pkgver=0.1.0_git20260731
 pkgrel=1
