@@ -34,7 +34,8 @@ grep -q 'bootable=false' "$script" || fail 'unbooted boundary marker missing'
 mkdir -p "$work/bin" \
 	"$work/out/pixel-9a/kernel-radio/tegu-wwan/dist/split-inputs/module-install/lib/modules/6.12.0-ferrix" \
 	"$work/out/pixel-9a/rootfs/tegu" \
-	"$work/rootfs-tree/usr/bin" "$work/rootfs-tree/lib"
+	"$work/rootfs-tree/usr/bin" "$work/rootfs-tree/usr/lib" \
+	"$work/rootfs-tree/etc/busybox-paths.d"
 
 cat >"$work/bin/uname" <<'EOF'
 #!/bin/sh
@@ -47,7 +48,10 @@ cat >"$work/bin/readelf" <<'EOF'
 #!/bin/sh
 set -eu
 case "${1:-}" in
-	-h) printf '%s\n' 'Class: ELF64' 'Machine: AArch64' ;;
+	-h)
+		grep -Fqx source-built-busybox "$2" || exit 1
+		printf '%s\n' 'Class: ELF64' 'Machine: AArch64'
+		;;
 	-l) printf '%s\n' 'Requesting program interpreter: /lib/ld-musl-aarch64.so.1]' ;;
 	-d) printf '%s\n' 'Shared library: [libc.musl-aarch64.so.1]' ;;
 	*) exit 2 ;;
@@ -77,10 +81,16 @@ EOF
 chmod 0755 "$work/bin/uname" "$work/bin/readelf" "$work/bin/cpio" "$work/bin/depmod"
 
 printf '%s\n' source-built-busybox >"$work/rootfs-tree/usr/bin/busybox"
-printf '%s\n' source-built-loader >"$work/rootfs-tree/lib/ld-musl-aarch64.so.1"
-ln -s ld-musl-aarch64.so.1 "$work/rootfs-tree/lib/libc.musl-aarch64.so.1"
+printf '%s\n' source-built-loader >"$work/rootfs-tree/usr/lib/ld-musl-aarch64.so.1"
+ln -s ld-musl-aarch64.so.1 "$work/rootfs-tree/usr/lib/libc.musl-aarch64.so.1"
+ln -s usr/bin "$work/rootfs-tree/bin"
+ln -s usr/lib "$work/rootfs-tree/lib"
+# The real pmOS archive lists this package metadata before the executable.
+# A basename-only lookup must not mistake either decoy for a runtime file.
+printf '%s\n' package-path-list-not-elf >"$work/rootfs-tree/etc/busybox-paths.d/busybox"
+printf '%s\n' not-the-runtime-loader >"$work/rootfs-tree/etc/ld-musl-aarch64.so.1"
 system_tar=$(command -v tar)
-"$system_tar" -cf "$work/out/pixel-9a/rootfs/tegu/rootfs.tar" -C "$work/rootfs-tree" .
+"$system_tar" -cf "$work/out/pixel-9a/rootfs/tegu/rootfs.tar" -C "$work/rootfs-tree" ./etc ./usr ./bin ./lib
 printf '%s\n' synthetic-rootfs-image >"$work/out/pixel-9a/rootfs/tegu/rootfs.img"
 
 kernel_dist="$work/out/pixel-9a/kernel-radio/tegu-wwan/dist"
@@ -99,15 +109,18 @@ printf 'schema_version\t1\ninstall_root\tsplit-inputs/module-install\n' >"$modul
 
 rootfs_out="$work/out/pixel-9a/rootfs/tegu"
 rootfs_manifest="$rootfs_out/manifest.tsv"
-{
-	printf 'schema_version\t1\n'
-	printf 'target_id\tgoogle-pixel-9a-tegu-gxq96-mp1-0\n'
-	printf 'kernel_backend\tlinux-google-tegu-wwan\n'
-	printf 'status\tbuilt-substrate-only\n'
-	printf 'bootable\tfalse\n'
-	printf 'artifact\trootfs.tar\t%s\t%s\n' "$(bytes "$rootfs_out/rootfs.tar")" "$(hash_file "$rootfs_out/rootfs.tar")"
-	printf 'artifact\trootfs.img\t%s\t%s\n' "$(bytes "$rootfs_out/rootfs.img")" "$(hash_file "$rootfs_out/rootfs.img")"
-} >"$rootfs_manifest"
+write_rootfs_manifest() {
+	{
+		printf 'schema_version\t1\n'
+		printf 'target_id\tgoogle-pixel-9a-tegu-gxq96-mp1-0\n'
+		printf 'kernel_backend\tlinux-google-tegu-wwan\n'
+		printf 'status\tbuilt-substrate-only\n'
+		printf 'bootable\tfalse\n'
+		printf 'artifact\trootfs.tar\t%s\t%s\n' "$(bytes "$rootfs_out/rootfs.tar")" "$(hash_file "$rootfs_out/rootfs.tar")"
+		printf 'artifact\trootfs.img\t%s\t%s\n' "$(bytes "$rootfs_out/rootfs.img")" "$(hash_file "$rootfs_out/rootfs.img")"
+	} >"$rootfs_manifest"
+}
+write_rootfs_manifest
 
 base_env="PATH=$work/bin:$PATH FERRIX_OUT_DIR=$work/out FERRIX_PIXEL9A_RADIO_KERNEL_DIST=$kernel_dist FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST=$kernel_manifest FERRIX_PIXEL9A_ROOTFS_OUT=$rootfs_out FERRIX_PIXEL9A_ROOTFS_MANIFEST=$rootfs_manifest FERRIX_PIXEL9A_BOOT_INPUTS_OUT=$work/out/pixel-9a/boot-inputs/tegu-wwan"
 if env $base_env "$script" preflight >"$work/preflight.out" 2>"$work/preflight.err"; then
@@ -135,7 +148,9 @@ env $base_env FERRIX_PIXEL9A_BOOT_INPUTS_BUILD=I-understand-this-builds-source-o
 
 inputs="$work/out/pixel-9a/boot-inputs/tegu-wwan"
 [ -f "$inputs/manifest.tsv" ] || fail 'boot-input manifest missing'
-cmp "$inputs/initramfs-root/lib/libc.musl-aarch64.so.1" "$work/rootfs-tree/lib/ld-musl-aarch64.so.1" || fail 'musl libc alias does not contain loader bytes'
+cmp "$inputs/initramfs-root/bin/busybox" "$work/rootfs-tree/usr/bin/busybox" || fail 'package metadata was selected instead of runtime BusyBox'
+cmp "$inputs/initramfs-root/lib/ld-musl-aarch64.so.1" "$work/rootfs-tree/usr/lib/ld-musl-aarch64.so.1" || fail 'non-runtime loader was selected'
+cmp "$inputs/initramfs-root/lib/libc.musl-aarch64.so.1" "$work/rootfs-tree/usr/lib/ld-musl-aarch64.so.1" || fail 'musl libc alias does not contain loader bytes'
 for artifact in initramfs.cpio vendor-ramdisk.cpio vendor-kernel-boot.cpio vendor-bootconfig; do
 	[ -s "$inputs/$artifact" ] || fail "boot-input artifact missing: $artifact"
 	awk -F "$tab" -v name="$artifact" '$1 == "artifact" && $2 == name && $6 != "" { found=1 } END { exit(found ? 0 : 1) }' "$inputs/manifest.tsv" ||
@@ -146,5 +161,31 @@ for name in vendor-dlkm system-dlkm; do
 done
 awk -F "$tab" '$1 == "status" && $2 == "built-source-inputs" { found=1 } END { exit(found ? 0 : 1) }' "$inputs/manifest.tsv" || fail 'source-input status missing'
 awk -F "$tab" '$1 == "bootable" && $2 == "false" { found=1 } END { exit(found ? 0 : 1) }' "$inputs/manifest.tsv" || fail 'bootable boundary missing'
+
+expect_archive_refusal() {
+	label=$1
+	expected=$2
+	refused_out="$work/out/pixel-9a/boot-inputs/$label"
+	write_rootfs_manifest
+	if env $base_env FERRIX_PIXEL9A_BOOT_INPUTS_OUT="$refused_out" \
+		FERRIX_PIXEL9A_BOOT_INPUTS_BUILD=I-understand-this-builds-source-owned-pixel-9a-boot-inputs \
+		"$script" build >"$work/$label.out" 2>"$work/$label.err"; then
+		fail "accepted $label rootfs archive"
+	fi
+	grep -Fq "$expected" "$work/$label.err" || fail "unexpected $label refusal: $(sed -n '1p' "$work/$label.err")"
+	[ ! -e "$refused_out" ] || fail "$label refusal published output"
+}
+
+# Duplicate records are ambiguous even when they name the same path.
+"$system_tar" -rf "$rootfs_out/rootfs.tar" -C "$work/rootfs-tree" ./usr/bin/busybox
+expect_archive_refusal duplicate-runtime 'resolved to 2 archive members'
+
+# A metadata-only archive must not fall back to a matching basename in /etc.
+"$system_tar" -cf "$rootfs_out/rootfs.tar" -C "$work/rootfs-tree" ./etc ./usr/lib
+expect_archive_refusal missing-runtime 'resolved to 0 archive members'
+
+printf '%s\n' wrong-runtime-content >"$work/rootfs-tree/usr/bin/busybox"
+"$system_tar" -cf "$rootfs_out/rootfs.tar" -C "$work/rootfs-tree" ./etc ./usr ./bin ./lib
+expect_archive_refusal invalid-elf 'rootfs BusyBox is not an AArch64 executable'
 
 printf '%s\n' 'pixel-9a boot-input workflow tests passed'

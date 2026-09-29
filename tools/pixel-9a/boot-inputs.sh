@@ -181,17 +181,19 @@ preflight() {
 	printf '%s\n' 'PASS pixel-9a-boot-inputs preflight: exact source handoffs and target-owned boot inputs are ready'
 }
 
-tar_regular_member_for() {
-	wanted=$1
-	tar -tf "$rootfs_tar" | awk -v wanted="$wanted" '
+tar_runtime_member_for() {
+	runtime_path=$1
+	usr_runtime_path=$2
+	members=$(tar -tf "$rootfs_tar" | awk -v runtime_path="$runtime_path" -v usr_runtime_path="$usr_runtime_path" '
 			{
 				path=$0
 				sub(/^\.\//, "", path)
-				base=path
-				sub(/^.*\//, "", base)
-				if (base == wanted) { print $0; exit }
+				if (path == runtime_path || path == usr_runtime_path) print $0
 			}
-		'
+		')
+	member_count=$(printf '%s\n' "$members" | awk 'NF { count++ } END { print count + 0 }')
+	[ "$member_count" = 1 ] || die "runtime path '$runtime_path' resolved to $member_count archive members"
+	printf '%s\n' "$members"
 }
 
 extract_regular_member() {
@@ -213,15 +215,14 @@ extract_regular_member() {
 build_initramfs() {
 	initramfs_root="$stage_dir/initramfs-root"
 	mkdir -p "$initramfs_root/bin" "$initramfs_root/dev" "$initramfs_root/proc" "$initramfs_root/sys" "$initramfs_root/newroot"
-	busybox_member=$(tar_regular_member_for busybox)
+	busybox_member=$(tar_runtime_member_for bin/busybox usr/bin/busybox)
 	extract_regular_member "$busybox_member" "$initramfs_root/bin/busybox"
 	chmod 0755 "$initramfs_root/bin/busybox"
 	readelf -h "$initramfs_root/bin/busybox" | grep -Eiq 'AArch64|ARM aarch64' || die 'rootfs BusyBox is not an AArch64 executable'
 	interpreter=$(readelf -l "$initramfs_root/bin/busybox" | sed -n 's/.*Requesting program interpreter: \([^]]*\)].*/\1/p' | head -1)
 	if [ -n "$interpreter" ]; then
 		[ "$interpreter" = /lib/ld-musl-aarch64.so.1 ] || die "BusyBox has an unreviewed runtime interpreter: $interpreter"
-		interpreter_name=$(basename -- "$interpreter")
-		interpreter_member=$(tar_regular_member_for "$interpreter_name")
+		interpreter_member=$(tar_runtime_member_for "${interpreter#/}" "usr/${interpreter#/}")
 		extract_regular_member "$interpreter_member" "$initramfs_root/$interpreter"
 		while IFS= read -r needed; do
 			[ -n "$needed" ] || continue
@@ -235,7 +236,7 @@ build_initramfs() {
 					cp "$initramfs_root/$interpreter" "$initramfs_root/lib/$needed"
 					;;
 				*)
-					needed_member=$(tar_regular_member_for "$needed")
+					needed_member=$(tar_runtime_member_for "lib/$needed" "usr/lib/$needed")
 					extract_regular_member "$needed_member" "$initramfs_root/lib/$needed"
 					;;
 			esac

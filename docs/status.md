@@ -1,5 +1,41 @@
 # Status
 
+## 2026-09-30 (source synchronization and native boot-input failure)
+
+- **Source synchronization:** `7075934` was committed, pushed to the canonical
+  repository, and fast-forwarded into the clean native builder checkout at
+  `/home/ezy/github-projects/omarchy-ferrix`. The older Orca `remora` worktree
+  was left unchanged.
+- **Native result:** the boot-input preflight passed, but construction stopped
+  with `FAIL pixel-9a-boot-inputs: rootfs BusyBox is not an AArch64 executable`.
+  No completed boot-input output was published and no device operation ran.
+- **Read-only diagnosis:** the rootfs archive contains both
+  `etc/busybox-paths.d/busybox` (a text file) and `usr/bin/busybox`. The generator
+  selects the first basename match, so it extracted the text file. Inspection
+  of the actual `usr/bin/busybox` reports AArch64 ELF with the expected musl
+  interpreter. The architecture gate correctly rejected the wrong member;
+  neither it nor the rootfs hash check was bypassed. The owner authorized
+  correcting the selector and retrying the device-free native build with
+  the same verified archive.
+- **Selector correction:** runtime files now resolve only at exact `/bin`
+  and `/lib` paths or their merged-`/usr` equivalents. Missing or duplicate
+  archive members are refused. The regression fixture reproduced the
+  original failure with metadata ordered first and now passes, including
+  duplicate-member, missing-executable, and invalid-ELF refusal cases.
+  Native retry results remain pending; no physical operation is authorized
+  by this build-only approval.
+- **Recovery lifecycle review:** both factory restore and OTA execution
+  currently require `recovery_procedure=tested|passed|verified`, while the
+  exact target still records `documented-not-tested`. This prevents the
+  first recovery rehearsal through these workflows. No status was fabricated
+  and no recovery gate was relaxed; a separately reviewed initial-recovery
+  test procedure is still needed before Ferrix installation.
+- **Offline validation:** device discovery/matching, Pixel tools (including
+  restore/sideload/unlock), radio kernel, product, firmware, rootfs, Fastboot
+  entry, diagnostic radio boot, artifacts, canonical flash, partition capacity,
+  radios, and inactive-slot workflow tests passed. These are stub results,
+  not physical recovery or boot evidence. Formatting and diff checks passed.
+
 ## 2026-09-30 (native builder access restored)
 
 - **Builder connectivity:** SSH to the authorized `deba` host now succeeds.
