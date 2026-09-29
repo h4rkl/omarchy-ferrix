@@ -120,6 +120,7 @@ RUN apt-get update \
         flex \
         gawk \
         git \
+        kpartx \
         kmod \
         libelf-dev \
         libncurses-dev \
@@ -130,6 +131,7 @@ RUN apt-get update \
         make \
         m4 \
         pkg-config \
+        procps \
         python3 \
         python3-pip \
         python3-setuptools \

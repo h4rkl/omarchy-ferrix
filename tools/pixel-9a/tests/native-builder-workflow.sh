@@ -79,6 +79,12 @@ for sysroot_input in \
     exit 1
   }
 done
+for host_package in kpartx procps; do
+  grep -F -- "        $host_package" "$dockerfile" >/dev/null || {
+    echo "builder image is missing pmbootstrap host dependency: $host_package" >&2
+    exit 1
+  }
+done
 if grep -F -- 'exec /opt/zig/zig objcopy' "$dockerfile" >/dev/null; then
   echo 'builder image still routes objcopy through unsupported Zig subcommand' >&2
   exit 1
