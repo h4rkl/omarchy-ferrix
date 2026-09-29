@@ -53,7 +53,7 @@ run_workflow() {
 	shift 2
 
 	case "$workflow:$verb" in
-		env:check|kernel-radio:preflight|kernel-radio:sync|kernel-radio:verify|kernel-radio:build|product:preflight|product:build|firmware:preflight|firmware:inventory|firmware:stage|rootfs:preflight|rootfs:validate|rootfs:build|boot-radio:preflight|boot-radio:build|radio-split:preflight|radio-split:build|artifacts:check|artifacts:manifest) ;;
+		env:check|kernel-radio:preflight|kernel-radio:sync|kernel-radio:verify|kernel-radio:build|product:preflight|product:build|firmware:preflight|firmware:inventory|firmware:inspect|firmware:stage|rootfs:preflight|rootfs:validate|rootfs:build|boot-radio:preflight|boot-radio:build|radio-split:preflight|radio-split:build|artifacts:check|artifacts:manifest) ;;
 		*) die "unsupported or device-facing workflow: $workflow $verb" ;;
 	esac
 
@@ -84,6 +84,7 @@ run_workflow() {
 		FERRIX_PIXEL9A_RADIO_SYNC FERRIX_PIXEL9A_RADIO_BUILD \
 		FERRIX_PIXEL9A_PRODUCT_BUILD FERRIX_PIXEL9A_FIRMWARE \
 		FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST FERRIX_PIXEL9A_ROOTFS_BUILD \
+		FERRIX_PIXEL9A_ROOTFS_CACHE_DIR \
 		FERRIX_PIXEL9A_RADIO_BOOT_BUILD FERRIX_PIXEL9A_RADIO_SPLIT_BUILD \
 		FERRIX_PIXEL9A_AVB_ALGORITHM FERRIX_PIXEL9A_AVB_KEY \
 		FERRIX_PIXEL9A_PMAPORTS_DIR FERRIX_PIXEL9A_PMAPORTS_COMMIT \

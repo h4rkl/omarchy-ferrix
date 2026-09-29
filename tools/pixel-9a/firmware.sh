@@ -405,8 +405,45 @@ stage() {
   printf '%s\n' "PASS pixel-9a-firmware staged allowlist: $manifest"
 }
 
+inspect_sources() {
+  preflight
+  [ "${FERRIX_PIXEL9A_FIRMWARE:-}" = "$confirmation" ] ||
+    die "firmware source inspection is opt-in; set FERRIX_PIXEL9A_FIRMWARE=$confirmation"
+  allowlist=${FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST:-"$target/firmware-stage-allowlist.tsv"}
+  validate_allowlist "$allowlist"
+  for command_name in debugfs od cp dirname mktemp; do need "$command_name"; done
+  mkdir -p "$firmware_out"
+  source=$(verify_archive)
+  archive=$(printf '%s\n' "$source" | awk -F '\t' '{ print $1 }')
+  nested=$(nested_name "$archive")
+  work=$(mktemp -d "$firmware_out/.inspect.XXXXXX")
+  nested_path="$work/image.zip"
+  manifest="$work/source-check.tsv"
+  : >"$manifest"
+  trap 'rm -rf "$work"' EXIT HUP INT TERM
+  unzip -p "$archive" "$nested" >"$nested_path" || die 'could not materialize nested image archive'
+  while IFS="$(printf '\t')" read -r controller image source_path runtime_path entry_type extra; do
+    [ -n "${controller:-}" ] || continue
+    case "$controller" in \#*) continue ;; esac
+    [ -z "${extra:-}" ] || die 'firmware allowlist has more than five TSV fields'
+    [ -n "${entry_type:-}" ] || entry_type=file
+    grep -q "^id = \"$controller\"$" "$policy" || die "controller is not listed in firmware policy: $controller"
+    is_allowed_image "$image" || die "source image is not allow-listed: $image"
+    filesystem=$(prepare_image "$image")
+    printf '%s\n' "== $controller: $image:$source_path -> $runtime_path ($entry_type) =="
+    if ! DEBUGFS_PAGER=cat debugfs -R "stat $source_path" "$filesystem"; then
+      printf 'source stat failed: %s\n' "$source_path"
+      continue
+    fi
+    if [ "$entry_type" = bundle ]; then
+      DEBUGFS_PAGER=cat debugfs -R "ls -p $source_path" "$filesystem" ||
+        printf 'source directory listing failed: %s\n' "$source_path"
+    fi
+  done <"$allowlist"
+}
+
 usage() {
-  printf '%s\n' 'usage: tools/pixel-9a/firmware.sh preflight|inventory|stage' >&2
+  printf '%s\n' 'usage: tools/pixel-9a/firmware.sh preflight|inventory|inspect|stage' >&2
   exit 2
 }
 
@@ -414,6 +451,7 @@ usage() {
 case "$1" in
   preflight) preflight ;;
   inventory) write_inventory ;;
+  inspect) inspect_sources ;;
   stage) stage ;;
   *) usage ;;
 esac

@@ -104,6 +104,16 @@ PATH="$fake_bin:$PATH" "$workflow" stage >/dev/null
   { echo 'bundle extractor did not stage the second regular file' >&2; exit 1; }
 grep -q '^firmware\tmodem-s5300\tvendor.img\t/firmware/carrierconfig/carrier.conf\tlib/firmware/carrierconfig/carrier.conf\t' \
   "$work/bundle-out/firmware-manifest.tsv"
+FERRIX_FAKE_BUNDLE_MODE=regular \
+FERRIX_PIXEL9A_PINS="$work/recovery.pins" \
+FERRIX_PIXEL9A_FACTORY_ARCHIVE="$work/factory.zip" \
+FERRIX_PIXEL9A_FIRMWARE="$confirmation" \
+FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST="$work/bundle.tsv" \
+FERRIX_PIXEL9A_FIRMWARE_OUT="$work/source-inspect-out" \
+PATH="$fake_bin:$PATH" "$workflow" inspect >"$work/source-inspect.out"
+grep -q '== modem-s5300: vendor.img:/firmware/carrierconfig -> lib/firmware/carrierconfig (bundle) ==' \
+  "$work/source-inspect.out"
+grep -q 'Inode: 42 Type: directory' "$work/source-inspect.out"
 mkdir -p "$work/overwrite-out/staged/lib/firmware/carrierconfig"
 ln -s "$work/archive-root/vendor.img" \
   "$work/overwrite-out/staged/lib/firmware/carrierconfig/carrier.conf"

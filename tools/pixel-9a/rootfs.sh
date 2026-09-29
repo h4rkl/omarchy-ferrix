@@ -17,6 +17,7 @@ out_root=${FERRIX_OUT_DIR:-"$root/out"}
 rootfs_out=${FERRIX_PIXEL9A_ROOTFS_OUT:-"$out_root/pixel-9a/rootfs/tegu"}
 manifest=${FERRIX_PIXEL9A_ROOTFS_MANIFEST:-"$rootfs_out/manifest.tsv"}
 cache_root=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}
+rootfs_cache_root=${FERRIX_PIXEL9A_ROOTFS_CACHE_DIR:-"$cache_root/pixel-9a"}
 profile_path=${FERRIX_PIXEL9A_PROFILE:-${FERRIX_PIXEL9A_RUNTIME_PROFILE:-"$target/dev/profile.toml"}}
 pins=${FERRIX_PIXEL9A_PINS:-"$target/recovery.pins"}
 stage_allowlist="$target/firmware-stage-allowlist.tsv"
@@ -720,10 +721,10 @@ build_rootfs() {
 	validate_product_dir
 	validate_firmware_dir
 	validate_radio_firmware_route
-	# The profile loader deliberately does not create ignored roots. Create the
-	# cache parent before any staging or mktemp operation so a clean native-Linux
-	# checkout has a reproducible build workspace.
-	mkdir -p "$cache_root"
+	# The native builder mounts only the target-specific Pixel cache writable.
+	# Keep pmbootstrap's temporary workspace inside that mount so builds work
+	# with the repository bind mounted read-only.
+	mkdir -p "$rootfs_cache_root"
 	pmaports=${FERRIX_PIXEL9A_PMAPORTS_DIR:-}
 	[ -n "$pmaports" ] || die 'FERRIX_PIXEL9A_PMAPORTS_DIR must point to a pinned pmaports checkout'
 	git -C "$pmaports" rev-parse --git-dir >/dev/null 2>&1 || die "pmaports path is not a Git checkout: $pmaports"
@@ -744,7 +745,7 @@ build_rootfs() {
 		die 'pmaports checkout has untracked changes'
 	fi
 
-	build_dir=$(mktemp -d "$cache_root/pixel-9a-rootfs.XXXXXX")
+	build_dir=$(mktemp -d "$rootfs_cache_root/rootfs.XXXXXX")
 	rootfs_image_tmp=''
 	cleanup() {
 		rm -rf "$build_dir"
