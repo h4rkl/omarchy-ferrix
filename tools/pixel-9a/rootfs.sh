@@ -880,8 +880,22 @@ build_rootfs() {
 	FERRIX_PMB_EXTERNAL_KERNEL=1 PMB_CHANNELS_CFG="$channels_cfg" python3 \
 		"$root/tools/pixel-9a/pmbootstrap-rootfs.py" --details-to-stdout --config "$config" -y install \
 		--password "$rootfs_password" --no-image --no-fde --no-sshd --no-firewall --no-recommends
-	rootfs_dir=$(find "$pmb_work" -maxdepth 2 -type d -name 'chroot_rootfs-*' -print -quit)
-	[ -n "$rootfs_dir" ] || die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
+	# pmbootstrap names this directory from the target's deviceinfo. Prefer a
+	# shell glob here: some minimal native builder images provide a find
+	# implementation that does not reliably traverse the root-owned chroot
+	# after pmbootstrap returns. Keep the explicit postcondition and print the
+	# workspace contents when it fails so a substrate problem is diagnosable.
+	rootfs_dir=''
+	for candidate in "$pmb_work"/chroot_rootfs-*; do
+		[ -d "$candidate" ] || continue
+		rootfs_dir=$candidate
+		break
+	done
+	if [ -z "$rootfs_dir" ]; then
+		printf '%s\n' "pmbootstrap workspace contents under $pmb_work:" >&2
+		find "$pmb_work" -maxdepth 2 -print >&2 2>/dev/null || true
+		die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
+	fi
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
 		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do
