@@ -752,6 +752,19 @@ rootfs_symlink() {
 	sudo -n ln -sfn -- "$target" "$destination"
 }
 
+ensure_output_dir() {
+	directory=$1
+	mkdir -p -- "$directory" 2>/dev/null || sudo -n mkdir -p -- "$directory"
+	if [ -w "$directory" ]; then
+		return 0
+	fi
+	# pmbootstrap and its privileged fallback can leave only this exact output
+	# directory root-owned. Reclaim the handoff directory before writing the
+	# immutable artifacts and manifest; never broaden this to the output root.
+	sudo -n chown "$(id -u):$(id -g)" "$directory"
+	[ -w "$directory" ] || die "rootfs output directory is not writable: $directory"
+}
+
 stage_radio_firmware_aliases() {
 	route_manifest="$rootfs_dir/usr/share/ferrix/pixel-9a/radio-firmware-manifest.tsv"
 	route_manifest_tmp="$build_dir/radio-firmware-manifest.tsv.tmp.$$"
@@ -978,9 +991,11 @@ build_rootfs() {
 	rootfs_symlink /lib/firmware "$rootfs_dir/vendor/firmware"
 	rootfs_symlink /lib/firmware "$rootfs_dir/etc/wifi"
 
-	mkdir -p "$rootfs_out"
+	ensure_output_dir "$rootfs_out"
 	rootfs_artifact="$rootfs_out/rootfs.tar"
-	tmp_tar="$rootfs_artifact.tmp.$$"
+	# Keep temporary files in the user-owned build directory. The final output
+	# directory may have been touched by a privileged pmbootstrap fallback.
+	tmp_tar="$build_dir/rootfs.tar.tmp.$$"
 	if ! tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -C "$rootfs_dir" -cf "$tmp_tar" .; then
 		sudo -n rm -f -- "$tmp_tar"
 		sudo -n tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
@@ -989,7 +1004,7 @@ build_rootfs() {
 	fi
 	mv "$tmp_tar" "$rootfs_artifact"
 	rootfs_image="$rootfs_out/rootfs.img"
-	rootfs_image_tmp="$rootfs_image.tmp.$$"
+	rootfs_image_tmp="$build_dir/rootfs.img.tmp.$$"
 	printf '%s\n' "creating ext4 rootfs image (${rootfs_image_size_mib} MiB) from $rootfs_dir"
 	if ! mke2fs -q -t ext4 -F -L ferrix-tegu -U "$rootfs_uuid" -d "$rootfs_dir" \
 		"$rootfs_image_tmp" "${rootfs_image_size_mib}M"; then
