@@ -83,12 +83,20 @@ RUN apt-get update \
 # required by dev/profile.env and is intentionally a linker-compatible command,
 # not an architecture-emulation substitute: this image itself must run on a
 # native x86_64 Linux Docker engine.
+# Debian Bookworm's clang package is 14, but this kernel revision gates
+# Kconfig on LLVM >= 17.  Zig carries a pinned LLVM 19 frontend and can act as
+# the clang driver for both host tools and the arm64 Kbuild.  Keep the wrapper
+# in PATH ahead of /usr/bin/clang; the other LLVM utilities remain the
+# explicitly installed Debian tools used by LLVM=1.
 RUN curl --fail --location --retry 3 --connect-timeout 30 --output /tmp/zig.tar.xz "$ZIG_URL" \
     && printf '%s  %s\n' "$ZIG_SHA256" /tmp/zig.tar.xz | sha256sum --check --status \
     && tar -xJf /tmp/zig.tar.xz -C /opt \
     && mv "/opt/zig-x86_64-linux-$ZIG_VERSION" /opt/zig \
     && ln -s /opt/zig/zig /usr/local/bin/zig \
     && rm -f /tmp/zig.tar.xz \
+    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig cc "$@"' > /usr/local/bin/clang \
+    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig c++ "$@"' > /usr/local/bin/clang++ \
+    && chmod 0755 /usr/local/bin/clang /usr/local/bin/clang++ \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig cc -target aarch64-linux-musl "$@"' > /usr/local/bin/aarch64-linux-musl-gcc \
     && chmod 0755 /usr/local/bin/aarch64-linux-musl-gcc
 
