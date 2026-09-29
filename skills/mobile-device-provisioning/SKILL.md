@@ -340,20 +340,45 @@ Choose by device state:
 
 ## Phase 5 - Build Ferrix images
 
-**Status:** Implemented and Stub-tested only; nothing has been built
-(`kernel_build_status`, `rootfs_build_status` = `not-built`). Native Linux
-x86_64 only. On macOS: run the `*-check`/`*-test` recipes if useful, then
-stop and hand off with the exact commands below. Do not use an ARM64 UTM
+**Status:** Implemented and Stub-tested only. The radio-first source archive and
+clean detached checkout were source-synced and hash-verified on a provisioned
+native Linux x86_64 builder on 2026-09-29; this does not mean that the kernel,
+product, rootfs, or boot artifacts are complete. Their manifests remain the
+authority for each stage, and no physical boot or radio capability is claimed.
+Native Linux x86_64 is still required. On macOS: run the `*-check`/`*-test`
+recipes if useful, then hand off to the native builder. Do not use an ARM64 UTM
 guest, an x86_64 UTM guest under CPU emulation, OrbStack/Lima, or a
 cross-compilation substitute; the pinned native kernel source, toolchain, and
-`pmbootstrap` are Linux-only by design. Docker is permitted only as a digest-pinned
-`linux/amd64` tool container running on a native Linux x86_64 host; it cannot
-substitute for that host, and it must not carry the phone's USB transport or
-ADB server. UTM remains acceptable for a separate Linux smoke test or QEMU
-workflow, not for this Pixel build gate.
+`pmbootstrap` are Linux-only by design. A digest-pinned `linux/amd64` tool
+container is allowed only when its Docker engine runs on native Linux x86_64;
+it cannot substitute for that host, and it must not carry the phone's USB
+transport or ADB server. UTM remains acceptable for a separate Linux smoke
+test or QEMU workflow, not for this Pixel build gate.
 
 Load the host profile first: `. tools/pixel-9a/env.sh`, then
 `just pixel-9a-env-validate` and `just pixel-9a-env-check build`.
+
+When the native builder is remote, transfer the checked-in source through the
+canonical Git repository (for example, push with `gh`/Git and pull the reviewed
+commit on the builder) rather than copying ignored caches, firmware, images, or
+device evidence. The checked-in `tools/pixel-9a/native-builder.sh` wrapper may
+then run only the device-free stages inside the pinned builder image:
+
+```sh
+tools/pixel-9a/native-builder.sh image
+FERRIX_PIXEL9A_RADIO_SYNC=I-understand-this-downloads-the-radio-first-kernel \
+  tools/pixel-9a/native-builder.sh run kernel-radio sync
+FERRIX_PIXEL9A_RADIO_BUILD=I-understand-this-runs-the-radio-first-kernel-build \
+  tools/pixel-9a/native-builder.sh run kernel-radio build
+FERRIX_PIXEL9A_PRODUCT_BUILD=I-understand-this-builds-the-pixel-9a-product \
+  tools/pixel-9a/native-builder.sh run product build
+```
+
+The wrapper requires Docker to report `linux/amd64` on a native Linux x86_64
+engine, mounts only the checkout plus target-scoped ignored cache/output paths,
+and refuses discovery, ADB, Fastboot, flashing, temporary boot, and guest-radio
+SSH workflows. Source sync, radio-kernel build, and product build opt-ins are
+separate authorizations; completing one stage does not authorize another.
 
 The pinned kernel and pmaports source checkouts must be clean before they are
 used: no tracked, staged, or untracked changes. The main Ferrix repository

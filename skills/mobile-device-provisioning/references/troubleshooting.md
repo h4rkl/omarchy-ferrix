@@ -154,6 +154,16 @@ idempotent).
   ADB socket into the build container. Hand the Pixel build off to provisioned
   native Linux x86_64; UTM is still fine for a separate Linux smoke test or
   QEMU workflow.
+- For a remote native builder, use the canonical Git checkout (a reviewed
+  `gh`/Git push followed by a fast-forward pull) and invoke
+  `tools/pixel-9a/native-builder.sh` there. Run `image` first, then the
+  device-free `env`, `kernel-radio`, `product`, `firmware`, `rootfs`,
+  `boot-radio`, `radio-split`, or `artifacts` stages it allow-lists. Verify
+  `docker info` reports `linux/amd64`; the wrapper mounts no USB bus, ADB
+  server socket, Fastboot transport, or guest-radio SSH path. A completed
+  source sync is only a verified source handoff, not a successful kernel or
+  product build, and each `FERRIX_PIXEL9A_*` build token remains a separate
+  authorization.
 - `repo` missing or under 80 GiB free: report; do not install or free disk on
   your own.
 - `pmbootstrap` needs a clean pmaports checkout at the pinned commit
