@@ -1,5 +1,24 @@
 # Status
 
+## 2026-09-30 (Fastbootd variant compatibility refusal)
+
+- The owner supplied `is-userspace: yes` after manually entering Fastbootd.
+  The local USB-enabled capacity workflow then returned exit 1:
+  `REFUSING pixel-9a partition capacity handoff: SKU/variant 'MSM USF' is
+  unavailable and no matching redacted ADB identity proves GXQ96`.
+- **Read-only diagnosis:** the shared SKU helper rejects this non-SKU string
+  before trying its ADB correlation path. The existing exact-target ADB
+  discovery still records Google / Pixel 9a / tegu / GXQ96 / MP1.0.
+  Google's [Pixel Fastboot HAL source](https://android.googlesource.com/platform/hardware/google/pixel/+/1c8e4019/fastboot/Fastboot_aidl.cpp)
+  hardcodes `MSM USF` in `getVariant`; that source corroborates a placeholder
+  interpretation, not the attached device's SKU. A correction would need to
+  be scoped to verified userspace Fastboot and still require matching
+  serial-bound complete ADB identity, live product/revision, and slot checks.
+- No capacity handoff was published, no further device calls were made after
+  the refusal, and no identity rule, recovery gate, or phone state was changed.
+  The provisioning playbook stopped the run pending review/authorization of
+  that compatibility correction and a fresh read-only attempt.
+
 ## 2026-09-30 (recovery transport observed, Fastbootd still pending)
 
 - Following the owner's next mode-change confirmation, the local,

@@ -112,11 +112,11 @@ devices)
 getvar)
 	variable=$2
 	case "$variable" in
-	product) value=tegu ;;
-	hw-revision) value=MP1.0 ;;
-	variant) value=GXQ96 ;;
-	current-slot) value=a ;;
-	slot-count) value=2 ;;
+	product) value=${STUB_FASTBOOT_PRODUCT:-tegu} ;;
+	hw-revision) value=${STUB_FASTBOOT_REVISION:-MP1.0} ;;
+	variant) value=${STUB_FASTBOOT_VARIANT:-GXQ96} ;;
+	current-slot) value=${STUB_FASTBOOT_SLOT:-a} ;;
+	slot-count) value=${STUB_FASTBOOT_SLOT_COUNT:-2} ;;
 	is-userspace) value=${STUB_FASTBOOT_IS_USERSPACE:-yes} ;;
 	partition-size:boot_a) value=0x01000000 ;;
 	partition-size:boot_b) value=16777216 ;;
@@ -207,6 +207,77 @@ grep -q '^partition	vendor_dlkm	8388608$' "$fastboot_handoff"
 ! grep -R -Fq 'SERIAL-F' "$work/out/pixel-9a"
 grep -q 'transport=fastboot' "$work/out/pixel-9a"/partition-capacity-*.txt
 grep -q 'fastboot_userspace=yes' "$work/out/pixel-9a"/partition-capacity-*.txt
+
+# Google's userspace HAL returns a placeholder rather than the board SKU.
+# The capacity-only exception must still prove the exact same Android device.
+if command -v shasum >/dev/null 2>&1; then
+	fixture_prefix=$(printf '%s' SERIAL-F | shasum -a 256 | cut -c1-12)
+else
+	fixture_prefix=$(printf '%s' SERIAL-F | sha256sum | cut -c1-12)
+fi
+write_adb_identity() {
+	mkdir -p "$1/pixel-9a"
+	{
+		printf 'transport=adb\nresult=ok\nserial_sha256_prefix=%s\n' "$2"
+		printf 'ro.product.manufacturer=Google\nro.product.model=Pixel 9a\n'
+		printf 'ro.product.device=tegu\nro.boot.hardware.revision=MP1.0\n'
+		[ -z "$3" ] || printf 'ro.boot.hardware.sku=%s\n' "$3"
+	} >"$1/pixel-9a/discovery-fixture.txt"
+}
+placeholder_out="$work/placeholder"
+write_adb_identity "$placeholder_out" "$fixture_prefix" GXQ96
+if ! FERRIX_OUT_DIR="$placeholder_out" STUB_ADB_DEVICES_EMPTY=1 \
+	STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB_FASTBOOT_VARIANT='MSM USF' \
+	"$workflow" >"$work/placeholder.out" 2>"$work/placeholder.err"; then
+	cat "$work/placeholder.err" >&2
+	exit 1
+fi
+grep -q '^sku=GXQ96$' "$placeholder_out"/pixel-9a/partition-capacity-*.txt
+grep -q '^observed_variant=MSM USF$' "$placeholder_out"/pixel-9a/partition-capacity-*.txt
+grep -q '^sku_source=adb-correlated-fastbootd-placeholder$' "$placeholder_out"/pixel-9a/partition-capacity-*.txt
+[ "$(grep -c '^partition	' "$placeholder_out/pixel-9a/partition-capacities-latest.tsv")" -eq 10 ]
+! grep -R -Fq SERIAL-F "$placeholder_out"
+
+# Every refusal uses a fresh output root: no completed handoff may appear.
+for refusal in missing-evidence wrong-serial wrong-sku incomplete-evidence bootloader unknown-variant wrong-product wrong-revision wrong-slot-count wrong-slot multiple-devices; do
+	refusal_out="$work/$refusal"
+	set --
+	case "$refusal" in
+		missing-evidence) ;;
+		wrong-serial) write_adb_identity "$refusal_out" 000000000000 GXQ96 ;;
+		wrong-sku) write_adb_identity "$refusal_out" "$fixture_prefix" WRONG ;;
+		incomplete-evidence) write_adb_identity "$refusal_out" "$fixture_prefix" '' ;;
+		*) write_adb_identity "$refusal_out" "$fixture_prefix" GXQ96 ;;
+	esac
+	expected='placeholder variant requires matching redacted ADB identity'
+	case "$refusal" in
+		bootloader) set -- STUB_FASTBOOT_IS_USERSPACE=no; expected='requires fastbootd' ;;
+		unknown-variant) set -- STUB_FASTBOOT_VARIANT=WRONG; expected="SKU/variant 'WRONG'" ;;
+		wrong-product) set -- STUB_FASTBOOT_PRODUCT=other; expected='product mismatch' ;;
+		wrong-revision) set -- STUB_FASTBOOT_REVISION=MP2.0; expected='hardware revision mismatch' ;;
+		wrong-slot-count) set -- STUB_FASTBOOT_SLOT_COUNT=1; expected='unexpected slot count' ;;
+		wrong-slot) set -- STUB_FASTBOOT_SLOT=c; expected='unexpected current slot' ;;
+		multiple-devices) set -- 'STUB_FASTBOOT_DEVICES=SERIAL-F fastboot usb:1|SERIAL-G fastboot usb:2'; expected='requires exactly one' ;;
+	esac
+	if env FERRIX_OUT_DIR="$refusal_out" STUB_ADB_DEVICES_EMPTY=1 \
+		STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB_FASTBOOT_VARIANT='MSM USF' \
+		"$@" "$workflow" >"$work/$refusal.out" 2>"$work/$refusal.err"; then
+		echo "placeholder variant unexpectedly accepted $refusal" >&2
+		exit 1
+	fi
+	grep -Fq "$expected" "$work/$refusal.err"
+	[ ! -e "$refusal_out/pixel-9a/partition-capacities-latest.tsv" ]
+done
+
+# The shared gate used by mutating workflows must not gain this exception.
+(
+	. "$root/tools/pixel-9a/adb-correlation.sh"
+	FERRIX_OUT_DIR=$placeholder_out
+	if pixel9a_fastboot_sku_gate 'MSM USF' "$fixture_prefix"; then
+		echo 'shared bootloader SKU gate accepted userspace placeholder' >&2
+		exit 1
+	fi
+)
 
 if STUB_ADB_DEVICES_EMPTY=1 STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB_FASTBOOT_IS_USERSPACE=no "$workflow" >"$work/not-userspace.out" 2>"$work/not-userspace.err"; then
 	echo 'partition capacity unexpectedly passed outside fastbootd' >&2

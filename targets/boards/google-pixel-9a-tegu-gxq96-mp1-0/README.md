@@ -71,6 +71,15 @@ serial hash has a complete redacted ADB discovery proving Google / Pixel 9a /
 `tegu` / `GXQ96` / `MP1.0`; the live Fastboot product, revision, serial, slot,
 slot count, unlock state, and transport are still rechecked independently.
 
+The read-only capacity workflow additionally recognizes `variant=MSM USF`
+only after verifying `is-userspace=yes`, exact product/revision, and the A/B
+slot fields. Google's [userspace Fastboot HAL](https://android.googlesource.com/platform/hardware/google/pixel/+/1c8e4019/fastboot/Fastboot_aidl.cpp)
+hardcodes that placeholder; it does not identify the SKU. The workflow still
+requires complete redacted ADB identity for the same serial hash proving
+`GXQ96`, and records the observed placeholder separately from the verified
+SKU. This exception is limited to capacity reads: the shared identity gate
+used by flashing, restoration, and activation remains unchanged.
+
 This is an owner-declared new development device with no personal data. The
 checked-in gate records `backup = "not-required-dev-device"` and
 `data_policy = "dev-device-no-user-data"`; it deliberately does not claim a

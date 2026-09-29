@@ -293,7 +293,6 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 	userspace=$(fastboot_getvar is-userspace) || die 'Fastboot is-userspace getvar is unavailable'
 	[ "$product" = "$expected_product" ] || die "product mismatch: $product"
 	[ "$revision" = "$expected_revision" ] || die "hardware revision mismatch: $revision"
-	pixel9a_fastboot_sku_gate "$sku" "$(sha256_prefix "$serial")" || die "SKU/variant '$sku' is unavailable and no matching redacted ADB identity proves $expected_sku"
 	[ "$slot_count" = 2 ] || die "unexpected slot count: $slot_count"
 	case "$slot" in
 		a|_a) active_suffix=_a; inactive_suffix=_b ;;
@@ -302,11 +301,24 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 	esac
 	[ "$userspace" = yes ] ||
 		die 'Fastboot capacity handoff requires fastbootd (is-userspace=yes) so both dynamic A/B logical partitions are independently observable; no reboot was issued'
+	if [ "$sku" = 'MSM USF' ]; then
+		# Google's userspace HAL hardcodes this placeholder in getVariant:
+		# https://android.googlesource.com/platform/hardware/google/pixel/+/1c8e4019/fastboot/Fastboot_aidl.cpp
+		# It is not a SKU. Only this read-only, mode-verified capacity path
+		# may correlate it with complete same-serial Android identity; leave
+		# the shared bootloader/mutation SKU gate unchanged.
+		pixel9a_sku_evidence=$(pixel9a_adb_correlation_file "$(sha256_prefix "$serial")" || true)
+		[ -n "$pixel9a_sku_evidence" ] || die "Fastbootd placeholder variant requires matching redacted ADB identity proving $expected_sku"
+		pixel9a_sku_source=adb-correlated-fastbootd-placeholder
+	else
+		pixel9a_fastboot_sku_gate "$sku" "$(sha256_prefix "$serial")" || die "SKU/variant '$sku' is unavailable and no matching redacted ADB identity proves $expected_sku"
+	fi
 
 	emit target_id "$expected_target_id"
 	emit product "$product"
 	emit hardware_revision "$revision"
 	emit sku "$expected_sku"
+	emit observed_variant "$sku"
 	emit sku_source "$pixel9a_sku_source"
 	emit sku_evidence "$pixel9a_sku_evidence"
 	emit transport fastboot
@@ -322,7 +334,8 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 	{
 		printf '# source=Fastboot getvar partition-size:<partition>_<slot>; values are bytes (hex or decimal)\n'
 		printf '# inventory_completeness=partial (Fastboot exposes no guest /proc inventory; this handoff never upgrades that gate)\n'
-		printf '# exact-target=%s product=%s revision=%s sku=%s current_slot=%s is_userspace=%s\n' "$expected_target_id" "$product" "$revision" "$sku" "$slot" "$userspace"
+		printf '# exact-target=%s product=%s revision=%s sku=%s current_slot=%s is_userspace=%s\n' "$expected_target_id" "$product" "$revision" "$expected_sku" "$slot" "$userspace"
+		printf '# observed_variant=%s sku_source=%s\n' "$sku" "$pixel9a_sku_source"
 		printf 'schema_version%s1\n' "$tab"
 		printf 'target_id%s%s\n' "$tab" "$expected_target_id"
 	} >"$handoff_tmp"
