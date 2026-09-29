@@ -171,14 +171,24 @@ case "${1:-}" in
   info) printf '%s\n' linux/amd64 ;;
   build) printf '%s\n' "$*" >"${FAKE_DOCKER_LOG:?}" ;;
   image) printf '%s\n' 'pixel-9a-builder=sha256:test linux/amd64' ;;
-  run) printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG:?}" ;;
+  run)
+    previous=''
+    for argument do
+      if [ "$previous" = --env-file ]; then
+        cp "$argument" "${FAKE_DOCKER_ENV_LOG:?}"
+      fi
+      previous=$argument
+    done
+    printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG:?}"
+    ;;
   *) printf 'unexpected docker verb: %s\n' "${1:-}" >&2; exit 1 ;;
 esac
 EOF
 chmod 0755 "$work/bin/docker"
 log="$work/log/docker"
+env_log="$work/log/env"
 
-PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" \
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
   FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
   "$script" image >/dev/null
 grep -F -- '--platform linux/amd64' "$log" >/dev/null
@@ -189,11 +199,16 @@ if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
 fi
 
 : >"$log"
-PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" \
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
   FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
-  "$script" run kernel-radio preflight >/dev/null
+  FERRIX_PIXEL9A_FIRMWARE_DIR="$root/out/pixel-9a/firmware/tegu/staged" \
+  "$script" run rootfs validate >/dev/null
 grep -F -- '--mount type=bind,src=' "$log" >/dev/null
 grep -F -- '/workspace' "$log" >/dev/null
+grep -Fx -- 'FERRIX_PIXEL9A_FIRMWARE_DIR=/workspace/out/pixel-9a/firmware/tegu/staged' "$env_log" >/dev/null || {
+  echo 'builder run dropped the verified firmware directory handoff' >&2
+  exit 1
+}
 if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
   echo 'builder run workflow exposed a physical transport' >&2
   exit 1
