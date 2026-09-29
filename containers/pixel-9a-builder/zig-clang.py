@@ -19,13 +19,17 @@ ZIG = "/opt/zig/zig"
 
 
 def normalize_compile_args(args: list[str]) -> list[str]:
-    # The kernel's arm32 VDSO helper uses the spelling -mcpu=armv8.  Zig's
-    # LLVM target table exposes that baseline as `generic`; preserve the
-    # intended baseline instead of allowing an otherwise unrelated helper
-    # build to fail on the spelling difference.
+    # The kernel's arm32 VDSO helper uses the spelling -march=armv8-a.  Zig's
+    # LLVM target table accepts the ARMv8-A 32-bit core as `cortex_a32` (the
+    # generic ARM target is only ARMv4T, which cannot assemble the barrier
+    # instructions used by the compat VDSO). Preserve the intended baseline
+    # instead of allowing an otherwise unrelated helper build to fail on the
+    # spelling difference.
     normalized: list[str] = []
     for arg in args:
-        if arg in ("-mcpu=armv8", "-march=armv8-a"):
+        if arg == "-march=armv8-a":
+            normalized.append("-mcpu=cortex_a32")
+        elif arg == "-mcpu=armv8":
             normalized.append("-mcpu=generic")
         else:
             normalized.append(arg)
