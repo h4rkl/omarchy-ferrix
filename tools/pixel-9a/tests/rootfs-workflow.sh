@@ -514,6 +514,7 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'  case "$1" in' '    --config) config=$2; shift 2 ;;' '    init|install|shutdown) action=$1; shift ;;' '    *) shift ;;' '  esac' \
 		'done' '[ -n "$config" ]' 'build_work=$(sed -n "s/^work = //p" "$config")' \
 		'aports=$(sed -n "s/^aports = //p" "$config")' \
+		'[ "$action" = shutdown ] && exit 0' \
 		'git -C "$aports" rev-parse HEAD >/dev/null' \
 		'[ "$(git -C "$aports" remote get-url origin)" = https://gitlab.postmarketos.org/postmarketOS/pmaports.git ]' \
 		'[ "${PMB_CHANNELS_CFG##*/}" = channels.cfg ]' \

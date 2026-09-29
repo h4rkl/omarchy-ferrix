@@ -910,6 +910,11 @@ build_rootfs() {
 	FERRIX_PMB_EXTERNAL_KERNEL=1 PMB_CHANNELS_CFG="$channels_cfg" python3 \
 		"$root/tools/pixel-9a/pmbootstrap-rootfs.py" --details-to-stdout --config "$config" -y install \
 		--password "$rootfs_password" --no-image --no-fde --no-sshd --no-firewall --no-recommends
+	# pmbootstrap leaves bind mounts for /dev, /proc, and /sys in the chroot
+	# after install. Detach its generated mounts before staging or archiving so
+	# the guest image contains only the rootfs tree, never live host pseudo-FS.
+	PMB_CHANNELS_CFG="$channels_cfg" pmbootstrap --config "$config" -y shutdown >/dev/null 2>&1 ||
+		die 'pmbootstrap could not detach the generated rootfs mounts'
 	# pmbootstrap names this directory from the target's deviceinfo. Prefer a
 	# shell glob here: some minimal native builder images provide a find
 	# implementation that does not reliably traverse the root-owned chroot
