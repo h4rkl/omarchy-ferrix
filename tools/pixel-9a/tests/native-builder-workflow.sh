@@ -26,6 +26,10 @@ grep -F -- 'exec python3 /usr/local/bin/ferrix-zig-clang.py "$@"' "$dockerfile" 
   echo 'builder image no longer routes clang through the pinned Zig wrapper' >&2
   exit 1
 }
+grep -F -- 'exec python3 /usr/local/bin/ferrix-zig-musl-link.py "$@"' "$dockerfile" >/dev/null || {
+  echo 'builder image no longer routes the musl linker through its argument shim' >&2
+  exit 1
+}
 grep -F -- 'exec /opt/zig/zig ld.lld "$@"' "$dockerfile" >/dev/null || {
   echo 'builder image no longer routes ld.lld through pinned Zig LLVM' >&2
   exit 1
@@ -68,6 +72,25 @@ assert module.normalize_compile_args(arm32) == [
     "-mthumb",
 ]
 assert module.normalize_compile_args(["-mcpu=armv8"]) == ["-mcpu=generic"]
+PY
+
+PYTHONDONTWRITEBYTECODE=1 python3 - "$root/containers/pixel-9a-builder/zig-musl-link.py" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("ferrix_zig_musl_link", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+assert module.normalize_link_args([
+    "-Wl,--fix-cortex-a53-843419",
+    "-Wl,-z,relro",
+    "-Xlinker",
+    "--fix-cortex-a53-843419",
+    "-static",
+]) == ["-Wl,-z,relro", "-static"]
+assert module.normalize_link_args(["--fix-cortex-a53-843419", "-lc"]) == ["-lc"]
 PY
 
 cat >"$work/bin/docker" <<'EOF'

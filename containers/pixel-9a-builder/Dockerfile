@@ -35,6 +35,7 @@ ARG AVB_REPO=https://android.googlesource.com/platform/external/avb
 ARG AVB_COMMIT=8201543ece1316d20f8a2002f70f8c076e28c7cb
 
 COPY zig-clang.py /usr/local/bin/ferrix-zig-clang.py
+COPY zig-musl-link.py /usr/local/bin/ferrix-zig-musl-link.py
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -113,7 +114,7 @@ RUN curl --fail --location --retry 3 --connect-timeout 30 --output /tmp/zig.tar.
         /usr/local/bin/ld.lld /usr/local/bin/llvm-ar /usr/local/bin/llvm-nm \
         /usr/local/bin/llvm-objcopy /usr/local/bin/llvm-objdump \
         /usr/local/bin/llvm-readelf /usr/local/bin/llvm-strip \
-    && printf '%s\n' '#!/bin/sh' 'exec /opt/zig/zig cc -target aarch64-linux-musl "$@"' > /usr/local/bin/aarch64-linux-musl-gcc \
+    && printf '%s\n' '#!/bin/sh' 'exec python3 /usr/local/bin/ferrix-zig-musl-link.py "$@"' > /usr/local/bin/aarch64-linux-musl-gcc \
     && chmod 0755 /usr/local/bin/aarch64-linux-musl-gcc
 
 # The Android image tools are used only to compose source-built split images.
