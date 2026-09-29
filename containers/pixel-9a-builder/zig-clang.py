@@ -27,9 +27,17 @@ def normalize_compile_args(args: list[str]) -> list[str]:
     # spelling difference.
     normalized: list[str] = []
     needs_el3 = False
+    needs_crypto = False
     for arg in args:
         if arg == "-march=armv8-a":
             normalized.append("-mcpu=cortex_a32")
+        elif arg == "-march=armv8-a+crypto":
+            # Kbuild's arm64 CRC64 NEON helper requests the ARMv8 crypto
+            # extension for PMULL (vmull_p64). Preserve that feature when the
+            # final EL3 CPU override is added below; otherwise Zig's generic
+            # override silently drops crypto and Clang rejects the intrinsic.
+            normalized.append("-mcpu=generic+crypto+v8a")
+            needs_crypto = True
         elif arg == "-mcpu=armv8":
             normalized.append("-mcpu=generic")
         else:
@@ -40,9 +48,13 @@ def normalize_compile_args(args: list[str]) -> list[str]:
     # assembler dialect flag must remain visible to Zig, while its generic
     # CPU model also needs the explicit EL3 and ARMv8-A extensions or LLVM
     # rejects those privileged instructions. Append this after the original
-    # arguments so a later generic -mcpu flag cannot silently remove them.
+    # arguments so a later generic -mcpu flag cannot silently remove them. If
+    # Kbuild requested ARMv8 crypto, retain it in the final override as well.
     if needs_el3:
-        normalized.append("-mcpu=generic+el3+v8a")
+        cpu = "generic+el3+v8a"
+        if needs_crypto:
+            cpu += "+crypto"
+        normalized.append(f"-mcpu={cpu}")
     return normalized
 
 
