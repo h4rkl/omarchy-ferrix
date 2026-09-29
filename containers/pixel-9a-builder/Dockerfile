@@ -37,8 +37,11 @@ ARG AVB_COMMIT=8201543ece1316d20f8a2002f70f8c076e28c7cb
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
+    HOME=/home/ferrix-builder \
     CARGO_HOME=/cache/cargo \
     RUSTUP_HOME=/usr/local/rustup \
+    ZIG_GLOBAL_CACHE_DIR=/cache/zig \
+    ZIG_LOCAL_CACHE_DIR=/cache/zig-local \
     FERRIX_PIXEL9A_REPO_ROOT=/workspace \
     FERRIX_CACHE_DIR=/workspace/.cache/ferrix \
     FERRIX_OUT_DIR=/workspace/out
@@ -143,8 +146,8 @@ RUN git clone --quiet --filter=blob:none --no-checkout "$PMBOOTSTRAP_REPO" /opt/
 RUN useradd --create-home --uid 1000 --shell /bin/sh ferrix-builder \
     && printf '%s\n' 'ferrix-builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/ferrix-builder \
     && chmod 0440 /etc/sudoers.d/ferrix-builder \
-    && mkdir -p /workspace /cache /out /usr/share/doc/ferrix-pixel9a-builder \
-    && chown ferrix-builder:ferrix-builder /workspace /cache /out \
+    && mkdir -p /workspace /cache /cache/zig /cache/zig-local /out /usr/share/doc/ferrix-pixel9a-builder \
+    && chown -R ferrix-builder:ferrix-builder /workspace /cache /out \
     && printf '%s\n' \
         "rust=1.98.1" \
         "zig=$ZIG_VERSION" \
