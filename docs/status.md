@@ -10,9 +10,27 @@
   Apple-Silicon OrbStack/UTM emulation path. Docker access is now enabled for
   `ezy`; the pinned target builder image
   `ferrix-pixel9a-builder:rust-1.98.1` was built on the native engine as
-  `linux/amd64` (`sha256:c1f648717e6695e5b020ce8c2124f62314157feb9206616b436b58de7937c8c7`).
+  `linux/amd64` (`sha256:a12eaf304773edb45590e7a0a764ca3b6465649bacd10aeadde136de098fd7c2`).
   Its device-free `env check build`, radio-kernel, product, and rootfs
-  preflights pass. No source sync or opt-in build has started yet.
+  preflights pass.
+- **Authorized native build evidence:** The radio-first source archive was
+  synced and hash-verified on this host at revision
+  `88335b765d920cc345cdffb9c1a6d77e3a531ff9`. The authorized Pixel 9a
+  product build completed with manifest SHA-256
+  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e4`; its
+  manifest remains `status=built` / `bootable=false`. The authorized
+  radio-first kernel build completed with manifest SHA-256
+  `fd3e0f5cc894a18a1c9d5eaebcd8ff315401902a34d8374497b603064d343da4` and
+  remains `status=built-not-booted` / `bootable=false`. Its `Image` SHA-256 is
+  `41eff637278cd66d75499e1aa1cd0143ab4fe786165b1347e8e83c187e0c5a1c`, and
+  its `dtb.img` SHA-256 is
+  `d248f800b76d55376021b1f1e73778b00dcae6722f3061d54b8f4dd768d0d9d0`.
+- **Build-stage boundary:** Firmware remains unstaged and untransferred;
+  the radio-first rootfs remains `status=not-built`; the complete radio split
+  handoff and boot artifacts remain unbuilt; and no temporary boot, persistent
+  flash, or physical Ferrix Linux session has been attempted. These native
+  build manifests are prerequisites only and provide no radio-runtime or
+  capability evidence.
 - **Radio-first physical adapter:** `flash-radio.sh` and its strict offline
   test now provide the separate physical route for the
   `linux-google-tegu-wwan` split manifest. It validates the route/contract
