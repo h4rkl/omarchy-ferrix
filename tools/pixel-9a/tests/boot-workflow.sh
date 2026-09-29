@@ -30,7 +30,7 @@ output=
 header=
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --output) output=$2; shift 2 ;;
+    --output|--vendor_boot) output=$2; shift 2 ;;
     --header_version) header=$2; shift 2 ;;
     *) shift ;;
   esac

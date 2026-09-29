@@ -311,7 +311,7 @@ make_boot_containers() {
   dtb_row=$(verify_manifest_artifact "$kernel_manifest" "$kernel_dist" dtb.img)
   dtb=$(printf '%s\n' "$dtb_row" | awk -F "$tab" '{ print $4 }')
   "$mkbootimg" --header_version 4 --ramdisk "$initramfs" --output "$1/init_boot.img"
-  "$mkbootimg" --header_version 4 --vendor_ramdisk "$vendor_ramdisk" --dtb "$dtb" --vendor_bootconfig "$bootconfig" --output "$1/vendor_boot.img"
+  "$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_ramdisk" --dtb "$dtb" --vendor_bootconfig "$bootconfig" --vendor_boot "$1/vendor_boot.img"
   [ -s "$1/init_boot.img" ] || die "mkbootimg produced an empty init_boot.img"
   [ -s "$1/vendor_boot.img" ] || die "mkbootimg produced an empty vendor_boot.img"
 }

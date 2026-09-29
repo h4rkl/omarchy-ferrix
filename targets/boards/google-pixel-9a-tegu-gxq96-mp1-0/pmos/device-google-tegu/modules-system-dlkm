@@ -1,0 +1,3 @@
+# No loadable system modules are selected by the current radio-first route.
+# This intentionally does not copy the broad modules_install tree into a
+# dynamic partition. Add only source-built, reviewed module paths here.

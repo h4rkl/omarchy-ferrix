@@ -141,8 +141,12 @@ check_static_inputs() {
 	done
 	required_file "$pmaports_pins"
 	[ -d "$package_dir" ] || die "target-local pmOS package is missing: $package_dir"
-	for file in APKBUILD deviceinfo kernel-cmdline.conf modules-initfs modules-initfs-radio boot-layout.toml firmware-policy.toml firmware-allowlist.tsv s5300-channels.toml s5300-userspace-sources.toml ferrix-backends.env ferrix-core.initd ferrix-networkd.initd ferrix-telephonyd.initd ferrix-audio.initd ferrix-product.initd ferrix-s5300-mounts.initd ferrix-radio-firmware.initd exynos-modem.initd sit-proxy.initd 99-google-tegu-sit.rules; do
+	for file in APKBUILD deviceinfo kernel-cmdline.conf modules-initfs modules-initfs-radio initramfs-init vendor-bootconfig modules-vendor-dlkm modules-system-dlkm boot-layout.toml firmware-policy.toml firmware-allowlist.tsv s5300-channels.toml s5300-userspace-sources.toml ferrix-backends.env ferrix-core.initd ferrix-networkd.initd ferrix-telephonyd.initd ferrix-audio.initd ferrix-product.initd ferrix-s5300-mounts.initd ferrix-radio-firmware.initd exynos-modem.initd sit-proxy.initd 99-google-tegu-sit.rules; do
 		required_file "$package_dir/$file"
+	done
+	[ -d "$package_dir/vendor-ramdisk/ferrix" ] || die "source-owned vendor ramdisk is missing: $package_dir/vendor-ramdisk/ferrix"
+	for file in target-id route-id rootfs-partlabel; do
+		required_file "$package_dir/vendor-ramdisk/ferrix/$file"
 	done
 	required_file "$root/tools/pixel-9a/pmbootstrap-rootfs.py"
 	required_file "$radio_firmware_route"

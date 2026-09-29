@@ -41,8 +41,9 @@ the `just` recipes so every child process receives the same resolved interface:
 just pixel-9a-env-check build
 ```
 
-The loader does not create any directory. It resolves the checked-in relative
-paths to absolute paths and exports these stage boundaries:
+The loader does not create any directory. It resolves the profile's relative
+paths to absolute paths. The workflows also accept the stage-specific
+boot-input and complete split-image overrides listed below:
 
 | Stage | Canonical output/cache interface |
 | --- | --- |
@@ -51,7 +52,9 @@ paths to absolute paths and exports these stage boundaries:
 | Radio kernel | `FERRIX_PIXEL9A_RADIO_KERNEL_CACHE_DIR`, `FERRIX_PIXEL9A_RADIO_KERNEL_OUT`, `FERRIX_PIXEL9A_RADIO_KERNEL_DIST`, `FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST` |
 | Rootfs | `FERRIX_PIXEL9A_PRODUCT_DIR`, `FERRIX_PIXEL9A_RADIO_KERNEL_DIST`, `FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST`, `FERRIX_PIXEL9A_FIRMWARE_DIR`, `FERRIX_PIXEL9A_ROOTFS_OUT`, `FERRIX_PIXEL9A_ROOTFS_MANIFEST` |
 | Split boot | `FERRIX_PIXEL9A_BOOT_OUT`, `FERRIX_PIXEL9A_BOOT_MANIFEST` plus the kernel/rootfs interfaces |
-| Radio-first split boot | `FERRIX_PIXEL9A_RADIO_BOOT_OUT`, `FERRIX_PIXEL9A_RADIO_BOOT_MANIFEST` plus the radio kernel/rootfs interfaces |
+| Radio-first diagnostic boot | `FERRIX_PIXEL9A_RADIO_BOOT_OUT`, `FERRIX_PIXEL9A_RADIO_BOOT_MANIFEST` plus the radio kernel/rootfs interfaces |
+| Source-owned boot inputs | `FERRIX_PIXEL9A_BOOT_INPUTS_OUT`, `FERRIX_PIXEL9A_BOOT_INPUTS_MANIFEST` plus the radio kernel/rootfs interfaces |
+| Complete radio-first split images | `FERRIX_PIXEL9A_RADIO_SPLIT_OUT`, `FERRIX_PIXEL9A_RADIO_SPLIT_MANIFEST`, `FERRIX_PIXEL9A_RADIO_PARTITION_SIZES` plus the boot-input interfaces |
 | Artifact manifest | `FERRIX_PIXEL9A_IMAGE_OUT`, `FERRIX_PIXEL9A_BOOT_OUT`, `FERRIX_PIXEL9A_BOOT_MANIFEST` plus the kernel/rootfs manifests |
 
 The firmware interface intentionally points at
@@ -74,6 +77,8 @@ out/pixel-9a/firmware/tegu/             firmware inventory/staged input
 out/pixel-9a/partition-capacities-latest.tsv  exact-target read-only capacity handoff
 out/pixel-9a/images/tegu/               Google comparison split-boot outputs
 out/pixel-9a/images/tegu-wwan/          selected radio-first boot handoff
+out/pixel-9a/boot-inputs/tegu-wwan/     source-owned ramdisks and module roots
+out/pixel-9a/images/tegu-wwan-split/    complete radio-first split handoff
 ```
 
 `FERRIX_CACHE_DIR=.cache/ferrix` and `FERRIX_OUT_DIR=out` remain compatibility
@@ -124,9 +129,10 @@ The selected radio-first build requires the exact source archive and clean
 detached checkout in `kernel-radio-route.toml`, the clean target-local
 pmaports checkout at `pmos/pins.env`, and the separately staged, hash-verified
 factory firmware manifest. Product and rootfs builds are opt-in and refuse
-missing or dirty inputs. The physical device contributes only the redacted
-ten-partition capacity handoff and any reviewed source-built vendor boot
-inputs; it is not contacted by the product, kernel, or rootfs builders.
+missing or dirty inputs. The physical device contributes the redacted
+ten-partition capacity handoff. Vendor boot inputs come from the source-owned
+boot-input generator; the product, kernel, rootfs, and boot-input builders do
+not contact the device.
 
 Each handoff is independently verifiable: the product manifest records the
 pinned Rust channel plus `Cargo.lock` and `rust-toolchain.toml` hashes; the
@@ -173,29 +179,33 @@ requires `is-userspace=yes`, and refuses the ordinary bootloader; it does not
 reboot, change slots, or write a partition.
 
 The radio-first Kbuild handoff intentionally stops at source-built `Image`,
-DTB/DTBO inputs, and `modules_install` output. Once a complete, redacted
-partition-capacity handoff has been obtained from the exact target, the
-device-free split composer can turn those inputs into the remaining source
-artifacts:
+DTB/DTBO inputs, and `modules_install` output. On the native builder, first
+build the source-owned ramdisks and module roots from that handoff and the
+completed rootfs:
+
+```sh
+just pixel-9a-boot-inputs-check
+FERRIX_PIXEL9A_BOOT_INPUTS_BUILD=I-understand-this-builds-source-owned-pixel-9a-boot-inputs \
+just pixel-9a-boot-inputs-build
+```
+
+Then, after obtaining and reviewing the exact target's redacted capacity
+handoff, compose the complete image set:
 
 ```sh
 FERRIX_PIXEL9A_RADIO_PARTITION_SIZES=/path/to/partition-capacities.tsv \
-FERRIX_PIXEL9A_VENDOR_KERNEL_BOOT_CPIO=/path/to/vendor-kernel-boot.cpio \
-FERRIX_PIXEL9A_VENDOR_DLKM_ROOT=/path/to/source-built/vendor-dlkm \
-FERRIX_PIXEL9A_SYSTEM_DLKM_ROOT=/path/to/source-built/system-dlkm \
 FERRIX_PIXEL9A_AVB_ALGORITHM=NONE \
 just pixel-9a-radio-split-check
 FERRIX_PIXEL9A_RADIO_SPLIT_BUILD=I-understand-this-composes-the-radio-first-split-artifacts \
 FERRIX_PIXEL9A_RADIO_PARTITION_SIZES=/path/to/partition-capacities.tsv \
-FERRIX_PIXEL9A_VENDOR_KERNEL_BOOT_CPIO=/path/to/vendor-kernel-boot.cpio \
-FERRIX_PIXEL9A_VENDOR_DLKM_ROOT=/path/to/source-built/vendor-dlkm \
-FERRIX_PIXEL9A_SYSTEM_DLKM_ROOT=/path/to/source-built/system-dlkm \
 FERRIX_PIXEL9A_AVB_ALGORITHM=NONE \
 just pixel-9a-radio-split-build
 ```
 
-The composer requires source-built DTBOs, modules, initramfs/vendor ramdisk,
-bootconfig, and the radio-first kernel/rootfs manifests. It creates `dtbo`,
+The composer verifies the boot-input manifest; legacy ad-hoc ramdisk/module
+environment variables are rejected. It requires source-built DTBOs, modules,
+initramfs/vendor ramdisk, bootconfig, and the radio-first kernel/rootfs
+manifests. It creates `dtbo`,
 `vendor_kernel_boot`, `vendor_dlkm`, and `system_dlkm`, then invokes native
 `avbtool add_hash_footer` on each final source-built partition and
 `make_vbmeta_image --include_descriptors_from_image` for all three fresh
@@ -211,6 +221,17 @@ radio-first manifest through its own identity, recovery, backup, inactive-slot,
 AVB, and confirmation gates; it is not accepted by the canonical
 `pixel-9a-flash-*` route. A complete, redacted capacity handoff is still
 required, and no physical boot or flash has been run on the target.
+
+Both vendor images use `mkbootimg --vendor_boot` with header v4 and 4096-byte
+pages. The early-module CPIO is a payload inside `vendor_kernel_boot.img`.
+The container choice follows the upstream [mkbootimg interface](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/mkbootimg.py)
+and [vendor kernel boot image rule](https://android.googlesource.com/kernel/build/+/refs/heads/main/kleaf/docs/api_reference/kernel.md#vendor_boot_image).
+DLKM filesystems use an explicit 4096-byte block size and reserve the space
+reported by `avbtool add_hash_footer --calc_max_image_size`. The composer
+appends the vbmeta blob and footer before including its descriptors in the
+three vbmeta images and verifies each image's payload digests before
+publishing the output; `--do_not_append_vbmeta_image` would discard that
+embedded metadata, as defined by [avbtool](https://android.googlesource.com/platform/external/avb/+/main/avbtool.py).
 
 ## Radio-first physical handoff
 
@@ -230,11 +251,31 @@ and the fastbootd transition plan. A temporary boot must be issued first:
 just pixel-9a-flash-radio-boot-temp --allow-unsigned-avb
 ```
 
-Only after observing and retaining its redacted transcript may the owner
-authorize the inactive-slot write:
+The command transcript proves only that the boot request was issued. Retain a
+redacted text capture of kernel output showing the Linux version and tegu
+machine record. After reviewing the capture and observing progress without a
+hang, panic, or reboot loop, return the device to ordinary Fastboot through
+the approved recovery/transport procedure and record that observation:
 
 ```sh
 FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE=out/pixel-9a/flash-radio/boot-temp-<stamp>-<pid>.txt \
+FERRIX_PIXEL9A_RADIO_TEMP_BOOT_KERNEL_LOG=/path/to/reviewed-redacted-kernel.txt \
+just pixel-9a-observe-temp-boot --allow-unsigned-avb
+```
+
+This workflow reads identity and writes local evidence. Its typed confirmation
+attests to the observation and capture redaction; it performs no device
+mutation. It binds the capture hash to the exact boot image, command transcript,
+and device. It rejects recorded kernel failures, but human observation is
+still required to rule out a silent hang or loop. Failure to obtain this
+capture leaves persistent writes gated; do not fabricate an observation.
+
+Only after this observation passes may the owner authorize the inactive-slot
+write:
+
+```sh
+FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE=out/pixel-9a/flash-radio/boot-temp-<stamp>-<pid>.txt \
+FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION=out/pixel-9a/flash-radio/observe-temp-<stamp>-<pid>.txt \
 just pixel-9a-flash-radio --stage kernel --slot b --allow-unsigned-avb
 ```
 

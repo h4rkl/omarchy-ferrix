@@ -509,22 +509,36 @@ FERRIX_PIXEL9A_BOOT_BUILD=I-understand-this-composes-pixel-9a-boot-artifacts \
 ```
 
 Its manifest deliberately remains `composed-not-booted` / `bootable=false`.
-For the selected radio route, use the separate composer instead:
+For the selected radio route, build the source-owned boot inputs first:
 
 ```sh
-just pixel-9a-boot-radio-test
-just pixel-9a-boot-radio-check
-FERRIX_PIXEL9A_RADIO_BOOT_BUILD=I-understand-this-composes-pixel-9a-radio-first-boot-artifacts \
-  just pixel-9a-boot-radio-build
+just pixel-9a-boot-inputs-test
+just pixel-9a-boot-inputs-check
+FERRIX_PIXEL9A_BOOT_INPUTS_BUILD=I-understand-this-builds-source-owned-pixel-9a-boot-inputs \
+  just pixel-9a-boot-inputs-build
 ```
 
-The radio-first output is a hash-recorded handoff with `Image`, `dtb.img`,
-header-v4 `boot.img`/`init_boot.img`/`vendor_boot.img`, `vbmeta.img`, and the
-rootfs artifacts. It does not yet generate `vendor_kernel_boot`, `dtbo`,
-`vendor_dlkm`, or `system_dlkm`, so it remains `composed-not-booted` /
-`bootable=false` and is not accepted by `tools/pixel-9a/flash.sh`. No physical
-boot, flash, slot change, or factory restore is implied by either host-side
-build.
+The complete split output is then composed only after the redacted,
+exact-target ten-partition capacity handoff is available:
+
+```sh
+just pixel-9a-radio-split-test
+just pixel-9a-radio-split-check
+FERRIX_PIXEL9A_RADIO_SPLIT_BUILD=I-understand-this-composes-the-radio-first-split-artifacts \
+  just pixel-9a-radio-split-build
+```
+
+`tools/pixel-9a/boot-inputs.sh` hashes the source-built rootfs BusyBox,
+checked-in Ferrix initramfs/vendor-ramdisk/bootconfig inputs, and source-built
+module roots. `tools/pixel-9a/radio-split.sh` generates the missing
+`vendor_kernel_boot`, `dtbo`, `vendor_dlkm`, `system_dlkm`, and fresh AVB
+metadata, then carries the kernel, rootfs, capacity, and boot-input provenance
+inside the output directory. The manifest remains `composed-not-booted` /
+`bootable=false`; temporary-boot command success does not prove a Ferrix Linux
+boot on the exact device. The older
+`just pixel-9a-boot-radio-*` route remains a diagnostic incomplete handoff and
+is not accepted by the flash workflow. No physical boot, flash, slot change,
+or factory restore is implied by host-side builds.
 
 The radio-first candidate builds its Wi-Fi, Bluetooth, S5300 WWAN, UFS, and
 filesystem paths in-kernel. The rootfs workflow therefore overlays the
@@ -574,6 +588,7 @@ reboot` directly:
 
 ```sh
 export FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE=out/pixel-9a/flash-radio/<boot-temp-transcript>
+export FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION=out/pixel-9a/flash-radio/<observe-temp-transcript>
 export FERRIX_PIXEL9A_RADIO_FLASH_EVIDENCE=out/pixel-9a/flash-radio/<flash-transcript>
 just pixel-9a-boot-inactive --preflight --slot b --allow-unsigned-avb
 FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data \
@@ -587,6 +602,12 @@ Fastboot immediately before and after selection, then issues the checked-in
 `set_active` and reboot sequence. Its result is only
 `slot-activated-boot-requested`; it is not Linux or capability evidence. It is
 stub-tested (`just pixel-9a-boot-inactive-test`) and has not run on hardware.
+
+Both persistent flashing and slot activation require the separate
+`pixel-9a-observe-temp-boot` record described in [the development workflow](dev/README.md#radio-first-physical-handoff).
+It binds the operator-reviewed kernel capture to the same temporary-boot
+transcript, image hash, and device. A successful Fastboot command alone does
+not satisfy the observation requirement.
 
 ## Radios on a booted guest
 

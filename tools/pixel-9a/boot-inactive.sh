@@ -18,6 +18,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 . "$root/tools/pixel-9a/data-safety.sh"
 . "$root/tools/pixel-9a/adb-correlation.sh"
+. "$root/tools/pixel-9a/temp-boot-observation.sh"
 
 target=${FERRIX_PIXEL9A_TARGET_DIR:-"$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"}
 pins=${FERRIX_PIXEL9A_PINS:-"$target/recovery.pins"}
@@ -276,6 +277,9 @@ verify_temp_evidence() {
 	[ "$(evidence_value "$temp_evidence" boot_exit_status)" = 0 ] || die 'temporary-boot evidence records a failed boot command'
 	[ "$(evidence_value "$temp_evidence" result)" = temporary-boot-issued ] || die 'temporary-boot evidence does not record result=temporary-boot-issued'
 	[ "$(evidence_value "$temp_evidence" serial_sha256_prefix)" = "$(sha256_prefix "$fastboot_serial")" ] || die 'temporary-boot evidence was recorded on a different device'
+	boot_hash=$(field "$(manifest_artifact_row boot)" 5)
+	[ "$(evidence_value "$temp_evidence" boot_img_sha256)" = "$boot_hash" ] || die 'temporary-boot evidence names a different boot image'
+	pixel9a_verify_temp_observation "${FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION:-}" "$temp_evidence" "$boot_hash" "$(sha256_prefix "$fastboot_serial")"
 	emit temporary_boot_evidence "$temp_evidence"
 }
 

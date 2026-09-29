@@ -23,6 +23,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 . "$root/tools/pixel-9a/data-safety.sh"
 . "$root/tools/pixel-9a/adb-correlation.sh"
+. "$root/tools/pixel-9a/temp-boot-observation.sh"
 target=${FERRIX_PIXEL9A_TARGET_DIR:-"$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"}
 route="$target/kernel-radio-route.toml"
 contract="$target/radio-split-artifact-contract.toml"
@@ -68,10 +69,14 @@ usage() {
 usage:
   tools/pixel-9a/flash-radio.sh preflight [--stage kernel|rootfs|all] [--slot a|b] [--allow-unsigned-avb]
   tools/pixel-9a/flash-radio.sh boot-temp [--allow-unsigned-avb]
+  tools/pixel-9a/flash-radio.sh observe-temp [--allow-unsigned-avb]
   tools/pixel-9a/flash-radio.sh flash [--stage kernel|rootfs|all] [--slot a|b] [--allow-unsigned-avb] [--skip-temp-boot-gate]
 
 preflight   read-only radio-first manifest, recovery, identity, and gate checks
 boot-temp   temporary fastboot boot of radio-first boot.img; no persistent write
+observe-temp  record reviewed kernel progress after the device returns to
+              ordinary Fastboot; requires FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE
+              and FERRIX_PIXEL9A_RADIO_TEMP_BOOT_KERNEL_LOG (redacted text)
 flash       persistent slot-explicit kernel/rootfs flash; requires the
             boot-temp evidence gate unless explicitly skipped and acknowledged
 EOF
@@ -166,14 +171,14 @@ parse_args() {
 	mode=$1
 	shift
 	case "$mode" in
-		preflight|boot-temp|flash) ;;
+		preflight|boot-temp|observe-temp|flash) ;;
 		*) usage ;;
 	esac
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 			--stage)
 				[ "$#" -ge 2 ] || usage
-				[ "$mode" != boot-temp ] || usage
+				case "$mode" in boot-temp|observe-temp) usage ;; esac
 				case "$2" in
 					kernel|rootfs|all) stage=$2 ;;
 					*) usage ;;
@@ -182,7 +187,7 @@ parse_args() {
 				;;
 			--slot)
 				[ "$#" -ge 2 ] || usage
-				[ "$mode" != boot-temp ] || usage
+				case "$mode" in boot-temp|observe-temp) usage ;; esac
 				case "$2" in
 					a|b) slot_override=$2 ;;
 					*) usage ;;
@@ -332,7 +337,7 @@ artifact_expected_relative() {
 artifact_origin_allowed() {
 	case "$1:$2" in
 		Image:kernel|dtb.img:kernel|\
-		boot:generated-mkbootimg|init_boot:generated-mkbootimg|vendor_boot:generated-mkbootimg|vendor_kernel_boot:source-built-cpio|dtbo:generated-mkdtboimg|vendor_dlkm:source-built-modules|system_dlkm:source-built-modules|vbmeta:generated-avbtool-from-final-images|vbmeta_vendor:generated-avbtool-from-final-images|vbmeta_system:generated-avbtool-from-final-images|rootfs_handoff:rootfs|rootfs_image:rootfs) return 0 ;;
+		boot:generated-mkbootimg|init_boot:generated-mkbootimg|vendor_boot:generated-mkbootimg|vendor_kernel_boot:generated-mkbootimg|dtbo:generated-mkdtboimg|vendor_dlkm:source-built-modules|system_dlkm:source-built-modules|vbmeta:generated-avbtool-from-final-images|vbmeta_vendor:generated-avbtool-from-final-images|vbmeta_system:generated-avbtool-from-final-images|rootfs_handoff:rootfs|rootfs_image:rootfs) return 0 ;;
 		*) return 1 ;;
 	esac
 }
@@ -358,6 +363,10 @@ verify_source_handoff() {
 	row=$(awk -F "$tab" -v key="$1" '$1 == key { print; found=1; exit } END { if (!found) exit 1 }' "$manifest") || die "radio-first manifest lacks $1 provenance row"
 	[ "$(field "$row" 2)" != '' ] || die "radio-first manifest $1 path is empty"
 	path=$(field "$row" 2)
+	case "$path" in
+		/*) ;;
+		*) safe_relative_path "$path"; path="$image_dir/$path" ;;
+	esac
 	bytes_expected=$(field "$row" 3)
 	hash_expected=$(field "$row" 4)
 	require_file "$path" "radio-first $1 handoff"
@@ -369,6 +378,10 @@ verify_source_handoff() {
 verify_partition_capacities() {
 	row=$(awk -F "$tab" '$1 == "partition_capacities" { print; found=1; exit } END { if (!found) exit 1 }' "$manifest") || die 'radio-first manifest lacks partition-capacity provenance'
 	capacity_file=$(field "$row" 2)
+	case "$capacity_file" in
+		/*) ;;
+		*) safe_relative_path "$capacity_file"; capacity_file="$image_dir/$capacity_file" ;;
+	esac
 	require_file "$capacity_file" 'radio-first partition capacity handoff'
 	[ "$(bytes_of "$capacity_file")" = "$(field "$row" 3)" ] || die 'radio-first partition capacity handoff size differs from its manifest'
 	[ "$(sha256_of "$capacity_file")" = "$(field "$row" 4)" ] || die 'radio-first partition capacity handoff hash differs from its manifest'
@@ -439,14 +452,13 @@ verify_manifest() {
 	done
 	verify_avb_bindings
 	verify_partition_capacities
-	verify_source_handoff kernel_manifest >/dev/null
-	verify_source_handoff rootfs_manifest >/dev/null
+	kernel_handoff=$(verify_source_handoff kernel_manifest)
+	rootfs_handoff_manifest=$(verify_source_handoff rootfs_manifest)
+	verify_source_handoff boot_inputs_manifest >/dev/null
 	verify_source_handoff vendor_kernel_boot_input >/dev/null
 	# The handoff manifests must retain the selected native Linux ABI and the
 	# pre-observation status. This prevents a hand-edited split manifest from
 	# turning an Android or already-claimed boot into the radio route.
-	kernel_handoff=$(manifest_value kernel_manifest)
-	rootfs_handoff_manifest=$(manifest_value rootfs_manifest)
 	for handoff in "$kernel_handoff" "$rootfs_handoff_manifest"; do
 		require_file "$handoff" 'radio-first source handoff'
 		[ "$(awk -F "$tab" '$1 == "schema_version" { print $2; exit }' "$handoff")" = 1 ] || die 'radio-first source handoff schema is not 1'
@@ -654,6 +666,12 @@ evidence_value() { awk -F '=' -v key="$2" '$1 == key { sub("^[^=]*=", ""); print
 check_temp_boot_gate() {
 	emit policy_temporary_boot_before_persistent_write true
 	if [ "$skip_temp_boot_gate" = yes ]; then emit temp_boot_gate 'SKIPPED by --skip-temp-boot-gate; typed phrase must name the skip'; return 0; fi
+	check_temp_boot_transcript
+	pixel9a_verify_temp_observation "${FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION:-}" "$evidence" "$boot_hash" "$(sha256_prefix "$fastboot_serial")"
+	emit temp_boot_gate "passed evidence=$evidence observation=$FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION"
+}
+
+check_temp_boot_transcript() {
 	evidence=${FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE:-}
 	[ -n "$evidence" ] || die 'radio-first image-layout policy requires temporary boot evidence before a persistent write'
 	require_file "$evidence" 'temporary-boot evidence file'
@@ -664,7 +682,6 @@ check_temp_boot_gate() {
 	[ "$(evidence_value "$evidence" boot_exit_status)" = 0 ] || die 'temporary-boot evidence records a failed boot command'
 	[ "$(evidence_value "$evidence" result)" = temporary-boot-issued ] || die 'temporary-boot evidence does not record result=temporary-boot-issued'
 	[ "$(evidence_value "$evidence" serial_sha256_prefix)" = "$(sha256_prefix "$fastboot_serial")" ] || die 'temporary-boot evidence was recorded on a different device'
-	emit temp_boot_gate "passed evidence=$evidence"
 }
 
 preflight() {
@@ -681,7 +698,7 @@ preflight() {
 		[ "$is_userspace" = no ] || die 'device is in fastbootd; start persistent flashing from the bootloader'
 		check_temp_boot_gate
 		emit stage "$stage"
-	elif [ "$mode" = boot-temp ]; then
+	elif [ "$mode" = boot-temp ] || [ "$mode" = observe-temp ]; then
 		[ "$is_userspace" = no ] || die 'temporary boot requires the bootloader Fastboot mode'
 	fi
 	emit preflight passed
@@ -760,7 +777,31 @@ boot_temp() {
 	[ "$boot_status" -eq 0 ] || fail temporary-boot-failed "the boot command returned status $boot_status"
 	if wait_for_fastboot_gone; then emit device_left_fastboot yes; else emit device_left_fastboot 'no (still enumerated after wait)'; fi
 	emit result temporary-boot-issued
-	printf 'observe the kernel on the serial console; this transcript gates persistent radio-first flashing:\n%s\n' "$transcript" >&2
+	printf 'capture and review kernel behavior, then run pixel-9a-observe-temp-boot; this command transcript alone does not authorize persistent writes:\n%s\n' "$transcript" >&2
+}
+
+observe_temp() {
+	check_temp_boot_transcript
+	observation_input=${FERRIX_PIXEL9A_RADIO_TEMP_BOOT_KERNEL_LOG:-}
+	pixel9a_check_kernel_observation_log "$observation_input"
+	input_hash=$(sha256_of "$observation_input")
+	boot_transcript_hash=$(sha256_of "$evidence")
+	emit observation_input_sha256 "$input_hash"
+	emit observation_scope 'kernel progress only; no Ferrix userspace or radio capability claim'
+	short=$(printf '%s' "$boot_hash" | cut -c1-8)
+	confirm_phrase "CONFIRM PIXEL 9A KERNEL PROGRESS OBSERVED boot.img@$short" 'Confirm this redacted capture is from the displayed device and temporary boot, that kernel progress was observed, and that no hang, panic, or reboot loop occurred. This only records evidence.'
+	recheck_identity no
+	[ "$(sha256_of "$observation_input")" = "$input_hash" ] || die 'kernel capture changed during observation review'
+	[ "$(sha256_of "$evidence")" = "$boot_transcript_hash" ] || die 'temporary-boot transcript changed during observation review'
+	observation_log="${transcript%.txt}-kernel.txt"
+	redact_literal "$fastboot_serial" "serial-sha256:$(sha256_prefix "$fastboot_serial")" <"$observation_input" >"$observation_log"
+	emit boot_img_sha256 "$boot_hash"
+	emit boot_transcript_sha256 "$boot_transcript_hash"
+	emit kernel_log "${observation_log##*/}"
+	emit kernel_log_bytes "$(bytes_of "$observation_log")"
+	emit kernel_log_sha256 "$(sha256_of "$observation_log")"
+	emit result temporary-boot-observed
+	printf 'observation (serial redacted): %s\n' "$transcript" >&2
 }
 
 flash_partition() {
@@ -805,6 +846,7 @@ flash_kernel_stage() {
 	phrase="CONFIRM PIXEL 9A RADIO FLASH KERNEL STAGE TO SLOT $(printf '%s' "$slot" | tr a-z A-Z)"
 	[ "$skip_temp_boot_gate" != yes ] || phrase="$phrase WITHOUT TEMP BOOT GATE"
 	confirm_phrase "$phrase" 'The next commands write the complete source-built radio-first kernel split. Dynamic partitions are written from fastbootd.'
+	check_temp_boot_gate
 	for name in $physical_artifacts; do
 		row=$(manifest_artifact_row "$name")
 		flash_partition "${name}_$slot" "$image_dir/$(field "$row" 3)" "$(field "$row" 5)" "$slot" "$(field "$row" 4)" no
@@ -821,6 +863,7 @@ flash_kernel_stage() {
 flash_rootfs_stage() {
 	emit rootfs_stage_partitions "$rootfs_partition"
 	confirm_phrase "CONFIRM PIXEL 9A RADIO FLASH ROOTFS STAGE TO PARTITION $(printf '%s' "$rootfs_partition" | tr a-z A-Z)" "The next command overwrites $rootfs_partition on the exact device with the source-built radio-first rootfs image."
+	check_temp_boot_gate
 	flash_partition "$rootfs_partition" "$rootfs_image" "$rootfs_hash" none "$rootfs_bytes" no
 	emit rootfs_stage complete
 }
@@ -851,5 +894,6 @@ preflight
 case "$mode" in
 	preflight) printf 'transcript (serial redacted): %s\n' "$transcript" >&2 ;;
 	boot-temp) require_ferrix_gates; boot_temp ;;
+	observe-temp) observe_temp ;;
 	flash) require_ferrix_gates; flash ;;
 esac

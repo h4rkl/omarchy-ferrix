@@ -87,12 +87,26 @@ for name in Image dtb.img boot init_boot vendor_boot vendor_kernel_boot dtbo ven
 	printf 'artifact\t%s\t%s\t%s\t%s\tsynthetic\n' "$name" "$relative" "$file_bytes" "$file_hash" >>"$work/images/boot-manifest.tsv"
 done
 
+boot_hash=$(sha256 "$work/images/boot.img")
 cat >"$work/temp-evidence.txt" <<EVIDENCE
 operation=pixel-9a-radio-boot-temp
 target_id=$expected_target_id
 serial_sha256_prefix=$serial_prefix
+boot_img_sha256=$boot_hash
 boot_exit_status=0
 result=temporary-boot-issued
+EVIDENCE
+printf 'Linux version 7.2.0-synthetic\nMachine model: ZUMA PRO TEGU MP on ZUMA PRO\n' >"$work/kernel.txt"
+cat >"$work/observation.txt" <<EVIDENCE
+operation=pixel-9a-radio-observe-temp
+target_id=$expected_target_id
+serial_sha256_prefix=$serial_prefix
+boot_img_sha256=$boot_hash
+boot_transcript_sha256=$(sha256 "$work/temp-evidence.txt")
+kernel_log=kernel.txt
+kernel_log_bytes=$(bytes "$work/kernel.txt")
+kernel_log_sha256=$(sha256 "$work/kernel.txt")
+result=temporary-boot-observed
 EVIDENCE
 cat >"$work/flash-evidence.txt" <<EVIDENCE
 operation=pixel-9a-flash
@@ -156,6 +170,7 @@ export PATH="$work/bin:$PATH" STUB_CALLS="$calls" STUB_STATE="$work/state" STUB_
 export FERRIX_PIXEL9A_TARGET_DIR="$work/target" FERRIX_OUT_DIR="$work/out"
 export FERRIX_PIXEL9A_RADIO_SPLIT_MANIFEST="$work/images/boot-manifest.tsv"
 export FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE="$work/temp-evidence.txt"
+export FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION="$work/observation.txt"
 export FERRIX_PIXEL9A_RADIO_FLASH_EVIDENCE="$work/flash-evidence.txt"
 export FERRIX_PIXEL9A_BOOT_WAIT_SECONDS=1
 
@@ -175,9 +190,22 @@ run preflight '' --preflight --slot b --allow-unsigned-avb
 grep -q '^preflight=passed$' "$work/preflight.out"
 ! grep -qE 'set_active|reboot' "$calls"
 
+FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION='' run missing_observation '' --preflight --slot b --allow-unsigned-avb
+[ "$status" -eq 1 ]
+grep -q 'observed temporary-boot evidence is required' "$work/missing_observation.err"
+! grep -qE 'set_active|reboot' "$calls"
+export FERRIX_PIXEL9A_RADIO_TEMP_BOOT_OBSERVATION="$work/observation.txt"
+
+sed "s/^boot_img_sha256=.*/boot_img_sha256=incorrect/" "$work/temp-evidence.txt" >"$work/wrong-boot.txt"
+FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE="$work/wrong-boot.txt" run wrong_boot '' --preflight --slot b --allow-unsigned-avb
+[ "$status" -eq 1 ]
+grep -q 'temporary-boot evidence names a different boot image' "$work/wrong_boot.err"
+! grep -qE 'set_active|reboot' "$calls"
+export FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE="$work/temp-evidence.txt"
+
 run refused 'CONFIRM PIXEL 9A ACTIVATE INACTIVE SLOT B AND BOOT' --confirm-boot --slot b --allow-unsigned-avb
 [ "$status" -eq 1 ]
-grep -q 'backup is not marked verified' "$work/refused.err"
+grep -q 'backup is not marked verified' "$work/refused.err" || { cat "$work/refused.err" >&2; exit 1; }
 ! grep -qE 'set_active|reboot' "$calls"
 
 export FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data

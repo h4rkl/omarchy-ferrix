@@ -1,0 +1,4 @@
+# No loadable vendor modules are selected by the current radio-first route.
+# The target's display, storage, USB, Wi-Fi, Bluetooth, GNSS, and S5300 paths
+# are built in by the pinned Kbuild configuration. Add a source-built module
+# path here only after reviewing its dependency closure and partition capacity.

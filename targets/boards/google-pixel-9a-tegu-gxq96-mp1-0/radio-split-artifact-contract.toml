@@ -15,26 +15,29 @@ boot_page_size = 4096
 dtbo_tool = "mkdtboimg.py"
 dtbo_page_size = 4096
 dynamic_partition_transport = "fastbootd"
+boot_input_generator = "tools/pixel-9a/boot-inputs.sh"
+boot_input_manifest_schema = 1
 
 [artifact.boot]
 partition = "boot"
 status = "not-built"
-source_inputs = ["kernel Image", "Ferrix initramfs"]
+source_inputs = ["kernel Image"]
 
 [artifact.init_boot]
 partition = "init_boot"
 status = "not-built"
-source_inputs = ["Ferrix initramfs"]
+source_inputs = ["source-owned Ferrix initramfs.cpio"]
 
 [artifact.vendor_boot]
 partition = "vendor_boot"
 status = "not-built"
-source_inputs = ["source-built DTB", "Ferrix vendor ramdisk", "Ferrix bootconfig"]
+source_inputs = ["source-built DTB", "source-owned Ferrix vendor-ramdisk.cpio", "source-owned Ferrix bootconfig"]
 
 [artifact.vendor_kernel_boot]
 partition = "vendor_kernel_boot"
 status = "not-built"
-source_inputs = ["source-built early module cpio"]
+container = "vendor-boot-header-v4"
+source_inputs = ["source-built early module cpio from boot-input generator", "source-built DTB"]
 
 [artifact.dtbo]
 partition = "dtbo"

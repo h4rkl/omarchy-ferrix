@@ -22,12 +22,14 @@ rootfs_manifest=${FERRIX_PIXEL9A_ROOTFS_MANIFEST:-"$rootfs_out/manifest.tsv"}
 image_out=${FERRIX_PIXEL9A_RADIO_SPLIT_OUT:-"$out_root/pixel-9a/images/tegu-wwan-split"}
 manifest=${FERRIX_PIXEL9A_RADIO_SPLIT_MANIFEST:-"$image_out/boot-manifest.tsv"}
 partition_sizes=${FERRIX_PIXEL9A_RADIO_PARTITION_SIZES:-}
-vendor_kernel_boot_cpio=${FERRIX_PIXEL9A_VENDOR_KERNEL_BOOT_CPIO:-}
-vendor_dlkm_root=${FERRIX_PIXEL9A_VENDOR_DLKM_ROOT:-}
-system_dlkm_root=${FERRIX_PIXEL9A_SYSTEM_DLKM_ROOT:-}
-initramfs=${FERRIX_PIXEL9A_INITRAMFS:-}
-vendor_ramdisk=${FERRIX_PIXEL9A_VENDOR_RAMDISK:-}
-bootconfig=${FERRIX_PIXEL9A_VENDOR_BOOTCONFIG:-}
+boot_inputs_out=${FERRIX_PIXEL9A_BOOT_INPUTS_OUT:-"$out_root/pixel-9a/boot-inputs/tegu-wwan"}
+boot_inputs_manifest=${FERRIX_PIXEL9A_BOOT_INPUTS_MANIFEST:-"$boot_inputs_out/manifest.tsv"}
+vendor_kernel_boot_cpio=
+vendor_dlkm_root=
+system_dlkm_root=
+initramfs=
+vendor_ramdisk=
+bootconfig=
 mkbootimg_request=${FERRIX_PIXEL9A_MKBOOTIMG:-mkbootimg}
 mkdtboimg_request=${FERRIX_PIXEL9A_MKDTBOIMG:-mkdtboimg.py}
 mke2fs_request=${FERRIX_PIXEL9A_MKE2FS:-mke2fs}
@@ -87,7 +89,7 @@ field() {
 
 safe_relative() {
 	case "$1" in
-		''|/*|.|..|../*|*/../*|*/..|*' '*) die "unsafe relative path: $1" ;;
+		''|/*|.|..|../*|*/../*|*/..|*' '*|*"$tab"*) die "unsafe relative path: $1" ;;
 	esac
 }
 
@@ -131,7 +133,9 @@ check_route() {
 		'boot_page_size = 4096' \
 		'dtbo_tool = "mkdtboimg.py"' \
 		'dtbo_page_size = 4096' \
-		'dynamic_partition_transport = "fastbootd"'; do
+		'dynamic_partition_transport = "fastbootd"' \
+		'boot_input_generator = "tools/pixel-9a/boot-inputs.sh"' \
+		'boot_input_manifest_schema = 1'; do
 		grep -Fqx "$required" "$contract" || die "radio split-artifact contract is missing: $required"
 	done
 }
@@ -252,6 +256,138 @@ verify_module_root() {
 	fi
 }
 
+verify_boot_input_artifact() {
+	name=$1
+	row=$(awk -F "$tab" -v name="$name" '$1 == "artifact" && $2 == name { print; found=1; exit } END { if (!found) exit 1 }' "$boot_inputs_manifest") || die "source-owned boot-input manifest lacks artifact: $name"
+	relative=$(field "$row" 3)
+	expected_bytes=$(field "$row" 4)
+	expected_hash=$(field "$row" 5)
+	origin=$(field "$row" 6)
+	safe_relative "$relative"
+	case "$name:$relative" in
+		initramfs.cpio:initramfs.cpio|vendor-ramdisk.cpio:vendor-ramdisk.cpio|vendor-kernel-boot.cpio:vendor-kernel-boot.cpio|vendor-bootconfig:vendor-bootconfig) ;;
+		*) die "source-owned boot input $name has a non-canonical path: $relative" ;;
+	esac
+	case "$expected_bytes" in ''|*[!0-9]*) die "source-owned boot input $name has an invalid byte count" ;; esac
+	case "$expected_hash" in ''|*[!0-9a-f]*) die "source-owned boot input $name has an invalid SHA-256" ;; esac
+	[ "${#expected_hash}" -eq 64 ] || die "source-owned boot input $name has an invalid SHA-256 length"
+	case "$name:$origin" in
+		initramfs.cpio:source-built-initramfs|vendor-ramdisk.cpio:source-built-vendor-ramdisk|vendor-kernel-boot.cpio:source-built-early-modules|vendor-bootconfig:source-owned-bootconfig) ;;
+		*) die "source-owned boot input $name has an unreviewed origin: $origin" ;;
+	esac
+	file="$boot_inputs_out/$relative"
+	require_file "$file" "source-owned boot input $name"
+	[ "$(file_size "$file")" = "$expected_bytes" ] || die "source-owned boot input $name size differs from its manifest"
+	[ "$(sha256_of "$file")" = "$expected_hash" ] || die "source-owned boot input $name SHA-256 differs from its manifest"
+	printf '%s\n' "$file"
+}
+
+verify_boot_input_source() {
+	key=$1
+	checked_in=$2
+	row=$(awk -F "$tab" -v key="$key" '$1 == "input" && $2 == key { print; found=1; exit } END { if (!found) exit 1 }' "$boot_inputs_manifest") || die "source-owned boot-input manifest lacks $key provenance"
+	expected_bytes=$(field "$row" 4)
+	expected_hash=$(field "$row" 5)
+	case "$expected_bytes" in ''|*[!0-9]*) die "source-owned boot input $key has an invalid provenance byte count" ;; esac
+	case "$expected_hash" in ''|*[!0-9a-f]*) die "source-owned boot input $key has an invalid provenance SHA-256" ;; esac
+	require_file "$checked_in" "checked-in $key source"
+	[ "$(file_size "$checked_in")" = "$expected_bytes" ] || die "checked-in $key source differs in size from the boot-input manifest"
+	[ "$(sha256_of "$checked_in")" = "$expected_hash" ] || die "checked-in $key source differs from the boot-input manifest"
+}
+
+verify_boot_inputs() {
+	require_file "$boot_inputs_manifest" 'source-owned boot-input manifest'
+	[ "$(manifest_value "$boot_inputs_manifest" schema_version)" = 1 ] || die 'source-owned boot-input manifest schema_version is not 1'
+	[ "$(manifest_value "$boot_inputs_manifest" target_id)" = google-pixel-9a-tegu-gxq96-mp1-0 ] || die 'source-owned boot-input manifest target is not exact Pixel 9a'
+	[ "$(manifest_value "$boot_inputs_manifest" route_id)" = experimental-linux-google-tegu-s5300-wwan ] || die 'source-owned boot-input manifest route is not the selected route'
+	[ "$(manifest_value "$boot_inputs_manifest" kernel_backend)" = linux-google-tegu-wwan ] || die 'source-owned boot-input manifest backend is not WWAN/SIT'
+	[ "$(manifest_value "$boot_inputs_manifest" status)" = built-source-inputs ] || die 'source-owned boot-input manifest is not a completed source-input handoff'
+	[ "$(manifest_value "$boot_inputs_manifest" bootable)" = false ] || die 'source-owned boot-input manifest must remain bootable=false'
+	for source in initramfs_source vendor_bootconfig_source modules_initfs_policy modules_vendor_policy modules_system_policy; do
+		case "$source" in
+			initramfs_source) checked_in="$target/pmos/device-google-tegu/initramfs-init" ;;
+			vendor_bootconfig_source) checked_in="$target/pmos/device-google-tegu/vendor-bootconfig" ;;
+			modules_initfs_policy) checked_in="$target/pmos/device-google-tegu/modules-initfs-radio" ;;
+			modules_vendor_policy) checked_in="$target/pmos/device-google-tegu/modules-vendor-dlkm" ;;
+			modules_system_policy) checked_in="$target/pmos/device-google-tegu/modules-system-dlkm" ;;
+		esac
+		verify_boot_input_source "$source" "$checked_in"
+	done
+	verify_boot_input_tree vendor_ramdisk_source "$target/pmos/device-google-tegu/vendor-ramdisk"
+	input_kernel_row=$(awk -F "$tab" '$1 == "kernel_manifest" { print; found=1; exit } END { if (!found) exit 1 }' "$boot_inputs_manifest") || die 'source-owned boot-input manifest lacks kernel manifest provenance'
+	input_rootfs_row=$(awk -F "$tab" '$1 == "rootfs_manifest" { print; found=1; exit } END { if (!found) exit 1 }' "$boot_inputs_manifest") || die 'source-owned boot-input manifest lacks rootfs manifest provenance'
+	for handoff in "$kernel_manifest" "$rootfs_manifest"; do
+		require_file "$handoff" 'source handoff manifest'
+	done
+	[ "$(file_size "$kernel_manifest")" = "$(field "$input_kernel_row" 3)" ] || die 'radio kernel manifest differs from the boot-input provenance'
+	[ "$(sha256_of "$kernel_manifest")" = "$(field "$input_kernel_row" 4)" ] || die 'radio kernel manifest hash differs from the boot-input provenance'
+	[ "$(file_size "$rootfs_manifest")" = "$(field "$input_rootfs_row" 3)" ] || die 'rootfs manifest differs from the boot-input provenance'
+	[ "$(sha256_of "$rootfs_manifest")" = "$(field "$input_rootfs_row" 4)" ] || die 'rootfs manifest hash differs from the boot-input provenance'
+	kernel_release=$(manifest_value "$boot_inputs_manifest" kernel_release)
+	case "$kernel_release" in ''|*[!A-Za-z0-9._+-]*) die 'source-owned boot-input kernel release is malformed' ;; esac
+	initramfs=$(verify_boot_input_artifact initramfs.cpio)
+	vendor_ramdisk=$(verify_boot_input_artifact vendor-ramdisk.cpio)
+	vendor_kernel_boot_cpio=$(verify_boot_input_artifact vendor-kernel-boot.cpio)
+	bootconfig=$(verify_boot_input_artifact vendor-bootconfig)
+	for name in vendor_dlkm system_dlkm; do
+		row=$(awk -F "$tab" -v name="$name" '$1 == "module_root" && $2 == name { print; found=1; exit } END { if (!found) exit 1 }' "$boot_inputs_manifest") || die "source-owned boot-input manifest lacks module root: $name"
+		relative=$(field "$row" 3)
+		safe_relative "$relative"
+		case "$name:$relative" in
+			vendor_dlkm:vendor-dlkm|system_dlkm:system-dlkm) ;;
+			*) die "source-owned $name root has a non-canonical path: $relative" ;;
+		esac
+		root_dir="$boot_inputs_out/$relative"
+		verify_module_root "$root_dir" "source-owned $name root"
+		case "$name" in
+			vendor_dlkm) policy="$target/pmos/device-google-tegu/modules-vendor-dlkm" ;;
+			system_dlkm) policy="$target/pmos/device-google-tegu/modules-system-dlkm" ;;
+		esac
+		policy_hash=$(field "$row" 4)
+		dep_bytes=$(field "$row" 5)
+		case "$policy_hash" in ''|*[!0-9a-f]*) die "source-owned $name policy hash is malformed" ;; esac
+		[ "${#policy_hash}" -eq 64 ] || die "source-owned $name policy hash length is malformed"
+		case "$dep_bytes" in ''|*[!0-9]*) die "source-owned $name depmod byte count is malformed" ;; esac
+		[ "$(sha256_of "$policy")" = "$policy_hash" ] || die "source-owned $name policy differs from its boot-input provenance"
+		dep_file="$root_dir/lib/modules/$kernel_release/modules.dep"
+		require_file "$dep_file" "source-owned $name depmod output"
+		[ "$(file_size "$dep_file")" = "$dep_bytes" ] || die "source-owned $name depmod output differs from its boot-input provenance"
+		verify_boot_input_tree "$name" "$root_dir"
+		case "$name" in
+			vendor_dlkm) vendor_dlkm_root=$root_dir ;;
+			system_dlkm) system_dlkm_root=$root_dir ;;
+		esac
+	done
+}
+
+# Verify every file and reject unlisted additions, omissions and duplicates.
+# This binds the actual module-root contents, including depmod output, rather
+# than just trusting the module policy and a modules.dep byte count.
+verify_boot_input_tree() (
+	tree_name=$1
+	tree_root=$2
+	verify_module_root "$tree_root" "boot-input $tree_name tree"
+	seen=''
+	count=0
+	while IFS="$tab" read -r kind name relative bytes hash extra; do
+		[ "$kind" = tree_file ] && [ "$name" = "$tree_name" ] || continue
+		safe_relative "$relative"
+		case " $seen " in *" $relative "*) die "$tree_name tree repeats $relative" ;; esac
+		seen="$seen $relative"
+		[ -z "${extra:-}" ] || die "$tree_name tree row has extra fields"
+		case "$bytes" in ''|*[!0-9]*) die "$tree_name tree has an invalid byte count" ;; esac
+		case "$hash" in ''|*[!0-9a-f]*) die "$tree_name tree has an invalid SHA-256" ;; esac
+		[ "${#hash}" -eq 64 ] || die "$tree_name tree has an invalid SHA-256 length"
+		file="$tree_root/$relative"
+		require_file "$file" "$tree_name tree file"
+		[ "$(file_size "$file")" = "$bytes" ] || die "$tree_name tree file size differs: $relative"
+		[ "$(sha256_of "$file")" = "$hash" ] || die "$tree_name tree file hash differs: $relative"
+		count=$((count + 1))
+	done <"$boot_inputs_manifest"
+	actual_count=$(find "$tree_root" -type f -print | wc -l | tr -d '[:space:]')
+	[ "$count" -gt 0 ] && [ "$count" = "$actual_count" ] || die "$tree_name tree file set differs from boot-input manifest"
+)
+
 # AVB metadata must be generated after the final split bytes exist.  A
 # path/hash-only vbmeta handoff cannot prove that salted descriptors bind these
 # newly composed bytes, so this route rejects external vbmeta inputs and
@@ -295,15 +431,14 @@ verify_required_inputs() {
 	verify_dtbo_sources
 	verify_partition_sizes
 	verify_avb_generation_contract
-	for input in "$initramfs" "$vendor_ramdisk" "$bootconfig" "$vendor_kernel_boot_cpio"; do
-		require_file "$input" 'split boot input'
+	for legacy in FERRIX_PIXEL9A_INITRAMFS FERRIX_PIXEL9A_VENDOR_RAMDISK FERRIX_PIXEL9A_VENDOR_BOOTCONFIG FERRIX_PIXEL9A_VENDOR_KERNEL_BOOT_CPIO FERRIX_PIXEL9A_VENDOR_DLKM_ROOT FERRIX_PIXEL9A_SYSTEM_DLKM_ROOT; do
+		[ -z "$(printenv "$legacy" 2>/dev/null || true)" ] || die "$legacy is no longer accepted; run pixel-9a-boot-inputs-build for source-owned inputs"
 	done
-	verify_module_root "$vendor_dlkm_root" vendor_dlkm_root
-	verify_module_root "$system_dlkm_root" system_dlkm_root
+	verify_boot_inputs
 }
 
 check_tools() {
-	for command_name in awk cp dirname find grep mkdir mktemp mv rm tr wc; do
+	for command_name in awk cat cp dd dirname find grep mkdir mktemp mv rm tr wc; do
 		command -v "$command_name" >/dev/null 2>&1 || die "missing prerequisite '$command_name'"
 	done
 	command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || die 'missing sha256sum or shasum'
@@ -338,10 +473,17 @@ make_ext4() {
 	output=$2
 	capacity=$3
 	label=$4
-	blocks=$((capacity / 4096))
-	"$mke2fs" -q -F -t ext4 -L "$label" -U clear -d "$root_dir" "$output" "$blocks"
+	# The filesystem must leave room for the descriptor and footer appended
+	# below. Ask the selected avbtool rather than guessing its overhead.
+	max_bytes=$("$avbtool" add_hash_footer --partition_size "$capacity" --calc_max_image_size) ||
+		die "avbtool could not calculate the $label payload capacity"
+	case "$max_bytes" in ''|*[!0-9]*) die "avbtool returned an invalid $label payload capacity" ;; esac
+	[ "$max_bytes" -gt 0 ] && [ "$max_bytes" -lt "$capacity" ] || die "invalid AVB reservation for $label"
+	blocks=$((max_bytes / 4096))
+	[ "$blocks" -gt 0 ] || die "no filesystem space remains for $label"
+	"$mke2fs" -q -F -t ext4 -b 4096 -L "$label" -U clear -d "$root_dir" "$output" "$blocks"
 	[ -f "$output" ] || die "mke2fs did not produce $output"
-	[ "$(file_size "$output")" -le "$capacity" ] || die "$label image exceeds its explicit partition capacity"
+	[ "$(file_size "$output")" -le "$max_bytes" ] || die "$label image leaves insufficient space for AVB metadata"
 }
 
 check_capacity() {
@@ -350,12 +492,19 @@ check_capacity() {
 	[ "$(file_size "$file")" -le "$(partition_capacity "$partition")" ] || die "$partition artifact exceeds its explicit partition capacity"
 }
 
+check_boot_magic() {
+	partition=$1
+	case "$partition" in boot|init_boot) expected_magic='ANDROID!' ;; *) expected_magic=VNDRBOOT ;; esac
+	magic=$(dd if="$stage/$partition.img" bs=8 count=1 2>/dev/null) || die "cannot read $partition image header"
+	[ "$magic" = "$expected_magic" ] || die "$partition is not a $expected_magic boot container"
+}
+
 add_avb_hash_footer() {
 	partition=$1
 	file=$2
 	# Derive a deterministic salt from the exact pre-footer bytes.  avbtool
-	# computes the descriptor digest over those bytes and then appends only the
-	# AVB footer, so the descriptor cannot silently describe an older image.
+	# computes the descriptor digest over those bytes, then appends the vbmeta
+	# blob and footer so make_vbmeta_image can read the descriptor back.
 	salt=$(sha256_of "$file")
 	if [ "$avb_algorithm" = NONE ]; then
 		"$avbtool" add_hash_footer \
@@ -364,8 +513,7 @@ add_avb_hash_footer() {
 			--partition_size "$(partition_capacity "$partition")" \
 			--hash_algorithm sha256 \
 			--salt "$salt" \
-			--algorithm NONE \
-			--do_not_append_vbmeta_image
+			--algorithm NONE
 	else
 		"$avbtool" add_hash_footer \
 			--image "$file" \
@@ -374,8 +522,7 @@ add_avb_hash_footer() {
 			--hash_algorithm sha256 \
 			--salt "$salt" \
 			--algorithm "$avb_algorithm" \
-			--key "$avb_key" \
-			--do_not_append_vbmeta_image
+			--key "$avb_key"
 	fi
 	[ -s "$file" ] || die "avbtool produced an empty AVB-bound image: $file"
 	check_capacity "$partition" "$file"
@@ -416,17 +563,23 @@ build() {
 	stage=$(mktemp -d "$image_parent/.tegu-radio-split.XXXXXX")
 	manifest_tmp="$stage/boot-manifest.tsv.tmp"
 	trap 'rm -rf "$stage"' EXIT HUP INT TERM
+	mkdir -p "$stage/provenance"
 	kernel_image=$(verify_artifact "$kernel_manifest" "$kernel_dist" Image)
 	dtb=$(verify_artifact "$kernel_manifest" "$kernel_dist" dtb.img)
 	rootfs_tar=$(verify_artifact "$rootfs_manifest" "$rootfs_out" rootfs.tar)
 	rootfs_image=$(verify_artifact "$rootfs_manifest" "$rootfs_out" rootfs.img)
+	cp "$kernel_manifest" "$stage/provenance/kernel-manifest.tsv"
+	cp "$rootfs_manifest" "$stage/provenance/rootfs-manifest.tsv"
+	cp "$partition_sizes" "$stage/provenance/partition-capacities.tsv"
+	cp "$boot_inputs_manifest" "$stage/provenance/boot-inputs-manifest.tsv"
+	cp "$vendor_kernel_boot_cpio" "$stage/provenance/vendor-kernel-boot.cpio"
 	cp "$kernel_image" "$stage/Image"
 	cp "$dtb" "$stage/dtb.img"
 	cp "$rootfs_tar" "$stage/rootfs.tar"
 	cp "$rootfs_image" "$stage/rootfs.img"
 	"$mkbootimg" --header_version 4 --pagesize 4096 --kernel "$stage/Image" --output "$stage/boot.img"
 	"$mkbootimg" --header_version 4 --pagesize 4096 --ramdisk "$initramfs" --output "$stage/init_boot.img"
-	"$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_ramdisk" --dtb "$stage/dtb.img" --vendor_bootconfig "$bootconfig" --output "$stage/vendor_boot.img"
+	"$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_ramdisk" --dtb "$stage/dtb.img" --vendor_bootconfig "$bootconfig" --vendor_boot "$stage/vendor_boot.img"
 	dtbo_inputs="$stage/.dtbo-inputs"
 	awk -F "$tab" '$1 == "source" && $2 ~ /\.dtbo$/ { print $2 }' "$kernel_dist/split-inputs/dtbo-source-set.tsv" | while IFS= read -r relative; do
 		printf '%s\n' "$kernel_dist/split-inputs/dtbo-source-set/$relative"
@@ -436,7 +589,12 @@ build() {
 	set --
 	while IFS= read -r dtbo; do set -- "$@" "$dtbo"; done <"$dtbo_inputs"
 	"$mkdtboimg" create "$stage/dtbo.img" --page_size=4096 "$@"
-	cp "$vendor_kernel_boot_cpio" "$stage/vendor_kernel_boot.img"
+	# vendor_kernel_boot uses the vendor boot container too; a bare CPIO is
+	# only its ramdisk payload and is not a bootloader-readable image.
+	"$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_kernel_boot_cpio" --dtb "$stage/dtb.img" --vendor_boot "$stage/vendor_kernel_boot.img"
+	for partition in boot init_boot vendor_boot vendor_kernel_boot; do
+		check_boot_magic "$partition"
+	done
 	make_ext4 "$vendor_dlkm_root" "$stage/vendor_dlkm.img" "$(partition_capacity vendor_dlkm)" vendor_dlkm
 	make_ext4 "$system_dlkm_root" "$stage/system_dlkm.img" "$(partition_capacity system_dlkm)" system_dlkm
 	for partition in boot init_boot vendor_boot vendor_kernel_boot dtbo vendor_dlkm system_dlkm vbmeta vbmeta_vendor vbmeta_system; do
@@ -467,6 +625,13 @@ build() {
 		--include_descriptors_from_image "$stage/system_dlkm.img"
 	for partition in vbmeta vbmeta_vendor vbmeta_system; do
 		check_capacity "$partition" "$stage/$partition.img"
+		# avbtool resolves descriptor partition names beside this image and
+		# verifies their payload digests. A matching outer TSV hash alone is
+		# not evidence that the embedded AVB descriptors bind these bytes.
+		if ! "$avbtool" verify_image --image "$stage/$partition.img" >"$stage/provenance/$partition-verification.txt" 2>&1; then
+			cat "$stage/provenance/$partition-verification.txt" >&2
+			die "generated $partition failed AVB payload verification"
+		fi
 	done
 	{
 		printf 'schema_version\t1\n'
@@ -480,14 +645,15 @@ build() {
 		printf 'header_version\t4\n'
 		printf 'split_artifact_contract\t%s\t%s\n' "$(route_value split_artifact_contract)" "$(route_value split_artifact_contract_sha256)"
 		printf 'partition_contract\tcomplete-source-built\n'
-			printf 'avb_mode\tfresh-generated\n'
-			printf 'avb_algorithm\t%s\n' "$avb_algorithm"
-			printf 'avb_descriptor_inputs\tfresh-avbtool-hash-footers-from-final-images\n'
-			printf 'avb_binding_salt\tsha256-of-pre-footer-image-bytes\n'
-		printf 'partition_capacities\t%s\t%s\t%s\n' "$partition_sizes" "$(file_size "$partition_sizes")" "$(sha256_of "$partition_sizes")"
-		printf 'kernel_manifest\t%s\t%s\t%s\n' "$kernel_manifest" "$(file_size "$kernel_manifest")" "$(sha256_of "$kernel_manifest")"
-		printf 'rootfs_manifest\t%s\t%s\t%s\n' "$rootfs_manifest" "$(file_size "$rootfs_manifest")" "$(sha256_of "$rootfs_manifest")"
-		printf 'vendor_kernel_boot_input\t%s\t%s\t%s\n' "$vendor_kernel_boot_cpio" "$(file_size "$vendor_kernel_boot_cpio")" "$(sha256_of "$vendor_kernel_boot_cpio")"
+		printf 'avb_mode\tfresh-generated\n'
+		printf 'avb_algorithm\t%s\n' "$avb_algorithm"
+		printf 'avb_descriptor_inputs\tfresh-avbtool-hash-footers-from-final-images\n'
+		printf 'avb_binding_salt\tsha256-of-pre-footer-image-bytes\n'
+		printf 'partition_capacities\tprovenance/partition-capacities.tsv\t%s\t%s\n' "$(file_size "$stage/provenance/partition-capacities.tsv")" "$(sha256_of "$stage/provenance/partition-capacities.tsv")"
+		printf 'kernel_manifest\tprovenance/kernel-manifest.tsv\t%s\t%s\n' "$(file_size "$stage/provenance/kernel-manifest.tsv")" "$(sha256_of "$stage/provenance/kernel-manifest.tsv")"
+		printf 'rootfs_manifest\tprovenance/rootfs-manifest.tsv\t%s\t%s\n' "$(file_size "$stage/provenance/rootfs-manifest.tsv")" "$(sha256_of "$stage/provenance/rootfs-manifest.tsv")"
+		printf 'boot_inputs_manifest\tprovenance/boot-inputs-manifest.tsv\t%s\t%s\n' "$(file_size "$stage/provenance/boot-inputs-manifest.tsv")" "$(sha256_of "$stage/provenance/boot-inputs-manifest.tsv")"
+		printf 'vendor_kernel_boot_input\tprovenance/vendor-kernel-boot.cpio\t%s\t%s\n' "$(file_size "$stage/provenance/vendor-kernel-boot.cpio")" "$(sha256_of "$stage/provenance/vendor-kernel-boot.cpio")"
 		for partition in boot init_boot vendor_boot vendor_kernel_boot dtbo vendor_dlkm system_dlkm vbmeta vbmeta_vendor vbmeta_system; do
 			printf 'partition_capacity\t%s\t%s\n' "$partition" "$(partition_capacity "$partition")"
 		done
@@ -504,7 +670,7 @@ build() {
 	record_artifact boot generated-mkbootimg "$stage/boot.img"
 	record_artifact init_boot generated-mkbootimg "$stage/init_boot.img"
 	record_artifact vendor_boot generated-mkbootimg "$stage/vendor_boot.img"
-	record_artifact vendor_kernel_boot source-built-cpio "$stage/vendor_kernel_boot.img"
+	record_artifact vendor_kernel_boot generated-mkbootimg "$stage/vendor_kernel_boot.img"
 	record_artifact dtbo generated-mkdtboimg "$stage/dtbo.img"
 	record_artifact vendor_dlkm source-built-modules "$stage/vendor_dlkm.img"
 	record_artifact system_dlkm source-built-modules "$stage/system_dlkm.img"

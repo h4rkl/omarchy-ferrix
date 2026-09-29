@@ -262,22 +262,37 @@ kernel artifacts, constructs fresh header-v4 `init_boot.img` and
 `rootfs.img`. It deliberately rejects the radio-first rootfs backend so the
 two incompatible kernel/userspace ABIs cannot be mixed.
 
-The radio-first composer is `tools/pixel-9a/boot-radio.sh`:
+The selected radio-first route separates source-owned boot-input construction
+from complete split-image composition. First run:
 
 ```sh
-just pixel-9a-boot-radio-test
-just pixel-9a-boot-radio-check
-FERRIX_PIXEL9A_RADIO_BOOT_BUILD=I-understand-this-composes-pixel-9a-radio-first-boot-artifacts \
-  just pixel-9a-boot-radio-build
+just pixel-9a-boot-inputs-test
+just pixel-9a-boot-inputs-check
+FERRIX_PIXEL9A_BOOT_INPUTS_BUILD=I-understand-this-builds-source-owned-pixel-9a-boot-inputs \
+  just pixel-9a-boot-inputs-build
 ```
 
-It verifies the radio kernel and matching SIT rootfs manifests, then writes a
-separate, hash-recorded handoff containing `Image`, `dtb.img`, header-v4
-`boot.img`/`init_boot.img`/`vendor_boot.img`, `vbmeta.img`, and the rootfs
-artifacts. This is intentionally not yet a complete persistent Pixel split
-image: `vendor_kernel_boot`, `dtbo`, `vendor_dlkm`, and `system_dlkm` are not
-generated, so the output remains `composed-not-booted` / `bootable=false` and
-is not accepted by the flash workflow.
+The complete split handoff then requires the exact-target ten-partition
+capacity file from the owner-controlled Fastbootd read-only gate:
+
+```sh
+just pixel-9a-radio-split-test
+just pixel-9a-radio-split-check
+FERRIX_PIXEL9A_RADIO_SPLIT_BUILD=I-understand-this-composes-the-radio-first-split-artifacts \
+  just pixel-9a-radio-split-build
+```
+
+`boot-inputs.sh` hashes the source-built rootfs BusyBox, checked-in Ferrix
+initramfs/vendor-ramdisk/bootconfig inputs, and source-built module roots.
+`radio-split.sh` consumes only that manifest, generates the missing persistent
+split artifacts and fresh AVB metadata, and carries relative provenance files
+inside the output so the Mac-side verifier does not depend on native-builder
+paths. The output remains `composed-not-booted` / `bootable=false`;
+temporary-boot command success does not prove a Ferrix Linux boot on the
+exact device.
+
+`boot-radio.sh` remains a diagnostic/incomplete handoff and is not a flashable
+route.
 `just pixel-9a-artifacts-manifest` checks the resulting kernel/rootfs/boot
 manifests and the pinned factory archive without contacting a device. It does
 not establish that any generated artifact is bootable or that the candidate
@@ -292,7 +307,10 @@ partition targets, input hashes, and recovery hashes immediately before use.
 Once the radio-first kernel stage has been written to the inactive slot, the
 checked-in `just pixel-9a-boot-inactive` workflow is the only route that may
 select and reboot that slot. It consumes same-device temporary-boot and
-persistent-flash evidence, re-hashes the complete split manifest and both
+persistent-flash evidence, plus the operator-reviewed kernel capture recorded
+by `just pixel-9a-observe-temp-boot`. Both flashing and activation bind that
+capture to the temporary-boot transcript and current `boot.img` hash; command
+success alone is insufficient. The activation workflow re-hashes the complete split manifest and both
 recovery archives, rechecks identity after selection, and reports only
 `slot-activated-boot-requested`; it does not claim a Linux boot. Raw
 `set_active`/reboot commands remain prohibited.

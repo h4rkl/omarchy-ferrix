@@ -1,5 +1,102 @@
 # Status
 
+## 2026-09-30 (native builder access restored)
+
+- **Builder connectivity:** SSH to the authorized `deba` host now succeeds.
+  The host reports Linux x86_64; the existing native builder's
+  `tools/pixel-9a/native-builder.sh run env check build` passed. No host tools
+  were installed and no phone transport was exposed to the builder.
+- **Workspace reconciliation:** the clean builder checkout at
+  `/home/ezy/github-projects/omarchy-ferrix` is at `9728c29`, matching the
+  Mac's committed baseline. The suggested Orca `remora` worktree is clean
+  but older (`1354afd`) and has no `out/pixel-9a` outputs. Neither checkout
+  was switched or overwritten.
+- **Existing handoffs located:** kernel, product, and rootfs manifest hashes
+  were re-read on the builder and match the earlier substrate handoff
+  recorded below. This check did not revalidate every payload or establish
+  compatibility with the uncommitted split-image fixes. Those fixes still
+  need source synchronization and native build validation.
+- **Physical boundary unchanged:** stock restoration, complete live partition
+  evidence, temporary-boot observation, installation, and guest/radio
+  validation remain pending. No physical operation was performed.
+
+## 2026-09-30 (observed temporary-boot gate)
+
+- **Implementation evidence for `google-pixel-9a-tegu-gxq96-mp1-0`:**
+  successful `fastboot boot` command evidence alone no longer permits
+  radio-first persistent writes or inactive-slot activation. Both workflows
+  require a reviewed kernel capture bound to the exact device, boot image,
+  and temporary-boot transcript. Activation also checks the transcript's
+  boot-image hash against the current image manifest.
+- **Observation workflow:** `just pixel-9a-observe-temp-boot` records the
+  operator-reviewed capture after read-only identity/recovery checks and a
+  typed attestation. It requires kernel-version and tegu machine records,
+  rejects known panic/lockup markers, and hashes the retained redacted log.
+  This is kernel-progress evidence only, not proof of a complete Ferrix boot;
+  automated marker checks do not replace observation of hangs or reboot loops.
+- **Offline validation:** `just pixel-9a-flash-radio-test` and
+  `just pixel-9a-boot-inactive-test` passed, including missing observations,
+  same-size capture tampering, duplicate success records, panic captures, and
+  mismatched boot images. All device interactions in these tests are stubs.
+- **Physical handoff remains blocked:** the authorized native builder's SSH
+  connection was refused with `Operation not permitted`; the last discovery
+  reported `No ADB or Fastboot device is visible.` No physical operation was
+  retried after that refusal. Corrected native image construction, complete
+  capacity/inventory evidence, reviewed rootfs mapping, tested stock recovery,
+  observed temporary boot, installation, and guest validation remain pending.
+  No hardware capability or recovery status is promoted.
+
+## 2026-09-30 (split image construction corrections)
+
+- **Implementation evidence for `google-pixel-9a-tegu-gxq96-mp1-0`:** the
+  radio split composer now creates both vendor images with the header-v4
+  vendor boot container. Previously `vendor_boot` used the ordinary boot
+  output option and `vendor_kernel_boot` was a bare CPIO. The composer checks
+  the four boot-image magic values, and the flash manifest now requires the
+  generated-container origin for `vendor_kernel_boot`.
+- **AVB construction:** removed the option that suppressed the embedded
+  vbmeta blob/footer needed by descriptor inclusion. DLKM filesystems now
+  use explicit 4096-byte blocks and reserve avbtool's calculated metadata
+  space. Each final vbmeta image must pass `avbtool verify_image` before the
+  output is published. The stricter stub test reproduced the old vendor
+  output failure and now covers container output, AVB metadata space,
+  descriptor availability, and failure to verify payloads.
+- **Boot-input handoff:** the module-install manifest is checked against the
+  kernel handoff before use. musl's libc alias is populated from its loader
+  even when the rootfs archive contains the libc name as a symlink. Every
+  vendor-ramdisk source file and every DLKM root file is now hash-recorded;
+  the composer rejects equal-length tampering and unlisted added files.
+- **Local validation:** the boot-input, radio-split, radio-flash, diagnostic
+  radio-boot, comparison-boot, rootfs, radio-kernel, and native-builder
+  workflow tests passed. These tests do not execute the real native image
+  tools or access a device.
+- **Validation boundary:** workflow tests are synthetic host evidence. These
+  corrected images have not been built with the real tools on the authorized
+  native builder or booted on the Pixel. The current SSH attempt to the
+  authorized builder failed with `Operation not permitted`; the last device
+  discovery reported `No ADB or Fastboot device is visible.` No new physical
+  capability or recovery gate is promoted.
+
+## 2026-09-30 (source-owned split boot handoff)
+
+- **Boot-input construction implemented:** `tools/pixel-9a/boot-inputs.sh` builds a
+  source-owned initramfs from the native rootfs BusyBox, the Ferrix vendor
+  ramdisk/bootconfig, and the reviewed source-built module roots. Its manifest
+  records source hashes and keeps the handoff `bootable=false`; stock Android
+  boot contents and legacy ad-hoc input variables are refused.
+- **Split output handoff:** `tools/pixel-9a/radio-split.sh` consumes that
+  manifest, generates the missing persistent split artifacts and fresh AVB
+  metadata, and embeds relative kernel/rootfs/capacity/boot-input provenance
+  so the Mac-side verifier is independent of native-builder paths.
+- **Offline validation:** the boot-input, radio-split, radio flash, radio boot,
+  rootfs, and radio-kernel workflow tests pass. No physical boot, flash, slot
+  change, or Fastbootd transition was performed.
+- **Still externally blocked:** the exact ten-partition capacity handoff still
+  requires one owner-entered Fastbootd device, and the current Mac ADB daemon
+  is unavailable. Recovery testing, complete native output construction,
+  exact-device temporary boot, and persistent installation remain gated and
+  unclaimed.
+
 ## 2026-09-30 (native Pixel 9a substrate completed)
 
 - **Exact recovery input:** The official `tegu` factory package remains
@@ -21,7 +118,7 @@
   This remains `built-not-booted` / `bootable=false` and is not a complete
   split-boot handoff.
 - **Product and rootfs handoff:** The product manifest SHA-256 is
-  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e4`.
+  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e`.
   The rootfs manifest SHA-256 is
   `3398822910ab9bbfa390d4beac3d51b0629824132a80c49538584c52b33530c5`;
   `rootfs.tar` is 611,676,160 bytes with SHA-256
@@ -133,7 +230,7 @@
   synced and hash-verified on this host at revision
   `88335b765d920cc345cdffb9c1a6d77e3a531ff9`. The authorized Pixel 9a
   product build completed with manifest SHA-256
-  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e4`; its
+  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e`; its
   manifest remains `status=built` / `bootable=false`. The authorized
   radio-first kernel build completed with manifest SHA-256
   `fd3e0f5cc894a18a1c9d5eaebcd8ff315401902a34d8374497b603064d343da4` and

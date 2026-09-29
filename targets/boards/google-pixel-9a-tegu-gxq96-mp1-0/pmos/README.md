@@ -7,8 +7,8 @@ does not install Android or Waydroid, and does not make any QEMU evidence a
 physical-device claim.
 
 The package is an input to `tools/pixel-9a/rootfs.sh`. It is not itself a
-bootable Pixel image. The target still needs a coherent Google Kleaf kernel
-dist, split-boot composition, exact firmware staging, and the recovery and
+bootable Pixel image. The selected route needs the matching radio-first
+Kbuild handoff, split-boot composition, exact firmware staging, and the recovery and
 physical-device gates in `../linux-plan.md` before any boot attempt.
 
 ## Package contents
@@ -21,6 +21,10 @@ physical-device gates in `../linux-plan.md` before any boot attempt.
   `tools/pixel-9a/rootfs.sh` overlays the radio list into the staged package so
   the incompatible bcmdhd/nitrous/cpif module names are never requested by the
   WWAN/SIT image.
+- `initramfs-init`, `vendor-bootconfig`, the two DLKM policy files, and the
+  `vendor-ramdisk/ferrix/` markers are source-owned inputs for
+  `tools/pixel-9a/boot-inputs.sh`; they are hash-recorded before split-image
+  composition and do not contain Android framework or stock module payloads.
 - `boot-layout.toml` records the expected split artifacts. It is metadata for a
   later artifact composer, not a flashing instruction.
 - The OpenRC service files enable Ferrix core/network/telephony, the native

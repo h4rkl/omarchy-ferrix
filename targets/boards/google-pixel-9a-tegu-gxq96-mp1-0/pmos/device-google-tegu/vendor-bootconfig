@@ -1,0 +1,5 @@
+# Source-owned Linux bootconfig for the exact Ferrix tegu WWAN/SIT route.
+# These are target metadata keys, not Android framework properties.
+ferrix.target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+ferrix.route_id = "experimental-linux-google-tegu-s5300-wwan"
+ferrix.rootfs_partlabel = "userdata"

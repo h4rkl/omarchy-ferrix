@@ -1,0 +1,69 @@
+#!/bin/busybox sh
+
+# Ferrix's source-owned header-v4 initramfs entrypoint for the radio-first
+# tegu route. It mounts only the Linux userdata filesystem named by the
+# checked-in target layout and hands control to the postmarketOS init. No
+# Android init, property service, framework, HAL, or vendor mount contract is
+# used here.
+
+set -eu
+
+bb=/bin/busybox
+root_partlabel=userdata
+
+log() {
+	$bb printf '%s\n' "$*" >/dev/console 2>/dev/null || :
+}
+
+mount_api() {
+	$bb mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
+	$bb mount -t proc proc /proc 2>/dev/null || :
+	$bb mount -t sysfs sysfs /sys 2>/dev/null || :
+}
+
+find_root_device() {
+	for candidate in /dev/disk/by-partlabel/$root_partlabel /dev/block/by-name/$root_partlabel; do
+		[ -b "$candidate" ] && {
+			printf '%s\n' "$candidate"
+			return 0
+		}
+	done
+
+	for uevent in /sys/class/block/*/uevent; do
+		[ -f "$uevent" ] || continue
+		partname=$($bb sed -n 's/^PARTNAME=//p' "$uevent")
+		[ "$partname" = "$root_partlabel" ] || continue
+		name=${uevent%/uevent}
+		name=${name##*/}
+		[ -b "/dev/$name" ] || continue
+		printf '%s\n' "/dev/$name"
+		return 0
+	done
+	return 1
+}
+
+mount_api
+$bb mkdir -p /newroot /newroot/dev /newroot/proc /newroot/sys
+
+root_device=
+attempt=0
+while [ "$attempt" -lt 90 ]; do
+	if root_device=$(find_root_device); then
+		break
+	fi
+	attempt=$((attempt + 1))
+	$bb sleep 1
+done
+
+[ -n "$root_device" ] || {
+	log "Ferrix initramfs: PARTLABEL=$root_partlabel was not found"
+	exec $bb sh
+}
+
+log "Ferrix initramfs: mounting $root_partlabel"
+$bb mount -t ext4 -o rw "$root_device" /newroot
+$bb mount -o move /dev /newroot/dev 2>/dev/null || :
+$bb mount -o move /proc /newroot/proc 2>/dev/null || :
+$bb mount -o move /sys /newroot/sys 2>/dev/null || :
+
+exec $bb switch_root /newroot /sbin/init

@@ -14,7 +14,7 @@ grep -q 'check_manifest_split_contract' "$script" || fail 'radio boot does not v
 grep -q 'split_artifact_contract_sha256' "$script" || fail 'radio boot does not verify split-artifact contract hashes'
 
 mkdir -p "$work/bin" "$work/out/pixel-9a/kernel-radio/tegu-wwan/dist" "$work/out/pixel-9a/rootfs/tegu"
-printf '%s\n' '#!/bin/sh' 'output=' 'while [ "$#" -gt 0 ]; do case "$1" in --output) output=$2; shift 2;; *) shift;; esac; done' '[ -n "$output" ]' 'printf synthetic >"$output"' >"$work/bin/mkbootimg"
+printf '%s\n' '#!/bin/sh' 'output=' 'while [ "$#" -gt 0 ]; do case "$1" in --output|--vendor_boot) output=$2; shift 2;; *) shift;; esac; done' '[ -n "$output" ]' 'printf synthetic >"$output"' >"$work/bin/mkbootimg"
 printf '%s\n' '#!/bin/sh' 'output=' 'while [ "$#" -gt 0 ]; do case "$1" in --output) output=$2; shift 2;; *) shift;; esac; done' '[ -n "$output" ]' 'printf vbmeta >"$output"' >"$work/bin/avbtool"
 chmod 0755 "$work/bin/mkbootimg" "$work/bin/avbtool"
 

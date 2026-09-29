@@ -183,9 +183,21 @@ pixel-9a-boot-radio-build:
 pixel-9a-boot-radio-test:
     @sh "{{root}}/tools/pixel-9a/tests/boot-radio-workflow.sh"
 
+# Device-free native-Linux construction of the source-owned initramfs, vendor
+# ramdisk/bootconfig, early-module CPIO, and reviewed module-root inputs used
+# by the radio-first split composer.
+pixel-9a-boot-inputs-check:
+    @"{{root}}/tools/pixel-9a/boot-inputs.sh" preflight
+
+pixel-9a-boot-inputs-build:
+    @"{{root}}/tools/pixel-9a/boot-inputs.sh" build
+
+pixel-9a-boot-inputs-test:
+    @sh "{{root}}/tools/pixel-9a/tests/boot-inputs-workflow.sh"
+
 # Device-free native-Linux split-image completion for the independent
 # radio-first route. It requires a redacted exact-target partition-capacity
-# handoff plus source-built kernel/rootfs/module inputs; it never invokes a
+# handoff plus source-built kernel/rootfs/boot-input inputs; it never invokes a
 # device operation and keeps the output bootable=false.
 pixel-9a-radio-split-check:
     @"{{root}}/tools/pixel-9a/radio-split.sh" preflight
@@ -259,6 +271,12 @@ pixel-9a-flash-radio-check *args:
 [positional-arguments]
 pixel-9a-flash-radio-boot-temp *args:
     @"{{root}}/tools/pixel-9a/flash-radio.sh" boot-temp "$@"
+
+# Record an operator-reviewed, redacted kernel capture after temporary boot.
+# This performs only identity reads and local evidence writes.
+[positional-arguments]
+pixel-9a-observe-temp-boot *args:
+    @"{{root}}/tools/pixel-9a/flash-radio.sh" observe-temp "$@"
 
 [positional-arguments]
 pixel-9a-flash-radio *args:

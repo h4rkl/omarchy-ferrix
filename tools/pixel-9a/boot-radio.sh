@@ -18,6 +18,7 @@ rootfs_out=${FERRIX_PIXEL9A_ROOTFS_OUT:-"$out_root/pixel-9a/rootfs/tegu"}
 rootfs_manifest=${FERRIX_PIXEL9A_ROOTFS_MANIFEST:-"$rootfs_out/manifest.tsv"}
 image_out=${FERRIX_PIXEL9A_RADIO_BOOT_OUT:-"$out_root/pixel-9a/images/tegu-wwan"}
 radio_boot_manifest=${FERRIX_PIXEL9A_RADIO_BOOT_MANIFEST:-"$image_out/boot-manifest.tsv"}
+boot_inputs_out=${FERRIX_PIXEL9A_BOOT_INPUTS_OUT:-"$out_root/pixel-9a/boot-inputs/tegu-wwan"}
 build_confirmation=I-understand-this-composes-pixel-9a-radio-first-boot-artifacts
 tab=$(printf '\t')
 
@@ -77,6 +78,8 @@ check_split_contract() {
 		'boot_page_size = 4096' \
 		'dtbo_tool = "mkdtboimg.py"' \
 		'dtbo_page_size = 4096' \
+		'boot_input_generator = "tools/pixel-9a/boot-inputs.sh"' \
+		'boot_input_manifest_schema = 1' \
 		'dynamic_partition_transport = "fastbootd"'; do
 		grep -Fqx "$required" "$contract" || die "radio split-artifact contract is missing: $required"
 	done
@@ -366,12 +369,9 @@ check_rootfs_contract() {
 }
 
 check_ramdisk_inputs() {
-	initramfs=${FERRIX_PIXEL9A_INITRAMFS:-}
-	vendor_ramdisk=${FERRIX_PIXEL9A_VENDOR_RAMDISK:-}
-	bootconfig=${FERRIX_PIXEL9A_VENDOR_BOOTCONFIG:-}
-	[ -n "$initramfs" ] || die 'FERRIX_PIXEL9A_INITRAMFS is required'
-	[ -n "$vendor_ramdisk" ] || die 'FERRIX_PIXEL9A_VENDOR_RAMDISK is required'
-	[ -n "$bootconfig" ] || die 'FERRIX_PIXEL9A_VENDOR_BOOTCONFIG is required'
+	initramfs=${FERRIX_PIXEL9A_INITRAMFS:-"$boot_inputs_out/initramfs.cpio"}
+	vendor_ramdisk=${FERRIX_PIXEL9A_VENDOR_RAMDISK:-"$boot_inputs_out/vendor-ramdisk.cpio"}
+	bootconfig=${FERRIX_PIXEL9A_VENDOR_BOOTCONFIG:-"$boot_inputs_out/vendor-bootconfig"}
 	for file in "$initramfs" "$vendor_ramdisk" "$bootconfig"; do
 		[ -f "$file" ] || die "boot container input is missing: $file"
 		[ ! -L "$file" ] || die "boot container input must not be a symlink: $file"
@@ -440,8 +440,8 @@ compose() {
 	# of the Google Kleaf output so a raw candidate Image can never be mistaken
 	# for a Google boot-manifest artifact.
 	"$mkbootimg" --header_version 4 --kernel "$stage/Image" --output "$stage/boot.img"
-	"$mkbootimg" --header_version 4 --ramdisk "$FERRIX_PIXEL9A_INITRAMFS" --output "$stage/init_boot.img"
-	"$mkbootimg" --header_version 4 --vendor_ramdisk "$FERRIX_PIXEL9A_VENDOR_RAMDISK" --dtb "$stage/dtb.img" --vendor_bootconfig "$FERRIX_PIXEL9A_VENDOR_BOOTCONFIG" --output "$stage/vendor_boot.img"
+	"$mkbootimg" --header_version 4 --ramdisk "$initramfs" --output "$stage/init_boot.img"
+	"$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_ramdisk" --dtb "$stage/dtb.img" --vendor_bootconfig "$bootconfig" --vendor_boot "$stage/vendor_boot.img"
 	rootfs_tar=$(verify_artifact "$rootfs_manifest" "$rootfs_out" rootfs.tar)
 	rootfs_image=$(verify_artifact "$rootfs_manifest" "$rootfs_out" rootfs.img)
 	cp "$rootfs_tar" "$stage/rootfs.tar"
