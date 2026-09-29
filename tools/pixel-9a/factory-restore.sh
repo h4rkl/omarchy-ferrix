@@ -10,6 +10,7 @@ set -eu
 # oem, or boot commands, and it never runs the vendor script itself.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$root/tools/pixel-9a/data-safety.sh"
 target=${FERRIX_PIXEL9A_TARGET_DIR:-"$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"}
 pins=${FERRIX_PIXEL9A_PINS:-"$target/recovery.pins"}
 recovery="$target/recovery"
@@ -230,6 +231,7 @@ read_all_gates() {
   identity_gate=$(gate_value identity) || die "target manifest has no [gates].identity entry: $target_manifest"
   image_compatibility_gate=$(gate_value image_compatibility) || die "target manifest has no [gates].image_compatibility entry: $target_manifest"
   backup_gate=$(gate_value backup) || die "target manifest has no [gates].backup entry: $target_manifest"
+  data_policy_gate=$(gate_value data_policy || true)
   recovery_procedure_gate=$(gate_value recovery_procedure) || die "target manifest has no [gates].recovery_procedure entry: $target_manifest"
   confirmation_gate=$(gate_value per_run_confirmation) || die "target manifest has no [gates].per_run_confirmation entry: $target_manifest"
   [ -n "$identity_gate" ] && [ -n "$image_compatibility_gate" ] && [ -n "$backup_gate" ] && [ -n "$recovery_procedure_gate" ] && [ -n "$confirmation_gate" ] ||
@@ -238,6 +240,7 @@ read_all_gates() {
   emit gate_image_compatibility "$image_compatibility_gate"
   emit gate_recovery_procedure "$recovery_procedure_gate"
   emit backup_gate "$backup_gate"
+  emit data_policy "$data_policy_gate"
   emit per_run_confirmation "$confirmation_gate"
 }
 
@@ -245,8 +248,8 @@ require_backup_gate() {
   read_all_gates
   [ "$identity_gate" = passed ] || die "identity gate is '$identity_gate'; exact target identity must be approved before this restore"
   [ "$confirmation_gate" = required ] || die "per-run confirmation gate is '$confirmation_gate'; manifest must require typed confirmation"
-  [ "$backup_gate" = verified ] ||
-    die "backup gate is '$backup_gate'; owner must verify a readable backup outside Git before this restore"
+  pixel9a_data_safety_check "$backup_gate" "$data_policy_gate" || die "$pixel9a_data_safety_reason"
+  emit data_safety_gate "$pixel9a_data_safety_status"
 }
 
 require_mutation_gates() {

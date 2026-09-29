@@ -98,7 +98,7 @@ case "$1" in
   -s)
     [ "$2" = "$STUB_SERIAL" ] || exit 99
     case "$3" in
-      getvar) case "$4" in product) value=tegu ;; variant) value=GXQ96 ;; hw-revision) value=MP1.0 ;; unlocked) value=yes ;; secure) value=yes ;; current-slot) value=a ;; slot-count) value=2 ;; serialno) value=$STUB_SERIAL ;; is-userspace) [ "$state" = fastbootd ] && value=yes || value=no ;; *) exit 99 ;; esac; printf '(bootloader) %s: %s\n' "$4" "$value" >&2 ;;
+      getvar) case "$4" in product) value=tegu ;; variant) value=${STUB_VARIANT:-GXQ96} ;; hw-revision) value=MP1.0 ;; unlocked) value=yes ;; secure) value=yes ;; current-slot) value=a ;; slot-count) value=2 ;; serialno) value=$STUB_SERIAL ;; is-userspace) [ "$state" = fastbootd ] && value=yes || value=no ;; *) exit 99 ;; esac; printf '(bootloader) %s: %s\n' "$4" "$value" >&2 ;;
       boot) [ -f "$4" ] || exit 99; echo gone >"$STUB_STATE" ;;
       flash) [ -f "$5" ] || exit 99; case "$4" in vendor_dlkm_*|system_dlkm_*) [ "$state" = fastbootd ] || exit 98 ;; esac ;;
       reboot) case "$4" in fastboot) echo fastbootd >"$STUB_STATE" ;; bootloader) echo bootloader >"$STUB_STATE" ;; *) exit 99 ;; esac ;;
@@ -115,6 +115,19 @@ calls="$work/calls.log"
 echo bootloader >"$work/state"
 export PATH="$work/bin:$PATH" STUB_CALLS="$calls" STUB_STATE="$work/state" STUB_SERIAL="$serial"
 export FERRIX_PIXEL9A_TARGET_DIR="$work/target" FERRIX_PIXEL9A_RADIO_SPLIT_MANIFEST="$work/images/boot-manifest.tsv" FERRIX_OUT_DIR="$work/out" FERRIX_PIXEL9A_FLASH_WAIT_SECONDS=1
+printf '%s' "$serial" >"$work/serial"
+serial_prefix=$(sha256 "$work/serial" | cut -c1-12)
+mkdir -p "$work/out/pixel-9a"
+cat >"$work/out/pixel-9a/discovery-adb.txt" <<ADB_EVIDENCE
+transport=adb
+serial_sha256_prefix=$serial_prefix
+ro.product.manufacturer=Google
+ro.product.model=Pixel 9a
+ro.product.device=tegu
+ro.boot.hardware.revision=MP1.0
+ro.boot.hardware.sku=GXQ96
+result=ok
+ADB_EVIDENCE
 
 run() {
 	case_name=$1; input=$2; shift 2
@@ -127,8 +140,26 @@ check 'preflight: verifies source-built radio contract without mutation' [ "$sta
 check 'preflight: identifies WWAN/SIT route' grep -q '^route_id=experimental-linux-google-tegu-s5300-wwan$' "$work/preflight_ok.out"
 check 'preflight: no device mutation' sh -c "! grep -qE 'fastboot.*(boot|flash|reboot)' '$calls'"
 
+STUB_VARIANT=N/A run preflight_n_a '' preflight --allow-unsigned-avb
+check 'preflight: accepts Fastboot N/A variant with same-serial ADB correlation' [ "$status" -eq 0 ]
+check 'preflight: records correlated SKU source' grep -q '^sku_source=adb-correlated$' "$work/preflight_n_a.out"
+check 'preflight: preserves observed unavailable variant' grep -q '^variant=N/A$' "$work/preflight_n_a.out"
+
 boot_hash=$(awk -F "$tab" '$1 == "artifact" && $2 == "boot" { print $5; exit }' "$work/images/boot-manifest.tsv")
 boot_phrase=$(printf 'CONFIRM PIXEL 9A RADIO TEMPORARY BOOT boot.img@%s\n' "$(printf '%s' "$boot_hash" | cut -c1-8)")
+awk '{ if ($0 == "backup = \"verified\"") print "backup = \"not-required-dev-device\""; else print; if ($0 == "backup = \"verified\"") print "data_policy = \"dev-device-no-user-data\"" }' "$work/target/manifest.toml" >"$work/target/manifest.policy"
+mv "$work/target/manifest.policy" "$work/target/manifest.toml"
+unset FERRIX_PIXEL9A_NO_USER_DATA
+run data_policy_refused "$boot_phrase" boot-temp --allow-unsigned-avb
+check 'data policy: no-user-data mutation refuses without session opt-in' [ "$status" -eq 1 ]
+check 'data policy: refusal never boots the device' sh -c "! grep -q ' fastboot.* boot ' '$calls'"
+check 'data policy: refusal does not call it a verified backup' grep -q 'backup is not marked verified' "$work/data_policy_refused.err"
+
+export FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data
+run data_policy_allowed "$boot_phrase" boot-temp --allow-unsigned-avb
+check 'data policy: explicit session opt-in permits only the normal typed run' [ "$status" -eq 0 ]
+check 'data policy: allowed transcript records the non-backup safety state' grep -q '^data_safety_gate=dev-device-no-user-data$' "$work/data_policy_allowed.out"
+
 run boot_temp "$boot_phrase" boot-temp --allow-unsigned-avb
 check 'boot-temp: exact radio phrase succeeds' [ "$status" -eq 0 ]
 evidence=$(find "$work/out/pixel-9a/flash-radio" -name 'boot-temp-*.txt' -type f | head -1)
@@ -141,6 +172,7 @@ run flash_kernel "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-
 check 'flash: complete split kernel stage succeeds on inactive slot' [ "$status" -eq 0 ]
 check 'flash: ten partition writes and two reboots' sh -c "[ \$(grep -c 'flash' '$calls') -eq 10 ] && [ \$(grep -c 'reboot' '$calls') -eq 2 ]"
 check 'flash: never writes active slot' sh -c "! grep -qE 'flash [^ ]+_a ' '$calls'"
+unset FERRIX_PIXEL9A_NO_USER_DATA
 
 # A canonical backend must be rejected before any device probe.
 sed 's/^kernel_backend\tlinux-google-tegu-wwan$/kernel_backend\tgoogle-kleaf-cpif/' "$work/images/boot-manifest.tsv" >"$work/canonical.tsv"

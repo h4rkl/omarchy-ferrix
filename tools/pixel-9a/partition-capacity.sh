@@ -15,6 +15,7 @@ set -eu
 # storage operation.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$root/tools/pixel-9a/adb-correlation.sh"
 out=${FERRIX_OUT_DIR:-"$root/out"}/pixel-9a
 expected_product=tegu
 expected_revision=MP1.0
@@ -292,7 +293,7 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 	userspace=$(fastboot_getvar is-userspace) || die 'Fastboot is-userspace getvar is unavailable'
 	[ "$product" = "$expected_product" ] || die "product mismatch: $product"
 	[ "$revision" = "$expected_revision" ] || die "hardware revision mismatch: $revision"
-	[ "$sku" = "$expected_sku" ] || die "SKU/variant mismatch: $sku"
+	pixel9a_fastboot_sku_gate "$sku" "$(sha256_prefix "$serial")" || die "SKU/variant '$sku' is unavailable and no matching redacted ADB identity proves $expected_sku"
 	[ "$slot_count" = 2 ] || die "unexpected slot count: $slot_count"
 	case "$slot" in
 		a|_a) active_suffix=_a; inactive_suffix=_b ;;
@@ -305,7 +306,9 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 	emit target_id "$expected_target_id"
 	emit product "$product"
 	emit hardware_revision "$revision"
-	emit sku "$sku"
+	emit sku "$expected_sku"
+	emit sku_source "$pixel9a_sku_source"
+	emit sku_evidence "$pixel9a_sku_evidence"
 	emit transport fastboot
 	emit current_slot "$slot"
 	emit slot_count "$slot_count"

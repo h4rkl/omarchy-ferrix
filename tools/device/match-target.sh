@@ -28,13 +28,58 @@ bad_lines=$(grep -nvE "^[a-z][a-z0-9_]*='([^']|'\\\\'')*'\$" "$identity" | grep 
 [ -z "$bad_lines" ] || die "refusing malformed identity file $identity:
 $bad_lines"
 
-manufacturer="" codename="" hardware_revision="" sku="" model="" transport=""
+manufacturer="" codename="" hardware_revision="" sku="" model="" transport="" serial_sha256_prefix=""
 # shellcheck disable=SC1090
 . "$identity"
 
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
+
+unknown_sku() {
+  case "$1" in
+    ''|N/A|NA|unknown|unavailable) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Fastboot may expose no SKU.  If the current serial has a matching, redacted
+# ADB discovery under the output root, recover the exact Android SKU and
+# manufacturer/model identity rather than treating variant=N/A as a different
+# device.  A missing or incomplete correlation remains a refusal.
+if [ "$transport" = fastboot ] && { unknown_sku "$sku" || [ -z "$manufacturer" ]; }; then
+  correlation_root=${FERRIX_OUT_DIR:-"$root/out"}
+  if [ -n "$serial_sha256_prefix" ] && [ -d "$correlation_root" ]; then
+    while IFS= read -r candidate; do
+      [ -f "$candidate" ] || continue
+      if ! awk -v prefix="$serial_sha256_prefix" '
+        $0 == "transport=adb" { transport = 1 }
+        $0 == "result=ok" { result = 1 }
+        $0 == "serial_sha256_prefix=" prefix { serial = 1 }
+        $0 == "ro.product.manufacturer=Google" || $0 == "identity.manufacturer=Google" { manufacturer = 1 }
+        $0 == "ro.product.model=Pixel 9a" || $0 == "identity.model=Pixel 9a" { model = 1 }
+        $0 == "ro.product.device=tegu" || $0 == "identity.codename=tegu" { codename = 1 }
+        $0 == "ro.boot.hardware.revision=MP1.0" || $0 == "identity.hardware_revision=MP1.0" { revision = 1 }
+        $0 == "ro.boot.hardware.sku=GXQ96" || $0 == "identity.sku=GXQ96" { sku = 1 }
+        END { exit !(transport && result && serial && manufacturer && model && codename && revision && sku) }
+      ' "$candidate"; then
+        continue
+      fi
+      [ -n "$manufacturer" ] || manufacturer=Google
+      unknown_sku "$sku" && sku=GXQ96
+      correlated_adb="$candidate"
+      break
+    done <<EOF
+$(find "$correlation_root" -type f -name 'discovery-*.txt' -print 2>/dev/null | sort -r)
+EOF
+  fi
+fi
+
+if [ "$transport" = fastboot ] && unknown_sku "$sku"; then
+  printf 'match=none\n'
+  printf 'note=Fastboot SKU/variant is unavailable; an exact same-serial redacted ADB identity is required\n'
+  [ -n "${correlated_adb:-}" ] || exit 10
+fi
 
 # Read a top-level `key = "value"` line from a manifest, stopping at the first
 # TOML table header so [gates] keys cannot shadow identity keys.
@@ -98,7 +143,7 @@ for manifest in "$boards"/*/manifest.toml; do
   same_revision=no
   [ "$t_revision" = "$hardware_revision" ] && same_revision=yes
   sku_ok=yes
-  if [ -n "$sku" ] && [ -n "$t_sku" ] && [ "$sku" != "$t_sku" ]; then
+  if ! unknown_sku "$sku" && ! unknown_sku "$t_sku" && [ "$sku" != "$t_sku" ]; then
     sku_ok=no
   fi
 
@@ -130,6 +175,7 @@ printf 'targets_scanned=%s\n' "$scanned"
 
 if [ "$exact_count" -eq 1 ]; then
   printf 'match=exact target_id=%s target_dir=%s\n' "$exact_id" "$exact_dir"
+  [ -n "${correlated_adb:-}" ] && printf 'sku_correlation=adb:%s\n' "$correlated_adb"
   exit 0
 fi
 

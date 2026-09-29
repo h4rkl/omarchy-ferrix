@@ -65,6 +65,21 @@ device visible. That branch reads independent A/B `partition-size:*` getvars,
 requires `is-userspace=yes`, and refuses the ordinary bootloader; it does not
 reboot, change slots, or write a partition.
 
+Fastboot on this exact device may report `variant=N/A`. The checked-in
+generic matcher and target workflows accept that value only when the same
+serial hash has a complete redacted ADB discovery proving Google / Pixel 9a /
+`tegu` / `GXQ96` / `MP1.0`; the live Fastboot product, revision, serial, slot,
+slot count, unlock state, and transport are still rechecked independently.
+
+This is an owner-declared new development device with no personal data. The
+checked-in gate records `backup = "not-required-dev-device"` and
+`data_policy = "dev-device-no-user-data"`; it deliberately does not claim a
+verified backup. Before any destructive or boot-state mutation, the owner
+must explicitly authorize the session policy with
+`FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data`
+and answer the workflow's exact per-run confirmation prompts. The checked-in
+stock recovery route remains untested until that recovery gate is exercised.
+
 ## Recovery files
 
 The checked-in pins select Google's current public Pixel 9a build recorded on
@@ -542,6 +557,30 @@ product, revision, SKU, current slot, and slot count. The owner must still
 pass the normal backup/recovery/confirmation gates. This workflow is stub-tested only (`just
 pixel-9a-flash-test`) and has not been run on the phone; the manifest stays
 `bootable=false` until an observed Linux boot.
+
+## Inactive-slot activation and boot
+
+The radio-first flash route intentionally writes only an explicitly selected
+inactive slot and never selects it. After its temporary-boot evidence and
+`result=flashed-not-booted` transcript have been reviewed, use the separate
+checked-in workflow below; do not type `fastboot set_active` or `fastboot
+reboot` directly:
+
+```sh
+export FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE=out/pixel-9a/flash-radio/<boot-temp-transcript>
+export FERRIX_PIXEL9A_RADIO_FLASH_EVIDENCE=out/pixel-9a/flash-radio/<flash-transcript>
+just pixel-9a-boot-inactive --preflight --slot b --allow-unsigned-avb
+FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data \
+  just pixel-9a-boot-inactive --confirm-boot --slot b --allow-unsigned-avb
+```
+
+The workflow re-hashes the complete split manifest and both pinned recovery
+archives, proves that all ten reviewed partition writes succeeded on the same
+device and inactive slot, rechecks `tegu` / `MP1.0` / serial / slot / ordinary
+Fastboot immediately before and after selection, then issues the checked-in
+`set_active` and reboot sequence. Its result is only
+`slot-activated-boot-requested`; it is not Linux or capability evidence. It is
+stub-tested (`just pixel-9a-boot-inactive-test`) and has not run on hardware.
 
 ## Radios on a booted guest
 

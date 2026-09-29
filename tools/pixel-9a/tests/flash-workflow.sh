@@ -31,6 +31,7 @@ sh -n "$script"
 # printf) are excluded; the dynamic call-log check below covers behaviour.
 offending=$(grep -nE '(^|[^[:alnum:]_])(adb|fastboot)([^[:alnum:]_]|$)' "$script" \
   | grep -vE '^[0-9]+:[[:space:]]*#' \
+  | grep -vE '^[0-9]+:[[:space:]]*\. ' \
   | grep -vE '^[0-9]+:[[:space:]]*(emit|die|fail|printf) ' \
   | grep -vE '^[0-9]+:[[:space:]]*need (adb|fastboot)$' \
   | grep -vE '^[0-9]+:[[:space:]]*adb_rows=\$\(adb devices -l \| awk ' \
@@ -215,6 +216,7 @@ serial='SYN.00[1]/&$'
 export PATH="$work/bin:$PATH" STUB_CALLS="$calls" STUB_STATE="$state" STUB_SERIAL="$serial"
 export STUB_ADB_DEVICES="" STUB_FASTBOOT_DEVICES="$serial fastboot usb:1
 "
+export FERRIX_PIXEL9A_FLASH_WAIT_SECONDS=1
 export FERRIX_PIXEL9A_TARGET_DIR="$work/target" FERRIX_PIXEL9A_BOOT_OUT="$image_dir"
 unset FERRIX_PIXEL9A_BOOT_MANIFEST FERRIX_PIXEL9A_PINS FERRIX_PIXEL9A_TEMP_BOOT_EVIDENCE || true
 

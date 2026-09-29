@@ -40,6 +40,15 @@ source-pinned native-Linux package inputs for this exact `tegu` / `GXQ96` /
   below. The exact tegu DT selects SIT; this crate is not a modem backend and
   is not wired into the Pixel adapter.
 
+The target's data-safety policy is explicit and checked in: this is an owner-
+declared new development device with no personal data, represented by
+`[gates] backup = "not-required-dev-device"` and
+`data_policy = "dev-device-no-user-data"` in `manifest.toml`. This is not a
+backup verification claim. Each mutating workflow requires the session-only
+`FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data`
+opt-in plus its normal typed per-run confirmation; the stock recovery gate is
+still independently required.
+
 The target manifest remains explicit about the current state:
 `kernel_build_status = "not-built"` for the comparison Google Kleaf route,
 `radio_kernel_build_status = "built-not-booted"`,
@@ -271,6 +280,13 @@ partition mutation. If it does not, an inactive-slot plan needs separate owner
 approval after backup and tested recovery gates pass. Either route must print
 and confirm the exact serial, product, hardware revision, current slot,
 partition targets, input hashes, and recovery hashes immediately before use.
+Once the radio-first kernel stage has been written to the inactive slot, the
+checked-in `just pixel-9a-boot-inactive` workflow is the only route that may
+select and reboot that slot. It consumes same-device temporary-boot and
+persistent-flash evidence, re-hashes the complete split manifest and both
+recovery archives, rechecks identity after selection, and reports only
+`slot-activated-boot-requested`; it does not claim a Linux boot. Raw
+`set_active`/reboot commands remain prohibited.
 
 ## Target-local root filesystem and adapter composition
 
@@ -505,8 +521,8 @@ Recorded prerequisites (not physical Linux evidence):
 
 Outstanding physical gates (all):
 
-- [ ] a personal-data/configuration backup outside the repository is verified
-  readable;
+- [x] the checked-in dev-device/no-user-data policy gate is present; this does
+  not claim a personal-data backup was verified;
 - [ ] stock factory recovery is tested on this exact device;
 - [ ] the complete live partition inventory is captured read-only and
   redacted;
@@ -515,8 +531,10 @@ Outstanding physical gates (all):
 - [x] a native postmarketOS rootfs substrate is built with the exact product,
   firmware, pmaports, and target package inputs; bootability remains unproven;
 - [ ] the Ferrix artifact manifest passes image-layout and size checks;
-- [ ] a temporary boot route is proven supported, or an inactive-slot plan is
-  explicitly approved;
+- [x] the checked-in inactive-slot activation/boot workflow is implemented and
+  stub-tested; it has not run on the physical target;
+- [ ] a temporary boot route is proven supported and the inactive-slot plan is
+  explicitly authorized for a physical run;
 - [ ] exact Bluetooth firmware member/path/hash evidence and live Bluetooth
   controller behavior are established;
 - [x] the source-pinned S5300 userspace packages build on native Linux and

@@ -158,9 +158,14 @@ Apply these rules for the whole session. They have the force of `AGENTS.md`.
    The sole development transport exception is the checked-in
    `tools/pixel-9a/enter-fastboot.sh --confirm-enter` workflow, which may
    issue exactly `adb reboot bootloader` after exact-target checks and its
-   typed confirmation. Read-only verbs (`adb devices -l`, `adb shell getprop`,
-   `fastboot devices -l`, `fastboot getvar`) are what the checked-in discovery
-   scripts already run; prefer the scripts over typing even those.
+   typed confirmation. The separate checked-in
+   `tools/pixel-9a/boot-inactive.sh confirm-boot` workflow may select an
+   already-flashed inactive slot and reboot it after its own evidence, identity,
+   recovery, and confirmation gates; that exception never authorizes a raw
+   `set_active` or reboot command. Read-only verbs (`adb devices -l`,
+   `adb shell getprop`, `fastboot devices -l`, `fastboot getvar`) are what the
+   checked-in discovery scripts already run; prefer the scripts over typing
+   even those.
 2. Destructive bootloader/storage mutation runs only through a checked-in
    workflow under `tools/<target>/` (today: `tools/pixel-9a/`). Such a
    workflow prints the exact serial, product/codename, hardware revision,
@@ -304,13 +309,19 @@ storage.
 ## Phase 3 - Backup and bootloader
 
 **Status:** Pixel 9a unlock gate Implemented and Run on hardware
-(2026-09-27, `unlocked=yes`). The backup gate is `pending` in
-`manifest.toml` and `linux-plan.md`.
+(2026-09-27, `unlocked=yes`). This admitted development device declares the
+checked-in `dev-device-no-user-data` policy; `backup` is intentionally
+`not-required-dev-device`, never `verified`.
 
-1. Backup: the human backs up personal data outside the repository and
-   verifies it is readable. No checked-in backup workflow exists; do not
-   improvise one with `adb pull` or `adb backup`. Record only "backup verified
-   by owner on <date>, stored outside Git".
+1. Backup/data policy: a normal target requires the human to back up personal
+   data outside the repository and verify it is readable. This exact admitted
+   development device instead uses the checked-in
+   `backup="not-required-dev-device"` plus
+   `data_policy="dev-device-no-user-data"` gate. Before a mutation, the owner
+   must explicitly authorize that policy in this session by setting
+   `FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data`;
+   workflows never relabel it as a verified backup. No checked-in backup
+   workflow exists; do not improvise one with `adb pull` or `adb backup`.
 2. Unlock preflight (read-only): `just pixel-9a-unlock-bootloader --preflight`
    re-verifies both recovery archives, requires exactly one transport, re-reads
    identity, and prints serial, codename, revision, slot, partition target,
@@ -627,10 +638,13 @@ flash), and requires exactly one Fastboot device with `product=tegu`,
    hoc or flash the archive.
 6. Slot: read-only preflight may display the current slot, but a persistent
    flash requires an explicit `--slot a|b` and refuses the active slot. The
-   workflow never issues `set_active`, so images written to the inactive slot
-   cannot be booted by it, and it prints a `slot_warning` either way. Choose
-   and confirm the inactive target slot before the run; do not infer it from a
-   default.
+   flash workflow never selects a slot and prints a `slot_warning`. After a
+   successful radio-first flash, the separate checked-in
+   `just pixel-9a-boot-inactive --preflight --slot <a|b>` then
+   `--confirm-boot` workflow is the only route allowed to select the already-
+   flashed inactive slot and reboot it. It rechecks the same device and all
+   image/recovery evidence; its result is a boot request, not boot evidence.
+   Do not infer a slot from a default or type raw `set_active`.
 7. Result semantics: success prints `result=flashed-not-booted`. It is not
    boot evidence; `bootable` stays false until a Linux boot is observed.
    Transcript `out/pixel-9a/flash/flash-<stamp>-<pid>.txt`.
@@ -671,19 +685,28 @@ radio evidence exists yet.
    set `FERRIX_PIXEL9A_RADIO_TEMP_BOOT_EVIDENCE` to that ignored path and run
    `just pixel-9a-flash-radio --stage kernel --slot <a|b>
    [--allow-unsigned-avb]`. The slot is mandatory and must be inactive; the
-   workflow never issues `set_active`. The typed phrase is
+   flash workflow never changes the selected slot. The typed phrase is
    `CONFIRM PIXEL 9A RADIO FLASH KERNEL STAGE TO SLOT <A|B>`. It writes the
    eight bootloader partitions, enters fastbootd only for `vendor_dlkm` and
    `system_dlkm`, returns to bootloader, and re-checks the exact device and
    image hash before every write. Success means only
    `result=flashed-not-booted`.
-5. Rootfs stage (`--stage rootfs` or `all`) additionally requires the
+5. Inactive-slot activation/boot: after reviewing the flash transcript, set
+   `FERRIX_PIXEL9A_RADIO_FLASH_EVIDENCE` to that ignored path and run
+   `just pixel-9a-boot-inactive --preflight --slot <a|b>
+   [--allow-unsigned-avb]`. With the owner-authorized data-policy token and
+   the same flags, run `--confirm-boot`. This is the only checked-in route
+   allowed to issue the reviewed slot-selection/reboot sequence; it rechecks
+   all ten flashed hashes, both recovery hashes, the exact serial and
+   inactive-slot relationship, and reports only
+   `result=slot-activated-boot-requested`.
+6. Rootfs stage (`--stage rootfs` or `all`) additionally requires the
    complete, redacted exact-target ADB partition inventory in
    `FERRIX_PIXEL9A_PARTITION_INVENTORY`, including the reviewed `userdata`
    mapping. `rootfs.tar` is never flashed; only the hash-verified
    `rootfs.img` is sent to the allow-listed target partition. The route does
    not invent a mapping when this gate is absent.
-6. The route never unlocks/locks, erases, formats, wipes, changes slots,
+7. The route never unlocks/locks, erases, formats, wipes, changes slots,
    flashes bootloader/radio firmware, or accepts the canonical Google
    manifest. `--skip-temp-boot-gate` is an owner-directed exception only;
    explain the risk and require the phrase ending `WITHOUT TEMP BOOT GATE`.

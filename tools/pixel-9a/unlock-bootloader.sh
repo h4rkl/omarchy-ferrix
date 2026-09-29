@@ -8,6 +8,7 @@ set -eu
 # state-changing command.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$root/tools/pixel-9a/data-safety.sh"
 target="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
 pins="$target/recovery.pins"
 recovery="$target/recovery"
@@ -127,6 +128,7 @@ read_all_gates() {
   identity_gate=$(gate_value identity) || die "target manifest has no [gates].identity entry: $target_manifest"
   image_compatibility_gate=$(gate_value image_compatibility) || die "target manifest has no [gates].image_compatibility entry: $target_manifest"
   backup_gate=$(gate_value backup) || die "target manifest has no [gates].backup entry: $target_manifest"
+  data_policy_gate=$(gate_value data_policy || true)
   recovery_procedure_gate=$(gate_value recovery_procedure) || die "target manifest has no [gates].recovery_procedure entry: $target_manifest"
   confirmation_gate=$(gate_value per_run_confirmation) || die "target manifest has no [gates].per_run_confirmation entry: $target_manifest"
   [ -n "$identity_gate" ] && [ -n "$image_compatibility_gate" ] && [ -n "$backup_gate" ] && [ -n "$recovery_procedure_gate" ] && [ -n "$confirmation_gate" ] ||
@@ -135,6 +137,7 @@ read_all_gates() {
   printf 'gate_image_compatibility=%s\n' "$image_compatibility_gate"
   printf 'gate_recovery_procedure=%s\n' "$recovery_procedure_gate"
   printf 'backup_gate=%s\n' "$backup_gate"
+  printf 'data_policy=%s\n' "$data_policy_gate"
   printf 'per_run_confirmation=%s\n' "$confirmation_gate"
 }
 
@@ -142,8 +145,8 @@ require_backup_gate() {
   read_all_gates
   [ "$identity_gate" = passed ] || die "identity gate is '$identity_gate'; exact target identity must be approved before unlocking"
   [ "$confirmation_gate" = required ] || die "per-run confirmation gate is '$confirmation_gate'; manifest must require typed confirmation"
-  [ "$backup_gate" = verified ] ||
-    die "backup gate is '$backup_gate'; owner must verify a readable backup outside Git before unlocking"
+  pixel9a_data_safety_check "$backup_gate" "$data_policy_gate" || die "$pixel9a_data_safety_reason"
+  printf 'data_safety_gate=%s\n' "$pixel9a_data_safety_status"
 }
 
 require_mutation_gates() {

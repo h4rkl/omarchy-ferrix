@@ -267,6 +267,15 @@ pixel-9a-flash-radio *args:
 pixel-9a-flash-radio-test:
     @sh "{{root}}/tools/pixel-9a/tests/flash-radio-workflow.sh"
 
+# Select and boot the already-flashed inactive radio-first slot through the
+# checked-in workflow; it never accepts a raw set_active command.
+[positional-arguments]
+pixel-9a-boot-inactive *args:
+    @"{{root}}/tools/pixel-9a/boot-inactive.sh" "$@"
+
+pixel-9a-boot-inactive-test:
+    @sh "{{root}}/tools/pixel-9a/tests/boot-inactive-workflow.sh"
+
 # Radios on a Pixel 9a already running Ferrix/pmOS over the USB network
 # (172.16.42.1, SSH). preflight/inventory/evidence are read-only; enable and
 # connect-wifi change radio state only, after a typed confirmation. Stub-tested

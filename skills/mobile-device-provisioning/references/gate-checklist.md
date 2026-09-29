@@ -2,14 +2,14 @@
 
 Copy the checklist into chat, filled in from the workflow's own preflight
 output, before asking for a go-ahead. Do this for every mutating run
-(unlock, sideload, factory restore, temporary boot, persistent flash, any
-future erase or slot change), even when the same operation ran earlier in
+(unlock, sideload, factory restore, temporary boot, persistent flash,
+inactive-slot activation/boot, any future erase or slot change), even when the same operation ran earlier in
 the session. One go-ahead covers one run.
 
 ## Pre-mutation checklist
 
 ```text
-MUTATION REQUEST - <operation, e.g. bootloader unlock / OTA sideload / factory restore / temp boot / flash --stage all --slot b>
+MUTATION REQUEST - <operation, e.g. bootloader unlock / OTA sideload / factory restore / temp boot / flash --stage all --slot b / inactive-slot boot --slot b>
 Workflow: <just recipe and flags exactly as they will be typed>
 Preflight: <recipe> -> <passed | refused: verbatim reason>   (if refused, stop here)
 
@@ -32,15 +32,15 @@ Operation detail:
                         ota     <filename> sha256 <..> verified <yes>
   temp-boot evidence  = <out/pixel-9a/flash/boot-temp-<stamp>-<pid>.txt | n/a>
   flags that disable a check = <--allow-unsigned-avb (needed for avb_mode=NONE on a secure=yes Pixel) | --skip-temp-boot-gate | --keep-data | none>, why: <..>
-  backup              = <verified readable by owner on <date>, stored outside Git | NOT VERIFIED>
-  gates in manifest   = identity <..> image_compatibility <..> backup <..> recovery_procedure <..>
+  backup/data policy  = <verified readable by owner on <date>, stored outside Git | NOT VERIFIED | not-required-dev-device + owner token>
+  gates in manifest   = identity <..> image_compatibility <..> backup <..> data_policy <..> recovery_procedure <..>
 
 Consequences if I proceed:
   - <wipes all user data | keeps data (--keep-data) | no data change>
   - <device will be left in Fastboot | recovery | booted Ferrix (unverified)>
   - <bootloader/radio firmware changes: yes/no>
   - <brick risk: bounded by verified stock recovery archives; a restore has/has not been tested on this device>
-  - <slot written: <a|b>; active slot before: <..>>
+  - <slot written/selected: <a|b>; active slot before: <..>; partition writes: yes/no>
 
 Confirmation phrases the workflow will demand (I will type them only after your go-ahead):
   1. "<exact phrase 1>"

@@ -34,7 +34,7 @@ run_match() {
   sh "$match" "$1" > "$work/stdout" 2> "$work/stderr" || status=$?
 }
 
-check "static: matcher never invokes adb/fastboot/curl" sh -c "! grep -nE '^[[:space:]]*[^#]*(adb|fastboot|curl)([[:space:]]|$)' '$match'"
+check "static: matcher never invokes adb/fastboot/curl" sh -c "! grep -nE '^[[:space:]]*[^#]*(adb|fastboot|curl)([[:space:]]|$)' '$match' | grep -vE 'transport.*fastboot|\\[[^]]*fastboot[^]]*\\]'"
 
 # Missing identity.
 run_match "$work/does-not-exist.env"
@@ -82,6 +82,28 @@ check "pixel: target_id is the Pixel 9a directory" grep -q '^match=exact target_
 write_identity "$work/id-pixel-rev.env" Google "Pixel 9a" tegu GXQ96 EVT1.0
 run_match "$work/id-pixel-rev.env"
 check "pixel: other revision of tegu is match=none" [ "$status" -eq 10 ]
+
+# Fastboot variant=N/A is accepted only with a same-serial redacted ADB
+# correlation proving the exact Pixel SKU and revision.
+mkdir -p "$work/out/pixel-9a"
+cat >"$work/out/pixel-9a/discovery-adb.txt" <<'ADB_EVIDENCE'
+transport=adb
+serial_sha256_prefix=0123456789ab
+ro.product.manufacturer=Google
+ro.product.model=Pixel 9a
+ro.product.device=tegu
+ro.boot.hardware.revision=MP1.0
+ro.boot.hardware.sku=GXQ96
+result=ok
+ADB_EVIDENCE
+write_identity "$work/id-pixel-fastboot-na.env" Google "" tegu N/A MP1.0 fastboot
+run_match "$work/id-pixel-fastboot-na.env"
+check "pixel: Fastboot N/A variant uses same-serial ADB correlation" [ "$status" -eq 0 ]
+check "pixel: correlation is reported" grep -q '^sku_correlation=adb:' "$work/stdout"
+rm -f "$work/out/pixel-9a/discovery-adb.txt"
+run_match "$work/id-pixel-fastboot-na.env"
+check "pixel: uncorrelated Fastboot N/A variant is refused" [ "$status" -eq 10 ]
+check "pixel: uncorrelated N/A refusal explains required evidence" grep -q 'same-serial redacted ADB identity' "$work/stdout"
 
 # Fastboot identity without manufacturer.
 write_identity "$work/id-fb.env" "" "" synthetic-op SKU7 EVT2 fastboot

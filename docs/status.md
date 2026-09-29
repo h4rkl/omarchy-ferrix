@@ -40,17 +40,40 @@
   This is build/protocol evidence only. There is still no physical boot,
   modem, SIM, bearer, Wi-Fi, Bluetooth, display, input, or capability
   evidence.
-- **Remaining gates:** The complete partition-capacity handoff, verified
-  personal-data backup, tested recovery procedure, complete split-boot
-  artifacts, exact-device temporary boot, and any persistent flash remain
-  pending. QEMU remains the passing development/CI baseline; no QEMU result
-  is promoted to the Pixel target.
+- **Remaining gates:** The complete partition-capacity handoff, tested
+  recovery procedure, complete split-boot artifacts, exact-device temporary
+  boot, and any persistent flash remain pending. The owner-declared
+  dev-device/no-user-data policy is checked in, but no personal-data backup is
+  claimed or recorded. QEMU remains the passing development/CI baseline; no
+  QEMU result is promoted to the Pixel target.
 - **Development transport entry:** Ordinary bootloader Fastboot can now be
   entered without hard buttons through the checked-in,
   confirmation-gated `just pixel-9a-enter-fastboot` workflow when exact-target
   ADB is available. Its read-only preflight has now run on the exact target;
   it never enters Fastbootd or changes storage, and no reboot mutation has
   been run through it yet.
+- **Read-only transport refresh (exact target):** On 2026-09-30 the Mac saw
+  exactly one Fastboot device for `google-pixel-9a-tegu-gxq96-mp1-0`:
+  `tegu` / `MP1.0`, unlocked, secure, current slot `a`, two slots, and
+  `is-userspace=no`. Fastboot reported `variant=N/A`; the checked-in matcher
+  and radio workflows now accept that only when the same serial hash has a
+  complete redacted ADB discovery proving Google / Pixel 9a / `tegu` /
+  `GXQ96` / `MP1.0`. This is admission evidence only.
+- **Capacity gate:** The real read-only capacity workflow refused ordinary
+  bootloader Fastboot with `Fastboot capacity handoff requires fastbootd
+  (is-userspace=yes) ...; no reboot was issued`. An owner-entered Fastbootd
+  session is still required; no raw Fastboot transition was attempted.
+- **Development-device data policy:** The checked-in target manifest now uses
+  `backup = "not-required-dev-device"` plus
+  `data_policy = "dev-device-no-user-data"` for the owner-declared new
+  development device. This never claims a verified backup; every mutating
+  workflow still requires the explicit session opt-in and per-run confirmation.
+- **Inactive-slot boot workflow:** `just pixel-9a-boot-inactive` is now a
+  checked-in, stub-tested route for selecting and rebooting an already-flashed
+  inactive radio-first slot. It re-hashes the split manifest and both recovery
+  archives, verifies temporary-boot and persistent-flash evidence from the
+  same device, rechecks identity after `set_active`, and never accepts a raw
+  slot-changing command. It has not run on hardware.
 
 ## 2026-09-29 (factory-version reconciliation and native-build handoff)
 

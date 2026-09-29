@@ -61,6 +61,8 @@ rootfs_manifest = "out/pixel-9a/rootfs/tegu/manifest.tsv"
 s5300_channel_metadata = "pmos/device-google-tegu/s5300-channels.toml"
 s5300_userspace_sources = "pmos/device-google-tegu/s5300-userspace-sources.toml"
 s5300_source_evidence = "s5300-source-evidence.md"
+inactive_slot_boot_workflow = "just pixel-9a-boot-inactive"
+inactive_slot_boot_status = "workflow-checked-in-not-run"
 
 [linux]
 substrate = "postmarketos"
@@ -79,7 +81,8 @@ boot_status = "not-attempted"
 [gates]
 identity = "passed"
 image_compatibility = "partial"
-backup = "pending"
+backup = "not-required-dev-device"
+data_policy = "dev-device-no-user-data"
 bootloader_unlock = "passed"
 recovery_procedure = "documented-not-tested"
 per_run_confirmation = "required"

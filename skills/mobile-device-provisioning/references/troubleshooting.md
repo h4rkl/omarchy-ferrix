@@ -66,7 +66,10 @@ reconnect. `offline` after a reboot usually clears within seconds.
   complete read-only guest inventory before that stage.
 - Never change the active slot by hand. A first Ferrix flash must not
   overwrite the active stock slot without the owner's approved inactive-slot
-  plan (`linux-plan.md`). State the slot in every checklist.
+  plan (`linux-plan.md`). State the slot in every checklist. After a successful
+  radio-first flash, only `just pixel-9a-boot-inactive` may select the already-
+  flashed inactive slot; it rechecks the same device and evidence before the
+  checked-in selection/reboot sequence.
 
 ## Hash or size mismatch
 
@@ -232,9 +235,12 @@ idempotent).
 
 - Any gate refusal, identity mismatch, or hash mismatch.
 - `match=none` or a different hardware revision than a checked-in target.
-- Backup status unknown or not verified.
-- Any request that needs `--skip-*`, `--allow-*`, relock, slot change,
-  erase, or a raw device command.
+- Backup status unknown or not verified, unless the checked-in
+  `not-required-dev-device`/`dev-device-no-user-data` policy has been
+  explicitly authorized for this session.
+- Any request that needs `--skip-*`, `--allow-*`, relock, a raw slot change,
+  erase, or a raw device command. The dedicated inactive-slot workflow is the
+  only approved slot-selection exception after its own gates pass.
 - Any evidence that would move a capability status, before editing
   `capabilities.toml`.
 - Anything that would place a serial, IMEI, MAC, SSID, key, firmware, or

@@ -49,6 +49,8 @@ set -eu
 # --allow-unsigned-avb acknowledgement.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$root/tools/pixel-9a/data-safety.sh"
+. "$root/tools/pixel-9a/adb-correlation.sh"
 target=${FERRIX_PIXEL9A_TARGET_DIR:-"$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"}
 pins=${FERRIX_PIXEL9A_PINS:-"$target/recovery.pins"}
 recovery_dir="$target/recovery"
@@ -505,6 +507,7 @@ read_backup_gate() {
   identity_gate=$(gate_value identity) || die "target manifest has no [gates].identity entry: $target_manifest"
   image_compatibility_gate=$(gate_value image_compatibility) || die "target manifest has no [gates].image_compatibility entry: $target_manifest"
   backup_gate=$(gate_value backup) || die "target manifest has no [gates].backup entry: $target_manifest"
+  data_policy_gate=$(gate_value data_policy || true)
   recovery_procedure_gate=$(gate_value recovery_procedure) || die "target manifest has no [gates].recovery_procedure entry: $target_manifest"
   confirmation_gate=$(gate_value per_run_confirmation) || die "target manifest has no [gates].per_run_confirmation entry: $target_manifest"
   [ -n "$identity_gate" ] && [ -n "$image_compatibility_gate" ] && [ -n "$backup_gate" ] && [ -n "$recovery_procedure_gate" ] && [ -n "$confirmation_gate" ] ||
@@ -513,6 +516,7 @@ read_backup_gate() {
   emit gate_image_compatibility "$image_compatibility_gate"
   emit gate_recovery_procedure "$recovery_procedure_gate"
   emit backup_gate "$backup_gate"
+  emit data_policy "$data_policy_gate"
   emit per_run_confirmation "$confirmation_gate"
 }
 
@@ -520,8 +524,8 @@ require_backup_gate() {
   read_backup_gate
   [ "$identity_gate" = passed ] || die "identity gate is '$identity_gate'; exact target identity must be approved before this mutation"
   [ "$confirmation_gate" = required ] || die "per-run confirmation gate is '$confirmation_gate'; manifest must require typed confirmation"
-  [ "$backup_gate" = verified ] ||
-    die "backup gate is '$backup_gate'; owner must verify a readable backup outside Git before this mutation"
+  pixel9a_data_safety_check "$backup_gate" "$data_policy_gate" || die "$pixel9a_data_safety_reason"
+  emit data_safety_gate "$pixel9a_data_safety_status"
 }
 
 require_ferrix_gates() {
@@ -588,7 +592,12 @@ read_identity() {
   serialno=$(fastboot_getvar serialno)
 
   [ "$product" = "$expected_product" ] || die "Fastboot product mismatch: '$product' is not $expected_product"
-  [ "$variant" = "$expected_sku" ] || die "Fastboot SKU/variant mismatch: '$variant' is not $expected_sku"
+  if ! pixel9a_fastboot_sku_gate "$variant" "$(sha256_prefix "$fastboot_serial")"; then
+    case "$variant" in
+      N/A|NA|unknown|unavailable|'') die "Fastboot SKU/variant '$variant' is unavailable and no matching redacted ADB identity proves $expected_sku" ;;
+      *) die "Fastboot SKU/variant mismatch: '$variant' is not $expected_sku" ;;
+    esac
+  fi
   [ "$hardware_revision" = "$expected_revision" ] || die "Fastboot hardware revision mismatch: '$hardware_revision' is not $expected_revision"
   [ "$unlocked" = yes ] || die "Fastboot reports unlocked='$unlocked'; a locked bootloader cannot boot or flash Ferrix images"
   case "$secure" in
@@ -621,7 +630,9 @@ read_identity() {
   emit serial_sha256_prefix "$(sha256_prefix "$fastboot_serial")"
   emit product "$product"
   emit variant "$variant"
-  emit sku "$variant"
+  emit sku "$expected_sku"
+  emit sku_source "$pixel9a_sku_source"
+  emit sku_evidence "$pixel9a_sku_evidence"
   emit hardware_revision "$hardware_revision"
   emit current_slot "$current_slot_raw"
   emit slot_count "$slot_count"
@@ -736,7 +747,8 @@ recheck_identity() {
   recheck_serial=$(printf '%s\n' "$fastboot_rows" | awk '{ print $1 }')
   [ "$recheck_serial" = "$fastboot_serial" ] || die "Fastboot serial changed before mutation"
   [ "$(fastboot_getvar product)" = "$expected_product" ] || die "Fastboot product changed before mutation"
-  [ "$(fastboot_getvar variant)" = "$expected_sku" ] || die "Fastboot SKU/variant changed before mutation"
+  recheck_variant=$(fastboot_getvar variant)
+  pixel9a_fastboot_sku_gate "$recheck_variant" "$(sha256_prefix "$fastboot_serial")" || die "Fastboot SKU/variant changed before mutation and no matching ADB correlation is available"
   [ "$(fastboot_getvar hw-revision)" = "$expected_revision" ] || die "Fastboot hardware revision changed before mutation"
   [ "$(fastboot_getvar unlocked)" = yes ] || die "Fastboot unlocked state changed before mutation"
   recheck_serialno=$(fastboot_getvar serialno)
