@@ -72,6 +72,7 @@ devices)
 		path=$5
 		case "$path" in
 		/sys/class/block/*/size)
+			[ "${STUB_DENY_SYSFS:-0}" = 1 ] && exit 13
 			block=$(printf '%s\n' "$path" | sed 's#^/sys/class/block/##; s#/size$##')
 			case "$block" in
 			dm-8|dm-12|dm-18|dm-22) echo 16384 ;;
@@ -171,6 +172,12 @@ generated="$work/out/pixel-9a"
 grep -q 'inventory_completeness=partial' "$generated"/partition-capacity-*.txt
 grep -q 'vendor_dlkm_inactive_block=dm-22' "$generated"/partition-capacity-*.txt
 grep -q 'system_dlkm_inactive_block=dm-18' "$generated"/partition-capacity-*.txt
+
+if STUB_DENY_PROC=1 STUB_DENY_SYSFS=1 "$workflow" >"$work/denied-sysfs.out" 2>"$work/denied-sysfs.err"; then
+	echo 'partition capacity unexpectedly passed with denied sysfs reads' >&2
+	exit 1
+fi
+grep -q 'boot_a capacity is not readable from /sys/class/block/sda13/size' "$work/denied-sysfs.err"
 
 if STUB_DENY_PROC=0 STUB_MISSING_DYNAMIC_B=1 "$workflow" >"$work/missing.out" 2>"$work/missing.err"; then
 	echo 'partition capacity unexpectedly passed without inactive dynamic mapping' >&2

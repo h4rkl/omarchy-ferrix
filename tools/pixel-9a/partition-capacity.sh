@@ -76,12 +76,15 @@ adb_prop() {
 }
 
 remote_read() {
-	if value=$(adb -s "$serial" shell "$@" </dev/null 2>/dev/null | tr -d '\r'); then
-		[ -n "$value" ] || return 1
-		printf '%s\n' "$value"
-		return 0
+	# Keep the adb exit status separate from CR stripping.  On Android, a
+	# denied shell read can otherwise be hidden by the succeeding `tr` in a
+	# pipeline and its diagnostic text can be mistaken for a value.
+	if ! value=$(adb -s "$serial" shell "$@" </dev/null 2>/dev/null); then
+		return 1
 	fi
-	return 1
+	value=$(printf '%s\n' "$value" | tr -d '\r')
+	[ -n "$value" ] || return 1
+	printf '%s\n' "$value"
 }
 
 valid_block_name() {
@@ -119,8 +122,9 @@ resolve_link() {
 capacity_for_block() {
 	block=$1
 	label=$2
-	sectors=$(remote_read cat "/sys/class/block/$block/size" | awk 'NF { print $1; exit }') ||
+	raw_sectors=$(remote_read cat "/sys/class/block/$block/size") ||
 		die "$label capacity is not readable from /sys/class/block/$block/size"
+	sectors=$(printf '%s\n' "$raw_sectors" | awk 'NF { print $1; exit }')
 	case "$sectors" in
 		''|*[!0-9]*) die "$label has a malformed sysfs sector count" ;;
 	esac

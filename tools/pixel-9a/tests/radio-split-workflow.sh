@@ -45,7 +45,7 @@ set -eu
 [ "${1:-}" = create ]
 output=${2:-}
 [ -n "$output" ]
-[ "$#" -gt 4 ]
+	[ "$#" -ge 4 ]
 case "$*" in
 	*tegu.dtbo*) ;;
 	*) printf '%s\n' 'mkdtboimg received no source-built DTBO input' >&2; exit 1 ;;

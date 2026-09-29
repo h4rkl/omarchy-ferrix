@@ -363,15 +363,31 @@ clean detached checkout were source-synced and hash-verified on a provisioned
 native Linux x86_64 builder on 2026-09-29; this does not mean that the kernel,
 product, rootfs, or boot artifacts are complete. Their manifests remain the
 authority for each stage, and no physical boot or radio capability is claimed.
-Native Linux x86_64 is still required. On macOS: run the `*-check`/`*-test`
-recipes if useful, then hand off to the native builder. Do not use an ARM64 UTM
+Native Linux x86_64 is still required. For the current Pixel 9a objective, use
+the remote `deba` build machine for Docker, UTM, QEMU, kernel and radio-kernel
+builds, product builds, and postmarketOS rootfs construction:
+
+```sh
+ssh -i ~/.ssh/id_ed25519 ezy@100.95.82.97
+```
+
+Use `/home/ezy/orca/workspaces/omarchy-ferrix/remora` when it is the convenient
+checked-out workspace, and synchronize reviewed repository commits through Git
+instead of copying ignored caches, firmware, images, or device evidence. Do
+not use `tanto`. Keep the local Mac exclusively for the Pixel's ADB/Fastboot
+operations, device logs, flashing, rebooting, and hardware validation; never
+expose its USB transport or ADB server socket to `deba`. If `deba` is
+unavailable, stop the physical build handoff and report the blocker rather
+than substituting the Mac, `tanto`, emulated UTM, or another unapproved host.
+
+On macOS, run only the read-only `*-check`/`*-test` recipes that do not contact
+the device, then hand the target build to `deba`. Do not use an ARM64 UTM
 guest, an x86_64 UTM guest under CPU emulation, OrbStack/Lima, or a
 cross-compilation substitute; the pinned native kernel source, toolchain, and
 `pmbootstrap` are Linux-only by design. A digest-pinned `linux/amd64` tool
 container is allowed only when its Docker engine runs on native Linux x86_64;
 it cannot substitute for that host, and it must not carry the phone's USB
-transport or ADB server. UTM remains acceptable for a separate Linux smoke
-test or QEMU workflow, not for this Pixel build gate.
+transport or ADB server.
 
 Load the host profile first: `. tools/pixel-9a/env.sh`, then
 `just pixel-9a-env-validate` and `just pixel-9a-env-check build`.
