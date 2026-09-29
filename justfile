@@ -197,6 +197,9 @@ pixel-9a-rootfs-validate:
 pixel-9a-rootfs-build:
     @"{{root}}/tools/pixel-9a/rootfs.sh" build
 
+pixel-9a-rootfs-finalize:
+    @"{{root}}/tools/pixel-9a/rootfs.sh" finalize
+
 pixel-9a-rootfs-test:
     @sh "{{root}}/tools/pixel-9a/tests/rootfs-workflow.sh"
 

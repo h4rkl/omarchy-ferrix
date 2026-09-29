@@ -33,6 +33,7 @@ build_token=I-understand-this-runs-pmbootstrap
 rootfs_image_size_mib=${FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB:-2048}
 rootfs_uuid=${FERRIX_PIXEL9A_ROOTFS_UUID:-9a9a9a9a-9a9a-49a9-9a9a-9a9a9a9a9a9a}
 rootfs_password=${FERRIX_PIXEL9A_ROOTFS_PASSWORD:-}
+manifest_status=''
 tab=$(printf '\t')
 
 die() {
@@ -58,6 +59,7 @@ file_size() {
 }
 
 manifest_begin() {
+	manifest_status=$1
 	manifest_dir=$(dirname -- "$manifest")
 	mkdir -p "$manifest_dir"
 	manifest_tmp="$manifest.tmp.$$"
@@ -96,8 +98,19 @@ manifest_input() {
 }
 
 manifest_finish() {
-	mv "$manifest_tmp" "$manifest"
-	printf 'manifest: %s\n' "$manifest"
+	manifest_destination=$manifest
+	# A read-only preflight or validation after a successful build must not
+	# downgrade the canonical built handoff. Keep its diagnostic result in an
+	# adjacent status-named sidecar; the explicit build/finalize path is the
+	# only path allowed to replace the canonical manifest.
+	if [ "$manifest_status" != built-substrate-only ] && [ -f "$manifest" ]; then
+		existing_status=$(awk -F "$tab" '$1 == "status" { print $2; exit }' "$manifest" 2>/dev/null || true)
+		if [ "$existing_status" = built-substrate-only ]; then
+			manifest_destination="$manifest.$manifest_status.tsv"
+		fi
+	fi
+	mv "$manifest_tmp" "$manifest_destination"
+	printf 'manifest: %s\n' "$manifest_destination"
 }
 
 required_file() {
@@ -787,6 +800,38 @@ stage_radio_firmware_aliases() {
 	rm -f "$route_manifest_tmp"
 }
 
+write_built_manifest() {
+	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
+	rootfs_artifact="$rootfs_out/rootfs.tar"
+	rootfs_image="$rootfs_out/rootfs.img"
+	[ -f "$rootfs_artifact" ] || die "rootfs artifact is missing: $rootfs_artifact"
+	[ -f "$rootfs_image" ] || die "rootfs image is missing: $rootfs_image"
+	[ -f "$rootfs_out/firmware-manifest.tsv" ] ||
+		die "rootfs firmware manifest is missing: $rootfs_out/firmware-manifest.tsv"
+	[ -f "$rootfs_out/radio-firmware-manifest.tsv" ] ||
+		die "rootfs radio firmware manifest is missing: $rootfs_out/radio-firmware-manifest.tsv"
+	manifest_begin built-substrate-only
+	manifest_input product_manifest "$product/manifest.tsv"
+	manifest_artifact deviceinfo "$package_dir/deviceinfo"
+	manifest_artifact kernel-cmdline.conf "$package_dir/kernel-cmdline.conf"
+	manifest_artifact modules-initfs "$package_dir/modules-initfs"
+	manifest_artifact modules-initfs-radio "$radio_initfs_module_list"
+	manifest_artifact boot-layout.toml "$package_dir/boot-layout.toml"
+	manifest_artifact firmware-policy.toml "$package_dir/firmware-policy.toml"
+	manifest_artifact s5300-channels.toml "$package_dir/s5300-channels.toml"
+	manifest_artifact s5300-userspace-sources.toml "$package_dir/s5300-userspace-sources.toml"
+	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
+	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
+	manifest_artifact profile.toml "$profile_path"
+	manifest_artifact firmware-manifest.tsv "$rootfs_out/firmware-manifest.tsv"
+	manifest_artifact radio-firmware-manifest.tsv "$rootfs_out/radio-firmware-manifest.tsv"
+	manifest_artifact firmware-radio-route.tsv "$radio_firmware_route"
+	manifest_artifact pmos/channels.cfg "$channels_cfg"
+	manifest_artifact rootfs.tar "$rootfs_artifact"
+	manifest_artifact rootfs.img "$rootfs_image"
+	manifest_finish
+}
+
 build_rootfs() {
 	preflight >/dev/null
 	require_linux_build_host
@@ -1017,31 +1062,18 @@ build_rootfs() {
 	rootfs_image_tmp=''
 	cp "$FERRIX_PIXEL9A_FIRMWARE_DIR/firmware-manifest.tsv" "$rootfs_out/firmware-manifest.tsv"
 	cp "$rootfs_dir/usr/share/ferrix/pixel-9a/radio-firmware-manifest.tsv" "$rootfs_out/radio-firmware-manifest.tsv"
-	manifest_begin built-substrate-only
-	manifest_input product_manifest "$product/manifest.tsv"
-	manifest_artifact deviceinfo "$package_dir/deviceinfo"
-	manifest_artifact kernel-cmdline.conf "$package_dir/kernel-cmdline.conf"
-	manifest_artifact modules-initfs "$package_dir/modules-initfs"
-	manifest_artifact modules-initfs-radio "$radio_initfs_module_list"
-	manifest_artifact boot-layout.toml "$package_dir/boot-layout.toml"
-	manifest_artifact firmware-policy.toml "$package_dir/firmware-policy.toml"
-	manifest_artifact s5300-channels.toml "$package_dir/s5300-channels.toml"
-	manifest_artifact s5300-userspace-sources.toml "$package_dir/s5300-userspace-sources.toml"
-	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
-	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
-	manifest_artifact profile.toml "$profile_path"
-	manifest_artifact firmware-manifest.tsv "$rootfs_out/firmware-manifest.tsv"
-	manifest_artifact radio-firmware-manifest.tsv "$rootfs_out/radio-firmware-manifest.tsv"
-	manifest_artifact firmware-radio-route.tsv "$radio_firmware_route"
-	manifest_artifact pmos/channels.cfg "$channels_cfg"
-	manifest_artifact rootfs.tar "$rootfs_artifact"
-	manifest_artifact rootfs.img "$rootfs_image"
-	manifest_finish
+	write_built_manifest
 	printf '%s\n' 'PASS pixel-9a-rootfs substrate built; bootable=false until split artifacts are validated'
 }
 
+finalize_rootfs_manifest() {
+	validate_inputs >/dev/null
+	write_built_manifest
+	printf '%s\n' 'PASS pixel-9a-rootfs built manifest refreshed from existing artifacts'
+}
+
 usage() {
-	printf '%s\n' 'usage: tools/pixel-9a/rootfs.sh preflight|validate|build' >&2
+	printf '%s\n' 'usage: tools/pixel-9a/rootfs.sh preflight|validate|build|finalize' >&2
 	exit 2
 }
 
@@ -1049,5 +1081,6 @@ case "${1:-}" in
 	preflight) [ "$#" -eq 1 ] || usage; preflight ;;
 	validate) [ "$#" -eq 1 ] || usage; validate_inputs ;;
 	build) [ "$#" -eq 1 ] || usage; build_rootfs ;;
+	finalize) [ "$#" -eq 1 ] || usage; finalize_rootfs_manifest ;;
 	*) usage ;;
 esac

@@ -647,6 +647,35 @@ awk -F "$tab" '$1 == "split_artifact_contract" && $2 == "radio-split-artifact-co
 awk -F "$tab" '$1 == "artifact" && $2 == "rootfs.tar" && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' "$manifest"
 awk -F "$tab" '$1 == "artifact" && $2 == "rootfs.img" && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' "$manifest"
 
+# Read-only status checks must not clobber a completed built handoff. They
+# write status-named diagnostics beside the canonical manifest instead.
+built_manifest_hash=$(hash_file "$manifest")
+PATH="$fake_bin:$PATH" FERRIX_OUT_DIR="$out" FERRIX_PIXEL9A_PINS="$pins_fixture" \
+FERRIX_CACHE_DIR="$work/cache" FERRIX_PIXEL9A_RADIO_KERNEL_DIST="$radio_kernel" \
+FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST="$radio_kernel/build-manifest.tsv" \
+FERRIX_PIXEL9A_PRODUCT_DIR="$product" FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
+FERRIX_PIXEL9A_PROFILE="$product/profile.toml" "$script" preflight >/dev/null
+[ "$(hash_file "$manifest")" = "$built_manifest_hash" ] ||
+	fail 'rootfs preflight clobbered the built manifest'
+awk -F "$tab" '$1 == "status" && $2 == "built-substrate-only" { found=1 } END { exit(found ? 0 : 1) }' "$manifest"
+awk -F "$tab" '$1 == "status" && $2 == "not-built" { found=1 } END { exit(found ? 0 : 1) }' "$manifest.not-built.tsv"
+
+PATH="$fake_bin:$PATH" FERRIX_OUT_DIR="$out" FERRIX_PIXEL9A_PINS="$pins_fixture" \
+FERRIX_CACHE_DIR="$work/cache" FERRIX_PIXEL9A_RADIO_KERNEL_DIST="$radio_kernel" \
+FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST="$radio_kernel/build-manifest.tsv" \
+FERRIX_PIXEL9A_PRODUCT_DIR="$product" FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
+FERRIX_PIXEL9A_PROFILE="$product/profile.toml" "$script" validate >/dev/null
+[ "$(hash_file "$manifest")" = "$built_manifest_hash" ] ||
+	fail 'rootfs validation clobbered the built manifest'
+awk -F "$tab" '$1 == "status" && $2 == "inputs-verified" { found=1 } END { exit(found ? 0 : 1) }' "$manifest.inputs-verified.tsv"
+
+PATH="$fake_bin:$PATH" FERRIX_OUT_DIR="$out" FERRIX_PIXEL9A_PINS="$pins_fixture" \
+FERRIX_CACHE_DIR="$work/cache" FERRIX_PIXEL9A_RADIO_KERNEL_DIST="$radio_kernel" \
+FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST="$radio_kernel/build-manifest.tsv" \
+FERRIX_PIXEL9A_PRODUCT_DIR="$product" FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
+FERRIX_PIXEL9A_PROFILE="$product/profile.toml" "$script" finalize >/dev/null
+awk -F "$tab" '$1 == "status" && $2 == "built-substrate-only" { found=1 } END { exit(found ? 0 : 1) }' "$manifest"
+
 staged="$work/staged"
 mkdir -p "$staged"
 PATH="$fake_bin:$PATH" tar -xf "$rootfs_artifact" -C "$staged"
