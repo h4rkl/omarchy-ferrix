@@ -2,18 +2,31 @@
 
 ## 2026-09-30 (Pixel 9a build, radios, and setup audit)
 
-- The phone was detached for the initial audit. A read-only static preflight
-  refused `requires exactly one Fastboot device and no ADB device`. The owner
-  later attached it and authorized ADB/Fastboot use. macOS detected a Google
-  Pixel 9a USB device (`18d1:4ee0`) with a Fastboot-protocol interface named
-  `fastbootd@0`; this interface name alone does not verify userspace Fastboot.
-  Checked-in `just device-discover` recorded
-  `adb_devices=0 fastboot_devices=0 result=no-device`. IOKit also showed USB
-  device clients from Opera, Brave, and Spotify; whether one holds the
-  interface is unverified. No current exact-target transport identity or
-  physical mutation was established. The
-  recorded GXQ96 / tegu / MP1.0 identity, tested stock recovery, and previous
-  static bundle remain historical evidence, not a current Ferrix boot claim.
+- Later in the attached-device session, `just device-discover` found one
+  `tegu` / `MP1.0` device in userspace Fastboot, unlocked on slot A. The
+  generic matcher initially treated Fastbootd's fixed `MSM USF` variant as a
+  conflicting SKU. It now requires `is-userspace=yes` and complete same-serial
+  Android evidence of `GXQ96`; `just device-match` then returned the exact
+  checked-in target. Bootloader-mode or uncorrelated placeholders still fail.
+  `just pixel-9a-discover` also passed. These are read-only transport and
+  identity observations, not Ferrix boot evidence. The read-only partition
+  inventory now applies the same narrowly scoped placeholder rule and passed
+  on the live Fastbootd transport with `inventory_completeness=partial`.
+- `just pixel-9a-partition-capacity` refused in Fastbootd because
+  `partition-size:vendor_boot_a` was unavailable. The checked-in diagnostic
+  found 12 unavailable static-partition size queries and live zero sizes for
+  inactive logical `vendor_dlkm_b` and `system_dlkm_b` (active A sizes were
+  positive). Both logical A/B classifications were reported, and the snapshot
+  status was `none`. No ten-partition capacity handoff was produced; the split
+  image route still lacks the required inactive allocation. No partition or
+  slot was changed.
+- The phone was detached for the initial audit, then attached with owner
+  authorization for ADB/Fastboot. Initial CLI discovery saw no transport even
+  though macOS detected a Pixel 9a USB interface; a later read-only discovery
+  succeeded as described above. IOKit showed USB clients from Opera, Brave,
+  and Spotify, but no cause for the initial CLI failure was established. The
+  earlier tested stock recovery and static bundle remain separate historical
+  evidence; neither establishes a Ferrix boot.
 - The selected physical build path remains the eight-static-partition
   WWAN/SIT bundle. The ten-partition split path is still blocked by missing
   positive inactive DLKM capacities. The current static candidate remains

@@ -64,3 +64,20 @@ pixel9a_fastboot_sku_gate() {
 		*) return 1 ;;
 	esac
 }
+
+# Read-only Fastbootd inventory/capacity workflows may recognize Google's
+# hardcoded userspace variant only with exact same-serial Android identity.
+# Mutation helpers keep using pixel9a_fastboot_sku_gate and their own gates.
+pixel9a_readonly_fastboot_sku_gate() {
+	readonly_variant=$1
+	readonly_userspace=$2
+	readonly_prefix=$3
+	if [ "$readonly_variant" = 'MSM USF' ]; then
+		[ "$readonly_userspace" = yes ] || return 1
+		pixel9a_sku_evidence=$(pixel9a_adb_correlation_file "$readonly_prefix" || true)
+		[ -n "$pixel9a_sku_evidence" ] || return 1
+		pixel9a_sku_source=adb-correlated-fastbootd-placeholder
+		return 0
+	fi
+	pixel9a_fastboot_sku_gate "$readonly_variant" "$readonly_prefix"
+}

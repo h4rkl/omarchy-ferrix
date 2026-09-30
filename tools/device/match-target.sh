@@ -28,7 +28,7 @@ bad_lines=$(grep -nvE "^[a-z][a-z0-9_]*='([^']|'\\\\'')*'\$" "$identity" | grep 
 [ -z "$bad_lines" ] || die "refusing malformed identity file $identity:
 $bad_lines"
 
-manufacturer="" codename="" hardware_revision="" sku="" model="" transport="" serial_sha256_prefix=""
+manufacturer="" codename="" hardware_revision="" sku="" model="" transport="" serial_sha256_prefix="" fastboot_userspace=""
 # shellcheck disable=SC1090
 . "$identity"
 
@@ -43,11 +43,18 @@ unknown_sku() {
   esac
 }
 
+pixel_fastbootd_placeholder() {
+  [ "$transport" = fastboot ] && [ "$fastboot_userspace" = yes ] &&
+    [ "$codename" = tegu ] && [ "$hardware_revision" = MP1.0 ] &&
+    [ "$sku" = 'MSM USF' ]
+}
+
 # Fastboot may expose no SKU.  If the current serial has a matching, redacted
 # ADB discovery under the output root, recover the exact Android SKU and
-# manufacturer/model identity rather than treating variant=N/A as a different
-# device.  A missing or incomplete correlation remains a refusal.
-if [ "$transport" = fastboot ] && { unknown_sku "$sku" || [ -z "$manufacturer" ]; }; then
+# manufacturer/model identity rather than treating variant=N/A, or the Pixel
+# userspace Fastboot placeholder, as a different device. A missing or
+# incomplete correlation remains a refusal.
+if [ "$transport" = fastboot ] && { unknown_sku "$sku" || pixel_fastbootd_placeholder || [ -z "$manufacturer" ]; }; then
   correlation_root=${FERRIX_OUT_DIR:-"$root/out"}
   if [ -n "$serial_sha256_prefix" ] && [ -d "$correlation_root" ]; then
     while IFS= read -r candidate; do
@@ -66,7 +73,7 @@ if [ "$transport" = fastboot ] && { unknown_sku "$sku" || [ -z "$manufacturer" ]
         continue
       fi
       [ -n "$manufacturer" ] || manufacturer=Google
-      unknown_sku "$sku" && sku=GXQ96
+      if unknown_sku "$sku" || pixel_fastbootd_placeholder; then sku=GXQ96; fi
       correlated_adb="$candidate"
       break
     done <<EOF
@@ -75,9 +82,9 @@ EOF
   fi
 fi
 
-if [ "$transport" = fastboot ] && unknown_sku "$sku"; then
+if [ "$transport" = fastboot ] && { unknown_sku "$sku" || pixel_fastbootd_placeholder; }; then
   printf 'match=none\n'
-  printf 'note=Fastboot SKU/variant is unavailable; an exact same-serial redacted ADB identity is required\n'
+  printf 'note=Fastboot SKU/variant is unavailable or a userspace placeholder; an exact same-serial redacted ADB identity is required\n'
   [ -n "${correlated_adb:-}" ] || exit 10
 fi
 

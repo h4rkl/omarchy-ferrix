@@ -144,19 +144,16 @@ device visible. That branch reads independent A/B `partition-size:*` getvars,
 requires `is-userspace=yes`, and refuses the ordinary bootloader; it does not
 reboot, change slots, or write a partition.
 
-Fastboot on this exact device may report `variant=N/A`. The checked-in
-generic matcher and target workflows accept that value only when the same
-serial hash has a complete redacted ADB discovery proving Google / Pixel 9a /
-`tegu` / `GXQ96` / `MP1.0`; the live Fastboot product, revision, serial, slot,
-slot count, unlock state, and transport are still rechecked independently.
-
-The read-only capacity workflow additionally recognizes `variant=MSM USF`
-only after verifying `is-userspace=yes`, exact product/revision, and the A/B
-slot fields. Google's [userspace Fastboot HAL](https://android.googlesource.com/platform/hardware/google/pixel/+/1c8e4019/fastboot/Fastboot_aidl.cpp)
-hardcodes that placeholder; it does not identify the SKU. The workflow still
-requires complete redacted ADB identity for the same serial hash proving
-`GXQ96`, and records the observed placeholder separately from the verified
-SKU. This capacity-read exception leaves the shared identity gate unchanged.
+Fastboot on this exact device may report `variant=N/A`; Fastbootd may report
+`variant=MSM USF`. Google's [userspace Fastboot HAL](https://android.googlesource.com/platform/hardware/google/pixel/+/1c8e4019/fastboot/Fastboot_aidl.cpp)
+hardcodes `MSM USF`, which does not identify the SKU. The generic matcher and
+read-only capacity workflow accept it only with `is-userspace=yes` and complete
+same-serial redacted ADB evidence proving Google / Pixel 9a / `tegu` /
+`GXQ96` / `MP1.0`. They accept `N/A` only with the same ADB proof. Live
+Fastboot product, revision, serial, slot, slot count, unlock state, and mode
+are still rechecked; observed variant and verified SKU stay distinct. The
+read-only Fastbootd partition inventory uses the same correlation and reports
+`inventory_completeness=partial` because it cannot inspect guest `/proc`.
 The radio-first flash adapter separately correlates this placeholder only
 during a same-process transition from a fully verified ordinary-bootloader
 identity, with all live invariants rechecked and complete same-serial ADB

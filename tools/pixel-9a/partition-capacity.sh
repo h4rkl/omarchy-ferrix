@@ -440,18 +440,12 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 		[ "$userspace" = yes ] ||
 			die 'Fastboot capacity handoff requires fastbootd (is-userspace=yes) so both dynamic A/B logical partitions are independently observable; no reboot was issued'
 	fi
-	if [ "$sku" = 'MSM USF' ]; then
-		[ "$userspace" = yes ] || die 'Fastbootd placeholder is forbidden in bootloader mode'
-		# Google's userspace HAL hardcodes this placeholder in getVariant:
-		# https://android.googlesource.com/platform/hardware/google/pixel/+/1c8e4019/fastboot/Fastboot_aidl.cpp
-		# It is not a SKU. Only this read-only, mode-verified capacity path
-		# may correlate it with complete same-serial Android identity; leave
-		# the shared bootloader/mutation SKU gate unchanged.
-		pixel9a_sku_evidence=$(pixel9a_adb_correlation_file "$(sha256_prefix "$serial")" || true)
-		[ -n "$pixel9a_sku_evidence" ] || die "Fastbootd placeholder variant requires matching redacted ADB identity proving $expected_sku"
-		pixel9a_sku_source=adb-correlated-fastbootd-placeholder
-	else
-		pixel9a_fastboot_sku_gate "$sku" "$(sha256_prefix "$serial")" || die "SKU/variant '$sku' is unavailable and no matching redacted ADB identity proves $expected_sku"
+	# Google's userspace HAL hardcodes MSM USF in getVariant. The shared
+	# read-only gate checks mode and same-serial Android proof, while mutation
+	# workflows retain their separate identity rules.
+	if ! pixel9a_readonly_fastboot_sku_gate "$sku" "$userspace" "$(sha256_prefix "$serial")"; then
+		[ "$sku" != 'MSM USF' ] || die "Fastbootd placeholder variant requires matching redacted ADB identity proving $expected_sku and userspace mode"
+		die "SKU/variant '$sku' is unavailable and no matching redacted ADB identity proves $expected_sku"
 	fi
 
 	emit target_id "$expected_target_id"

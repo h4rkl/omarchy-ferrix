@@ -105,6 +105,32 @@ run_match "$work/id-pixel-fastboot-na.env"
 check "pixel: uncorrelated Fastboot N/A variant is refused" [ "$status" -eq 10 ]
 check "pixel: uncorrelated N/A refusal explains required evidence" grep -q 'same-serial redacted ADB identity' "$work/stdout"
 
+# Google's Pixel userspace Fastboot reports MSM USF instead of the Android
+# model/SKU. Only that mode and a same-serial ADB proof may normalize it.
+cat >"$work/out/pixel-9a/discovery-adb.txt" <<'ADB_EVIDENCE'
+transport=adb
+serial_sha256_prefix=0123456789ab
+ro.product.manufacturer=Google
+ro.product.model=Pixel 9a
+ro.product.device=tegu
+ro.boot.hardware.revision=MP1.0
+ro.boot.hardware.sku=GXQ96
+result=ok
+ADB_EVIDENCE
+write_identity "$work/id-pixel-fastbootd.env" Google "" tegu 'MSM USF' MP1.0 fastboot
+printf "fastboot_userspace='yes'\n" >> "$work/id-pixel-fastbootd.env"
+run_match "$work/id-pixel-fastbootd.env"
+check "pixel: Fastbootd placeholder uses same-serial ADB correlation" [ "$status" -eq 0 ]
+check "pixel: Fastbootd correlation reports verified GXQ96" grep -q '^identity_sku=GXQ96$' "$work/stdout"
+printf "fastboot_userspace='no'\n" >> "$work/id-pixel-fastbootd.env"
+run_match "$work/id-pixel-fastbootd.env"
+check "pixel: bootloader-mode MSM USF is refused" [ "$status" -eq 10 ]
+rm -f "$work/out/pixel-9a/discovery-adb.txt"
+write_identity "$work/id-pixel-fastbootd-uncorrelated.env" Google "" tegu 'MSM USF' MP1.0 fastboot
+printf "fastboot_userspace='yes'\n" >> "$work/id-pixel-fastbootd-uncorrelated.env"
+run_match "$work/id-pixel-fastbootd-uncorrelated.env"
+check "pixel: uncorrelated Fastbootd placeholder is refused" [ "$status" -eq 10 ]
+
 # Fastboot identity without manufacturer.
 write_identity "$work/id-fb.env" "" "" synthetic-op SKU7 EVT2 fastboot
 run_match "$work/id-fb.env"

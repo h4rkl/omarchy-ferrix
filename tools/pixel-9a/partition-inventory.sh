@@ -194,9 +194,10 @@ revision=$(fastboot_getvar hw-revision)
 sku=$(fastboot_getvar variant)
 slot=$(fastboot_getvar current-slot)
 slot_count=$(fastboot_getvar slot-count)
+userspace=$(fastboot_getvar is-userspace)
 [ "$product" = "$expected_product" ] || die "product mismatch: $product"
 [ "$revision" = "$expected_revision" ] || die "hardware revision mismatch: $revision"
-pixel9a_fastboot_sku_gate "$sku" "$(sha256_prefix "$serial")" || die "SKU/variant '$sku' is unavailable and no matching redacted ADB identity proves $expected_sku"
+pixel9a_readonly_fastboot_sku_gate "$sku" "$userspace" "$(sha256_prefix "$serial")" || die "SKU/variant '$sku' is unavailable or unverified by same-serial Android identity"
 case "$slot" in a|b|_a|_b) ;; *) die "unexpected current slot: $slot" ;; esac
 [ "$slot_count" = 2 ] || die "unexpected slot count: $slot_count"
 emit product "$product"
@@ -208,7 +209,8 @@ emit sku_evidence "$pixel9a_sku_evidence"
 emit current_slot "$slot"
 emit slot_count "$slot_count"
 emit unlocked "$(fastboot_getvar unlocked)"
-emit is_userspace "$(fastboot_getvar is-userspace)"
+emit is_userspace "$userspace"
 emit all_read_only "$(fastboot -s "$serial" getvar all 2>&1)"
+emit inventory_completeness partial
 emit result ok
 printf 'transcript=%s\n' "$transcript" >&2

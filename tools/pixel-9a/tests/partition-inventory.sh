@@ -81,11 +81,11 @@ case "$1" in
     case "$4" in
       product) value=tegu ;;
       hw-revision) value=MP1.0 ;;
-      variant) value=GXQ96 ;;
+      variant) value=${STUB_FB_VARIANT:-GXQ96} ;;
       current-slot) value=a ;;
       slot-count) value=2 ;;
       unlocked) value=yes ;;
-      is-userspace) value=no ;;
+      is-userspace) value=${STUB_FB_USERSPACE:-no} ;;
       all) value='(bootloader) product: tegu' ;;
       *) exit 99 ;;
     esac
@@ -154,5 +154,38 @@ STUB_ADB_DEVICES='SERIAL-A device usb:1' STUB_FASTBOOT_DEVICES='' STUB_DENY_PROC
 grep -q '^inventory_completeness=partial$' "$work/partial.out"
 grep -q '^block_devices=unavailable:permission-denied-or-empty$' "$work/partial.out"
 grep -q '^cmdline=unavailable:permission-denied-or-empty$' "$work/partial.out"
+
+# The observed Pixel Fastbootd variant is a fixed placeholder, never proof of
+# the SKU. Accept it only with userspace mode and complete same-serial ADB
+# identity; keep Fastboot inventory explicitly partial.
+if command -v shasum >/dev/null 2>&1; then
+  prefix=$(printf %s SERIAL-A | shasum -a 256 | cut -c1-12)
+else
+  prefix=$(printf %s SERIAL-A | sha256sum | cut -c1-12)
+fi
+cat > "$work/out/pixel-9a/discovery-adb.txt" <<EOF
+transport=adb
+serial_sha256_prefix=$prefix
+ro.product.manufacturer=Google
+ro.product.model=Pixel 9a
+ro.product.device=tegu
+ro.boot.hardware.revision=MP1.0
+ro.boot.hardware.sku=GXQ96
+result=ok
+EOF
+STUB_ADB_DEVICES='' STUB_FASTBOOT_DEVICES='SERIAL-A fastboot' \
+  STUB_FB_VARIANT='MSM USF' STUB_FB_USERSPACE=yes \
+  "$workflow" >"$work/fastbootd.out" 2>"$work/fastbootd.err"
+grep -q '^sku=GXQ96$' "$work/fastbootd.out"
+grep -q '^variant=MSM USF$' "$work/fastbootd.out"
+grep -q '^sku_source=adb-correlated-fastbootd-placeholder$' "$work/fastbootd.out"
+grep -q '^inventory_completeness=partial$' "$work/fastbootd.out"
+STUB_ADB_DEVICES='' STUB_FASTBOOT_DEVICES='SERIAL-A fastboot' \
+  STUB_FB_VARIANT='MSM USF' STUB_FB_USERSPACE=no \
+  refuse fastboot-placeholder-in-bootloader 'unavailable or unverified'
+rm -f "$work/out/pixel-9a/discovery-adb.txt"
+STUB_ADB_DEVICES='' STUB_FASTBOOT_DEVICES='SERIAL-A fastboot' \
+  STUB_FB_VARIANT='MSM USF' STUB_FB_USERSPACE=yes \
+  refuse fastboot-placeholder-without-adb 'unavailable or unverified'
 
 printf '%s\n' 'pixel-9a partition inventory tests passed'

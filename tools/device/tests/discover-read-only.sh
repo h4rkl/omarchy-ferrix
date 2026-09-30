@@ -206,6 +206,7 @@ check "identity: Fastboot transport recorded" grep -q "^transport='fastboot'\$" 
 check "identity: Fastboot codename from product" grep -q "^codename='synthetic-op'\$" "$fastboot_identity"
 check "identity: Fastboot locked state normalized" grep -q "^bootloader_state='locked'\$" "$fastboot_identity"
 check "identity: Fastboot manufacturer is empty without operator hint" grep -q "^manufacturer=''\$" "$fastboot_identity"
+check "identity: Fastboot userspace mode is recorded" grep -q "^fastboot_userspace='no'\$" "$fastboot_identity"
 check "dynamic: Fastboot identity variables were queried" grep -q 'getvar.*hw-revision' "$calls"
 
 bad_calls=$(grep -vE '^adb\tdevices\t-l\t$|^adb\t-s\t[^[:space:]]+\tshell\tgetprop\t(ro|sys)\.[^[:space:]]+\t$|^fastboot\tdevices\t-l\t$|^fastboot\t-s\t[^[:space:]]+\tgetvar\t(product|variant|hw-revision|current-slot|slot-count|unlocked|secure|is-userspace|version-bootloader|version-baseband|serialno)\t$' "$calls" || true)

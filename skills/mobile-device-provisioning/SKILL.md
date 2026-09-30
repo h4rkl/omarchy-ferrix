@@ -295,7 +295,9 @@ All `tools/device/` scripts honour `FERRIX_OUT_DIR`, `FERRIX_BOARDS_DIR`, and
 2. `just device-match` (`tools/device/match-target.sh [identity.env]`):
    `match=exact target_id=... target_dir=...` (exit 0) or `match=none`
    (exit 10) with `partial=` rows and, for a same-codename different-revision
-   device, the note `do not reuse target evidence`.
+   device, the note `do not reuse target evidence`. On Pixel 9a Fastbootd,
+   `variant=MSM USF` needs `is-userspace=yes` and complete same-serial ADB
+   proof of `GXQ96`; the placeholder alone cannot match the target.
 3. Decide:
    - `match=exact` -> continue with that target's `tools/<target>/` workflows.
      For Pixel 9a also run `just pixel-9a-discover` so the exact-target
