@@ -29,10 +29,12 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
 3. On `match=none`: `just device-propose` `[ro]`, then STOP for owner approval.
 4. `just pixel-9a-discover` `[ro]` (exact-target transcript for a matched Pixel 9a).
 5. For development, `just pixel-9a-enter-fastboot --preflight` `[ro]` then
-   `--confirm-enter` `[confirm]` may soft-reboot the exact Android device into
-   ordinary bootloader Fastboot through the checked-in target workflow. Hard
-   button entry is only a fallback when ADB is unavailable. This workflow never
-   enters Fastbootd and never changes storage, slots, or bootloader state.
+   `--confirm-enter` `[confirm]` may soft-reboot the exact Android or Fastbootd
+   device into ordinary bootloader Fastboot through the checked-in target
+   workflow. The Fastbootd path requires complete same-serial Android identity
+   evidence and verifies bootloader mode after reboot. Hard-button entry is
+   a fallback when neither checked transport is available. This workflow
+   never enters Fastbootd and never changes storage, slots, or bootloader state.
 6. `just pixel-9a-recovery-download` `[ro]` (or `device-recovery-download <id>` `[opt-in]`); `just pixel-9a-factory-inspect` `[ro]`.
 7. Human makes and verifies a backup outside Git.
 8. `just pixel-9a-unlock-bootloader --preflight` `[ro]`; `--confirm-unlock` `[confirm]` (wipes data).
@@ -221,8 +223,8 @@ Offline test recipes that must pass before any hardware session:
 3. Cable and mode: data-capable USB cable; USB debugging on, screen unlocked,
    RSA prompt accepted, or the phone in Fastboot. When ADB is available, the
    LLM may use `just pixel-9a-enter-fastboot --confirm-enter` after its exact
-   target preflight; hard-button Fastboot entry is not required for normal
-   development. One phone attached at a time.
+   target preflight; the same checked-in workflow can exit Fastbootd when a
+   same-serial Android identity transcript exists. One phone attached at a time.
 4. Ask the human for: owner authorization for this device, whether a verified
    backup exists, and the intended end state (stock recovery or Ferrix).
 
@@ -234,8 +236,9 @@ Apply these rules for the whole session. They have the force of `AGENTS.md`.
    erases, formats, flashes, sideloads, boots an image, or changes slots.
    The sole development transport exception is the checked-in
    `tools/pixel-9a/enter-fastboot.sh --confirm-enter` workflow, which may
-   issue exactly `adb reboot bootloader` after exact-target checks and its
-   typed confirmation. The separate checked-in
+   issue only `adb reboot bootloader` from checked Android or `fastboot reboot
+   bootloader` from checked Fastbootd after same-serial Android correlation
+   and its typed confirmation. The separate checked-in
    `tools/pixel-9a/boot-inactive.sh confirm-boot` workflow may select an
    already-flashed inactive slot and reboot it after its own evidence, identity,
    recovery, and confirmation gates; that exception never authorizes a raw
@@ -996,7 +999,7 @@ target subfolders listed in `.gitignore`. Run `git status` and read the diff.
 | Wrong `is-userspace` for the step | Let the workflow hop; never `fastboot reboot ...` by hand |
 | Flash refuses without temp-boot evidence | Run the matching route's `pixel-9a-flash-boot-temp` or `pixel-9a-flash-radio-boot-temp` first; never use `--skip-temp-boot-gate` on your own |
 | Device stays in Fastboot after unlock | Expected; next step is stock restore or a gated boot, decided by owner |
-| Development needs ordinary bootloader Fastboot while Android is running | Use `just pixel-9a-enter-fastboot --preflight`, then `--confirm-enter`; do not require hard buttons or type raw `adb reboot bootloader` |
+| Development needs ordinary bootloader Fastboot from Android or Fastbootd | Use `just pixel-9a-enter-fastboot --preflight`, then `--confirm-enter`; do not type raw reboot commands |
 | Temp boot hangs or loops | Power-cycle per owner instruction; restore stock via Phase 4; record as failed boot evidence |
 | Radio-first flash refuses a canonical manifest | Keep the route separation; feed only `images/tegu-wwan-split/boot-manifest.tsv` to `pixel-9a-flash-radio-*` and only the Google Kleaf manifest to `pixel-9a-flash-*` |
 | Radio-first flash refuses rootfs inventory | Stop; obtain a complete redacted exact-target ADB partition inventory and do not invent a `userdata` mapping |

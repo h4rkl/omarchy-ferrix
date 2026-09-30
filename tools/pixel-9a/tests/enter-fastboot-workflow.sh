@@ -11,6 +11,7 @@ if grep -vE '^[[:space:]]*#' "$script" | grep -nE '^[[:space:]]*(adb|fastboot) .
 	exit 1
 fi
 grep -F -- 'adb -s "$adb_serial" reboot bootloader' "$script" >/dev/null
+grep -F -- 'fastboot -s "$fastboot_serial" reboot bootloader' "$script" >/dev/null
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/pixel-9a-enter-fastboot.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
@@ -62,17 +63,31 @@ printf '\n' >>"$STUB_CALLS"
 case "$1" in
 devices)
 	{ [ -f "$STUB_STATE/rebooted" ] || [ "${STUB_START_FASTBOOT:-}" = 1 ]; } && printf '%s fastboot usb:1\n' "$STUB_SERIAL"
+	[ "${STUB_EXTRA_FASTBOOT:-}" = 1 ] && printf 'SYN-OTHER fastboot usb:2\n'
 	;;
 -s)
 	[ "$2" = "$STUB_SERIAL" ] || exit 99
+	if [ "$3" = reboot ]; then
+		[ "$4" = bootloader ] || exit 99
+		: >"$STUB_STATE/rebooted"
+		exit 0
+	fi
 	[ "$3" = getvar ] || exit 99
 	case "$4" in
 	product) value=tegu ;;
-	variant) value=${STUB_FASTBOOT_VARIANT:-GXQ96} ;;
+	variant)
+		if [ "${STUB_START_FASTBOOTD:-}" = 1 ]; then
+			if [ -f "$STUB_STATE/rebooted" ]; then value=N/A; else value='MSM USF'; fi
+		else
+			value=${STUB_FASTBOOT_VARIANT:-GXQ96}
+		fi
+		;;
 	hw-revision) value=MP1.0 ;;
 	current-slot) value=a ;;
 	slot-count) value=2 ;;
-	is-userspace) value=no ;;
+	is-userspace)
+		if [ "${STUB_START_FASTBOOTD:-}" = 1 ] && [ ! -f "$STUB_STATE/rebooted" ]; then value=yes; else value=no; fi
+		;;
 	*) exit 99 ;;
 	esac
 	printf '(bootloader) %s: %s\n' "$4" "$value" >&2
@@ -122,5 +137,53 @@ run_case already --confirm-enter
 grep -q '^result=already-in-fastboot$' "$work/already.out"
 ! grep -q 'reboot' "$calls"
 unset STUB_START_FASTBOOT
+
+export STUB_START_FASTBOOT=1 STUB_START_FASTBOOTD=1 FERRIX_OUT_DIR="$work/out"
+mkdir -p "$FERRIX_OUT_DIR"
+: >"$work/fastbootd-missing.in"
+run_case fastbootd-missing --preflight
+[ "$status" -eq 1 ]
+grep -q 'same-serial Android identity' "$work/fastbootd-missing.err"
+! grep -q 'reboot' "$calls"
+
+prefix=$(printf '%s' "$serial" | shasum -a 256 | cut -c1-12)
+cat >"$FERRIX_OUT_DIR/discovery-synthetic.txt" <<EOF
+transport=adb
+result=ok
+serial_sha256_prefix=$prefix
+ro.product.manufacturer=Google
+ro.product.model=Pixel 9a
+ro.product.device=tegu
+ro.boot.hardware.revision=MP1.0
+ro.boot.hardware.sku=GXQ96
+EOF
+: >"$work/fastbootd-preflight.in"
+run_case fastbootd-preflight --preflight
+[ "$status" -eq 0 ] || { cat "$work/fastbootd-preflight.err" >&2; exit 1; }
+grep -q '^transport=fastbootd$' "$work/fastbootd-preflight.out"
+grep -q '^sku_gate=adb-correlated-fastbootd-placeholder$' "$work/fastbootd-preflight.out"
+! grep -q 'reboot' "$calls"
+
+export STUB_EXTRA_FASTBOOT=1
+: >"$work/fastbootd-ambiguous.in"
+run_case fastbootd-ambiguous --preflight
+[ "$status" -eq 1 ]
+grep -q 'expected exactly one ADB or Fastboot device' "$work/fastbootd-ambiguous.err"
+! grep -q 'reboot' "$calls"
+unset STUB_EXTRA_FASTBOOT
+
+printf '%s\n' 'wrong phrase' >"$work/fastbootd-reject.in"
+run_case fastbootd-reject --confirm-enter
+[ "$status" -eq 1 ]
+! grep -q 'reboot' "$calls"
+
+printf '%s\n' 'CONFIRM PIXEL 9A EXIT FASTBOOTD' >"$work/fastbootd-enter.in"
+run_case fastbootd-enter --confirm-enter
+[ "$status" -eq 0 ]
+grep -q '^result=entered-fastboot$' "$work/fastbootd-enter.out"
+grep -q '^transport=fastboot$' "$work/fastbootd-enter.out"
+grep -q '^fastboot\t-s\tSYN-FASTBOOT-001\treboot\tbootloader\t$' "$calls"
+[ "$(grep -c 'reboot' "$calls")" -eq 1 ]
+unset STUB_START_FASTBOOT STUB_START_FASTBOOTD FERRIX_OUT_DIR
 
 printf '%s\n' '{"event":"pixel-9a-enter-fastboot-test","status":"passed"}'

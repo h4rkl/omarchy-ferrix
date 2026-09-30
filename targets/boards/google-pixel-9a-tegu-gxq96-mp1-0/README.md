@@ -282,22 +282,24 @@ stock restore is recorded above.
 
 ## Development Fastboot entry
 
-When stock Android is running and ADB is authorized, the LLM may place the
-exact target into ordinary bootloader Fastboot through the checked-in,
-non-destructive workflow:
+When stock Android ADB or Fastbootd is available, the LLM may place the exact
+target into ordinary bootloader Fastboot through the checked-in workflow:
 
 ```sh
 just pixel-9a-enter-fastboot --preflight
 just pixel-9a-enter-fastboot --confirm-enter
 ```
 
-The workflow verifies the exact Google Pixel 9a / `tegu` / `GXQ96` / `MP1.0`
-identity before and after issuing `adb reboot bootloader`, requires the typed
-phrase `CONFIRM PIXEL 9A ENTER FASTBOOT`, and never changes storage, slots,
-the bootloader, or user data. Hard-button entry is only a fallback when ADB is
-unavailable. This device may report `variant=N/A` from bootloader Fastboot;
-the dev workflow treats that field as unavailable only after the exact ADB
-identity was checked before reboot and product, hardware revision, serial,
+The Android branch verifies the exact Google Pixel 9a / `tegu` / `GXQ96` /
+`MP1.0` identity before `adb reboot bootloader` and requires the typed phrase
+`CONFIRM PIXEL 9A ENTER FASTBOOT`. The Fastbootd branch requires complete
+same-serial Android identity evidence, checks live product/revision/slot and
+`is-userspace=yes`, and requires `CONFIRM PIXEL 9A EXIT FASTBOOTD` before
+`fastboot reboot bootloader`. Both branches verify the resulting serial,
+bootloader mode, and slot, and never change storage, slots, bootloader state,
+or user data. This device may report `variant=N/A` from bootloader Fastboot;
+the dev workflow treats that field as unavailable only after live or recorded
+same-serial ADB identity was checked and product, hardware revision, serial,
 slot count, and `is-userspace=no` are rechecked afterward. This is ordinary
 bootloader Fastboot; the separate capacity workflow still refuses to enter
 Fastbootd on its own.

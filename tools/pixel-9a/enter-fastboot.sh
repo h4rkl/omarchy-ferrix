@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-# Non-destructive, target-scoped Android -> bootloader Fastboot transition for
-# development. This is the only checked-in workflow allowed to issue the
-# transport-changing adb reboot bootloader for a normal dev session. It never
-# enters Fastbootd, unlocks, flashes, boots an image, changes slots, or writes
-# storage.
+# Non-destructive, target-scoped Android/Fastbootd -> bootloader Fastboot
+# transition for development. It never enters Fastbootd, unlocks, flashes,
+# boots an image, changes slots, or writes storage.
 
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+. "$root/tools/pixel-9a/adb-correlation.sh"
 expected_product=tegu
 expected_model='Pixel 9a'
 expected_manufacturer=Google
@@ -25,7 +25,7 @@ usage:
   tools/pixel-9a/enter-fastboot.sh --confirm-enter
 
 --preflight       read-only exact-target transport and identity checks
---confirm-enter   require one typed confirmation, then issue adb reboot bootloader
+--confirm-enter   require one typed confirmation, then reboot to bootloader Fastboot
 EOF
 	exit 2
 }
@@ -41,6 +41,14 @@ need() {
 
 count_rows() {
 	printf '%s\n' "$1" | awk 'NF { count++ } END { print count + 0 }'
+}
+
+sha256_prefix() {
+	if command -v shasum >/dev/null 2>&1; then
+		printf '%s' "$1" | shasum -a 256 | cut -c1-12
+	else
+		printf '%s' "$1" | sha256sum | cut -c1-12
+	fi
 }
 
 adb_prop() {
@@ -103,10 +111,6 @@ validate_fastboot_identity() {
 	[ -n "$fastboot_serial" ] || die 'Fastboot serial is empty'
 	[ "$(fastboot_getvar product)" = "$expected_product" ] || die 'Fastboot product is not tegu'
 	fastboot_variant=$(fastboot_getvar variant)
-	case "$fastboot_variant" in
-		"$expected_sku"|N/A|'') ;;
-		*) die "Fastboot SKU/variant is '$fastboot_variant', not $expected_sku or unavailable" ;;
-	esac
 	[ "$(fastboot_getvar hw-revision)" = "$expected_revision" ] || die 'Fastboot hardware revision is not MP1.0'
 	current_slot=$(fastboot_getvar current-slot)
 	case "$current_slot" in
@@ -116,13 +120,35 @@ validate_fastboot_identity() {
 	slot_count=$(fastboot_getvar slot-count)
 	[ "$slot_count" = 2 ] || die "Fastboot slot-count is '$slot_count', not 2"
 	is_userspace=$(fastboot_getvar is-userspace)
-	[ "$is_userspace" = no ] || die "device is in Fastbootd (is-userspace=$is_userspace), not bootloader Fastboot"
-	printf 'transport=fastboot\n'
+	case "$is_userspace" in
+		no)
+			case "$fastboot_variant" in
+				"$expected_sku"|N/A|'') ;;
+				*) die "Fastboot SKU/variant is '$fastboot_variant', not $expected_sku or unavailable" ;;
+			esac
+			current_transport=fastboot
+			;;
+		yes)
+			serial_prefix=$(sha256_prefix "$fastboot_serial")
+			adb_evidence=$(pixel9a_adb_correlation_file "$serial_prefix" || true)
+			[ -n "$adb_evidence" ] || die 'Fastbootd requires complete same-serial Android identity'
+			pixel9a_readonly_fastboot_sku_gate "$fastboot_variant" yes "$serial_prefix" ||
+				die 'Fastbootd SKU is not verified by same-serial Android identity'
+			current_transport=fastbootd
+			;;
+		*) die "unexpected is-userspace=$is_userspace" ;;
+	esac
+	printf 'transport=%s\n' "$current_transport"
 	printf 'serial=%s\n' "$fastboot_serial"
 	printf 'product=%s\n' "$expected_product"
 	printf 'variant=%s\n' "${fastboot_variant:-N/A}"
 	printf 'target_sku=%s\n' "$expected_sku"
-	[ "${fastboot_variant:-N/A}" = "$expected_sku" ] || printf 'sku_gate=adb-correlated-or-fastboot-unavailable\n'
+	if [ "$current_transport" = fastbootd ]; then
+		printf 'sku_gate=%s\n' "$pixel9a_sku_source"
+		printf 'identity_evidence=%s\n' "$adb_evidence"
+	elif [ "${fastboot_variant:-N/A}" != "$expected_sku" ]; then
+		printf 'sku_gate=adb-correlated-or-fastboot-unavailable\n'
+	fi
 	printf 'hardware_revision=%s\n' "$expected_revision"
 	printf 'current_slot=%s\n' "$current_slot"
 	printf 'slot_count=%s\n' "$slot_count"
@@ -145,7 +171,7 @@ preflight() {
 		printf 'preflight=passed\n'
 		return 0
 	fi
-	die "expected exactly one ADB device or one bootloader Fastboot device; adb=$adb_count fastboot=$fastboot_count"
+		die "expected exactly one ADB or Fastboot device; adb=$adb_count fastboot=$fastboot_count"
 }
 
 recheck_adb() {
@@ -158,14 +184,15 @@ recheck_adb() {
 }
 
 wait_for_fastboot() {
+	expected_serial=$1
 	attempt=0
 	while [ "$attempt" -lt "$wait_seconds" ]; do
 		read_transports
 		if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 			candidate=$(printf '%s\n' "$fastboot_rows" | awk '{ print $1; exit }')
-			[ "$candidate" = "$adb_serial" ] || die 'a different Fastboot serial appeared after reboot'
+			[ "$candidate" = "$expected_serial" ] || die 'a different Fastboot serial appeared after reboot'
 			fastboot_serial=$candidate
-			return 0
+			[ "$(fastboot_getvar is-userspace)" = no ] && return 0
 		fi
 		[ "$adb_count" -le 1 ] && [ "$fastboot_count" -le 1 ] ||
 			die "ambiguous transports while waiting: adb=$adb_count fastboot=$fastboot_count"
@@ -176,8 +203,13 @@ wait_for_fastboot() {
 }
 
 confirm_enter() {
-	phrase='CONFIRM PIXEL 9A ENTER FASTBOOT'
-	printf '%s\n' 'The next command reboots the exact Pixel 9a from Android into bootloader Fastboot.' >&2
+	if [ "$current_transport" = fastbootd ]; then
+		phrase='CONFIRM PIXEL 9A EXIT FASTBOOTD'
+		printf '%s\n' 'The next command reboots the exact Pixel 9a from Fastbootd into bootloader Fastboot.' >&2
+	else
+		phrase='CONFIRM PIXEL 9A ENTER FASTBOOT'
+		printf '%s\n' 'The next command reboots the exact Pixel 9a from Android into bootloader Fastboot.' >&2
+	fi
 	printf '%s\n' 'No partition, slot, bootloader, or user data is changed.' >&2
 	printf 'Type exactly: %s\n> ' "$phrase" >&2
 	IFS= read -r confirmation || die 'confirmation was not provided; no reboot performed'
@@ -208,10 +240,28 @@ if [ "$current_transport" = fastboot ]; then
 fi
 
 confirm_enter
+if [ "$current_transport" = fastbootd ]; then
+	expected_serial=$fastboot_serial
+	expected_slot=$current_slot
+	read_transports
+	[ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ] || die 'transport changed before Fastbootd exit'
+	[ "$(printf '%s\n' "$fastboot_rows" | awk '{ print $1; exit }')" = "$expected_serial" ] || die 'Fastboot serial changed before reboot'
+	validate_fastboot_identity >/dev/null
+	[ "$current_transport" = fastbootd ] && [ "$current_slot" = "$expected_slot" ] || die 'Fastbootd identity, mode, or slot changed before reboot'
+	printf 'mutation=fastboot reboot bootloader\n'
+	fastboot -s "$fastboot_serial" reboot bootloader
+	wait_for_fastboot "$expected_serial"
+	read_transports
+	validate_fastboot_identity
+	[ "$current_transport" = fastboot ] && [ "$current_slot" = "$expected_slot" ] || die 'bootloader mode or slot changed after reboot'
+	pixel9a_fastboot_sku_gate "$fastboot_variant" "$(sha256_prefix "$fastboot_serial")" || die 'bootloader SKU is not verified by same-serial Android identity'
+	printf 'result=entered-fastboot\n'
+	exit 0
+fi
 recheck_adb
 printf 'mutation=adb reboot bootloader\n'
 adb -s "$adb_serial" reboot bootloader
-wait_for_fastboot
+wait_for_fastboot "$adb_serial"
 read_transports
 validate_fastboot_identity
 printf 'result=entered-fastboot\n'
