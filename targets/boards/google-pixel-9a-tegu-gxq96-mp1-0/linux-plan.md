@@ -224,8 +224,11 @@ MP overlay cannot be transplanted as a standalone one-file patch.
 This diagnostic does not prove the bootloader applied that overlay during the
 temporary probe. Both composers now select only a future source-built
 `exynos/google/zumapro-tegu-mp.dtbo` and require an exact MP ID/revision DTBO
-table. The current source cannot meet that gate. Port and test the matching
-overlay against the source-built base DTB before any new image composition;
+table. The current source cannot meet that gate. Its Kbuild expects an
+`exynos/google/zumapro-tegu-mp.dtso` input plus a Makefile target. A new
+kernel build must also apply the compiled overlay to its base DTB with
+Kbuild's `fdtoverlay` before producing a manifest. Port and review the
+matching overlay against the source-built base DTB before image composition;
 never copy the stock binary into the Ferrix route.
 For the eight physical boot partitions, the static adapter uses an explicit
 `--slot b flash <base>` operation and checks that Fastboot reports writing

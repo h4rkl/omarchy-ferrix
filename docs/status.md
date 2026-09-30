@@ -16,7 +16,12 @@
   in the final DTBO table. They refuse to compose a new bundle until that
   source and base-tree compatibility are supplied. The kernel build now
   refuses the current source before starting Kbuild because the MP overlay
-  source and its Kbuild selection are absent.
+  source and its Kbuild selection are absent. The native builder wrapper
+  produced that exact refusal at commit `402d14f` without creating output.
+  Future kernel manifests will inventory only the exact MP overlay instead
+  of copying every unrelated ARM board overlay, and the kernel workflow will
+  require the compiled overlay to apply to its source-built base DTB before
+  emitting a manifest. This offline check cannot establish hardware boot.
 - The verified stock comparison showed a version-4 boot image with fixed
   4 KiB pages, but both vendor boot containers use 2 KiB pages. Stock
   `vendor_boot` has no embedded DTB; `vendor_kernel_boot` carries the DTBs.

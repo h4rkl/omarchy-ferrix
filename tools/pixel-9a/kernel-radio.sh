@@ -356,7 +356,7 @@ verify_source() {
 
 verify_target_overlay_source() {
 	overlay_dir="$source_root/arch/arm64/boot/dts/exynos/google"
-	[ -f "$overlay_dir/zumapro-tegu-mp.dts" ] ||
+	[ -f "$overlay_dir/zumapro-tegu-mp.dtso" ] ||
 		die 'pinned kernel source has no tegu MP1.0 overlay source; refusing an unusable build'
 	[ -f "$overlay_dir/Makefile" ] && grep -Fq 'zumapro-tegu-mp.dtbo' "$overlay_dir/Makefile" ||
 		die 'pinned kernel Kbuild does not select the tegu MP1.0 overlay'
@@ -430,42 +430,41 @@ EOF
 }
 
 write_dtbo_source_set() {
-	# Kbuild produces the board DTBs/DTBOs, but it does not produce the
-	# Android DTBO container. Preserve the source-built inputs separately so
-	# a later mkdtboimg step can consume exactly these bytes without silently
-	# reusing a factory overlay.
+	# Kbuild produces the board overlay, but not the Android DTBO container.
+	# Preserve only the exact MP1.0 source-built input for image composition.
 	dtb_source_root="$build_out/arch/arm64/boot/dts"
 	[ -d "$dtb_source_root" ] || die "radio kernel DTB output directory is missing: $dtb_source_root"
-	[ -s "$dtb_source_root/exynos/google/zumapro-tegu-mp.dtbo" ] ||
+	relative=exynos/google/zumapro-tegu-mp.dtbo
+	source_file="$dtb_source_root/$relative"
+	[ -s "$source_file" ] ||
 		die 'radio kernel build produced no tegu MP1.0 DTBO overlay'
-	source_count=$(find "$dtb_source_root" -type f \( -name '*.dtb' -o -name '*.dtbo' \) -print | wc -l | tr -d '[:space:]')
-	[ "$source_count" -gt 0 ] || die 'radio kernel build produced no source-built DTB/DTBO inputs'
-	dtbo_count=$(find "$dtb_source_root" -type f -name '*.dtbo' -print | wc -l | tr -d '[:space:]')
-	[ "$dtbo_count" -gt 0 ] || die 'radio kernel build produced no source-built DTBO overlay inputs'
 	source_dir="$dist/split-inputs/dtbo-source-set"
 	source_manifest="$dist/split-inputs/dtbo-source-set.tsv"
-	mkdir -p "$source_dir"
-	source_list="$dist/split-inputs/.dtbo-source-list.$$"
-	find "$dtb_source_root" -type f \( -name '*.dtb' -o -name '*.dtbo' \) -print | LC_ALL=C sort >"$source_list"
+	destination="$source_dir/$relative"
+	mkdir -p "$(dirname -- "$destination")"
+	cp "$source_file" "$destination"
 	tmp="$source_manifest.tmp.$$"
-	trap 'rm -f "$tmp" "$source_list"' EXIT HUP INT TERM
+	trap 'rm -f "$tmp"' EXIT HUP INT TERM
 	{
 		printf 'schema_version\t1\n'
 		printf 'source_root\tarch/arm64/boot/dts\n'
-		while IFS= read -r source_file; do
-			relative=${source_file#"$dtb_source_root"/}
-			case "$relative" in
-				''|/*|*..*|*' '*) die "unsafe source-built DTB path: $relative" ;;
-			esac
-			destination="$source_dir/$relative"
-			mkdir -p "$(dirname -- "$destination")"
-			cp "$source_file" "$destination"
-			printf 'source\t%s\t%s\t%s\n' "$relative" "$(file_size "$destination")" "$(sha256_of "$destination")"
-		done <"$source_list"
+		printf 'source\t%s\t%s\t%s\n' "$relative" "$(file_size "$destination")" "$(sha256_of "$destination")"
 	} >"$tmp"
 	mv "$tmp" "$source_manifest"
-	rm -f "$source_list"
 	trap - EXIT HUP INT TERM
+}
+
+verify_dtbo_application() {
+	fdt_tool="$build_out/scripts/dtc/fdtoverlay"
+	[ -x "$fdt_tool" ] || die 'Kbuild did not produce fdtoverlay for base/MP overlay validation'
+	overlay="$dist/split-inputs/dtbo-source-set/exynos/google/zumapro-tegu-mp.dtbo"
+	merged="$dist/split-inputs/tegu-mp-applied.dtb"
+	log="$dist/split-inputs/tegu-mp-apply.log"
+	if ! "$fdt_tool" -i "$dist/dtb.img" -o "$merged" "$overlay" >"$log" 2>&1; then
+		cat "$log" >&2
+		die 'source-built tegu MP1.0 overlay cannot be applied to source-built base DTB'
+	fi
+	[ -s "$merged" ] || die 'tegu MP1.0 overlay application produced an empty DTB'
 }
 
 install_kernel_modules() {
@@ -603,6 +602,7 @@ build_kernel() {
 	cp "$image" "$dist/Image"
 	cp "$dtb" "$dist/dtb.img"
 	write_dtbo_source_set
+	verify_dtbo_application
 	install_kernel_modules
 	write_partition_size_status
 	write_manifest
