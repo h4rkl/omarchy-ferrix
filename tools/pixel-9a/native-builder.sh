@@ -159,13 +159,13 @@ run_workflow() {
 
 	if [ "$workflow:$verb" = rootfs:build ]; then
 		printf '%s\n' 'FERRIX_PIXEL9A_PRIVILEGED=1' >>"$env_file"
-		exec docker run --rm --platform linux/amd64 --init --privileged \
+		docker run --rm --platform linux/amd64 --init --privileged \
 			--mount "type=bind,src=$root,dst=/workspace,readonly" \
 			--mount "type=bind,src=$root/.cache/ferrix/pixel-9a,dst=/workspace/.cache/ferrix/pixel-9a" \
 			--mount "type=bind,src=$root/out/pixel-9a,dst=/workspace/out/pixel-9a" \
 			--env-file "$env_file" "$image" sh -c 'cd /workspace && exec "$@"' -- "$@"
 	fi
-	exec docker run --rm --platform linux/amd64 --init \
+	docker run --rm --platform linux/amd64 --init \
 		--mount "type=bind,src=$root,dst=/workspace,readonly" \
 		--mount "type=bind,src=$root/.cache/ferrix/pixel-9a,dst=/workspace/.cache/ferrix/pixel-9a" \
 		--mount "type=bind,src=$root/out/pixel-9a,dst=/workspace/out/pixel-9a" \

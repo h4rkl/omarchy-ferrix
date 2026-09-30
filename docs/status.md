@@ -20,6 +20,14 @@
   status was `none`. No ten-partition capacity handoff was produced; the split
   image route still lacks the required inactive allocation. No partition or
   slot was changed.
+- The native builder wrapper had used `exec docker run` after writing a
+  temporary env file that may contain the one-time rootfs password; that
+  bypassed its exit trap. It now waits for Docker and deletes the file on
+  success and failure, preserving Docker's exit status. Offline tests cover
+  ordinary and privileged runs and failure cleanup. Scoped stale wrapper
+  env files older than ten minutes were removed from the Mac's current temp
+  directory and the authorized builder's `/tmp`; both checked directories
+  then had zero matching files.
 - The phone was detached for the initial audit, then attached with owner
   authorization for ADB/Fastboot. Initial CLI discovery saw no transport even
   though macOS detected a Pixel 9a USB interface; a later read-only discovery

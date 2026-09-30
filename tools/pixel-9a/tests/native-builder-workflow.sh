@@ -182,10 +182,14 @@ case "${1:-}" in
     for argument do
       if [ "$previous" = --env-file ]; then
         cp "$argument" "${FAKE_DOCKER_ENV_LOG:?}"
+        if [ -n "${FAKE_DOCKER_ENV_PATH_LOG:-}" ]; then
+          printf '%s\n' "$argument" >"$FAKE_DOCKER_ENV_PATH_LOG"
+        fi
       fi
       previous=$argument
     done
     printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG:?}"
+    exit "${FAKE_DOCKER_RUN_STATUS:-0}"
     ;;
   *) printf 'unexpected docker verb: %s\n' "${1:-}" >&2; exit 1 ;;
 esac
@@ -193,6 +197,7 @@ EOF
 chmod 0755 "$work/bin/docker"
 log="$work/log/docker"
 env_log="$work/log/env"
+env_path_log="$work/log/env-path"
 
 PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
   FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
@@ -205,7 +210,7 @@ if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
 fi
 
 : >"$log"
-PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" FAKE_DOCKER_ENV_PATH_LOG="$env_path_log" \
   FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
   FERRIX_PIXEL9A_FIRMWARE_DIR="$root/out/pixel-9a/firmware/tegu/staged" \
   FERRIX_PIXEL9A_PRODUCT_OUT="$root/out/pixel-9a/product/tegu-attempt-test" \
@@ -223,6 +228,10 @@ grep -Fx -- 'FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password' "$env_log" >/dev/null
   echo 'builder run dropped the one-time rootfs password handoff' >&2
   exit 1
 }
+[ ! -e "$(cat "$env_path_log")" ] || {
+  echo 'native builder left a temporary env file after Docker returned' >&2
+  exit 1
+}
 for handoff in \
   'FERRIX_PIXEL9A_PRODUCT_OUT=/workspace/out/pixel-9a/product/tegu-attempt-test' \
   'FERRIX_PIXEL9A_PRODUCT_DIR=/workspace/out/pixel-9a/product/tegu-attempt-test' \
@@ -236,6 +245,18 @@ if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
   echo 'builder run workflow exposed a physical transport' >&2
   exit 1
 fi
+failure_status=0
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" FAKE_DOCKER_ENV_PATH_LOG="$env_path_log" \
+  FAKE_DOCKER_RUN_STATUS=37 FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
+  "$script" run rootfs validate >"$work/docker-failure.out" 2>&1 || failure_status=$?
+[ "$failure_status" -eq 37 ] || {
+  echo "native builder did not preserve Docker failure status: $failure_status" >&2
+  exit 1
+}
+[ ! -e "$(cat "$env_path_log")" ] || {
+  echo 'native builder left a temporary env file after Docker failed' >&2
+  exit 1
+}
 
 : >"$log"
 PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
@@ -300,6 +321,19 @@ grep -Fx -- 'FERRIX_PIXEL9A_STATIC_PARTITION_SIZES=/workspace/out/pixel-9a/parti
 }
 grep -Fx -- 'FERRIX_PIXEL9A_STATIC_BOOT_OUT=/workspace/out/pixel-9a/images/tegu-wwan-static-test' "$env_log" >/dev/null || {
   echo 'builder dropped the static output path' >&2
+  exit 1
+}
+
+: >"$log"
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" FAKE_DOCKER_ENV_PATH_LOG="$env_path_log" \
+  FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
+  "$script" run rootfs build >/dev/null
+grep -F -- '--privileged' "$log" >/dev/null || {
+  echo 'rootfs build did not use the privileged native builder branch' >&2
+  exit 1
+}
+[ ! -e "$(cat "$env_path_log")" ] || {
+  echo 'privileged native builder left a temporary env file' >&2
   exit 1
 }
 
