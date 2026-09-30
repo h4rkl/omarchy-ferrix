@@ -1,5 +1,26 @@
 # Status
 
+## 2026-10-01 (fresh Pixel 9a attempt: rootfs wrapper failure)
+
+- Attempt `20260930T111220Z` on the native x86_64 builder was bound to clean
+  source commit `c17c0b7a0c28178598f94cfe80a576142f2b091a` and an exact
+  static capacity handoff. Device-free source, product, firmware, and rootfs
+  preflights passed. The fresh radio kernel and product stages passed; their
+  manifest SHA-256 values are `1c91764d6c6649725566caac584cc8262a94182fa14250fb1aed6149c70e77cb`
+  and `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e`.
+- The privileged rootfs command produced a 2 GiB ext4 image and a manifest
+  with SHA-256 `6c784bc463fcfa1ced11e6c0c94a0236c20e486e7fb80b3dd00e461f97940b10`;
+  `e2fsck -fn` passed. The native wrapper then launched the command a second
+  time without privileges and exited 2 (`reason=no-loop-control`). The wrapper
+  now returns immediately after the privileged Docker run. Its test verifies
+  exactly one dispatch, preserved failure status, and temporary env-file
+  cleanup. The three rootfs AWK expressions that emitted quote-escape
+  warnings were also corrected.
+- This attempt has no composed boot images and is **not an install candidate**.
+  Its one-time rootfs password file was deleted. No phone mutation occurred;
+  the existing `image_compatibility=partial` gate still refuses persistent
+  installation.
+
 ## 2026-09-30 (Pixel 9a build, radios, and setup audit)
 
 - Later in the attached-device session, `just device-discover` found one

@@ -332,8 +332,25 @@ grep -F -- '--privileged' "$log" >/dev/null || {
   echo 'rootfs build did not use the privileged native builder branch' >&2
   exit 1
 }
+[ "$(wc -l <"$log" | tr -d '[:space:]')" -eq 1 ] || {
+  echo 'rootfs build dispatched more than one Docker run' >&2
+  exit 1
+}
 [ ! -e "$(cat "$env_path_log")" ] || {
   echo 'privileged native builder left a temporary env file' >&2
+  exit 1
+}
+: >"$log"
+privileged_status=0
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" FAKE_DOCKER_ENV_PATH_LOG="$env_path_log" \
+  FAKE_DOCKER_RUN_STATUS=37 FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
+  "$script" run rootfs build >"$work/privileged-failure.out" 2>&1 || privileged_status=$?
+[ "$privileged_status" -eq 37 ] && [ "$(wc -l <"$log" | tr -d '[:space:]')" -eq 1 ] || {
+  echo 'privileged rootfs failure was masked or retried' >&2
+  exit 1
+}
+[ ! -e "$(cat "$env_path_log")" ] || {
+  echo 'privileged native builder left a temporary env file after failure' >&2
   exit 1
 }
 

@@ -153,10 +153,10 @@ check_static_inputs() {
 	required_file "$radio_route"
 	required_file "$radio_split_contract"
 	[ ! -L "$radio_split_contract" ] || die "radio split-artifact contract must not be a symlink: $radio_split_contract"
-	route_contract=$(awk -F '=' '$1 ~ /^[[:space:]]*split_artifact_contract[[:space:]]*$/ { value=$2; gsub(/[[:space:]\"]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' "$radio_route") ||
+	route_contract=$(awk -F '=' '$1 ~ /^[[:space:]]*split_artifact_contract[[:space:]]*$/ { value=$2; gsub(/[[:space:]"]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' "$radio_route") ||
 		die 'radio route is missing split_artifact_contract'
 	[ "$route_contract" = radio-split-artifact-contract.toml ] || die "radio route split-artifact contract is not canonical: $route_contract"
-	radio_split_contract_hash=$(awk -F '=' '$1 ~ /^[[:space:]]*split_artifact_contract_sha256[[:space:]]*$/ { value=$2; gsub(/[[:space:]\"]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' "$radio_route") ||
+	radio_split_contract_hash=$(awk -F '=' '$1 ~ /^[[:space:]]*split_artifact_contract_sha256[[:space:]]*$/ { value=$2; gsub(/[[:space:]"]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' "$radio_route") ||
 		die 'radio route is missing split_artifact_contract_sha256'
 	case "$radio_split_contract_hash" in
 		''|*[!0-9a-fA-F]*) die 'radio route split_artifact_contract_sha256 is malformed' ;;
@@ -353,7 +353,7 @@ validate_radio_kernel_dist() {
 		die 'radio-first kernel manifest lacks the split-artifact contract row'
 	[ "$(printf '%s\n' "$contract_row" | awk -F "$tab" '{ print $2 }')" = radio-split-artifact-contract.toml ] ||
 		die 'radio-first kernel manifest split-artifact contract path is not canonical'
-	[ "$(printf '%s\n' "$contract_row" | awk -F "$tab" '{ print $3 }')" = "$(awk -F '=' '$1 ~ /^[[:space:]]*split_artifact_contract_sha256[[:space:]]*$/ { value=$2; gsub(/[[:space:]\"]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' "$radio_route")" ] ||
+	[ "$(printf '%s\n' "$contract_row" | awk -F "$tab" '{ print $3 }')" = "$(awk -F '=' '$1 ~ /^[[:space:]]*split_artifact_contract_sha256[[:space:]]*$/ { value=$2; gsub(/[[:space:]"]/, "", value); print value; found=1; exit } END { if (!found) exit 1 }' "$radio_route")" ] ||
 		die 'radio-first kernel manifest split-artifact contract hash differs from the radio route'
 	mapping_row=$(awk -F "$tab" '$1 == "firmware_mapping" { print; found=1; exit } END { if (!found) exit 1 }' "$radio_kernel_manifest") ||
 		die 'radio-first kernel manifest lacks the firmware mapping row'
