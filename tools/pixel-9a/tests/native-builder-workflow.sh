@@ -228,9 +228,26 @@ fi
 : >"$log"
 PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
   FERRIX_PIXEL9A_RADIO_KERNEL_OUT="$root/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild" \
+  FERRIX_PIXEL9A_RADIO_KERNEL_DIST="$root/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild/dist" \
+  FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST="$root/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild/build-manifest.tsv" \
   "$script" run kernel-radio preflight >/dev/null
 grep -Fx -- 'FERRIX_PIXEL9A_RADIO_KERNEL_OUT=/workspace/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild' "$env_log" >/dev/null || {
   echo 'builder did not confine and forward the new kernel output path' >&2
+  exit 1
+}
+grep -Fx -- 'FERRIX_PIXEL9A_RADIO_KERNEL_DIST=/workspace/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild/dist' "$env_log" >/dev/null || {
+  echo 'builder did not forward the selected kernel dist handoff' >&2
+  exit 1
+}
+grep -Fx -- 'FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST=/workspace/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild/build-manifest.tsv' "$env_log" >/dev/null || {
+  echo 'builder did not forward the selected kernel manifest handoff' >&2
+  exit 1
+}
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
+  FERRIX_PIXEL9A_RADIO_KERNEL_OUT=out/pixel-9a/kernel-radio/relative-rebuild \
+  "$script" run kernel-radio preflight >/dev/null
+grep -Fx -- 'FERRIX_PIXEL9A_RADIO_KERNEL_OUT=/workspace/out/pixel-9a/kernel-radio/relative-rebuild' "$env_log" >/dev/null || {
+  echo 'builder let a relative kernel path escape the intended build root' >&2
   exit 1
 }
 for unsafe in "$root/out/pixel-9a/../escape" "$root/out/elsewhere"; do
