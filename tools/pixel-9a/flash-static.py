@@ -63,6 +63,8 @@ def pinned_path(relative: str, base: Path) -> Path:
 
 def read_candidate() -> tuple[dict, Path, Path, Path]:
     config = tomllib.loads(CANDIDATE.read_text())
+    require(config.get("status") != "probe-unobserved",
+            "candidate blocked after unobserved temporary probe; build and review a new attempt")
     expected = {
         "schema_version": 1, "target_id": TARGET_ID, "product": "tegu",
         "sku": "GXQ96", "hardware_revision": "MP1.0", "route_id": ROUTE_ID,

@@ -15,6 +15,20 @@ assert spec is not None and spec.loader is not None
 workflow = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(workflow)
 
+with tempfile.TemporaryDirectory(prefix="pixel-9a-blocked-candidate-test.") as temporary:
+    blocked = Path(temporary) / "static-install-candidate.toml"
+    blocked.write_text('status = "probe-unobserved"\n')
+    original_candidate = workflow.CANDIDATE
+    workflow.CANDIDATE = blocked
+    try:
+        workflow.read_candidate()
+    except workflow.Refusal as error:
+        assert "blocked after unobserved temporary probe" in str(error)
+    else:
+        raise AssertionError("unobserved probe candidate was accepted")
+    finally:
+        workflow.CANDIDATE = original_candidate
+
 serial = "TEST-PIXEL-9A"
 prefix = hashlib.sha256(serial.encode()).hexdigest()[:12]
 capacities = {name: 4096 * (index + 1) for index, name in enumerate(workflow.BOOT_PARTITIONS)}
