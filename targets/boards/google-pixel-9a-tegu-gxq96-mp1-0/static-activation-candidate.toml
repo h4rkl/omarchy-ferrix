@@ -1,0 +1,16 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+status = "proposed-not-run"
+source_candidate = "static-install-candidate.toml"
+source_candidate_sha256 = "fb4756c98116b227f9c7bd979399085ab51f22a477cb2ae0cf2695da24783169"
+manifest_sha256 = "95b5bcf20f74b83eb00f4159f1a69b6b9e31f0ea143953f6b0f4640bb4ebd78a"
+expected_current_slot = "a"
+target_slot = "b"
+operation = "select-reviewed-inactive-slot-and-reboot-only"
+kernel_stage_required = true
+rootfs_stage_required = true
+per_run_confirmation = true
+stock_recovery = "tested-pinned-full-factory-restore"
+
+# This is a separate future physical operation. It does not amend the image
+# candidate's no-slot-selection write policy or authorize a run by itself.

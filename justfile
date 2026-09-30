@@ -241,7 +241,7 @@ pixel-9a-static-boot-verify-transfer:
     @"{{root}}/tools/pixel-9a/static-boot.py" verify-transfer
 
 pixel-9a-static-boot-test:
-    @python3 "{{root}}/tools/pixel-9a/tests/static-boot-contract.py"
+    @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/static-boot-contract.py"
 
 # Native Linux/postmarketOS Pixel 9a rootfs substrate. These recipes are
 # device-free; build refuses missing kernel/product/firmware inputs and never
@@ -334,6 +334,23 @@ pixel-9a-flash-static-observe-temp:
 
 pixel-9a-flash-static-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/flash-static-contract.py"
+
+# Persistent static stages are separate. The current partial compatibility
+# gate refuses them; each eventual mutation needs its own owner go-ahead.
+pixel-9a-install-static-check:
+    @"{{root}}/tools/pixel-9a/install-static.py" preflight
+
+pixel-9a-install-static-kernel:
+    @"{{root}}/tools/pixel-9a/install-static.py" flash-kernel
+
+pixel-9a-install-static-rootfs:
+    @"{{root}}/tools/pixel-9a/install-static.py" flash-rootfs
+
+pixel-9a-install-static-activate:
+    @"{{root}}/tools/pixel-9a/install-static.py" activate
+
+pixel-9a-install-static-test:
+    @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/install-static-contract.py"
 
 # Select and boot the already-flashed inactive radio-first slot through the
 # checked-in workflow; it never accepts a raw set_active command.

@@ -157,12 +157,27 @@ It remains `composed-not-booted` / `bootable=false`. A checked-in static
 candidate and `flash-static.py` adapter now perform strict read-only physical
 admission and a separately confirmed kernel-only `fastboot boot` probe.
 Read-only admission passed on the exact device in ordinary Fastboot on slot A.
-The owner approved one temporary probe; no persistent static flash command
-exists, and the existing ten-partition route cannot consume this contract.
+The owner approved one temporary probe; a separate persistent static install
+adapter is now offline-tested for inactive slot B boot images, separately
+confirmed shared `userdata`, and later activation. It refuses the current
+`image_compatibility=partial` target gate and requires matching observed
+temporary-boot evidence. No physical static write or slot selection was run;
+the existing ten-partition route cannot consume this contract. The image
+candidate continues to forbid slot selection. A separate pinned
+`static-activation-candidate.toml` proposal is required and rechecked before
+the later slot-B selection/reboot stage; it is not physical approval.
 The host-only Python tooling reuses the strict TOML/TSV image verifier and
 pinned Python Android image utilities; it is outside guest/product code.
 The temporary command still uses stock `init_boot` and `vendor_boot`, so it
 cannot establish a full Ferrix split boot even if the bootloader accepts it.
+For the eight physical boot partitions, the static adapter uses an explicit
+`--slot b flash <base>` operation and checks that Fastboot reports writing
+the corresponding `_b` target. [AOSP Fastboot's partition and flash paths](https://android.googlesource.com/platform/system/core/+/ee9d6382d13411614c27b25de8c97273f066a8d3/fastboot/fastboot.cpp)
+show this slot resolution and a resize only for logical partitions; this is
+source-level rationale, while the installed host tool reports version
+`37.0.1-15733141` and no static flash has run on the device. The live gate
+requires both A/B targets to be physical and capacity matched before each
+write. A reported successful write is still not partition readback proof.
 An offline-tested `observe-temp` mode requires the exact temporary-boot
 transcript, same-device identity, image hash, and a reviewed tegu kernel
 capture without a panic marker. Its record is limited to kernel progress;

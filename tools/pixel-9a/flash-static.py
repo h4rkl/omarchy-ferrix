@@ -69,6 +69,7 @@ def read_candidate() -> tuple[dict, Path, Path, Path]:
         "status": "composed-not-booted", "stock_slot": "a", "inactive_slot": "b",
         "rootfs_partition": "userdata", "rootfs_image_bytes": 2147483648,
         "recovery_build": "CP3A.260905.009",
+        "fastboot_cli_version": "37.0.1-15733141",
     }
     for key, value in expected.items():
         require(config.get(key) == value, f"candidate {key} differs from reviewed value")
@@ -282,8 +283,8 @@ def gates() -> str:
                           ("recovery_procedure", "tested"),
                           ("per_run_confirmation", "required")):
         require(values.get(key) == expected, f"target {key} gate differs")
-    require(values.get("image_compatibility") == "partial",
-            "target image compatibility gate changed; review this probe workflow")
+    require(values.get("image_compatibility") in ("partial", "passed", "verified"),
+            "target image compatibility gate is not a reviewed value")
     return values["image_compatibility"]
 
 
@@ -352,7 +353,7 @@ def preflight() -> tuple[dict, Path, str, str, Path]:
     emit("preflight=passed-read-only bootable=false persistent_flash=not-authorized")
     evidence_dir = OUT / "flash-static"
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     transcript = evidence_dir / f"preflight-{stamp}-{os.getpid()}.txt"
     with transcript.open("x") as stream:
         stream.write("# Pixel 9a static route read-only preflight; serial redacted. Never commit.\n")
@@ -384,7 +385,7 @@ def boot_temp() -> None:
     require("FAILED" not in output, "bootloader reported a temporary-boot failure")
     transcript_dir = OUT / "flash-static"
     transcript_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     transcript = transcript_dir / f"boot-temp-{stamp}-{os.getpid()}.txt"
     redacted_output = output.replace(serial, "[redacted]").strip().replace("\n", "\\n")
     with transcript.open("x") as stream:
@@ -422,7 +423,7 @@ def observe_temp() -> None:
             "device, boot image, or observation input changed before recording")
     boot_evidence(transcript, prefix, boot_hash)
     kernel_capture(capture)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     redacted_log = evidence_dir / f"observe-temp-{stamp}-{os.getpid()}-kernel.txt"
     redacted_log.write_text(content.replace(serial, f"serial-sha256:{prefix}"),
                             encoding="utf-8")

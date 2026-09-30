@@ -42,7 +42,17 @@ split image set. The `observe-temp` step requires a reviewed kernel capture
 and binds its redacted copy to the exact boot transcript. It is offline-tested
 only; the temporary probe stopped before device action after an optional
 transfer-verifier invocation omitted the named output path. No persistent
-static flash command is implemented.
+static flash has been run. Separate offline-tested
+`pixel-9a-install-static-check`, `-kernel`, `-rootfs`, and `-activate`
+recipes now define three independently confirmed physical stages. The current
+target `image_compatibility=partial` gate refuses them, and no observed temporary
+boot evidence exists. The eight inactive boot images, shared `userdata`
+rootfs, and slot selection each need their own future gate review and per-run
+owner approval. The persistent adapter pins the currently installed Fastboot
+CLI version `37.0.1-15733141`; Fastboot command success alone cannot verify
+on-device bytes. Slot selection is held in a separate pinned
+`static-activation-candidate.toml`; the image candidate's no-slot-selection
+policy remains in force for both flash stages.
 
 Initial identity was established by the checked-in read-only workflow
 `just pixel-9a-discover`:
@@ -161,8 +171,9 @@ write, and rechecks at write time. This is offline-tested safety behavior,
 not permission to resize the zero-capacity inactive partitions. The targeted
 read-only `userdata` map does not authorize a shared-data wipe.
 The tested pinned factory restore is the owner's selected stock recovery
-route, while persistent static flash and a separate per-run confirmation remain
-outstanding.
+route. Persistent static flash remains physically unattempted and gated by
+image compatibility, a reviewed temporary-boot observation, and separate
+per-run confirmations.
 
 This is an owner-declared new development device with no personal data. The
 checked-in gate records `backup = "not-required-dev-device"` and

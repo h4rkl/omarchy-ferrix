@@ -63,8 +63,10 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
    `pixel-9a-flash-static-boot-temp` workflow can issue only one confirmed
    kernel-only `fastboot boot`. For a named build output, set
    `FERRIX_PIXEL9A_STATIC_BOOT_OUT` when running
-   `pixel-9a-static-boot-verify-transfer`. No persistent static flash command
-   exists.
+   `pixel-9a-static-boot-verify-transfer`. A separate persistent static
+   adapter is offline-tested but refuses the current partial image-compatibility
+   gate and missing observed boot evidence; do not run its mutations until
+   those gates and each new owner confirmation pass.
 11. `just pixel-9a-partition-inventory` `[ro]`; when the exact Android
     transport is available, also run `just pixel-9a-partition-capacity` `[ro]`
     to record the ten static/dynamic partition capacities used by the
@@ -102,6 +104,30 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
     observation. Stop on a failed gate, bootloader refusal, hang, or loop.
     A temporary boot command or observation alone is not persistent flash
     authorization or evidence of a Ferrix Linux userspace boot.
+    When a later review independently upgrades the exact static image
+    compatibility gate, `just pixel-9a-install-static-check` `[ro]` must pass
+    with `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` and
+    `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_OBSERVATION` bound to this candidate.
+    It also pins and rechecks the reviewed host Fastboot CLI version before
+    each stage/write; a changed version needs a new tool-behavior review.
+    The final images have AVB algorithm `NONE` while Fastboot reports
+    `secure=yes`; explain the unlocked-device unsigned-AVB consequence and
+    obtain explicit owner direction before setting
+    `FERRIX_PIXEL9A_STATIC_UNSIGNED_AVB=I-accept-unsigned-AVB-on-this-unlocked-Pixel-9a`.
+    With that token, the development-device token, and a separate owner
+    go-ahead for each run, `pixel-9a-install-static-kernel` writes only eight
+    inactive physical slot-B images; `pixel-9a-install-static-rootfs` then
+    overwrites unslotted shared `userdata` after checking the complete
+    kernel-stage transcript;
+    `pixel-9a-install-static-activate` checks both stages, selects slot B,
+    and requests reboot only after validating the separate pinned
+    `static-activation-candidate.toml` proposal. The image candidate itself
+    continues to forbid slot selection. Every stage reruns exact identity,
+    recovery, live capacities, image hashes, and observation gates before
+    mutation; the kernel stage rechecks before each write. These workflows
+    are stub-tested only, have never run on hardware, and a successful Fastboot command is
+    not readback proof or Ferrix boot evidence. Stop on any refusal or partial
+    stage; do not retry or switch slots to work around it.
 12. For the canonical Google route only, once a complete, reviewed image set
     exists and the owner authorizes the physical operation:
     `just pixel-9a-flash-check` `[ro]`; `just pixel-9a-flash-boot-temp`
@@ -128,6 +154,7 @@ Offline test recipes that must pass before any hardware session:
 `just pixel-9a-boot-radio-test`, `just pixel-9a-radio-split-test`,
 `just pixel-9a-static-boot-test`,
 `just pixel-9a-flash-static-test`,
+`just pixel-9a-install-static-test`,
 `just pixel-9a-artifacts-test`, `just pixel-9a-flash-test`,
 `just pixel-9a-flash-radio-test`,
 `just pixel-9a-partition-capacity-test`, and `just pixel-9a-radios-test`.

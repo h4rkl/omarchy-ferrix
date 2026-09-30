@@ -21,6 +21,7 @@ rootfs_partition = "userdata"
 rootfs_image_sha256 = "56eeff4de8e5a90dae2169f4def73e9a4f904f06db583114b9dd8120ab8497c6"
 rootfs_image_bytes = 2147483648
 recovery_build = "CP3A.260905.009"
+fastboot_cli_version = "37.0.1-15733141"
 
 [write_policy]
 stock_slot_writes = false

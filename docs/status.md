@@ -77,6 +77,17 @@
   mode that binds a reviewed kernel capture to the exact boot transcript and
   image hash. It has not been run on physical evidence and does not change
   the stopped device route.
+- **Persistent static adapter (offline only):** A separate target workflow now
+  defines exact inactive slot B boot writes, a separately confirmed shared
+  `userdata` rootfs write, and later slot B activation. Its mock transport
+  test checks the eight-partition allow-list, refused partial compatibility,
+  explicit unsigned-AVB policy, typed confirmation, stage evidence binding,
+  a failed first write, command order, and a separate pinned slot-B activation
+  proposal. The image candidate itself still forbids slot selection. The live
+  target reports `image_compatibility=partial`; no static flash or slot
+  selection was attempted. Kernel progress and
+  full Ferrix boot remain unobserved; an accepted Fastboot write would not be
+  a readback verification of its bytes.
 - **Recovery/storage decision:** The owner chose the tested pinned factory
   restore as the stock recovery path if Ferrix later uses shared `userdata`.
   This is a storage-plan choice, not authorization for a `userdata` wipe or
