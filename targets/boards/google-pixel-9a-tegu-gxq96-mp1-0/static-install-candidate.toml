@@ -4,7 +4,9 @@ product = "tegu"
 sku = "GXQ96"
 hardware_revision = "MP1.0"
 route_id = "experimental-linux-google-tegu-s5300-wwan-static"
-status = "composed-not-booted"
+# Fastboot accepted one temporary boot, but post-probe Android reported a
+# different kernel banner. Refuse further physical use of these bytes.
+status = "probe-unobserved"
 stock_slot = "a"
 inactive_slot = "b"
 

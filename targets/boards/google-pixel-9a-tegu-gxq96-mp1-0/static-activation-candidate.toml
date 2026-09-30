@@ -2,7 +2,7 @@ schema_version = 1
 target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
 status = "proposed-not-run"
 source_candidate = "static-install-candidate.toml"
-source_candidate_sha256 = "5ada60e17c07d24dacd48f79013a9451046802b439d338c3115362f11c781815"
+source_candidate_sha256 = "25ed41f49891b954b339cd7d630e825622042513ef077a371d7a18fb2ee20c74"
 manifest_sha256 = "78c7d21d01d12cc464c76be98bef60afccd38b4d8cd57e0b6c77ff0e670512ed"
 expected_current_slot = "a"
 target_slot = "b"
@@ -12,5 +12,5 @@ rootfs_stage_required = true
 per_run_confirmation = true
 stock_recovery = "tested-pinned-full-factory-restore"
 
-# This is a separate future physical operation. It does not amend the image
-# candidate's no-slot-selection write policy or authorize a run by itself.
+# This proposal is blocked by the source candidate's unobserved probe. It
+# does not amend the no-slot-selection write policy or authorize a run.

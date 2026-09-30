@@ -4,10 +4,10 @@ This is an exact physical-target identity and stock-recovery package for the
 identified device. It is not a claim that Ferrix Linux boots on this phone.
 Ferrix product code remains target-neutral; the capability matrix is
 conservatively `unsupported` until target-specific Linux evidence exists.
-The current [fresh static build handoff](dev/README.md#one-fresh-static-build-attempt)
-is the selected WWAN/SIT route. The checked-in `image_compatibility=partial`
-gate still refuses persistent installation; a temporary kernel probe and a
-reviewed observation are separate steps.
+The [fresh static build handoff](dev/README.md#one-fresh-static-build-attempt)
+is the selected WWAN/SIT route. The current candidate is blocked after an
+unobserved temporary probe. The checked-in `image_compatibility=partial` gate
+also refuses persistent installation.
 
 The owner-authorized first stock restore completed on 2026-09-30 with
 `result=factory-restore-complete` and exit 0; ignored transcript
@@ -33,8 +33,9 @@ The broader inventory remains `partial`. On native Linux x86_64, fresh
 source-built kernel, product, rootfs, and boot-input handoffs produced the
 current, separately verified eight-partition static bundle (manifest SHA-256
 `78c7d21d01d12cc464c76be98bef60afccd38b4d8cd57e0b6c77ff0e670512ed`).
-It is `composed-not-booted` / `bootable=false`; no Ferrix image has been
-booted or flashed.
+The bundle is `composed-not-booted` / `bootable=false`. One kernel-only
+`fastboot boot` was accepted, but the candidate kernel was not observed;
+no partition was flashed.
 
 The checked-in `static-install-candidate.toml` pins this bundle, fresh
 capacities, same-device discovery, targeted `userdata` map, and tested stock
@@ -44,8 +45,10 @@ result does not admit this bundle. The earlier one-probe approval named a
 different `boot.img` hash and is historical. The current kernel-only
 `boot.img` has SHA-256
 `f310cae8e6fd2c9d7992d68b3020901c6bb4c59fa5fa1fbf3f0c32d2064c8bfe`.
-A new confirmed temporary boot would use stock `init_boot` and `vendor_boot`
-and could probe kernel progress, not the full Ferrix split image set.
+Its one temporary probe used stock `init_boot` and `vendor_boot`. The
+post-probe Android `/proc/version` differed from the candidate's kernel
+banner, so the candidate is now `probe-unobserved` and must not be loaded
+again without a new build and compatibility investigation.
 
 For each new physical loading attempt, rebuild the kernel, product, rootfs,
 boot inputs, and static image bundle on native deba from the reviewed commit
@@ -75,7 +78,8 @@ not return, use a separately captured serial kernel log with the same banner
 or stop; do not invent boot evidence. These paths are offline-tested only.
 The earlier candidate's temporary probe stopped before device action after
 an optional transfer-verifier invocation omitted its named output path. The
-current bundle's exact-path transfer check passed; it has not been booted.
+current bundle's exact-path transfer check passed. Its temporary boot
+command was accepted, but no candidate kernel boot was observed.
 No persistent static flash has been run. Separate offline-tested
 `pixel-9a-install-static-check`, `-kernel`, `-rootfs`, and `-activate`
 recipes now define three independently confirmed physical stages. The current

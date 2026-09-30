@@ -1,5 +1,32 @@
 # Status
 
+## 2026-10-01 (Pixel 9a temporary probe not observed)
+
+- The fresh `20260930T142411Z` candidate passed live read-only admission in
+  ordinary bootloader Fastboot on the exact unlocked `tegu` / `MP1.0`, slot A.
+  The checked-in temporary workflow then sent its pinned kernel-only
+  `boot.img` (SHA-256
+  `f310cae8e6fd2c9d7992d68b3020901c6bb4c59fa5fa1fbf3f0c32d2064c8bfe`)
+  with `fastboot boot`; the bootloader reported `OKAY`. The redacted boot
+  transcript SHA-256 is `febe0c41f55d3e9da6f8939c56e576be929d05dc22dc6c89f10680c166a08038`.
+  No partition, slot, or bootloader state was changed.
+- Neither ADB nor Fastboot was visible shortly after the command. The same
+  Pixel returned as authorized stock Android ADB on slot A about two minutes
+  later. The target-scoped capture workflow refused because live
+  `/proc/version` differs from the kernel banner embedded in the pinned
+  `boot.img`; Android also denied `/proc/device-tree/model`. A hash-bound,
+  serial-redacted mismatch diagnostic was saved under ignored `out/pixel-9a/`
+  (SHA-256 `58f6427a3043434a9046278536c04a8a07b93d5a844724ba66fdc32f686a0c75`).
+  Its expected and observed banner hashes differ. The updated capture workflow
+  records this negative result while refusing full observation; offline tests
+  also verify that a version-only capture cannot satisfy the gate.
+- The checked-in candidate is now `probe-unobserved`, so further physical
+  loading of those bytes is refused. No Ferrix kernel progress, Ferrix
+  userspace, or radio capability is claimed. No persistent image was flashed.
+  The one-time rootfs password file was deleted from the builder. A new
+  source-bound build and compatibility investigation are required before
+  another loading attempt; `image_compatibility=partial` remains unchanged.
+
 ## 2026-10-01 (fresh Pixel 9a static bundle and Fastbootd return)
 
 - Attempt `20260930T142411Z` used clean native-builder source commit
