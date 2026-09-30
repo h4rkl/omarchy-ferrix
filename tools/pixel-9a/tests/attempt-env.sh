@@ -26,6 +26,7 @@ esac
 EOF
 chmod 0755 "$work/bin/git"
 export PATH="$work/bin:$PATH"
+export FERRIX_PIXEL9A_REPO_ROOT="$root"
 
 if FAKE_DIRTY=1 sh "$script" "$attempt" "$capacity" > "$work/dirty.out" 2>&1; then
 	echo 'attempt-env accepted a dirty source checkout' >&2
@@ -53,6 +54,8 @@ sh -n "$env_file"
 	[ "${#FERRIX_PIXEL9A_ATTEMPT_CAPACITY_SHA256}" -eq 64 ]
 	[ "$FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST" = "out/pixel-9a/kernel-radio/tegu-wwan-$attempt/build-manifest.tsv" ]
 	[ "$FERRIX_PIXEL9A_PRODUCT_DIR" = "$FERRIX_PIXEL9A_PRODUCT_OUT" ]
+	[ "$FERRIX_PIXEL9A_PMAPORTS_DIR" = .cache/ferrix/pixel-9a/pmaports ]
+	[ "$FERRIX_PIXEL9A_BOOT_INPUTS_OUT" = "$root/out/pixel-9a/boot-inputs/tegu-wwan-$attempt" ]
 	[ "$FERRIX_PIXEL9A_BOOT_INPUTS_MANIFEST" = "$FERRIX_PIXEL9A_BOOT_INPUTS_OUT/manifest.tsv" ]
 	[ "$FERRIX_PIXEL9A_STATIC_BOOT_OUT" = "out/pixel-9a/images/tegu-wwan-static-$attempt" ]
 	[ "$FERRIX_PIXEL9A_STATIC_PARTITION_SIZES" = "$capacity" ]

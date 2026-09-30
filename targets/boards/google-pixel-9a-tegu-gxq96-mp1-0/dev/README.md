@@ -139,8 +139,8 @@ FERRIX_PIXEL9A_STATIC_BOOT_BUILD=I-understand-this-composes-source-built-pixel-9
 tools/pixel-9a/native-builder.sh run static-boot verify
 ```
 
-`rootfs build` also requires a reviewed, clean
-`FERRIX_PIXEL9A_PMAPORTS_DIR`, verified staged firmware, and a one-time
+`rootfs build` also requires the reviewed, clean pmaports checkout at the
+generated `FERRIX_PIXEL9A_PMAPORTS_DIR`, verified staged firmware, and a one-time
 `FERRIX_PIXEL9A_ROOTFS_PASSWORD` supplied outside the repository. Retain the
 build transcript and record the reviewed Git commit, the generated env path,
 the named capacity hash, every stage manifest hash, and the complete final

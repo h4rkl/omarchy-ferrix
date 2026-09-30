@@ -29,20 +29,21 @@ entered ordinary Fastboot without writing storage. Fresh static A/B capacities
 were captured at `2026-09-30T01:44:54Z`. A separate same-device read-only
 `userdata` map at `02:02:26Z` correlated Android's `/dev/block/sda34` by-name
 entry with a live unslotted physical 117,543,358,464-byte Fastboot partition.
-The broader inventory remains `partial`. On native Linux x86_64, a fresh
-source-built kernel, product, rootfs, and corrected boot-input handoff produced
-a separately verified eight-partition static bundle (manifest SHA-256
-`17edb90a0ef6ba1e1921279deced2d942e84edc89b74c19e6fd6a728c077c122`).
+The broader inventory remains `partial`. On native Linux x86_64, fresh
+source-built kernel, product, rootfs, and boot-input handoffs produced the
+current, separately verified eight-partition static bundle (manifest SHA-256
+`78c7d21d01d12cc464c76be98bef60afccd38b4d8cd57e0b6c77ff0e670512ed`).
 It is `composed-not-booted` / `bootable=false`; no Ferrix image has been
 booted or flashed.
 
 The checked-in `static-install-candidate.toml` pins this bundle, fresh
 capacities, same-device discovery, targeted `userdata` map, and tested stock
-recovery. Its separate `just pixel-9a-flash-static-check` read-only admission
-passed on the exact device in ordinary Fastboot on slot A at about 04:36 UTC
-on 2026-09-30. The earlier one-probe approval named a different `boot.img`
-hash and is historical. The current kernel-only `boot.img` has SHA-256
-`bffd420dada4cee402977fab39374107c8239b6ba2acbbbb073fd9e898c7964c`.
+recovery. Read-only admission of the earlier candidate passed on the exact
+device in ordinary Fastboot on slot A at about 04:36 UTC on 2026-09-30; that
+result does not admit this bundle. The earlier one-probe approval named a
+different `boot.img` hash and is historical. The current kernel-only
+`boot.img` has SHA-256
+`f310cae8e6fd2c9d7992d68b3020901c6bb4c59fa5fa1fbf3f0c32d2064c8bfe`.
 A new confirmed temporary boot would use stock `init_boot` and `vendor_boot`
 and could probe kernel progress, not the full Ferrix split image set.
 

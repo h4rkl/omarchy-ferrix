@@ -1,5 +1,39 @@
 # Status
 
+## 2026-10-01 (fresh Pixel 9a static bundle and Fastbootd return)
+
+- Attempt `20260930T142411Z` used clean native-builder source commit
+  `c4f0abf18b41a5906e0b9c421cb7afc130876e3f` and the reviewed named
+  static capacity handoff (SHA-256
+  `9e7c7406b77b03c9cc0dbcc66d7f4682b9149a041a355c468a99454687b2d66d`).
+  Fresh radio kernel, product, rootfs, and boot inputs passed; their manifest
+  hashes are respectively `5f28d65a73e94a87b30c8a45e0e7d613b43765aec531814b48ca2915b5c4364f`,
+  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e`,
+  `e893edf54e115c9a328dbacf22d3a2573d170fe3a5dfd154fd9587c19cc1fdd2`,
+  and `f5335584a82466f9ac6f6763b1b61371aff60a23a1f12eb93a1e98a1f430e4a1`.
+- The first rootfs invocation refused a missing pmaports environment path
+  before building an image. A retry supplied the clean pinned checkout and
+  passed. Its 2 GiB ext4 image passed `e2fsck -fn`; the one-time password did
+  not appear in the build log and no temporary native-builder env file remained.
+  The first boot-input invocation likewise refused the generated relative
+  output path before writing files; a retry supplied the absolute path under
+  `out/pixel-9a` and passed. The attempt generator now supplies both values
+  automatically, with a passing regression test. Both retries used the same
+  unchanged source and fresh attempt outputs.
+- Native static composition and AVB payload verification passed. The 30-file
+  bundle `out/pixel-9a/images/tegu-wwan-static-20260930T142411Z` has manifest
+  SHA-256 `78c7d21d01d12cc464c76be98bef60afccd38b4d8cd57e0b6c77ff0e670512ed`,
+  `boot.img` SHA-256 `f310cae8e6fd2c9d7992d68b3020901c6bb4c59fa5fa1fbf3f0c32d2064c8bfe`,
+  and `rootfs.img` SHA-256 `1e265155a3723fa61f0caf865d7c952ba3baf0f7f0e7d38abe0b925f93b8ee36`.
+  The complete bundle was transferred to the Mac, where the exact-path
+  transfer verifier passed. It remains `composed-not-booted` / `bootable=false`.
+- The checked-in Fastbootd-to-bootloader workflow passed offline tests and a
+  live read-only preflight. With the owner's unattended-work authorization,
+  it returned the one exact Pixel 9a to ordinary bootloader Fastboot and
+  verified the same serial and slot A afterward. No storage, slot, or user
+  data changed. Persistent install still refuses `image_compatibility=partial`;
+  no Ferrix boot or physical radio behavior has been observed.
+
 ## 2026-10-01 (fresh Pixel 9a attempt: rootfs wrapper failure)
 
 - Attempt `20260930T111220Z` on the native x86_64 builder was bound to clean
