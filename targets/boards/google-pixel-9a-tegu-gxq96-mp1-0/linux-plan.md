@@ -173,8 +173,42 @@ candidate continues to forbid slot selection. A separate pinned
 the later slot-B selection/reboot stage; it is not physical approval.
 The host-only Python tooling reuses the strict TOML/TSV image verifier and
 pinned Python Android image utilities; it is outside guest/product code.
-The temporary command still uses stock `init_boot` and `vendor_boot`, so it
-cannot establish a full Ferrix split boot even if the bootloader accepts it.
+The temporary command still uses stock `init_boot`, `vendor_boot`,
+`vendor_kernel_boot`, and `dtbo`, so it cannot establish a full Ferrix split
+boot even if the bootloader accepts it. AOSP's
+[Pixel kernel guide](https://source.android.com/docs/setup/build/building-pixel-kernels)
+lists the latter two as tegu kernel partitions, while the
+[version-4 boot image layout](https://source.android.com/docs/core/architecture/bootloader/boot-image-header)
+places the device tree in a vendor boot container. This boot-only probe can
+fail from a mixed image set; the watchdog result does not isolate the kernel.
+The observed-kernel and image-compatibility gates therefore remain unresolved.
+Before any new physical attempt, compare the candidate and stock boot inputs,
+device tree, overlays, bootconfig, and kernel ABI against the exact restored
+build. If the mixed-image temporary route cannot validate that combination,
+review a separately gated full-image test and its stock recovery path. A new
+source-bound candidate and per-run confirmation remain mandatory.
+
+An initial offline comparison used the verified stock factory archive pinned
+in `recovery.pins` (SHA-256 `0c2f9053bf064b09483c9371afe92fa057029d6f9237668d1c0d7`)
+and the fresh candidate bundle. The parser was AOSP
+[`unpack_bootimg.py`](https://android.googlesource.com/platform/system/tools/mkbootimg/+/d2bb0af5ba6d3198a3e99529c97eda1be0b5a093/unpack_bootimg.py)
+at commit `d2bb0af5ba6d3198a3e99529c97eda1be0b5a093` (downloaded script
+SHA-256 `a9d260978a63bd06a24b6347e7dee8a28ff96639793caea15dff6aa491316308`).
+The inner factory ZIP and unpacked images remain under ignored
+`out/pixel-9a/stock-compare/`.
+
+| Boot input | Pinned stock | Fresh candidate |
+| --- | --- | --- |
+| `boot.img` | Header v4, 16,637,228-byte kernel | Header v4, 45,173,248-byte kernel |
+| `vendor_kernel_boot.img` | Header v4, 2,048-byte pages, four concatenated DTBs totaling 1,547,478 bytes | Header v4, 4,096-byte pages, one 68,753-byte DTB |
+| `vendor_boot.img` | Header v4, 2,048-byte pages, no embedded DTB, nonempty vendor command line | Header v4, 4,096-byte pages, embedded 68,753-byte DTB, empty vendor command line |
+
+The stock DTBs were counted from four consecutive valid FDT headers; the
+candidate has one. This comparison does not establish which DTB the
+bootloader selects or which difference, if any, caused the watchdog. It does
+show that the complete candidate image set has not been matched to the known
+working stock boot layout. Full-image compatibility cannot be promoted from
+the accepted `fastboot boot` command.
 For the eight physical boot partitions, the static adapter uses an explicit
 `--slot b flash <base>` operation and checks that Fastboot reports writing
 the corresponding `_b` target. [AOSP Fastboot's partition and flash paths](https://android.googlesource.com/platform/system/core/+/ee9d6382d13411614c27b25de8c97273f066a8d3/fastboot/fastboot.cpp)

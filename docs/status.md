@@ -36,6 +36,27 @@
   explains the bootloader and system properties. The watchdog reason is
   consistent with the return after this probe, but does not identify the
   failed component or prove that the candidate kernel reached Linux.
+- Offline review found a limitation in the temporary probe: the checked-in
+  command supplies only `boot.img`, while the phone continues to use stock
+  `init_boot`, `vendor_boot`, `vendor_kernel_boot`, and `dtbo`. AOSP lists
+  `vendor_kernel_boot` and `dtbo` among Pixel 9a kernel partitions and places
+  the device tree in a vendor boot container for header version 4
+  ([Pixel kernel build guide](https://source.android.com/docs/setup/build/building-pixel-kernels),
+  [boot image header](https://source.android.com/docs/core/architecture/bootloader/boot-image-header)).
+  Thus the watchdog cannot validate or reject the complete eight-image bundle.
+  The existing install gate still requires observed same-candidate kernel
+  progress and full image compatibility; it cannot be bypassed by this clue.
+- An offline comparison unpacked the verified pinned stock factory archive
+  (SHA-256 `0c2f9053bf064b09483c937cf16f4824371afe92fa057029d6f9237668d1c0d7`)
+  and the failed candidate using AOSP `unpack_bootimg.py` at commit
+  `d2bb0af5ba6d3198a3e99529c97eda1be0b5a093`. Stock
+  `vendor_kernel_boot` uses 2 KiB pages and carries four DTBs totaling
+  1,547,478 bytes; the candidate uses 4 KiB pages and one 68,753-byte DTB.
+  Stock `vendor_boot` likewise uses 2 KiB pages, has no DTB, and supplies a
+  vendor command line; the candidate uses 4 KiB pages, embeds that 68,753-byte
+  DTB, and has an empty vendor command line. These differences leave full-image
+  compatibility unproven. The boot-only temporary probe used the stock vendor
+  images, so it did not exercise those candidate differences.
 
 ## 2026-10-01 (fresh Pixel 9a static bundle and Fastbootd return)
 

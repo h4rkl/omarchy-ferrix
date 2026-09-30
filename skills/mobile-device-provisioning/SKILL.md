@@ -109,8 +109,9 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
     `just pixel-9a-flash-static-boot-temp` `[confirm]` with the accepted
     development-device data-policy token. Manually type the prompted phrase;
     the workflow repeats every read-only gate before `fastboot boot`. This
-    probes kernel progress with currently flashed stock `init_boot` and
-    `vendor_boot`, not the full Ferrix split image set. With a reviewed text
+    probes kernel progress with currently flashed stock `init_boot`,
+    `vendor_boot`, `vendor_kernel_boot`, and `dtbo`, not the full Ferrix image
+    set. With a reviewed text
     kernel capture, set `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` to the
     ignored boot transcript and `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_KERNEL_LOG`
     to the capture, then run `just pixel-9a-flash-static-observe-temp`. It

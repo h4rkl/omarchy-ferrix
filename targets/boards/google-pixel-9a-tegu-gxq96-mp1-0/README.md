@@ -45,10 +45,13 @@ result does not admit this bundle. The earlier one-probe approval named a
 different `boot.img` hash and is historical. The current kernel-only
 `boot.img` has SHA-256
 `f310cae8e6fd2c9d7992d68b3020901c6bb4c59fa5fa1fbf3f0c32d2064c8bfe`.
-Its one temporary probe used stock `init_boot` and `vendor_boot`. The
+Its one temporary probe used stock `init_boot`, `vendor_boot`,
+`vendor_kernel_boot`, and `dtbo`. The
 post-probe Android `/proc/version` differed from the candidate's kernel
 banner, so the candidate is now `probe-unobserved` and must not be loaded
 again without a new build and compatibility investigation.
+The boot-only probe cannot test the candidate device tree and full boot image
+set together; the subsequent watchdog reason does not isolate the fault.
 The read-only `just pixel-9a-postprobe-diagnose` workflow checks exact Android
 identity and records boot-reason properties and bounded console pstore summaries
 under ignored `out/pixel-9a/postprobe/`. After this probe, Android reported a
