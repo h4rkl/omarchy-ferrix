@@ -125,6 +125,13 @@ getvar)
 	current-slot) value=${STUB_FASTBOOT_SLOT:-a} ;;
 	slot-count) value=${STUB_FASTBOOT_SLOT_COUNT:-2} ;;
 	is-userspace) value=${STUB_FASTBOOT_IS_USERSPACE:-yes} ;;
+	unlocked|secure) value=yes ;;
+	super-partition-name) value=super ;;
+	is-logical:*) value=yes ;;
+	snapshot-update-status)
+		[ -n "${STUB_SNAPSHOT_STATUS:-}" ] || exit 1
+		value=$STUB_SNAPSHOT_STATUS
+		;;
 	partition-size:boot_a) value=0x01000000 ;;
 	partition-size:boot_b) value=16777216 ;;
 	partition-size:init_boot_a) value=0x00800000 ;;
@@ -353,12 +360,23 @@ grep -q '^result=diagnostic-only$' "$work/diagnostic.out"
 grep -q '^unavailable_queries=1$' "$work/diagnostic.out"
 grep -q '^handoff_status=not-produced-diagnostic-only$' "$diagnostic"
 grep -q '^diagnostic_vendor_dlkm_b_raw=0x0$' "$diagnostic"
+grep -q '^diagnostic_snapshot-update-status=unavailable$' "$diagnostic"
+grep -q '^diagnostic_super-partition-name=super$' "$diagnostic"
+grep -q '^diagnostic_is-logical:vendor_dlkm_b=yes$' "$diagnostic"
 grep -Fq 'Could not open partition' "$diagnostic"
 [ "$(grep -c '^getvar_query=partition-size:' "$diagnostic")" -eq 20 ]
 [ "$(grep -c ' getvar partition-size:' "$work/diagnostic.commands")" -eq 20 ]
 ! grep -Fq 'SERIAL.[F]' "$diagnostic"
 ! grep -q '^handoff_status=exact-capacities-observed$' "$diagnostic"
 [ -z "$(find "$work/diagnostic" -name '*.tsv' -print)" ]
+
+FERRIX_OUT_DIR="$work/diagnostic-snapshot" STUB_ADB_DEVICES_EMPTY=1 \
+	STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB_SNAPSHOT_STATUS=none \
+	"$workflow" --diagnose-fastboot >"$work/snapshot.out" 2>"$work/snapshot.err"
+snapshot_diagnostic=$(awk -F= '$1 == "transcript" { print $2 }' "$work/snapshot.out")
+grep -q '^diagnostic_snapshot-update-status=none$' "$snapshot_diagnostic"
+grep -q '^handoff_status=not-produced-diagnostic-only$' "$snapshot_diagnostic"
+[ -z "$(find "$work/diagnostic-snapshot" -name '*.tsv' -print)" ]
 
 for bad_diagnostic in adb bootloader wrong-identity; do
 	set -- STUB_ADB_DEVICES_EMPTY=1 'STUB_FASTBOOT_DEVICES=SERIAL-F fastboot usb:1'

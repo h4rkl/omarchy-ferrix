@@ -77,8 +77,12 @@ slot fields. Google's [userspace Fastboot HAL](https://android.googlesource.com/
 hardcodes that placeholder; it does not identify the SKU. The workflow still
 requires complete redacted ADB identity for the same serial hash proving
 `GXQ96`, and records the observed placeholder separately from the verified
-SKU. This exception is limited to capacity reads: the shared identity gate
-used by flashing, restoration, and activation remains unchanged.
+SKU. This capacity-read exception leaves the shared identity gate unchanged.
+The radio-first flash adapter separately correlates this placeholder only
+during a same-process transition from a fully verified ordinary-bootloader
+identity, with all live invariants rechecked and complete same-serial ADB
+proof of `GXQ96`. It never accepts the placeholder in bootloader mode.
+Restoration, unlock, and activation helpers retain their existing rules.
 
 For an owner-authorized read-only investigation of missing capacities in
 Fastbootd, use:
@@ -95,6 +99,9 @@ installation gates passed. Normal capacity runs also retain the raw query
 responses and only mark capacities observed after publishing a complete
 handoff. Do not treat a zero CLI exit as a successful query: the local CLI
 has returned exit zero with `FAILED (remote: 'Could not open partition')`.
+The diagnostic also records lock/secure state, snapshot-update status,
+super-partition name, and logical classification of both DLKM pairs. Missing
+metadata is recorded as unavailable, never assumed idle, unlocked, or safe.
 
 The physical diagnostic on 2026-09-30 found that Fastbootd could not open
 either slot of `vendor_boot`, `vendor_kernel_boot`, `dtbo`, `vbmeta`,

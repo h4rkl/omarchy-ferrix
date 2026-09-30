@@ -126,7 +126,9 @@ case "$1" in
             ;;
           is-logical:*) value=${STUB_IS_LOGICAL:-yes} ;;
           snapshot-update-status) value=${STUB_SNAPSHOT_STATUS-none} ;;
-          product) value=tegu ;; variant) value=${STUB_VARIANT:-GXQ96} ;; hw-revision) value=MP1.0 ;; unlocked) value=yes ;; secure) value=yes ;; current-slot) value=a ;; slot-count) value=2 ;; serialno) value=$STUB_SERIAL ;; is-userspace) [ "$state" = fastbootd ] && value=yes || value=no ;; *) exit 99 ;;
+          product) value=tegu ;;
+          variant) value=${STUB_VARIANT:-GXQ96}; if [ "$state" = fastbootd ]; then value=${STUB_FASTBOOTD_VARIANT:-$value}; fi ;;
+          hw-revision) value=MP1.0 ;; unlocked) value=yes ;; secure) value=yes ;; current-slot) value=a ;; slot-count) value=2 ;; serialno) value=$STUB_SERIAL ;; is-userspace) [ "$state" = fastbootd ] && value=yes || value=no ;; *) exit 99 ;;
         esac
         printf '(bootloader) %s: %s\n' "$4" "$value" >&2 ;;
       boot) [ -f "$4" ] || exit 99; echo gone >"$STUB_STATE" ;;
@@ -234,10 +236,23 @@ run panic "$observe_phrase" observe-temp --allow-unsigned-avb
 check 'observation: panic cannot become successful evidence' [ "$status" -eq 1 ]
 check 'observation: panic refusal reports recovery boundary' grep -q 'contains a kernel failure' "$work/panic.err"
 
-run flash_kernel "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
+STUB_FASTBOOTD_VARIANT='MSM USF' run flash_kernel "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
 check 'flash: complete split kernel stage succeeds on inactive slot' [ "$status" -eq 0 ]
+check 'identity: Fastbootd placeholder is bound to this bootloader session and ADB' grep -q '^fastbootd_sku_source=same-session-bootloader-and-adb-correlated$' "$work/flash_kernel.out"
 check 'flash: ten partition writes and four checked transport reboots' sh -c "[ \$(grep -c ' flash ' '$calls') -eq 10 ] && [ \$(grep -c ' reboot ' '$calls') -eq 4 ]"
 check 'flash: never writes active slot' sh -c "! grep -qE 'flash [^ ]+_a ' '$calls'"
+unset STUB_FASTBOOTD_VARIANT
+
+STUB_VARIANT='MSM USF' run bootloader_placeholder '' preflight --slot b --allow-unsigned-avb
+check 'identity: placeholder in bootloader mode remains refused' [ "$status" -eq 1 ]
+unset STUB_VARIANT
+mv "$work/out/pixel-9a/discovery-adb.txt" "$work/discovery.original"
+STUB_FASTBOOTD_VARIANT='MSM USF' run missing_adb "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
+check 'identity: placeholder without ADB proof fails before image writes' [ "$status" -eq 1 ]
+check 'identity: missing ADB refusal is explicit' grep -q 'complete same-device ADB identity' "$work/missing_adb.err"
+check 'identity: missing proof causes no image write' sh -c "! grep -q ' flash ' '$calls'"
+mv "$work/discovery.original" "$work/out/pixel-9a/discovery-adb.txt"
+unset STUB_FASTBOOTD_VARIANT
 
 run live_preflight '' preflight --slot b --allow-unsigned-avb
 check 'layout: inactive-slot preflight checks all twenty capacities' [ "$status" -eq 0 ]

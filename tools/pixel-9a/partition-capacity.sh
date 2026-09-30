@@ -361,6 +361,18 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 		# missing/zero response is retained as evidence, not substituted or
 		# accepted by the handoff's positive/equal/aligned capacity gates.
 		emit handoff_status not-produced-diagnostic-only
+		# Context for a reviewed storage plan, never permission to change it.
+		# Unsupported variables remain explicitly unavailable; do not infer an
+		# idle snapshot, unlocked device, or free space from a missing response.
+		for diagnostic_key in unlocked secure snapshot-update-status super-partition-name \
+			is-logical:vendor_dlkm_a is-logical:vendor_dlkm_b \
+			is-logical:system_dlkm_a is-logical:system_dlkm_b; do
+			if diagnostic_value=$(fastboot_getvar "$diagnostic_key"); then
+				emit "diagnostic_$diagnostic_key" "$diagnostic_value"
+			else
+				emit "diagnostic_$diagnostic_key" unavailable
+			fi
+		done
 		diagnostic_missing=0
 		for partition in boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta vbmeta_vendor vbmeta_system vendor_dlkm system_dlkm; do
 			for suffix in _a _b; do

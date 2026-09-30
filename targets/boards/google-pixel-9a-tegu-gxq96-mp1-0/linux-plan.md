@@ -122,8 +122,9 @@ inactive boot writes and later Fastbootd DLKM writes follow; each write has
 another live capacity check. A failure during the initial round trip leaves
 images untouched, though the phone may remain in Fastbootd. Later failures
 can still leave a partially flashed inactive slot: no atomicity or automatic
-rollback is claimed. The shared mutation SKU gate is unchanged, so the
-observed `MSM USF` placeholder is still a blocker for that route.
+rollback is claimed. The shared mutation SKU gate is unchanged. The
+radio-first route now has a narrower Fastbootd-only correlation described
+below; the placeholder remains forbidden in bootloader mode.
 
 Next acquisition/layout review, before enabling any allocation change:
 
@@ -139,6 +140,63 @@ Next acquisition/layout review, before enabling any allocation change:
    establish tested recovery to the accepted pinned build, then review the complete
    image and storage plan. Only a new, specific mutation preflight and owner
    confirmation can authorize physical installation.
+
+### Remaining-contract review (proposed; implementation approval requested)
+
+Read-only inspection of deba at source commit
+`26fc9f9beb1d1faf041a8d4df71fe6142353c133` found empty selected initfs/vendor/
+system module policies and empty generated DLKM `modules.dep`/`modules.load`
+files. The built kernel configuration has SHA-256
+`a644e47fac409e47d2c132dfb1dc02839f645812ce0d10a7bc2e93634c766b2d`.
+It sets Exynos UFS, ext4, devtmpfs, Exynos DWC3, the display driver,
+BCM4383 Wi-Fi, Bluetooth UART, and S5300 WWAN to built-in (`=y`). The
+source-owned initramfs mounts `PARTLABEL=userdata` directly, with no DLKM
+mount. This is source/build evidence, not an observed boot or proof that a
+revised AVB chain will be accepted by the Pixel bootloader.
+
+Proposed resolution instead of reallocating shared `super`:
+
+- Introduce a separately named native static-boot artifact contract. Keep
+  the existing ten-partition contract intact; do not add a skip-DLKM switch
+  or feed an eight-partition capacity file to the existing composer.
+- Bind the final built kernel configuration to its kernel manifest, verify
+  all required early drivers are built in, and reject nonempty selected
+  module policies or loadable payloads in the proposed route. Revalidate
+  boot inputs, rootfs, source revision, and all hashes on the native builder.
+- Collect fresh static capacities in ordinary bootloader Fastboot. Compose
+  only the eight inactive boot-related images with fresh, source-derived AVB
+  metadata referencing the intended static images, not stock DLKM contents.
+  Verify the new AVB chain independently. Do not write, resize, delete, or
+  reformat `super` or either slot's logical partitions.
+- Give that route its own strict manifest acceptance and flash adapter;
+  retain identity, inactive-slot, live capacity, image hash, data policy,
+  tested recovery, temporary-boot observation, and per-run confirmation gates.
+  The existing ten-partition adapter must reject the new contract.
+- Keep rootfs provisioning separately gated. The current native rootfs needs
+  `userdata`; writing it is a shared-data wipe, not a dual-boot installation.
+  Recovering stock would require the accepted pinned factory restore. Exact
+  live mapping and size evidence and explicit per-run approval remain required.
+
+The other proposal is an explicit first-stock-recovery-test workflow. Normal
+restore and Ferrix gates must not silently admit an untested recovery route.
+A separately authorized first test would require exact live identity, both
+pinned official archives, their own board/image requirements, the reviewed
+vendor sequence, the existing data policy, and an additional typed
+acknowledgement that this is an unproven recovery test. It would execute the
+stock vendor restore sequence only; never Ferrix images. Successful command
+completion plus fresh same-device Android discovery of the accepted stock
+build is required before promoting recovery evidence. The target's general
+Ferrix `image_compatibility=partial` is not evidence about the official stock
+archive. No first-test mode or gate exception is implemented by this proposal.
+
+The current radio-first Fastbootd SKU correction is independent of those
+proposals: `MSM USF` is recognized only after this process has established a
+complete ordinary-bootloader identity, then rechecked the same serial,
+product, revision, slot, slot count, unlock/secure state, and userspace mode.
+Complete matching-serial ADB discovery must also prove `GXQ96`. Missing proof,
+bootloader-mode placeholders, and other variants are refused. The observed
+placeholder and evidence source are logged separately. Shared restoration,
+unlock, and activation helpers remain unchanged.
 
 ## Kernel decision and pinned source baseline
 

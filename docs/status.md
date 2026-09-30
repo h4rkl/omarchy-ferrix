@@ -1,5 +1,44 @@
 # Status
 
+## 2026-09-30 (remaining-blocker investigation and scoped Fastbootd fix)
+
+- **Implemented:** the radio-first flash adapter now accepts the observed
+  Fastbootd placeholder only after a fully verified ordinary-bootloader
+  identity in the same process, complete same-serial ADB proof of `GXQ96`,
+  and all live identity/state rechecks. Bootloader placeholders and absent
+  correlation remain refused. Shared SKU helpers and recovery gates were
+  not changed. Offline flash tests pass with the placeholder through the
+  complete simulated round trip and refuse missing proof before image writes.
+  Capacity and inactive-slot tests, shell syntax, `cargo fmt --check`, and
+  `git diff --check` also pass; full Rust/QEMU tests were not rerun for these
+  host-workflow changes.
+- **Exact physical target:** `google-pixel-9a-tegu-gxq96-mp1-0`. A local
+  read-only diagnostic at `2026-09-30T00:09:13Z` recorded unlocked/secure
+  `yes`, snapshot-update-status `none`, super-partition name `super`, and
+  logical classification `yes` for all four DLKM slot entries. The prior
+  missing static-size pairs and zero inactive DLKM sizes persist. Metadata
+  observations do not establish free extents or authorize allocation changes.
+  Ignored evidence:
+  `out/pixel-9a/partition-capacity-diagnostic-20260930T000913Z-36717.txt`.
+- **Builder read-only evidence:** deba remains at
+  `26fc9f9beb1d1faf041a8d4df71fe6142353c133` with built source inputs. Empty
+  selected module policies and generated load lists, together with built-in
+  Exynos UFS, ext4, USB, display, and radio drivers, support investigating an
+  independent eight-static-partition contract that leaves `super` untouched.
+  The target Linux plan records the configuration hash and required checks;
+  no alternative route is implemented or approved by these observations.
+- **Recovery:** no `factory-restore-complete` transcript was found in the
+  local restore evidence directory. The owner's earlier report is retained,
+  not invalidated or upgraded. The existing restore execution path requires
+  already-tested recovery and Ferrix image compatibility; an explicit first
+  stock-recovery-test contract has been proposed for owner approval rather
+  than bypassing or relabelling either gate.
+- **Boundary:** only read-only phone/builder probes and local code/tests ran.
+  No firmware write, flash, resize, reboot, slot selection, recovery-pin edit,
+  rootfs mapping change, builder sync, or native rebuild occurred. Approval
+  was requested for the separate static-only route and first-test tooling;
+  physical actions still need their own exact preflight and confirmation.
+
 ## 2026-09-30 (stock-preserving radio-first flash safeguards)
 
 - **Exact target:** `google-pixel-9a-tegu-gxq96-mp1-0`. The owner confirmed

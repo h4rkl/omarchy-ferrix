@@ -660,6 +660,14 @@ Google Kleaf/CPIF route, and it never flashes bootloader or radio firmware.
 The route is Implemented and Stub-tested only; no physical boot, flash, or
 radio evidence exists yet.
 
+On a transition from an identity-verified bootloader in the same process,
+this route may recognize Google's `MSM USF` Fastbootd placeholder only after
+rechecking userspace mode, serial, product, revision, slots, unlock/secure
+state, and complete same-serial ADB evidence of `GXQ96`. An old ADB transcript
+alone is insufficient: the same-session bootloader anchor is mandatory.
+The placeholder remains forbidden in bootloader mode; shared SKU helpers
+for restoration, unlock, and activation are unchanged.
+
 1. Read-only preflight:
    `just pixel-9a-flash-radio-check [--stage kernel|rootfs|all] [--slot a|b]
    [--allow-unsigned-avb]`. It verifies the radio route and split-contract

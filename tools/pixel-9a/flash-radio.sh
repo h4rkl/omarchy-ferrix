@@ -63,6 +63,7 @@ skip_temp_boot_gate=no
 serial=
 fastboot_serial=
 transcript=
+verified_bootloader_serial_prefix=
 
 usage() {
 	cat >&2 <<'EOF'
@@ -703,6 +704,9 @@ read_identity() {
 	[ "$slot_count" = 2 ] || die "Fastboot slot-count is '$slot_count', not 2"
 	case "$is_userspace" in yes|no) ;; *) die "Fastboot is-userspace is '$is_userspace'; expected yes or no" ;; esac
 	[ -z "$serialno" ] || [ "$serialno" = "$fastboot_serial" ] || die 'Fastboot getvar serialno does not match the enumerated serial'
+	# Only a fully verified bootloader identity in this process may anchor a
+	# subsequent Fastbootd placeholder. An old transcript alone is not enough.
+	if [ "$is_userspace" = no ]; then verified_bootloader_serial_prefix=$serial_prefix; fi
 	current_slot=$(normalize_slot "$current_slot_raw")
 	if [ -n "$slot_override" ]; then slot=$slot_override; slot_source=--slot; else slot=$current_slot; slot_source=current-slot; fi
 	emit transport fastboot
@@ -811,7 +815,6 @@ recheck_identity() {
 	[ "$recheck_serial" = "$fastboot_serial" ] || die 'Fastboot serial changed before mutation'
 	[ "$(fastboot_getvar product)" = "$expected_product" ] || die 'Fastboot product changed before mutation'
 	recheck_variant=$(fastboot_getvar variant)
-	pixel9a_fastboot_sku_gate "$recheck_variant" "$(sha256_prefix "$fastboot_serial")" || die 'Fastboot SKU/variant changed before mutation and no matching ADB correlation is available'
 	[ "$(fastboot_getvar hw-revision)" = "$expected_revision" ] || die 'Fastboot hardware revision changed before mutation'
 	[ "$(fastboot_getvar unlocked)" = yes ] || die 'Fastboot unlocked state changed before mutation'
 	recheck_serialno=$(fastboot_getvar serialno)
@@ -820,6 +823,20 @@ recheck_identity() {
 	[ "$(fastboot_getvar is-userspace)" = "$expected_userspace" ] || die "Fastboot is-userspace differs from expected $expected_userspace"
 	[ "$(normalize_slot "$(fastboot_getvar current-slot)")" = "$current_slot" ] || die 'Fastboot current slot changed before mutation'
 	[ "$(fastboot_getvar slot-count)" = 2 ] || die 'Fastboot slot-count changed before mutation'
+	if [ "$recheck_variant" = 'MSM USF' ]; then
+		# Google's Fastbootd HAL returns a placeholder, not a different SKU.
+		# This route-local exception needs both the verified mode/identity above
+		# and this run's bootloader anchor plus complete same-serial ADB evidence.
+		[ "$expected_userspace" = yes ] || die 'Fastbootd placeholder is forbidden in bootloader mode'
+		[ "$verified_bootloader_serial_prefix" = "$(sha256_prefix "$fastboot_serial")" ] || die 'Fastbootd placeholder requires same-session verified bootloader identity'
+		radio_sku_evidence=$(pixel9a_adb_correlation_file "$verified_bootloader_serial_prefix" || true)
+		[ -n "$radio_sku_evidence" ] || die 'Fastbootd placeholder requires complete same-device ADB identity proving GXQ96'
+		emit fastbootd_observed_variant "$recheck_variant"
+		emit fastbootd_sku_source same-session-bootloader-and-adb-correlated
+		emit fastbootd_sku_evidence "$radio_sku_evidence"
+	else
+		pixel9a_fastboot_sku_gate "$recheck_variant" "$(sha256_prefix "$fastboot_serial")" || die 'Fastboot SKU/variant changed before mutation and no matching ADB correlation is available'
+	fi
 }
 
 wait_for_same_serial() {
