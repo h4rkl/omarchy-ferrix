@@ -459,14 +459,33 @@ def capture_temp() -> None:
         observed = command("adb", "-s", serial, "shell", "getprop", property_name).strip()
         require(observed == value, f"post-probe ADB {property_name} differs from reviewed identity")
     version = command("adb", "-s", serial, "shell", "cat", "/proc/version").strip()
-    model = command("adb", "-s", serial, "shell", "cat", "/proc/device-tree/model").strip("\x00\r\n ")
     require("\n" not in version and version == image_kernel_banner(boot),
             "live /proc/version differs from the pinned boot image kernel")
-    require(model == "ZUMA PRO TEGU MP on ZUMA PRO",
-            "live device tree model differs from pinned tegu board")
+    try:
+        model = command("adb", "-s", serial, "shell", "cat", "/proc/device-tree/model").strip("\x00\r\n ")
+    except Refusal as error:
+        if "Permission denied" not in str(error):
+            raise
+        model = None
     require(sha(boot) == boot_hash and sha(transcript) == transcript_hash and
             hashlib.sha256(serial.encode()).hexdigest()[:12] == prefix,
             "image or identity changed while collecting temporary-boot evidence")
+    if model is None:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        partial = evidence_dir / f"capture-partial-{stamp}-{os.getpid()}.txt"
+        with partial.open("x", encoding="utf-8") as stream:
+            stream.write(f"capture_source=adb-procfs-version-only\n"
+                         f"target_id={TARGET_ID}\nserial_sha256_prefix={prefix}\n"
+                         f"boot_img_sha256={boot_hash}\n"
+                         f"boot_transcript_sha256={transcript_hash}\n"
+                         "device_tree_model=unavailable-permission-denied\n"
+                         f"{version}\n")
+        print(f"result=live-kernel-banner-matched-model-unavailable "
+              f"capture={partial} sha256={sha(partial)}")
+        print("This partial capture cannot satisfy the temporary-boot observation gate.")
+        return
+    require(model == "ZUMA PRO TEGU MP on ZUMA PRO",
+            "live device tree model differs from pinned tegu board")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     capture = evidence_dir / f"capture-temp-{stamp}-{os.getpid()}.txt"
     with capture.open("x", encoding="utf-8") as stream:

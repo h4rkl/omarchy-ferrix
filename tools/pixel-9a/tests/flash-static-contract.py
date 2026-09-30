@@ -236,6 +236,37 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-static-observe-test.") as temp
     else:
         raise AssertionError("capture from another temporary boot was accepted")
     assert serial not in generated_capture.read_text()
+
+    def model_denied_command(*args: str, **kwargs) -> str:
+        if args[4:] == ("cat", "/proc/device-tree/model"):
+            raise workflow.Refusal("adb command failed: Permission denied")
+        return adb_capture_command(*args, **kwargs)
+
+    workflow.command = model_denied_command
+    workflow.capture_temp()
+    partial = next(evidence_dir.glob("capture-partial-*.txt"))
+    assert "device_tree_model=unavailable-permission-denied" in partial.read_text()
+    assert banner in partial.read_text() and serial not in partial.read_text()
+    try:
+        workflow.kernel_capture(partial, bundle / "boot.img")
+    except workflow.Refusal as error:
+        assert "tegu machine record" in str(error)
+    else:
+        raise AssertionError("version-only capture was accepted as a full kernel observation")
+
+    def stock_version_command(*args: str, **kwargs) -> str:
+        if args[4:] == ("cat", "/proc/version"):
+            return "Linux version 6.1-stock (stock@google) #1 SMP\n"
+        return model_denied_command(*args, **kwargs)
+
+    workflow.command = stock_version_command
+    try:
+        workflow.capture_temp()
+    except workflow.Refusal as error:
+        assert "differs from the pinned boot image kernel" in str(error)
+    else:
+        raise AssertionError("stock kernel version was accepted as the temporary image")
+    workflow.command = adb_capture_command
     observed_properties["ro.boot.hardware.revision"] = "MP2.0"
     try:
         workflow.capture_temp()

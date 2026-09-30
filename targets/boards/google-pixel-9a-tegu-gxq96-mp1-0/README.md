@@ -64,7 +64,9 @@ set `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` to the boot transcript and run
 `just pixel-9a-flash-static-capture-temp`. It reads `/proc/version` and the
 device-tree model after exact ADB identity checks and writes an ignored,
 redacted capture. This matches the live kernel build banner and device-tree
-model; it is not
+model. If Android denies the device-tree model, it records only a hash-bound
+version capture, which cannot pass `observe-temp`; a separate reviewed kernel
+log is then required. A full capture is not
 a readback of the loaded image, a full kernel log, or proof of no earlier
 kernel errors. `observe-temp` also requires a reviewed human account
 of no hang or reboot loop and a fresh ordinary-Fastboot preflight. If ADB does
