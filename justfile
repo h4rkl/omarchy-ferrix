@@ -120,6 +120,11 @@ pixel-9a-partition-capacity:
 pixel-9a-partition-capacity-diagnose:
     @"{{root}}/tools/pixel-9a/partition-capacity.sh" --diagnose-fastboot
 
+# Separate schema-2, eight-partition handoff for the native static-boot route.
+# Read-only; requires owner-entered ordinary bootloader Fastboot.
+pixel-9a-partition-capacity-static:
+    @"{{root}}/tools/pixel-9a/partition-capacity.sh" --static-boot
+
 pixel-9a-partition-test:
     @sh "{{root}}/tools/pixel-9a/tests/partition-inventory.sh"
 

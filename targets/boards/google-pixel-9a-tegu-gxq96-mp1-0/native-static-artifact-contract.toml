@@ -1,0 +1,46 @@
+schema_version = 1
+target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
+route_id = "experimental-linux-google-tegu-s5300-wwan-static"
+status = "implementation-approved-not-built"
+source_kernel_backend = "linux-google-tegu-wwan"
+source_only = true
+android_userspace_required = false
+stock_modules_may_be_reused = false
+boot_header_version = 4
+boot_page_size = 4096
+capacity_schema_version = 2
+capacity_contract = "static-boot-only"
+partition_contract = "complete-native-static-builtins"
+partitions = ["boot", "init_boot", "vendor_boot", "vendor_kernel_boot", "dtbo", "vbmeta", "vbmeta_vendor", "vbmeta_system"]
+forbidden_writes = ["bootloader", "radio", "super", "vendor_dlkm", "system_dlkm", "metadata", "persist", "efs", "efs_backup", "modem_userdata"]
+active_slot_writes = false
+logical_partition_writes = false
+allocation_changes = false
+temporary_boot_observation_required = true
+tested_stock_recovery_required = true
+per_run_confirmation_required = true
+
+# Rootfs is separately gated. This declaration does not authorize userdata
+# provisioning or make an Android slot-switch a working stock recovery path.
+rootfs_mapping_status = "pending-live-map-and-separate-wipe-confirmation"
+
+[builtins]
+config_source = "extract-ikconfig-from-hash-verified-kernel-Image"
+extractor = "scripts/extract-ikconfig"
+extractor_source_revision = "88335b765d920cc345cdffb9c1a6d77e3a531ff9"
+extractor_sha256 = "070020a9c5a0b9e6f7e24f5728073e8e62155be49133a9f3f37e8fc19230a9b1"
+required = ["CONFIG_DEVTMPFS=y", "CONFIG_DEVTMPFS_MOUNT=y", "CONFIG_SCSI=y", "CONFIG_SCSI_UFSHCD=y", "CONFIG_SCSI_UFS_EXYNOS=y", "CONFIG_EXT4_FS=y", "CONFIG_USB_DWC3=y", "CONFIG_USB_DWC3_EXYNOS=y", "CONFIG_USB_GADGET=y", "CONFIG_DRM_EXYNOS_ZUMAPRO_DPU=y", "CONFIG_BRCMFMAC=y", "CONFIG_BT_HCIUART_BCM=y", "CONFIG_S5300_MODEM=y"]
+selected_initfs_modules_must_be_empty = true
+selected_vendor_modules_must_be_empty = true
+selected_system_modules_must_be_empty = true
+early_cpio_loadable_modules_forbidden = true
+
+[avb]
+descriptors = "fresh-from-final-static-images-only"
+stock_descriptors_forbidden = true
+logical_partition_descriptors_forbidden = true
+independent_descriptor_verification_required = true
+
+# This contract is deliberately distinct from the ten-partition radio split
+# contract. Existing composers/flash adapters must continue to reject it.
+# A future adapter may admit it only after verifying all fields and provenance.

@@ -1,5 +1,49 @@
 # Status
 
+## 2026-09-30 (approved recovery bootstrap and static capacity handoff)
+
+- **Owner approval:** implement the separate static-only installation
+  contract and first-stock-recovery-test workflow. Physical writes still
+  require their exact preflight and fresh per-run approval; the accepted
+  recovery destination is pinned stock `CP3A.260905.009`.
+- **Recovery bootstrap implemented:** `--preflight-first-test` and
+  `--confirm-first-test` preserve exact identity, pinned archive hashes,
+  stock board requirements, vendor-sequence verification, and data safety.
+  Only this explicit mode permits `documented-not-tested` recovery and
+  partial Ferrix image compatibility; it verifies the independent stock
+  inputs, demands an extra acknowledgement, and always uses the vendor wipe
+  sequence. Normal restore gates remain unchanged. No mode edits the target
+  gates or claims a successful Android boot from command completion.
+- **Physical read-only preflight:** exact target
+  `google-pixel-9a-tegu-gxq96-mp1-0`, slot `a`, unlocked, ordinary bootloader,
+  passed at `2026-09-30T00:16:27Z`; ignored transcript
+  `out/pixel-9a/restore/20260930T001627Z.txt`. Both pinned archives were
+  rehashed. The reviewed stock sequence requires newer bootloader
+  `tegu-17.0-15819938` and baseband `g5300t-260604-260807-B-16036236`;
+  these changes and the data wipe were disclosed. Per-run authorization was
+  requested, not inferred from tooling approval. No restore was executed.
+- **Static capacities acquired:** after the owner entered bootloader mode,
+  read-only inventory and the new schema-2 `--static-boot` capacity workflow
+  succeeded. Both slots independently reported boot/vendor_boot/
+  vendor_kernel_boot 67,108,864 bytes, init_boot 8,388,608 bytes, dtbo
+  16,777,216 bytes, and each vbmeta partition 65,536 bytes. All sixteen
+  partition entries were classified physical. The separate ignored handoff
+  is `out/pixel-9a/partition-capacities-static-20260930T001738Z-91048.tsv`;
+  no dynamic sizes were substituted and the ten-partition handoff remains
+  unavailable. Broader inventory remains partial.
+- **Native static contract:** the approved source-only TOML contract is
+  checked in and hash-pinned separately from the existing split contract.
+  Extracting IKCONFIG from the verified builder `Image` with the pinned
+  upstream helper reproduced configuration hash
+  `a644e47fac409e47d2c132dfb1dc02839f645812ce0d10a7bc2e93634c766b2d`.
+  The static-only composer/flash adapter are not implemented yet; the
+  existing route must not consume the new eight-partition handoff.
+- **Validation:** factory-restore and capacity regressions pass, including
+  first-test acknowledgement, ordinary-mode refusal, data safety, gate
+  non-promotion, wrong transport, physical classification, and separate
+  output schema. No firmware write, slot change, partition write, native
+  rebuild, or capability promotion was performed.
+
 ## 2026-09-30 (remaining-blocker investigation and scoped Fastbootd fix)
 
 - **Implemented:** the radio-first flash adapter now accepts the observed

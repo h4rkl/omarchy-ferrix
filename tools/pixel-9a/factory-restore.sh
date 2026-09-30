@@ -33,6 +33,8 @@ usage() {
 usage:
   tools/pixel-9a/factory-restore.sh --preflight [--keep-data] [--from-adb]
   tools/pixel-9a/factory-restore.sh --confirm-restore [--keep-data] [--from-adb]
+  tools/pixel-9a/factory-restore.sh --preflight-first-test [--from-adb]
+  tools/pixel-9a/factory-restore.sh --confirm-first-test [--from-adb]
 
 --preflight        read-only artifact, vendor-sequence, transport, and
                    Fastboot identity/version checks
@@ -41,6 +43,10 @@ usage:
 --keep-data        omit -w from the fastboot update stage (default wipes user data)
 --from-adb         the phone is in Android: verify its identity over ADB and,
                    after its own confirmation, reboot it to the bootloader
+--preflight-first-test  read-only preflight for the explicitly approved first
+                   stock recovery test; does not claim recovery is tested
+--confirm-first-test  test the pinned vendor restore with an extra typed risk
+                   acknowledgement; always wipes data, never flashes Ferrix
 
 Requires `just pixel-9a-factory-inspect` to have recorded the pinned archive's
 android-info requirements first. Only a serial-redacted transcript remains
@@ -52,17 +58,21 @@ EOF
 mode=""
 wipe=1
 from_adb=0
+first_recovery_test=0
 [ "$#" -ge 1 ] || usage
 for argument in "$@"; do
   case "$argument" in
     --preflight) [ -z "$mode" ] || usage; mode=preflight ;;
     --confirm-restore) [ -z "$mode" ] || usage; mode=restore ;;
+    --preflight-first-test) [ -z "$mode" ] || usage; mode=preflight; first_recovery_test=1 ;;
+    --confirm-first-test) [ -z "$mode" ] || usage; mode=restore; first_recovery_test=1 ;;
     --keep-data) wipe=0 ;;
     --from-adb) from_adb=1 ;;
     *) usage ;;
   esac
 done
 [ -n "$mode" ] || usage
+[ "$first_recovery_test" -eq 0 ] || [ "$wipe" -eq 1 ] || usage
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -255,6 +265,11 @@ require_backup_gate() {
 
 require_mutation_gates() {
   require_backup_gate
+  if [ "$first_recovery_test" -eq 1 ]; then
+    require_first_test_contract
+    emit recovery_test_gate 'explicit-first-test; not previously verified'
+    return 0
+  fi
   case "$image_compatibility_gate" in
     passed|verified) ;;
     *) die "image compatibility gate is '$image_compatibility_gate'; exact target image inputs are not approved for this restore" ;;
@@ -263,6 +278,21 @@ require_mutation_gates() {
     tested|passed|verified) ;;
     *) die "recovery procedure gate is '$recovery_procedure_gate'; exact-target recovery procedure is not tested" ;;
   esac
+}
+
+# Owner-approved bootstrap contract, not a relaxation of normal restore or
+# Ferrix flash. Image compatibility here is the independently verified pinned
+# stock archive, not the target's still-incomplete native Linux image set.
+require_first_test_contract() {
+  [ "$identity_gate" = passed ] || die 'first recovery test requires approved exact-target identity'
+  [ "$confirmation_gate" = required ] || die 'first recovery test requires typed per-run confirmation'
+  [ "$recovery_procedure_gate" = documented-not-tested ] || die 'first recovery test requires documented-not-tested state; use normal restore for tested recovery'
+  case "$image_compatibility_gate" in
+    partial|passed|verified) ;;
+    *) die "first recovery test refuses unknown image compatibility state: $image_compatibility_gate" ;;
+  esac
+  [ "${stock_image_compatibility:-}" = verified-pinned-vendor-inputs ] || die 'first recovery test lacks verified pinned stock inputs'
+  [ "$wipe" -eq 1 ] || die 'first recovery test must use the complete vendor wipe sequence'
 }
 
 # The archive's android-info.txt lives inside the multi-gigabyte nested image
@@ -489,6 +519,12 @@ read_fastboot_identity() {
 
 print_plan() {
   emit operation factory-restore
+  emit first_recovery_test "$first_recovery_test"
+  emit stock_image_compatibility "$stock_image_compatibility"
+  if [ "$first_recovery_test" -eq 1 ]; then
+    emit recovery_test_limitation 'first test changes bootloader/radio firmware and wipes user data; recovery is not yet proven'
+    emit recovery_test_confirmation 'CONFIRM PIXEL 9A FIRST STOCK RECOVERY TEST (WIPES ALL USER DATA)'
+  fi
   if [ "$wipe" -eq 1 ]; then
     emit user_data "wipe via fastboot -w update"
   else
@@ -506,7 +542,9 @@ preflight() {
   verify_artifact ota
   read_inventory_requirements
   read_vendor_sequence
+  stock_image_compatibility=verified-pinned-vendor-inputs
   read_all_gates
+  [ "$first_recovery_test" -eq 0 ] || require_first_test_contract
   enumerate_transports
   emit adb_devices "$adb_count"
   emit fastboot_devices "$fastboot_count"
@@ -748,6 +786,12 @@ say "transcript (serial redacted): $transcript"
 [ "$mode" = restore ] || exit 0
 require_mutation_gates
 
+if [ "$first_recovery_test" -eq 1 ]; then
+  confirm_phrase \
+    'CONFIRM PIXEL 9A FIRST STOCK RECOVERY TEST (WIPES ALL USER DATA)' \
+    'This explicitly tests a recovery path that is not yet proven. The vendor sequence replaces bootloader/radio firmware and stock images and wipes shared data. It does not authorize Ferrix flashing or mark recovery as tested.'
+fi
+
 if [ "$from_adb" -eq 1 ]; then
   confirm_phrase \
     "CONFIRM PIXEL 9A REBOOT TO BOOTLOADER FOR FACTORY RESTORE" \
@@ -819,6 +863,7 @@ fi
 emit update_exit_status "$update_status"
 if [ "$update_status" -eq 0 ]; then
   emit result factory-restore-complete
+  emit stock_boot_verification pending-fresh-same-device-android-discovery
   say "fastboot update finished; the device reboots into stock Android by itself (vendor default)."
   say "transcript (serial redacted): $transcript"
 else

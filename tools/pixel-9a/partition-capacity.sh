@@ -32,8 +32,15 @@ mode=handoff
 case "$#:${1:-}" in
 	0:) ;;
 	1:--diagnose-fastboot) mode=diagnose-fastboot ;;
-	*) die 'usage: partition-capacity.sh [--diagnose-fastboot]' ;;
+	1:--static-boot) mode=static-boot ;;
+	*) die 'usage: partition-capacity.sh [--diagnose-fastboot|--static-boot]' ;;
 esac
+capacity_partitions='boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta vbmeta_vendor vbmeta_system vendor_dlkm system_dlkm'
+capacity_schema=1
+if [ "$mode" = static-boot ]; then
+	capacity_partitions='boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta vbmeta_vendor vbmeta_system'
+	capacity_schema=2
+fi
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || die "missing $1; install Android Platform Tools"
@@ -53,6 +60,11 @@ transcript="$out/partition-capacity-$stamp.txt"
 [ "$mode" != diagnose-fastboot ] || transcript="$out/partition-capacity-diagnostic-$stamp-$$.txt"
 handoff="$out/partition-capacities-$stamp.tsv"
 latest="$out/partition-capacities-latest.tsv"
+if [ "$mode" = static-boot ]; then
+	transcript="$out/partition-capacity-static-$stamp-$$.txt"
+	handoff="$out/partition-capacities-static-$stamp-$$.tsv"
+	latest="$out/partition-capacities-static-latest.tsv"
+fi
 handoff_tmp="$out/.partition-capacities-latest.$$"
 serial=''
 cleanup() {
@@ -326,9 +338,14 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 		b|_b) active_suffix=_b; inactive_suffix=_a ;;
 		*) die "unexpected current slot: $slot" ;;
 	esac
-	[ "$userspace" = yes ] ||
-		die 'Fastboot capacity handoff requires fastbootd (is-userspace=yes) so both dynamic A/B logical partitions are independently observable; no reboot was issued'
+	if [ "$mode" = static-boot ]; then
+		[ "$userspace" = no ] || die 'static-boot capacities require ordinary bootloader Fastboot; no reboot was issued'
+	else
+		[ "$userspace" = yes ] ||
+			die 'Fastboot capacity handoff requires fastbootd (is-userspace=yes) so both dynamic A/B logical partitions are independently observable; no reboot was issued'
+	fi
 	if [ "$sku" = 'MSM USF' ]; then
+		[ "$userspace" = yes ] || die 'Fastbootd placeholder is forbidden in bootloader mode'
 		# Google's userspace HAL hardcodes this placeholder in getVariant:
 		# https://android.googlesource.com/platform/hardware/google/pixel/+/1c8e4019/fastboot/Fastboot_aidl.cpp
 		# It is not a SKU. Only this read-only, mode-verified capacity path
@@ -394,11 +411,18 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 		printf '# inventory_completeness=partial (Fastboot exposes no guest /proc inventory; this handoff never upgrades that gate)\n'
 		printf '# exact-target=%s product=%s revision=%s sku=%s current_slot=%s is_userspace=%s\n' "$expected_target_id" "$product" "$revision" "$expected_sku" "$slot" "$userspace"
 		printf '# observed_variant=%s sku_source=%s\n' "$sku" "$pixel9a_sku_source"
-		printf 'schema_version%s1\n' "$tab"
+		printf 'schema_version%s%s\n' "$tab" "$capacity_schema"
 		printf 'target_id%s%s\n' "$tab" "$expected_target_id"
+		[ "$mode" != static-boot ] || printf 'partition_contract%sstatic-boot-only\n' "$tab"
 	} >"$handoff_tmp"
 
-	for partition in boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta vbmeta_vendor vbmeta_system vendor_dlkm system_dlkm; do
+	for partition in $capacity_partitions; do
+		if [ "$mode" = static-boot ]; then
+			for static_suffix in _a _b; do
+				static_logical=$(fastboot_getvar "is-logical:$partition$static_suffix") || die "missing physical classification for $partition$static_suffix"
+				[ "$static_logical" = no ] || die "$partition$static_suffix is not a verified physical partition"
+			done
+		fi
 		fastboot_capacity_for_partition "$partition"
 		write_partition_row "$partition" "$fastboot_capacity_bytes"
 		emit "${partition}_active_capacity_bytes" "$fastboot_capacity_bytes"
@@ -418,6 +442,7 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 fi
 
 [ "$mode" != diagnose-fastboot ] || die 'diagnostic mode requires exactly one Fastbootd device and no ADB transport'
+[ "$mode" != static-boot ] || die 'static-boot handoff requires exactly one bootloader Fastboot device and no ADB transport'
 
 [ "$adb_count" -eq 1 ] && [ "$fastboot_count" -eq 0 ] ||
 	die "capacity handoff requires exactly one ADB or one Fastboot device (adb=$adb_count fastboot=$fastboot_count)"

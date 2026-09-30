@@ -127,7 +127,8 @@ getvar)
 	is-userspace) value=${STUB_FASTBOOT_IS_USERSPACE:-yes} ;;
 	unlocked|secure) value=yes ;;
 	super-partition-name) value=super ;;
-	is-logical:*) value=yes ;;
+	is-logical:vendor_dlkm_*|is-logical:system_dlkm_*) value=yes ;;
+	is-logical:*) value=${STUB_STATIC_IS_LOGICAL:-no} ;;
 	snapshot-update-status)
 		[ -n "${STUB_SNAPSHOT_STATUS:-}" ] || exit 1
 		value=$STUB_SNAPSHOT_STATUS
@@ -392,6 +393,28 @@ for bad_diagnostic in adb bootloader wrong-identity; do
 		exit 1
 	fi
 	! grep -q ' getvar partition-size:' "$work/diagnostic-$bad_diagnostic.commands"
+done
+
+FERRIX_OUT_DIR="$work/static" STUB_ADB_DEVICES_EMPTY=1 \
+	STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' STUB_FASTBOOT_IS_USERSPACE=no \
+	STUB_FASTBOOT_LOG="$work/static.commands" \
+	"$workflow" --static-boot >"$work/static.out" 2>"$work/static.err"
+static_handoff="$work/static/pixel-9a/partition-capacities-static-latest.tsv"
+grep -q '^schema_version[[:space:]]2$' "$static_handoff"
+grep -q '^partition_contract[[:space:]]static-boot-only$' "$static_handoff"
+[ "$(grep -c '^partition[[:space:]]' "$static_handoff")" -eq 8 ]
+! grep -q 'dlkm' "$work/static.commands"
+[ ! -e "$work/static/pixel-9a/partition-capacities-latest.tsv" ]
+for static_failure in wrong-mode logical; do
+	set -- STUB_ADB_DEVICES_EMPTY=1 'STUB_FASTBOOT_DEVICES=SERIAL-F fastboot usb:1' STUB_FASTBOOT_IS_USERSPACE=no
+	case "$static_failure" in
+		wrong-mode) set -- "$@" STUB_FASTBOOT_IS_USERSPACE=yes ;;
+		logical) set -- "$@" STUB_STATIC_IS_LOGICAL=yes ;;
+	esac
+	if env FERRIX_OUT_DIR="$work/static-$static_failure" "$@" "$workflow" --static-boot >"$work/static-$static_failure.out" 2>"$work/static-$static_failure.err"; then
+		echo "static capacity accepted $static_failure" >&2; exit 1
+	fi
+	[ -z "$(find "$work/static-$static_failure" -name '*.tsv' -print)" ]
 done
 
 printf '%s\n' 'pixel-9a partition capacity tests passed'

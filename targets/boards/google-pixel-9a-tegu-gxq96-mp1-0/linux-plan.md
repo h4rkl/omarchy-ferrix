@@ -141,7 +141,14 @@ Next acquisition/layout review, before enabling any allocation change:
    image and storage plan. Only a new, specific mutation preflight and owner
    confirmation can authorize physical installation.
 
-### Remaining-contract review (proposed; implementation approval requested)
+### Remaining-contract review (implementation approved; physical runs separate)
+
+The owner approved the static-only and first-recovery-test tooling changes
+on 2026-09-30. This does not authorize a device write. The source-only
+`native-static-artifact-contract.toml` now declares the independent eight
+partition, built-in-driver and AVB requirements. Its composer and flash
+adapter remain to be implemented; the existing ten-partition route cannot
+consume it.
 
 Read-only inspection of deba at source commit
 `26fc9f9beb1d1faf041a8d4df71fe6142353c133` found empty selected initfs/vendor/
@@ -187,7 +194,26 @@ stock vendor restore sequence only; never Ferrix images. Successful command
 completion plus fresh same-device Android discovery of the accepted stock
 build is required before promoting recovery evidence. The target's general
 Ferrix `image_compatibility=partial` is not evidence about the official stock
-archive. No first-test mode or gate exception is implemented by this proposal.
+archive. The explicit `--preflight-first-test` / `--confirm-first-test` modes
+are now implemented and stub-tested. The live read-only preflight passed on
+2026-09-30; no restore execution or gate promotion is implied. Normal restore
+still requires its existing tested-recovery gate. First-test mode always
+uses the full wipe sequence and adds a separate risk acknowledgement before
+any mutation.
+
+The separate `pixel-9a-partition-capacity-static` read-only workflow now
+requires ordinary bootloader mode, verifies physical classification and both
+slots' independent equal positive sizes for the eight allow-listed targets,
+and emits schema 2 / `partition_contract=static-boot-only` to a separate
+ignored output. The live capture at `2026-09-30T00:17:38Z` passed; it neither
+queries DLKM sizes nor upgrades the broader partial inventory. Fresh evidence
+must be collected after any restore that changes the layout.
+
+The kernel's embedded IKCONFIG was extracted read-only on deba using the
+pinned upstream helper and matched the recorded `.config` digest exactly.
+The new contract binds the extractor digest and requires future composition
+to repeat this extraction from the verified `Image`, not trust an unrelated
+configuration file. No generated image or extracted config enters Git.
 
 The current radio-first Fastbootd SKU correction is independent of those
 proposals: `MSM USF` is recognized only after this process has established a

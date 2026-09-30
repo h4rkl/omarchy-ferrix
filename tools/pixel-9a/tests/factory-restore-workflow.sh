@@ -575,6 +575,53 @@ bad_calls=$(grep -vE '^adb\tdevices\t-l\t$|^adb\t-s\t[^[:space:]]+\tshell\tgetpr
 check "dynamic: the last run used only allow-listed verbs" [ -z "$bad_calls" ]
 [ -z "$bad_calls" ] || printf '%s\n' "$bad_calls"
 
+# Explicit first-test mode resolves the recovery-test bootstrap without
+# promoting any target gate or weakening normal restore.
+cp -R "$work/target" "$work/target-first-test"
+sed -i.bak -e 's/image_compatibility = "passed"/image_compatibility = "partial"/' \
+  -e 's/recovery_procedure = "tested"/recovery_procedure = "documented-not-tested"/' \
+  "$work/target-first-test/manifest.toml"
+first_manifest_hash=$(sha256_of "$work/target-first-test/manifest.toml")
+reset_stub
+export STUB_FASTBOOT_DEVICES="$fastboot_one" FERRIX_PIXEL9A_TARGET_DIR="$work/target-first-test"
+feed first_preflight
+run_case first_preflight --preflight-first-test
+check 'first test: pinned stock compatibility is independent of Ferrix partial state' [ "$status" -eq 0 ]
+check 'first test: preflight is read-only' [ -z "$(mutations)" ]
+check 'first test: warns about unproven recovery and firmware changes' grep -q '^recovery_test_limitation=first test changes bootloader/radio firmware' "$work/first_preflight/stdout"
+feed normal_still_blocked
+run_case normal_still_blocked --confirm-restore
+check 'first test: normal restore still refuses unapproved gates' [ "$status" -eq 1 ]
+check 'first test: normal refusal performs no mutation' [ -z "$(mutations)" ]
+
+feed first_wrong 'CONFIRM PIXEL 9A FLASH BOOTLOADER AND RADIO (WIPES ALL USER DATA)'
+run_case first_wrong --confirm-first-test
+check 'first test: existing restore phrase cannot bypass additional acknowledgement' [ "$status" -eq 1 ]
+check 'first test: wrong acknowledgement performs no mutation' [ -z "$(mutations)" ]
+
+feed first_restore 'CONFIRM PIXEL 9A FIRST STOCK RECOVERY TEST (WIPES ALL USER DATA)' \
+  'CONFIRM PIXEL 9A FLASH BOOTLOADER AND RADIO (WIPES ALL USER DATA)' \
+  'CONFIRM PIXEL 9A FASTBOOT UPDATE (WIPES ALL USER DATA)'
+run_case first_restore --confirm-first-test
+check 'first test: exact extra acknowledgement permits vendor restore sequence' [ "$status" -eq 0 ]
+check 'first test: only the existing vendor wipe sequence ran' [ "$(mutations)" = "$expected_wipe" ]
+check 'first test: completion still requires Android boot evidence' grep -q '^stock_boot_verification=pending-fresh-same-device-android-discovery$' "$work/first_restore/stdout"
+check 'first test: never promotes manifest gates' [ "$(sha256_of "$work/target-first-test/manifest.toml")" = "$first_manifest_hash" ]
+
+reset_stub
+export STUB_FASTBOOT_DEVICES="$fastboot_one" FERRIX_PIXEL9A_TARGET_DIR="$work/target-gates-current"
+feed first_backup_pending 'CONFIRM PIXEL 9A FIRST STOCK RECOVERY TEST (WIPES ALL USER DATA)'
+run_case first_backup_pending --confirm-first-test
+check 'first test: unresolved data safety still refuses' [ "$status" -eq 1 ]
+check 'first test: pending data safety causes no mutation' [ -z "$(mutations)" ]
+
+reset_stub
+export STUB_FASTBOOT_DEVICES="$fastboot_one" FERRIX_PIXEL9A_TARGET_DIR="$work/target-first-test"
+feed first_keep_data
+run_case first_keep_data --preflight-first-test --keep-data
+check 'first test: refuses keep-data variant' [ "$status" -eq 2 ]
+check 'first test: invalid mode does not contact phone' [ ! -s "$calls" ]
+
 if [ "$fails" -eq 0 ]; then
   echo '{"event":"pixel-9a-factory-restore-test","status":"passed"}'
 else

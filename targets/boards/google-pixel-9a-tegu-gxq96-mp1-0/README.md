@@ -223,6 +223,28 @@ Fastbootd on its own.
 
 ## Recovery choices
 
+The owner approved an explicit first-stock-recovery-test contract on
+2026-09-30, accepting pinned stock `CP3A.260905.009` as the recovery
+destination. To test recovery without falsely marking it tested first:
+
+```sh
+just pixel-9a-factory-restore --preflight-first-test
+# Only after exact preflight review and fresh owner authorization:
+just pixel-9a-factory-restore --confirm-first-test
+```
+
+The development-device data-policy token is still required for execution.
+This mode verifies the same official archives, board requirements, vendor
+sequence, unique device, and image hashes; it permits only the explicit
+`documented-not-tested` bootstrap state and always wipes data. It adds
+`CONFIRM PIXEL 9A FIRST STOCK RECOVERY TEST (WIPES ALL USER DATA)` before
+the existing bootloader/radio and update confirmations. It replaces stock
+bootloader/radio firmware as part of Google's sequence; this is distinct
+from Ferrix's firmware-preserving installation route. `--keep-data` is
+refused. Command completion does not prove a successful Android boot, and
+the workflow never edits recovery gates. Capture fresh same-device discovery
+of the expected stock build before recording recovery as tested.
+
 Back up personal data first. Google documents full OTA sideload as the safer
 route: it normally does not require an unlocked bootloader or a data wipe. The
 device was locked during initial discovery and is now unlocked; the OTA route

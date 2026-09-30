@@ -339,6 +339,23 @@ checked-in `dev-device-no-user-data` policy; `backup` is intentionally
 
 ## Phase 4 - Stock recovery paths
 
+**Owner-approved first-test exception (2026-09-30):** when this exact target's
+recovery gate is `documented-not-tested`, the separate
+`--preflight-first-test` / `--confirm-first-test` modes of
+`pixel-9a-factory-restore` may test the pinned stock recovery route. This is
+an explicit bootstrap contract, not permission to relax normal restore or
+Ferrix gates. Require all ordinary identity, pinned archive, stock board and
+vendor-sequence checks, the data policy, and the full printed preflight plus
+fresh per-run owner authorization. Explain that this stock test updates
+bootloader/radio firmware and wipes data; Ferrix itself must leave that
+firmware untouched. Execution adds the typed phrase
+`CONFIRM PIXEL 9A FIRST STOCK RECOVERY TEST (WIPES ALL USER DATA)` before
+the two normal restore-stage phrases. Do not use `--keep-data`. Neither the
+preflight nor command completion promotes the gate: require the successful
+restore transcript and fresh same-device Android discovery of the accepted
+pinned build. The first-test implementation is stub-tested and its physical
+read-only preflight passed; no physical execution has been recorded yet.
+
 **Status:** both workflows Implemented, Stub-tested only (`just
 pixel-9a-tools-test`: sideload 49 checks, factory restore 69 checks). Neither
 has run on hardware; `manifest.toml` records
