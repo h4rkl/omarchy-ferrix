@@ -221,11 +221,25 @@ overlay refused `FDT_ERR_BADOFFSET`, consistent with the kernel's
 Google's [tegu common source](https://android.googlesource.com/kernel/devices/google/tegu/+/6276884d9940694b25a6934671918ec8ac412ee8/dts/zumapro-tegu-common.dtsi)
 includes the ZumaPro base and many board and modem definitions; the
 MP overlay cannot be transplanted as a standalone one-file patch.
+The pinned Google [tegu](https://android.googlesource.com/kernel/devices/google/tegu/+/6276884d9940694b25a6934671918ec8ac412ee8/),
+[Zuma](https://android.googlesource.com/kernel/devices/google/zuma/+/42395e8adcb880aa336f0da6bb2a19ed53929c40/),
+and [ZumaPro](https://android.googlesource.com/kernel/devices/google/zumapro/+/8831630eee2ad095b85ed452944e6353940966a5/)
+source revisions supply a 55-file,
+7,646-line include closure for `zumapro-tegu-mp.dts`. The verified stock
+MP overlay has 113 external fixup labels. Each of the four stock base DTBs
+has 1,009 symbols; the old candidate base has none. A source-text comparison
+finds only 49 of those 113 labels in the selected native base DTS include
+closure. This label comparison is an offline port estimate, not a successful
+overlay application or evidence of hardware function. Use the checked-in
+`tools/pixel-9a/dt-inspect.sh` on ignored stock comparison files to repeat
+the DTB header, symbol, and fixup inventory.
 This diagnostic does not prove the bootloader applied that overlay during the
 temporary probe. Both composers now select only a future source-built
 `exynos/google/zumapro-tegu-mp.dtbo` and require an exact MP ID/revision DTBO
-table. The current source cannot meet that gate. Its Kbuild expects an
-`exynos/google/zumapro-tegu-mp.dtso` input plus a Makefile target. A new
+table. The current source cannot meet that gate. A minimal overlay carrying
+only board ID and model would leave the missing hardware definitions
+unresolved. Its Kbuild expects an `exynos/google/zumapro-tegu-mp.dtso`
+input plus a Makefile target. A new
 kernel build must also apply the compiled overlay to its base DTB with
 Kbuild's `fdtoverlay` before producing a manifest. Port and review the
 matching overlay against the source-built base DTB before image composition;

@@ -74,6 +74,13 @@ pixel-9a-recovery-download:
 pixel-9a-factory-inspect:
     @"{{root}}/tools/pixel-9a/inspect-factory.sh"
 
+# Device-free inspection of extracted, ignored Pixel 9a DTBs and overlays.
+pixel-9a-dt-inspect file:
+    @"{{root}}/tools/pixel-9a/dt-inspect.sh" "{{file}}"
+
+pixel-9a-dt-fixups file:
+    @"{{root}}/tools/pixel-9a/dt-inspect.sh" --fixups "{{file}}"
+
 # Native-Linux-only, device-free Google downstream kernel workflow. Sync is a
 # large opt-in download; build uses Google's Kleaf/Bazel target and writes only
 # to ignored cache/output paths.

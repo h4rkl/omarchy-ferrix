@@ -22,6 +22,14 @@
   of copying every unrelated ARM board overlay, and the kernel workflow will
   require the compiled overlay to apply to its source-built base DTB before
   emitting a manifest. This offline check cannot establish hardware boot.
+- A read-only audit of the pinned Google MP source closure found 55 DTS/DTSI
+  files across the tegu, Zuma, and ZumaPro trees. The verified stock MP
+  overlay has 113 external fixups; the native base DTS include closure defines
+  49 matching labels, and its previously built DTB has no symbols. All four
+  extracted stock base DTBs have 1,009 symbols each. The checked-in
+  `dt-inspect.sh` workflow reproduces the stock and candidate DTB metadata
+  inventory without contacting the phone. This rules out a one-file copy of
+  the stock overlay as a compatible native source port.
 - A fresh checked-in, read-only ADB discovery on 2026-09-30T19:38Z again
   identified the exact `tegu` / `GXQ96` / `MP1.0` device on stock Android
   slot A with an unlocked bootloader. The checked-in static flash preflight
