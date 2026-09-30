@@ -1,5 +1,29 @@
 # Status
 
+## 2026-09-30 (fresh Pixel 9a attempt and build gate refusal)
+
+- The owner now requires a new native build before every physical loading
+  attempt. The mobile-device playbook and target README state that policy, and
+  the native wrapper forwards separate attempt-specific kernel, product, and
+  rootfs output paths. Its offline test passed. The reviewed source commit is
+  `29eb332d54505e0c1fccb84482915d810277c95c` on native deba Linux x86_64.
+- Attempt `20260930T032948Z` freshly built a radio kernel (manifest SHA-256
+  `578c0e35bdafe7ee11b4475ffe58470ef9a309a473ee21b128dbd29827a3d809`),
+  product (manifest SHA-256
+  `eba8e1b7c829af9c3c1457bf865793ed06b345af2fdf97f37dc65e517d19908e`),
+  and pmbootstrap rootfs (manifest SHA-256
+  `5be513bc17f5f02cb0934ab69a5aaf1c3769e179652c59a44739d3d0e15b0162`)
+  under new ignored output paths. The product used Cargo's verified build
+  cache; its output directory and manifest were created for this attempt.
+- The fresh boot-input build passed, but the static composer's read-only
+  preflight refused verbatim: `FAIL pixel-9a-static-boot: boot inputs name
+  another kernel_manifest`. The boot-input builder had used its hard-coded
+  default kernel manifest instead of the attempt kernel output. No final
+  bundle was composed or transferred, and no Pixel command was run. The
+  producer default has been corrected to follow `FERRIX_PIXEL9A_RADIO_KERNEL_OUT`;
+  its offline regression test now covers a nondefault kernel output. The
+  failed boot-input output remains ignored as evidence and is not a candidate.
+
 ## 2026-09-30 (fresh Pixel 9a static capacities and unbooted native images)
 
 - **Physical target and transport:** One owner-approved run of

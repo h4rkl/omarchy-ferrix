@@ -32,7 +32,7 @@ grep -q 'source-owned' "$script" || fail 'source-owned handoff marker missing'
 grep -q 'bootable=false' "$script" || fail 'unbooted boundary marker missing'
 
 mkdir -p "$work/bin" \
-	"$work/out/pixel-9a/kernel-radio/tegu-wwan/dist/split-inputs/module-install/lib/modules/6.12.0-ferrix" \
+	"$work/out/pixel-9a/kernel-radio/tegu-attempt/dist/split-inputs/module-install/lib/modules/6.12.0-ferrix" \
 	"$work/out/pixel-9a/rootfs/tegu" \
 	"$work/rootfs-tree/usr/bin" "$work/rootfs-tree/usr/lib" \
 	"$work/rootfs-tree/etc/busybox-paths.d"
@@ -93,8 +93,9 @@ system_tar=$(command -v tar)
 "$system_tar" -cf "$work/out/pixel-9a/rootfs/tegu/rootfs.tar" -C "$work/rootfs-tree" ./etc ./usr ./bin ./lib
 printf '%s\n' synthetic-rootfs-image >"$work/out/pixel-9a/rootfs/tegu/rootfs.img"
 
-kernel_dist="$work/out/pixel-9a/kernel-radio/tegu-wwan/dist"
-kernel_manifest="$work/out/pixel-9a/kernel-radio/tegu-wwan/build-manifest.tsv"
+kernel_out="$work/out/pixel-9a/kernel-radio/tegu-attempt"
+kernel_dist="$kernel_out/dist"
+kernel_manifest="$kernel_out/build-manifest.tsv"
 module_manifest="$kernel_dist/split-inputs/module-install.tsv"
 printf 'schema_version\t1\ninstall_root\tsplit-inputs/module-install\n' >"$module_manifest"
 {
@@ -122,7 +123,7 @@ write_rootfs_manifest() {
 }
 write_rootfs_manifest
 
-base_env="PATH=$work/bin:$PATH FERRIX_OUT_DIR=$work/out FERRIX_PIXEL9A_RADIO_KERNEL_DIST=$kernel_dist FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST=$kernel_manifest FERRIX_PIXEL9A_ROOTFS_OUT=$rootfs_out FERRIX_PIXEL9A_ROOTFS_MANIFEST=$rootfs_manifest FERRIX_PIXEL9A_BOOT_INPUTS_OUT=$work/out/pixel-9a/boot-inputs/tegu-wwan"
+base_env="PATH=$work/bin:$PATH FERRIX_OUT_DIR=$work/out FERRIX_PIXEL9A_RADIO_KERNEL_OUT=$kernel_out FERRIX_PIXEL9A_ROOTFS_OUT=$rootfs_out FERRIX_PIXEL9A_ROOTFS_MANIFEST=$rootfs_manifest FERRIX_PIXEL9A_BOOT_INPUTS_OUT=$work/out/pixel-9a/boot-inputs/tegu-wwan"
 if env $base_env "$script" preflight >"$work/preflight.out" 2>"$work/preflight.err"; then
 	:
 else
@@ -148,6 +149,8 @@ env $base_env FERRIX_PIXEL9A_BOOT_INPUTS_BUILD=I-understand-this-builds-source-o
 
 inputs="$work/out/pixel-9a/boot-inputs/tegu-wwan"
 [ -f "$inputs/manifest.tsv" ] || fail 'boot-input manifest missing'
+awk -F "$tab" -v expected="$kernel_manifest" '$1 == "kernel_manifest" && $2 == expected { found=1 } END { exit(found ? 0 : 1) }' "$inputs/manifest.tsv" ||
+	fail 'boot inputs did not follow the attempt kernel output'
 cmp "$inputs/initramfs-root/bin/busybox" "$work/rootfs-tree/usr/bin/busybox" || fail 'package metadata was selected instead of runtime BusyBox'
 cmp "$inputs/initramfs-root/lib/ld-musl-aarch64.so.1" "$work/rootfs-tree/usr/lib/ld-musl-aarch64.so.1" || fail 'non-runtime loader was selected'
 cmp "$inputs/initramfs-root/lib/libc.musl-aarch64.so.1" "$work/rootfs-tree/usr/lib/ld-musl-aarch64.so.1" || fail 'musl libc alias does not contain loader bytes'
