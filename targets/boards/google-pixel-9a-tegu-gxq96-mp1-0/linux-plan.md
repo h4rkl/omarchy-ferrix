@@ -68,8 +68,77 @@ preflight on 2026-09-29T21:11:49Z, and the ordinary-bootloader Fastboot
 partition inventory completed at 2026-09-29T21:12:06Z. The preflight still
 reports `image_compatibility=partial` and
 `recovery_procedure=documented-not-tested`; the Android-side inventory remains
-partial, and an owner-entered Fastbootd session is still required for the
-independent ten-partition capacity handoff.
+partial. The owner-entered Fastbootd diagnostic on 2026-09-30 established
+that this mode cannot expose six static partition pairs and reports zero
+allocation for both inactive DLKM partitions. Another mode transition alone
+does not complete the ten-partition capacity handoff.
+
+### Stock-preserving installation methodology
+
+The owner's 2026-09-30 direction is to preserve the stock recovery route,
+bootloader/radio firmware, and active stock slot while preparing an explicit
+inactive-slot Ferrix installation. This is not authorization to repartition,
+overwrite shared storage, select a slot, or flash without a per-run review.
+
+- Keep the existing bootloader and radio firmware. Fastboot and Fastbootd are
+  transports, not replacement firmware. The Ferrix route never writes
+  bootloader/radio partitions or relocks the device.
+- Preserve every active-slot partition. Inactive boot-related partitions
+  still need Ferrix-specific source-built images; leaving all boot images
+  untouched cannot deliver the current native Linux route.
+- Treat `super`, logical-partition allocation, snapshots, `metadata`, and
+  `userdata` as shared-storage concerns, not independent inactive-slot
+  storage. The currently unset rootfs mapping stays unset. A `userdata`
+  rootfs would overwrite Android's shared data filesystem and does not satisfy
+  a promise of an immediately bootable stock fallback.
+- Keep tested recovery and exact image compatibility as independent gates.
+  The owner reports a stock restore, but the recorded preflight alone does
+  not establish its completion. The pinned recovery build `CP3A.260905.009`
+  differs from the observed stock build `BD4A.240925.111`; restoring the
+  pinned archive must not be described as restoring that exact old build.
+  The owner explicitly accepted the pinned newer `CP3A.260905.009` build as
+  the recovery destination on 2026-09-30. This resolves the destination
+  choice only, not the completion-evidence or per-run confirmation gates.
+  Do not upgrade bootloader firmware or claim downgrade compatibility to
+  resolve this discrepancy.
+
+The current radio-first workflow enforces an **existing-allocation-only**
+policy. The reason is visible in [AOSP's Fastboot implementation](https://android.googlesource.com/platform/system/core/+/3f439a7a887736cb3cf26d6523defc19ff61ec7b/fastboot/fastboot.cpp):
+an ordinary logical-partition flash can invoke a resize to the image's
+expanded size. Merely omitting an explicit resize command is insufficient.
+This source observation is not proof of a particular host binary's behavior.
+
+For an explicitly selected inactive slot, the read-only preflight now checks
+both slots' live capacities against all ten reviewed capacities. Missing,
+zero, ambiguous, unaligned, or changed values fail closed. Logical images
+must equal the reviewed allocation, not merely fit within it. Temporary boot
+and observation remain separate, non-persistent operations.
+
+After per-run confirmation, the kernel flash workflow first rechecks identity
+and capacities, visits Fastbootd, verifies exact identity, logical partition
+classification, existing sizes, and `snapshot-update-status=none`, then
+returns to the bootloader and rechecks before writing any image. The normal
+inactive boot writes and later Fastbootd DLKM writes follow; each write has
+another live capacity check. A failure during the initial round trip leaves
+images untouched, though the phone may remain in Fastbootd. Later failures
+can still leave a partially flashed inactive slot: no atomicity or automatic
+rollback is claimed. The shared mutation SKU gate is unchanged, so the
+observed `MSM USF` placeholder is still a blocker for that route.
+
+Next acquisition/layout review, before enabling any allocation change:
+
+1. Collect fresh static A/B capacities in owner-entered bootloader Fastboot
+   with the existing read-only inventory workflow. Any future cross-mode
+   handoff must bind exact identity, current slot, capture times, and hashes;
+   old and new transcripts must not be silently merged.
+2. Obtain exact live logical metadata, group limits, free extents, and
+   snapshot state through a reviewed read-only workflow. Zero inactive DLKM
+   allocation is an observation, not proof of spare space or permission to
+   copy the active size. No allocation/resize workflow is approved here.
+3. Choose a rootfs storage route consistent with the desired stock fallback,
+   establish tested recovery to the accepted pinned build, then review the complete
+   image and storage plan. Only a new, specific mutation preflight and owner
+   confirmation can authorize physical installation.
 
 ## Kernel decision and pinned source baseline
 

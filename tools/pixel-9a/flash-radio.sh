@@ -585,6 +585,86 @@ fastboot_getvar() {
 	'
 }
 
+# These safety reads must not accept a successful CLI exit with a remote
+# FAILED response, duplicate values, or a similarly named partition's row.
+layout_getvar() (
+	layout_key=$1
+	layout_output=$(fastboot -s "$fastboot_serial" getvar "$layout_key" 2>&1) ||
+		die "live layout query failed: $layout_key"
+	printf '%s\n' "$layout_output" | awk -v key="$layout_key" '
+		/FAILED/ { failed=1 }
+		{
+			line=$0
+			sub(/^[[:space:]]*/, "", line)
+			sub(/^\(bootloader\)[[:space:]]*/, "", line)
+			if (index(line, key ":") == 1) {
+				value=substr(line, length(key)+2)
+				gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+				count++
+			}
+		}
+		END { if (failed || count != 1 || value == "") exit 1; print value }
+	' || die "live layout query missing, failed, or ambiguous: $layout_key"
+)
+
+live_partition_capacity() (
+	live_raw=$(layout_getvar "partition-size:$1") || exit 1
+	# POSIX awk is already a workflow prerequisite. Bound conversion to exact
+	# integer arithmetic rather than trusting shell-specific hexadecimal syntax.
+	printf '%s\n' "$live_raw" | awk '
+		{
+			text=$0; base=10; value=0
+			if (text ~ /^0[xX][0-9a-fA-F]+$/) { base=16; text=substr(text,3) }
+			else if (text !~ /^[0-9]+$/) exit 1
+			for (i=1; i<=length(text); i++) {
+				digit=index("0123456789abcdef", tolower(substr(text,i,1)))-1
+				value=value*base+digit
+				if (value>9007199254740991) exit 1
+			}
+			if (value<=0 || value%4096!=0) exit 1
+			printf "%.0f\n", value
+		}
+	' || die "live capacity is zero, malformed, or unaligned: $1"
+)
+
+check_live_kernel_layout() (
+	[ "$slot" != "$current_slot" ] || die 'live layout check requires an explicitly selected inactive slot'
+	for live_name in $physical_artifacts $dynamic_artifacts; do
+		live_expected=$(awk -F "$tab" -v name="$live_name" '$1 == "partition" && $2 == name { print $3 }' "$capacity_file")
+		live_image_bytes=$(field "$(manifest_artifact_row "$live_name")" 4)
+		[ "$live_image_bytes" -le "$live_expected" ] || die "$live_name image exceeds the reviewed capacity"
+		case "$live_name" in
+			vendor_dlkm|system_dlkm)
+				[ "$live_image_bytes" = "$live_expected" ] || die "$live_name image would resize its logical partition; allocation changes are not authorized"
+				;;
+		esac
+		for live_suffix in a b; do
+			live_bytes=$(live_partition_capacity "${live_name}_$live_suffix") || exit 1
+			[ "$live_bytes" = "$live_expected" ] || die "live ${live_name}_$live_suffix capacity differs from the reviewed handoff; no allocation change is authorized"
+			emit live_capacity "partition=${live_name}_$live_suffix bytes=$live_bytes"
+		done
+	done
+	emit live_layout matched-existing-allocation
+)
+
+check_live_write_capacity() (
+	live_write_partition=$1
+	live_write_bytes=$2
+	live_write_userspace=$3
+	live_write_capacity=$(live_partition_capacity "$live_write_partition") || exit 1
+	[ "$live_write_bytes" -le "$live_write_capacity" ] || die "$live_write_partition image exceeds its live capacity"
+	if [ "$live_write_userspace" = no ] && [ "$live_write_partition" != "$rootfs_partition_allowlist" ]; then
+		live_write_name=${live_write_partition%_*}
+		live_reviewed=$(awk -F "$tab" -v name="$live_write_name" '$1 == "partition" && $2 == name { print $3 }' "$capacity_file")
+		[ "$live_write_capacity" = "$live_reviewed" ] || die "$live_write_partition capacity changed before write"
+	fi
+	if [ "$live_write_userspace" = yes ]; then
+		[ "$(layout_getvar "is-logical:$live_write_partition")" = yes ] || die "$live_write_partition is not a verified logical partition"
+		[ "$(layout_getvar snapshot-update-status)" = none ] || die 'snapshot update status is not none; shared storage writes are forbidden'
+		[ "$live_write_bytes" = "$live_write_capacity" ] || die "$live_write_partition flash would resize shared storage; no allocation change is authorized"
+	fi
+)
+
 read_transports() {
 	adb_rows=$(adb devices -l | awk 'NR > 1 && NF { print }')
 	fastboot_rows=$(fastboot devices -l 2>/dev/null | awk 'NF { print }')
@@ -701,6 +781,15 @@ preflight() {
 	elif [ "$mode" = boot-temp ] || [ "$mode" = observe-temp ]; then
 		[ "$is_userspace" = no ] || die 'temporary boot requires the bootloader Fastboot mode'
 	fi
+	case "$mode:$stage" in
+		preflight:kernel|preflight:all|flash:kernel|flash:all)
+			if [ -n "$slot_override" ]; then
+				check_live_kernel_layout
+			else
+				emit live_layout not-checked-no-explicit-inactive-slot
+			fi
+			;;
+	esac
 	emit preflight passed
 }
 
@@ -805,12 +894,13 @@ observe_temp() {
 }
 
 flash_partition() {
-	partition=$1; image=$2; hash=$3; label=$4; expected_bytes=$5; expected_userspace=${6:-no}
+	partition=$1; image=$2; hash=$3; label=$4; flash_expected_bytes=$5; expected_userspace=${6:-no}
 	require_file "$image" 'flash image'
-	[ "$(bytes_of "$image")" = "$expected_bytes" ] || die "$partition image size changed after manifest verification"
+	[ "$(bytes_of "$image")" = "$flash_expected_bytes" ] || die "$partition image size changed after manifest verification"
 	[ "$(sha256_of "$image")" = "$hash" ] || die "$partition image hash changed after manifest verification"
-	emit mutation_input_image "partition_target=$partition input_image_sha256=$hash bytes=$expected_bytes"
+	emit mutation_input_image "partition_target=$partition input_image_sha256=$hash bytes=$flash_expected_bytes"
 	recheck_identity "$expected_userspace"
+	check_live_write_capacity "$partition" "$flash_expected_bytes" "$expected_userspace"
 	emit mutation "fastboot -s $fastboot_serial flash $partition $image"
 	flash_status=0
 	fastboot -s "$fastboot_serial" flash "$partition" "$image" || flash_status=$?
@@ -845,8 +935,23 @@ return_to_bootloader() {
 flash_kernel_stage() {
 	phrase="CONFIRM PIXEL 9A RADIO FLASH KERNEL STAGE TO SLOT $(printf '%s' "$slot" | tr a-z A-Z)"
 	[ "$skip_temp_boot_gate" != yes ] || phrase="$phrase WITHOUT TEMP BOOT GATE"
-	confirm_phrase "$phrase" 'The next commands write the complete source-built radio-first kernel split. Dynamic partitions are written from fastbootd.'
+	confirm_phrase "$phrase" 'The next commands first visit fastbootd to validate existing logical allocations and snapshot state, return to the bootloader, then write only the inactive radio-first kernel split. No allocation-size change is permitted.'
 	check_temp_boot_gate
+	recheck_identity no
+	check_live_kernel_layout
+	# Validate the Fastbootd identity and logical write conditions before any
+	# image is written. In particular, an unavailable SKU or snapshot state
+	# must not strand a partially written inactive boot set. This transport
+	# round trip is covered by the per-run confirmation above.
+	enter_fastbootd
+	recheck_identity yes
+	for name in $dynamic_artifacts; do
+		row=$(manifest_artifact_row "$name")
+		check_live_write_capacity "${name}_$slot" "$(field "$row" 4)" yes
+	done
+	return_to_bootloader
+	recheck_identity no
+	check_live_kernel_layout
 	for name in $physical_artifacts; do
 		row=$(manifest_artifact_row "$name")
 		flash_partition "${name}_$slot" "$image_dir/$(field "$row" 3)" "$(field "$row" 5)" "$slot" "$(field "$row" 4)" no

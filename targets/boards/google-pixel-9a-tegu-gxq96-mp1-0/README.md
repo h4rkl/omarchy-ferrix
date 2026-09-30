@@ -105,6 +105,17 @@ or mirrored values. A reviewed acquisition/layout plan is required before
 changing the capacity contract or partition allocation. This diagnostic
 workflow performs no reboot, resize, slot selection, or flash.
 
+The [stock-preserving installation methodology](linux-plan.md#stock-preserving-installation-methodology)
+keeps bootloader/radio firmware and the active stock slot out of the Ferrix
+write set. The radio-first flash workflow now checks live A/B sizes against
+the reviewed handoff and requires logical images to match existing allocation
+exactly. After confirmation, it verifies Fastbootd identity, logical sizes,
+and idle snapshot state in an initial transport round trip before any image
+write, and rechecks at write time. This is offline-tested safety behavior,
+not permission to resize the zero-capacity inactive partitions. Shared
+`userdata` remains unmapped for Ferrix, and stock recovery still needs its
+independent evidence gate.
+
 This is an owner-declared new development device with no personal data. The
 checked-in gate records `backup = "not-required-dev-device"` and
 `data_policy = "dev-device-no-user-data"`; it deliberately does not claim a

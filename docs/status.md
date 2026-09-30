@@ -1,5 +1,49 @@
 # Status
 
+## 2026-09-30 (stock-preserving radio-first flash safeguards)
+
+- **Exact target:** `google-pixel-9a-tegu-gxq96-mp1-0`. The owner confirmed
+  preserving bootloader/radio firmware and the active stock slot. The target
+  Linux plan now separates inactive boot-image writes from shared logical
+  allocation, snapshots, and `userdata`; rootfs mapping remains unset.
+- **Implementation, not hardware evidence:** radio-first persistent-flash
+  preflight with an explicit inactive slot now reads all twenty A/B sizes
+  and requires equality with the reviewed capacity handoff. Missing, zero,
+  changed, ambiguous, overflowing, and unaligned sizes refuse before mutation.
+  Logical image sizes must equal their existing allocation so a smaller or
+  larger image cannot implicitly authorize a resize. Temporary boot remains
+  independent of this persistent-write check.
+- **Pre-write sequencing:** after typed confirmation, the workflow visits
+  Fastbootd to check exact identity, logical classification, sizes, and
+  `snapshot-update-status=none`, then returns and rechecks before the first
+  image write. These checks are repeated at the write boundary. Early
+  Fastbootd failures now leave images untouched, although the device can
+  remain in Fastbootd; failures after writes begin can still leave a partially
+  flashed inactive slot. The successful stub route performs ten inactive
+  writes and four transport reboots, never slot selection or firmware writes.
+- **Validation:** radio-first flash, inactive-slot activation, capacity, and
+  radio-split regression suites pass, along with shell syntax,
+  `cargo fmt --check`, and `git diff --check`. Fixtures cover smaller logical
+  images with valid hashes, zero/changed/malformed/duplicate capacities,
+  failed queries with zero CLI exit, Fastbootd allocation differences,
+  snapshot refusal, and logical classification. The flash test now selects
+  successful temporary-boot evidence explicitly instead of relying on
+  filesystem iteration order, and clears per-case stub overrides. Full Rust
+  runtime and QEMU suites were not rerun for these host-shell-only changes.
+- **Recovery distinction:** owner-reported restoration is not promoted by
+  these changes. The pinned recovery `CP3A.260905.009` is not the observed
+  stock build `BD4A.240925.111`; restoring the former cannot be described as
+  restoring that exact old ROM. The owner accepted the pinned newer build as
+  the recovery destination in this session, without authorizing a flash.
+  Recovery completion still needs evidence; no downgrade compatibility is
+  claimed.
+- **Still blocked:** the live zero-capacity inactive DLKM pair, incomplete
+  cross-mode size evidence, mutation-path `MSM USF` SKU refusal, recovery
+  completion evidence, and rootfs storage choice are unresolved. No safety
+  gate, capacity contract, recovery pin, or capability claim was relaxed.
+  This session contacted no phone and performed no flash, reboot, resize,
+  slot change, or builder sync/build.
+
 ## 2026-09-30 (capacity diagnostics fixed; physical layout blockers identified)
 
 - **Owner-authorized read-only fix:** capacity queries now retain their

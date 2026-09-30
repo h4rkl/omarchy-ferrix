@@ -686,10 +686,17 @@ radio evidence exists yet.
    `just pixel-9a-flash-radio --stage kernel --slot <a|b>
    [--allow-unsigned-avb]`. The slot is mandatory and must be inactive; the
    flash workflow never changes the selected slot. The typed phrase is
-   `CONFIRM PIXEL 9A RADIO FLASH KERNEL STAGE TO SLOT <A|B>`. It writes the
-   eight bootloader partitions, enters fastbootd only for `vendor_dlkm` and
-   `system_dlkm`, returns to bootloader, and re-checks the exact device and
-   image hash before every write. Success means only
+   `CONFIRM PIXEL 9A RADIO FLASH KERNEL STAGE TO SLOT <A|B>`. The explicit-slot
+   preflight checks both slots' live sizes against the reviewed handoff and
+   refuses any allocation-size change. After confirmation, an initial
+   Fastbootd round trip checks identity, logical classification, sizes, and
+   `snapshot-update-status=none` before any image write. It then writes the
+   eight inactive bootloader-mode partitions, enters Fastbootd for
+   `vendor_dlkm` and `system_dlkm`, returns to bootloader, and re-checks the
+   exact device, image hash, and live capacity before every write. These are
+   four transport reboots, not slot selection. A failed initial round trip
+   can leave the phone in Fastbootd with no images written; later failures
+   can leave a partially flashed inactive slot. Success means only
    `result=flashed-not-booted`.
 5. Inactive-slot activation/boot: after reviewing the flash transcript, set
    `FERRIX_PIXEL9A_RADIO_FLASH_EVIDENCE` to that ignored path and run

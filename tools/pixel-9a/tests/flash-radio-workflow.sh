@@ -63,6 +63,9 @@ printf 'boot-inputs-provenance\n' >"$work/boot-inputs.tsv"
 	for name in boot init_boot vendor_boot vendor_kernel_boot dtbo vendor_dlkm system_dlkm vbmeta vbmeta_vendor vbmeta_system; do printf 'partition\t%s\t4096\n' "$name"; done
 } >"$work/capacity.tsv"
 for name in boot init_boot vendor_boot vendor_kernel_boot dtbo vendor_dlkm system_dlkm vbmeta vbmeta_vendor vbmeta_system; do printf 'radio-%s\n' "$name" >"$work/images/$name.img"; done
+# Logical images must occupy the already-reviewed allocation: an ordinary
+# Fastboot flash may resize a logical partition to the image's expanded size.
+for name in vendor_dlkm system_dlkm; do dd if=/dev/zero of="$work/images/$name.img" bs=4096 count=1 2>/dev/null; done
 printf 'rootfs-tar\n' >"$work/images/rootfs.tar"
 printf 'rootfs-image\n' >"$work/images/rootfs.img"
 mkdir -p "$work/images/provenance"
@@ -106,7 +109,26 @@ case "$1" in
   -s)
     [ "$2" = "$STUB_SERIAL" ] || exit 99
     case "$3" in
-      getvar) case "$4" in product) value=tegu ;; variant) value=${STUB_VARIANT:-GXQ96} ;; hw-revision) value=MP1.0 ;; unlocked) value=yes ;; secure) value=yes ;; current-slot) value=a ;; slot-count) value=2 ;; serialno) value=$STUB_SERIAL ;; is-userspace) [ "$state" = fastbootd ] && value=yes || value=no ;; *) exit 99 ;; esac; printf '(bootloader) %s: %s\n' "$4" "$value" >&2 ;;
+      getvar)
+        case "$4" in
+          partition-size:*)
+            value=0x1000
+            if [ "$4" = "partition-size:${STUB_CAPACITY_PARTITION:-none}" ]; then
+              value=${STUB_CAPACITY_VALUE:-0x0}
+              case "$value" in
+                failed) printf "getvar:%s FAILED (remote: 'Could not open partition')\n" "$4" >&2; exit 0 ;;
+                duplicate) printf '(bootloader) %s: 0x1000\n(bootloader) %s: 0x1000\n' "$4" "$4" >&2; exit 0 ;;
+                prefix) printf '(bootloader) %s_extra: 0x1000\n' "$4" >&2; exit 0 ;;
+                nonzero-exit) printf '(bootloader) %s: 0x1000\n' "$4" >&2; exit 1 ;;
+              esac
+            fi
+            if [ "$state" = fastbootd ] && [ -n "${STUB_FASTBOOTD_CAPACITY:-}" ]; then value=$STUB_FASTBOOTD_CAPACITY; fi
+            ;;
+          is-logical:*) value=${STUB_IS_LOGICAL:-yes} ;;
+          snapshot-update-status) value=${STUB_SNAPSHOT_STATUS-none} ;;
+          product) value=tegu ;; variant) value=${STUB_VARIANT:-GXQ96} ;; hw-revision) value=MP1.0 ;; unlocked) value=yes ;; secure) value=yes ;; current-slot) value=a ;; slot-count) value=2 ;; serialno) value=$STUB_SERIAL ;; is-userspace) [ "$state" = fastbootd ] && value=yes || value=no ;; *) exit 99 ;;
+        esac
+        printf '(bootloader) %s: %s\n' "$4" "$value" >&2 ;;
       boot) [ -f "$4" ] || exit 99; echo gone >"$STUB_STATE" ;;
       flash) [ -f "$5" ] || exit 99; case "$4" in vendor_dlkm_*|system_dlkm_*) [ "$state" = fastbootd ] || exit 98 ;; esac ;;
       reboot) case "$4" in fastboot) echo fastbootd >"$STUB_STATE" ;; bootloader) echo bootloader >"$STUB_STATE" ;; *) exit 99 ;; esac ;;
@@ -152,6 +174,7 @@ STUB_VARIANT=N/A run preflight_n_a '' preflight --allow-unsigned-avb
 check 'preflight: accepts Fastboot N/A variant with same-serial ADB correlation' [ "$status" -eq 0 ]
 check 'preflight: records correlated SKU source' grep -q '^sku_source=adb-correlated$' "$work/preflight_n_a.out"
 check 'preflight: preserves observed unavailable variant' grep -q '^variant=N/A$' "$work/preflight_n_a.out"
+unset STUB_VARIANT
 
 boot_hash=$(awk -F "$tab" '$1 == "artifact" && $2 == "boot" { print $5; exit }' "$work/images/boot-manifest.tsv")
 boot_phrase=$(printf 'CONFIRM PIXEL 9A RADIO TEMPORARY BOOT boot.img@%s\n' "$(printf '%s' "$boot_hash" | cut -c1-8)")
@@ -170,7 +193,7 @@ check 'data policy: allowed transcript records the non-backup safety state' grep
 
 run boot_temp "$boot_phrase" boot-temp --allow-unsigned-avb
 check 'boot-temp: exact radio phrase succeeds' [ "$status" -eq 0 ]
-evidence=$(find "$work/out/pixel-9a/flash-radio" -name 'boot-temp-*.txt' -type f | head -1)
+evidence=$(grep -l '^result=temporary-boot-issued$' "$work/out/pixel-9a/flash-radio"/boot-temp-*.txt | head -1)
 check 'boot-temp: writes route-specific evidence' [ -n "$evidence" ]
 check 'privacy: evidence does not contain serial' env SERIAL="$serial" EVIDENCE="$evidence" sh -c '! grep -Fq "$SERIAL" "$EVIDENCE"'
 
@@ -213,8 +236,63 @@ check 'observation: panic refusal reports recovery boundary' grep -q 'contains a
 
 run flash_kernel "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
 check 'flash: complete split kernel stage succeeds on inactive slot' [ "$status" -eq 0 ]
-check 'flash: ten partition writes and two reboots' sh -c "[ \$(grep -c 'flash' '$calls') -eq 10 ] && [ \$(grep -c 'reboot' '$calls') -eq 2 ]"
+check 'flash: ten partition writes and four checked transport reboots' sh -c "[ \$(grep -c ' flash ' '$calls') -eq 10 ] && [ \$(grep -c ' reboot ' '$calls') -eq 4 ]"
 check 'flash: never writes active slot' sh -c "! grep -qE 'flash [^ ]+_a ' '$calls'"
+
+run live_preflight '' preflight --slot b --allow-unsigned-avb
+check 'layout: inactive-slot preflight checks all twenty capacities' [ "$status" -eq 0 ]
+check 'layout: records matched existing allocation' grep -q '^live_layout=matched-existing-allocation$' "$work/live_preflight.out"
+check 'layout: preflight is read-only' sh -c "! grep -qE 'fastboot.* (flash|reboot|boot) ' '$calls'"
+
+# A hash-consistent image that merely fits is insufficient for logical flash:
+# the client may shrink its allocation to the image size.
+cp "$work/images/boot-manifest.tsv" "$work/manifest.original"
+cp "$work/images/vendor_dlkm.img" "$work/vendor-dlkm.original"
+printf 'short-dlkm\n' >"$work/images/vendor_dlkm.img"
+awk -F "$tab" -v OFS="$tab" -v size="$(bytes "$work/images/vendor_dlkm.img")" \
+	-v hash="$(sha256 "$work/images/vendor_dlkm.img")" '
+	($1 == "artifact" || $1 == "avb_bound_image") && $2 == "vendor_dlkm" { $4=size; $5=hash }
+	{ print }
+' "$work/manifest.original" >"$work/images/boot-manifest.tsv"
+run smaller_image '' preflight --slot b --allow-unsigned-avb
+check 'layout: refuses smaller logical image despite valid hashes' [ "$status" -eq 1 ]
+check 'layout: explains implicit shrink refusal' grep -q 'image would resize its logical partition' "$work/smaller_image.err"
+check 'layout: smaller logical image never mutates' sh -c "! grep -qE 'fastboot.* (flash|reboot|boot) ' '$calls'"
+cp "$work/vendor-dlkm.original" "$work/images/vendor_dlkm.img"
+cp "$work/manifest.original" "$work/images/boot-manifest.tsv"
+
+for bad_size in 0x0 0x2000 invalid 4097 0x20000000000000 failed duplicate prefix nonzero-exit; do
+	STUB_CAPACITY_PARTITION=vendor_dlkm_b STUB_CAPACITY_VALUE="$bad_size" \
+		run bad_layout "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
+	check "layout: rejects $bad_size before any mutation" [ "$status" -eq 1 ]
+	check "layout: $bad_size never writes or reboots" sh -c "! grep -qE 'fastboot.* (flash|reboot|boot) ' '$calls'"
+done
+unset STUB_CAPACITY_PARTITION STUB_CAPACITY_VALUE
+
+STUB_CAPACITY_PARTITION=vendor_dlkm_a STUB_CAPACITY_VALUE=0x2000 \
+	run changed_active '' preflight --slot b --allow-unsigned-avb
+check 'layout: also refuses changed active-slot allocation' [ "$status" -eq 1 ]
+unset STUB_CAPACITY_PARTITION STUB_CAPACITY_VALUE
+
+STUB_FASTBOOTD_CAPACITY=0x2000 run changed_dynamic "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
+check 'layout: rechecks capacity after entering Fastbootd' [ "$status" -eq 1 ]
+check 'layout: refuses implicit logical resize' sh -c "grep -q 'flash would resize shared storage' '$work/changed_dynamic.err' || { cat '$work/changed_dynamic.err' >&2; exit 1; }"
+check 'layout: changed Fastbootd allocation prevents every image write' sh -c "! grep -q ' flash ' '$calls'"
+unset STUB_FASTBOOTD_CAPACITY
+
+for snapshot in merging snapshotted unknown ''; do
+	STUB_SNAPSHOT_STATUS="$snapshot" run snapshot_active "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
+	check "layout: refuses snapshot state $snapshot" [ "$status" -eq 1 ]
+	check "layout: $snapshot refusal identifies snapshot gate" grep -q 'snapshot' "$work/snapshot_active.err"
+	check "layout: $snapshot prevents every image write" sh -c "! grep -q ' flash ' '$calls'"
+done
+unset STUB_SNAPSHOT_STATUS
+
+STUB_IS_LOGICAL=no run not_logical "$flash_phrase" flash --stage kernel --slot b --allow-unsigned-avb
+check 'layout: logical partition classification is required' [ "$status" -eq 1 ]
+check 'layout: classification refusal is explicit' grep -q 'not a verified logical partition' "$work/not_logical.err"
+check 'layout: wrong partition kind prevents every image write' sh -c "! grep -q ' flash ' '$calls'"
+unset STUB_IS_LOGICAL
 unset FERRIX_PIXEL9A_NO_USER_DATA
 
 # A canonical backend must be rejected before any device probe.
