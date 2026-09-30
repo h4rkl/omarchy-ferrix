@@ -13,7 +13,10 @@
   succeeded; the merged tree reports model `ZUMA PRO TEGU MP on ZUMA PRO`.
   This confirms a source-tree mismatch beyond the original missing-symbol
   diagnostic. The stock overlay was used only for ignored comparison output,
-  never for a Ferrix image. No phone command occurred.
+  never for a Ferrix image. The overlay probes did not contact the phone.
+- A subsequent checked-in, read-only discovery saw neither ADB nor Fastboot.
+  This reports transport availability only; it does not establish any change
+  to the previously observed stock Android slot or bootloader state.
 
 ## 2026-10-01 (Pixel 9a vendor boot layout correction; no new device load)
 
