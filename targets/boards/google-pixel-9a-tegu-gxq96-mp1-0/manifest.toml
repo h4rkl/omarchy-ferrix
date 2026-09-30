@@ -100,7 +100,7 @@ kernel_build_status = "not-built"
 radio_kernel_build_status = "built-not-booted"
 radio_kernel_backend = "experimental-linux-google-tegu-s5300-wwan"
 rootfs_build_status = "built-substrate-only"
-boot_status = "not-attempted"
+boot_status = "temporary-probe-unobserved"
 
 [gates]
 identity = "passed"

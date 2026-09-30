@@ -53,11 +53,13 @@ The target manifest remains explicit about the current state:
 `kernel_build_status = "not-built"` for the comparison Google Kleaf route,
 `radio_kernel_build_status = "built-not-booted"`,
 `rootfs_build_status = "built-substrate-only"`, and
-`boot_status = "not-attempted"`. The package's boot layout is still
+`boot_status = "temporary-probe-unobserved"`. The package's boot layout is still
 `substrate-only-not-bootable`. The native build is a source/package handoff,
-not physical evidence: no physical boot, framebuffer/input result, live Linux
+not physical Linux evidence: no Ferrix boot, framebuffer/input result, live Linux
 service result, firmware runtime result, or target capability evidence has
-been captured. The earlier ADB/Fastboot identity, recovery, and
+been captured. A kernel-only `fastboot boot` was accepted on 2026-09-30, but
+post-probe Android reported a different kernel banner, so that candidate is
+blocked. The earlier ADB/Fastboot identity, recovery, and
 bootloader-unlock observations are admission and recovery history only, not
 Linux evidence. The target-local `FERRIX_EVIDENCE=physical:<target-id>` value
 is a scope label required by the host profile, not proof of a physical run.
