@@ -544,8 +544,9 @@ Mac under the same attempt name, and verify every recorded hash there. Point
 the checked-in candidate at only that verified bundle. If any build, transfer,
 or hash check fails, stop before a phone command. Rebuilding after a probe
 invalidates that probe's image-bound observation for later flash stages.
-For the selected static route, run `just pixel-9a-attempt-env <UTC-attempt-id>
-<exact-named-static-capacity-TSV>` on the clean builder checkout, then source
+For the selected static route, run `sh tools/pixel-9a/attempt-env.sh
+<UTC-attempt-id> <exact-named-static-capacity-TSV>` on the clean builder
+checkout (or the equivalent `just pixel-9a-attempt-env` recipe), then source
 the generated `out/pixel-9a/attempts/<id>/env.sh` after
 `tools/pixel-9a/env.sh`. The native wrapper verifies that source commit and
 capacity hash before each stage. The commands below with default output paths

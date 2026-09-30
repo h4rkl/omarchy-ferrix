@@ -28,6 +28,14 @@
   env files older than ten minutes were removed from the Mac's current temp
   directory and the authorized builder's `/tmp`; both checked directories
   then had zero matching files.
+- Reviewed commits were fast-forwarded to the clean native x86_64 builder.
+  Its native-wrapper and environment/attempt tests passed there. The builder
+  lacks `just`, so the static attempt handoff now names the checked-in shell
+  script directly; no host tool was installed. Docker reports `linux/x86_64`;
+  the builder image was refreshed from the reviewed Dockerfile as
+  `sha256:3cdcd7157ec2ac18dfc3c1b0cf50b042cc9d22ad3ba7291dc2d3e444d97755c8`.
+  A fresh container `env check build` passed, and its temporary env file was
+  removed. No new ROM image was built in this audit.
 - The phone was detached for the initial audit, then attached with owner
   authorization for ADB/Fastboot. Initial CLI discovery saw no transport even
   though macOS detected a Pixel 9a USB interface; a later read-only discovery
@@ -63,9 +71,8 @@
   `cargo fmt --check`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   and `cargo test --workspace`. `just host-check` reported that the local
-  Docker engine is not running; no host tools were installed and no native
-  image was built in this audit. QEMU graphics and physical device behavior
-  remain untested by this change set.
+  Docker engine is not running; no host tools were installed. QEMU graphics
+  and physical Ferrix behavior remain untested by this change set.
 
 ## 2026-09-30 (fresh Pixel 9a attempt and build gate refusal)
 

@@ -109,7 +109,7 @@ reviewed Git commit:
 ```sh
 attempt=$(date -u +%Y%m%dT%H%M%SZ)
 capacity='out/pixel-9a/partition-capacities-static-EXACT-CAPTURE.tsv' # replace with the reviewed named file
-just pixel-9a-attempt-env "$attempt" "$capacity"
+sh tools/pixel-9a/attempt-env.sh "$attempt" "$capacity"
 . tools/pixel-9a/env.sh
 . "out/pixel-9a/attempts/$attempt/env.sh"
 tools/pixel-9a/native-builder.sh image
@@ -124,6 +124,8 @@ The generated file is ignored and remains on the builder. The container
 wrapper maps its relative paths to `/workspace` and passes only device-free
 workflows. The capacity file and pinned source/firmware inputs must already
 be present; preparation neither fetches nor builds them.
+The native builder does not require `just`; on a host with `just`, the
+equivalent recipe is `just pixel-9a-attempt-env "$attempt" "$capacity"`.
 
 After the separate build-stage opt-ins in the provisioning playbook, run the
 selected stages in order using the same sourced environment:
