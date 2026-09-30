@@ -404,7 +404,7 @@ def boot_temp() -> None:
     boot_hash = sha(boot)
     phrase = f"CONFIRM PIXEL 9A STATIC TEMPORARY BOOT boot.img@{boot_hash[:12]}"
     print("The next command sends this exact kernel-only image to the device; no partition or slot is changed.")
-    print("This probes kernel progress with the current stock init_boot/vendor_boot and does not validate the full Ferrix image set.")
+    print("This probes kernel progress with stock init_boot/vendor_boot/vendor_kernel_boot/dtbo and does not validate the full Ferrix image set.")
     print(f"Type exactly: {phrase}", flush=True)
     entered = input("> ")
     require(entered == phrase, "confirmation did not match; no device operation performed")

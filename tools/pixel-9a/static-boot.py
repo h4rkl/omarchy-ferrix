@@ -13,6 +13,7 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -68,7 +69,8 @@ PARTITIONS = (
 )
 PAYLOADS = PARTITIONS[:5]
 BOOT_INPUT_NAMES = (
-    "initramfs.cpio", "vendor-ramdisk.cpio", "vendor-kernel-boot.cpio", "vendor-bootconfig"
+    "initramfs.cpio", "vendor-ramdisk.cpio", "vendor-kernel-boot.cpio",
+    "vendor-bootconfig", "vendor-cmdline",
 )
 BUILD_TOKEN = "I-understand-this-composes-source-built-pixel-9a-static-boot-images"
 
@@ -97,6 +99,37 @@ def digest(path: Path, algorithm: str = "sha256") -> str:
 
 def size(path: Path) -> int:
     return regular(path, "size input").stat().st_size
+
+
+def render_vendor_cmdline(path: Path) -> str:
+    arguments = [line.strip() for line in regular(path, "kernel command line").read_text().splitlines()
+                 if line.strip() and not line.lstrip().startswith("#")]
+    require(arguments and all(re.fullmatch(r"[A-Za-z0-9._=,/+-]+", arg) for arg in arguments),
+            "source-owned vendor command line contains an unsafe argument")
+    require({"root=PARTLABEL=userdata", "console=ttySAC0,115200", "bootconfig"}
+            <= set(arguments), "source-owned vendor command line lacks boot arguments")
+    result = " ".join(arguments)
+    require(len(result) < 2048, "source-owned vendor command line exceeds header capacity")
+    return result
+
+
+def require_vendor_layout(path: Path, dtb_bytes: int, cmdline: str) -> None:
+    # AOSP vendor_boot_img_hdr_v4: fixed fields end at byte 2128. Checking
+    # these few offsets also works on the Mac transfer verifier without adding
+    # a second host-side Android image parser dependency.
+    with regular(path, "vendor boot image").open("rb") as stream:
+        header = stream.read(2128)
+    require(len(header) == 2128 and header[:8] == b"VNDRBOOT",
+            "vendor boot image lacks a version-4 header")
+    version, page_size = struct.unpack_from("<II", header, 8)
+    declared_header_size, declared_dtb_size = struct.unpack_from("<II", header, 2096)
+    actual_cmdline = header[28:2076].split(b"\0", 1)[0]
+    require(version == 4 and declared_header_size == 2128 and page_size == 2048,
+            "vendor boot header version or page size differs from reviewed stock layout")
+    require(declared_dtb_size == dtb_bytes,
+            "vendor boot DTB placement differs from reviewed stock layout")
+    require(actual_cmdline == cmdline.encode("ascii"),
+            "vendor boot command line differs from source-owned input")
 
 
 def run(*args: str, capture: bool = False) -> bytes:
@@ -236,6 +269,8 @@ def validate() -> dict[str, object]:
             contract.get("source_kernel_backend") == "linux-google-tegu-wwan" and
             contract.get("boot_header_version") == 4 and
             contract.get("boot_page_size") == 4096 and
+            contract.get("vendor_boot_page_size") == 2048 and
+            contract.get("vendor_dtb_partition") == "vendor_kernel_boot" and
             contract.get("capacity_schema_version") == 2 and
             contract.get("capacity_contract") == "static-boot-only",
             "static contract no longer requires source-only native Linux")
@@ -353,13 +388,18 @@ def validate() -> dict[str, object]:
     origins = {"initramfs.cpio": "source-built-initramfs",
                "vendor-ramdisk.cpio": "source-built-vendor-ramdisk",
                "vendor-kernel-boot.cpio": "source-built-early-modules",
-               "vendor-bootconfig": "source-owned-bootconfig"}
+               "vendor-bootconfig": "source-owned-bootconfig",
+               "vendor-cmdline": "source-owned-kernel-cmdline"}
     for name, origin in origins.items():
         row = named(inputs, "artifact", name, 6)
         require(row[2] == name and row[5] == origin, f"boot-input {name} path or source differs")
         boot_files[name] = checked(BOOT_INPUTS_OUT / name, row[3], row[4], name)
+    require(boot_files["vendor-cmdline"].read_text().strip() ==
+            render_vendor_cmdline(TARGET / "pmos/device-google-tegu/kernel-cmdline.conf"),
+            "vendor command line differs from checked-in source")
     source_inputs = {"initramfs_source": "initramfs-init",
                      "vendor_bootconfig_source": "vendor-bootconfig",
+                     "kernel_cmdline_source": "kernel-cmdline.conf",
                      "modules_initfs_policy": "modules-initfs-radio",
                      "modules_vendor_policy": "modules-vendor-dlkm",
                      "modules_system_policy": "modules-system-dlkm"}
@@ -455,12 +495,12 @@ def build(inputs: dict[str, object]) -> None:
         run(mkbootimg, "--header_version", "4", "--pagesize", "4096",
             "--ramdisk", str(boot_files["initramfs.cpio"]),
             "--output", str(stage / "init_boot.img"))
-        run(mkbootimg, "--header_version", "4", "--pagesize", "4096",
+        run(mkbootimg, "--header_version", "4", "--pagesize", "2048",
             "--vendor_ramdisk", str(boot_files["vendor-ramdisk.cpio"]),
-            "--dtb", str(stage / "dtb.img"),
+            "--vendor_cmdline", boot_files["vendor-cmdline"].read_text().strip(),
             "--vendor_bootconfig", str(boot_files["vendor-bootconfig"]),
             "--vendor_boot", str(stage / "vendor_boot.img"))
-        run(mkbootimg, "--header_version", "4", "--pagesize", "4096",
+        run(mkbootimg, "--header_version", "4", "--pagesize", "2048",
             "--vendor_ramdisk", str(boot_files["vendor-kernel-boot.cpio"]),
             "--dtb", str(stage / "dtb.img"),
             "--vendor_boot", str(stage / "vendor_kernel_boot.img"))
@@ -470,6 +510,9 @@ def build(inputs: dict[str, object]) -> None:
             expected_magic = b"ANDROID!" if partition in ("boot", "init_boot") else b"VNDRBOOT"
             require((stage / f"{partition}.img").open("rb").read(8) == expected_magic,
                     f"{partition} has the wrong boot-container magic")
+        require_vendor_layout(stage / "vendor_boot.img", 0,
+                              boot_files["vendor-cmdline"].read_text().strip())
+        require_vendor_layout(stage / "vendor_kernel_boot.img", size(stage / "dtb.img"), "")
         capacities = inputs["capacities"]
         for partition in PAYLOADS:
             image = stage / f"{partition}.img"
@@ -601,6 +644,9 @@ def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False,
         row = one(manifest, key, 4)
         require(row[1] == f"provenance/{name}", f"{name} provenance path differs")
         checked(bundle / row[1], row[2], row[3], name)
+    require((bundle / "provenance/vendor-cmdline").read_text().strip() ==
+            render_vendor_cmdline(TARGET / "pmos/device-google-tegu/kernel-cmdline.conf"),
+            "bundled vendor command line differs from checked-in source")
     require(digest(bundle / "provenance/native-static-artifact-contract.toml") == digest(CONTRACT),
             "bundle static contract differs from checked-in contract")
     require(digest(bundle / "provenance/kernel-radio-route.toml") == digest(ROUTE),
@@ -673,6 +719,9 @@ def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False,
         expected_magic = b"ANDROID!" if partition in ("boot", "init_boot") else b"VNDRBOOT"
         require((bundle / f"{partition}.img").open("rb").read(8) == expected_magic,
                 f"{partition} has the wrong boot-container magic")
+    require_vendor_layout(bundle / "vendor_boot.img", 0,
+                          (bundle / "provenance/vendor-cmdline").read_text().strip())
+    require_vendor_layout(bundle / "vendor_kernel_boot.img", size(bundle / "dtb.img"), "")
     for source_rows, source_name, final_name in ((kernel, "Image", "Image"),
                                                 (kernel, "dtb.img", "dtb.img"),
                                                 (rootfs, "rootfs.tar", "rootfs_handoff"),

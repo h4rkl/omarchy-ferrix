@@ -1,5 +1,22 @@
 # Status
 
+## 2026-10-01 (Pixel 9a vendor boot layout correction; no new device load)
+
+- The verified stock comparison showed a version-4 boot image with fixed
+  4 KiB pages, but both vendor boot containers use 2 KiB pages. Stock
+  `vendor_boot` has no embedded DTB; `vendor_kernel_boot` carries the DTBs.
+  The selected static and split source contracts and composers now encode
+  that placement and page size. The static transfer verifier reads the
+  version-4 vendor headers to reject a wrong page size, DTB placement, or
+  command line.
+- The existing checked-in `kernel-cmdline.conf` now supplies early console
+  and `bootconfig`; the source-owned boot-input generator hashes a rendered
+  `vendor-cmdline`, and both composers pass it to `mkbootimg`. The target
+  package checksum and route-pinned contract hashes were updated. The
+  previously built candidate is still blocked and cannot be reused under
+  the revised contracts. No phone command or new physical loading occurred
+  for this correction. Hardware compatibility remains unproved.
+
 ## 2026-10-01 (Pixel 9a temporary probe not observed)
 
 - The fresh `20260930T142411Z` candidate passed live read-only admission in

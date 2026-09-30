@@ -24,6 +24,7 @@ vendor_list="$package_dir/modules-vendor-dlkm"
 system_list="$package_dir/modules-system-dlkm"
 init_script="$package_dir/initramfs-init"
 vendor_bootconfig_source="$package_dir/vendor-bootconfig"
+kernel_cmdline_source="$package_dir/kernel-cmdline.conf"
 vendor_ramdisk_source="$package_dir/vendor-ramdisk"
 build_confirmation=I-understand-this-builds-source-owned-pixel-9a-boot-inputs
 tab=$(printf '\t')
@@ -104,7 +105,7 @@ check_target_inputs() {
 	[ "$(route_value target_id)" = google-pixel-9a-tegu-gxq96-mp1-0 ] || die 'radio route target is not the exact Pixel 9a'
 	[ "$(route_value route_id)" = experimental-linux-google-tegu-s5300-wwan ] || die 'radio route is not the reviewed WWAN route'
 	[ "$(route_value status)" = experimental-not-adopted ] || die 'radio route must remain experimental-not-adopted'
-	for file in "$init_script" "$vendor_bootconfig_source" "$initfs_list" "$vendor_list" "$system_list"; do
+	for file in "$init_script" "$vendor_bootconfig_source" "$kernel_cmdline_source" "$initfs_list" "$vendor_list" "$system_list"; do
 		require_file "$file" 'checked-in boot input'
 	done
 	require_dir "$vendor_ramdisk_source" 'source-owned vendor ramdisk'
@@ -124,6 +125,11 @@ EOF
 	grep -Fqx 'ferrix.target_id = "google-pixel-9a-tegu-gxq96-mp1-0"' "$vendor_bootconfig_source" || die 'vendor bootconfig target identity is missing'
 	grep -Fqx 'ferrix.route_id = "experimental-linux-google-tegu-s5300-wwan"' "$vendor_bootconfig_source" || die 'vendor bootconfig route identity is missing'
 	grep -Fqx 'ferrix.rootfs_partlabel = "userdata"' "$vendor_bootconfig_source" || die 'vendor bootconfig rootfs mapping is missing'
+	for argument in root=PARTLABEL=userdata console=ttySAC0,115200 bootconfig; do
+		grep -Fqx "$argument" "$kernel_cmdline_source" || die "kernel command line lacks $argument"
+	done
+	awk 'NF && $1 !~ /^#/ && ($0 !~ /^[A-Za-z0-9._=,\/+-]+$/ || NF != 1) { exit 1 }' "$kernel_cmdline_source" ||
+		die 'kernel command line contains an unsafe argument'
 	grep -Fqx '#!/bin/busybox sh' "$init_script" || die 'initramfs entrypoint must use the source-built rootfs BusyBox'
 	grep -Fq 'root_partlabel=userdata' "$init_script" || die 'initramfs entrypoint does not use the reviewed userdata PARTLABEL'
 }
@@ -334,6 +340,8 @@ build_vendor_ramdisk() {
 	cp -R "$vendor_ramdisk_source"/. "$ramdisk_root"/
 	make_cpio "$ramdisk_root" "$stage_dir/vendor-ramdisk.cpio"
 	cp "$vendor_bootconfig_source" "$stage_dir/vendor-bootconfig"
+	awk 'NF && $1 !~ /^#/ { printf "%s%s", separator, $0; separator=" " } END { print "" }' \
+		"$kernel_cmdline_source" >"$stage_dir/vendor-cmdline"
 }
 
 write_tree_rows() (
@@ -361,6 +369,7 @@ write_manifest() {
 		printf 'rootfs_manifest\t%s\t%s\t%s\n' "$rootfs_manifest" "$(file_size "$rootfs_manifest")" "$(sha256_of "$rootfs_manifest")"
 		printf 'input\tinitramfs_source\t%s\t%s\t%s\n' "$init_script" "$(file_size "$init_script")" "$(sha256_of "$init_script")"
 		printf 'input\tvendor_bootconfig_source\t%s\t%s\t%s\n' "$vendor_bootconfig_source" "$(file_size "$vendor_bootconfig_source")" "$(sha256_of "$vendor_bootconfig_source")"
+		printf 'input\tkernel_cmdline_source\t%s\t%s\t%s\n' "$kernel_cmdline_source" "$(file_size "$kernel_cmdline_source")" "$(sha256_of "$kernel_cmdline_source")"
 		printf 'input\tvendor_ramdisk_source\t%s\n' "$vendor_ramdisk_source"
 		printf 'input\tmodules_initfs_policy\t%s\t%s\t%s\n' "$initfs_list" "$(file_size "$initfs_list")" "$(sha256_of "$initfs_list")"
 		printf 'input\tmodules_vendor_policy\t%s\t%s\t%s\n' "$vendor_list" "$(file_size "$vendor_list")" "$(sha256_of "$vendor_list")"
@@ -369,6 +378,7 @@ write_manifest() {
 		printf 'artifact\tvendor-ramdisk.cpio\tvendor-ramdisk.cpio\t%s\t%s\tsource-built-vendor-ramdisk\n' "$(file_size "$stage_dir/vendor-ramdisk.cpio")" "$(sha256_of "$stage_dir/vendor-ramdisk.cpio")"
 		printf 'artifact\tvendor-kernel-boot.cpio\tvendor-kernel-boot.cpio\t%s\t%s\tsource-built-early-modules\n' "$(file_size "$stage_dir/vendor-kernel-boot.cpio")" "$(sha256_of "$stage_dir/vendor-kernel-boot.cpio")"
 		printf 'artifact\tvendor-bootconfig\tvendor-bootconfig\t%s\t%s\tsource-owned-bootconfig\n' "$(file_size "$stage_dir/vendor-bootconfig")" "$(sha256_of "$stage_dir/vendor-bootconfig")"
+		printf 'artifact\tvendor-cmdline\tvendor-cmdline\t%s\t%s\tsource-owned-kernel-cmdline\n' "$(file_size "$stage_dir/vendor-cmdline")" "$(sha256_of "$stage_dir/vendor-cmdline")"
 		printf 'module_root\tvendor_dlkm\tvendor-dlkm\t%s\t%s\n' "$(sha256_of "$vendor_list")" "$(file_size "$stage_dir/vendor-dlkm/lib/modules/$kernel_release/modules.dep")"
 		printf 'module_root\tsystem_dlkm\tsystem-dlkm\t%s\t%s\n' "$(sha256_of "$system_list")" "$(file_size "$stage_dir/system-dlkm/lib/modules/$kernel_release/modules.dep")"
 		write_tree_rows vendor_ramdisk_source "$vendor_ramdisk_source"

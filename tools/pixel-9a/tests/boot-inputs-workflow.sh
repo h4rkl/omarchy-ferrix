@@ -154,11 +154,13 @@ awk -F "$tab" -v expected="$kernel_manifest" '$1 == "kernel_manifest" && $2 == e
 cmp "$inputs/initramfs-root/bin/busybox" "$work/rootfs-tree/usr/bin/busybox" || fail 'package metadata was selected instead of runtime BusyBox'
 cmp "$inputs/initramfs-root/lib/ld-musl-aarch64.so.1" "$work/rootfs-tree/usr/lib/ld-musl-aarch64.so.1" || fail 'non-runtime loader was selected'
 cmp "$inputs/initramfs-root/lib/libc.musl-aarch64.so.1" "$work/rootfs-tree/usr/lib/ld-musl-aarch64.so.1" || fail 'musl libc alias does not contain loader bytes'
-for artifact in initramfs.cpio vendor-ramdisk.cpio vendor-kernel-boot.cpio vendor-bootconfig; do
+for artifact in initramfs.cpio vendor-ramdisk.cpio vendor-kernel-boot.cpio vendor-bootconfig vendor-cmdline; do
 	[ -s "$inputs/$artifact" ] || fail "boot-input artifact missing: $artifact"
 	awk -F "$tab" -v name="$artifact" '$1 == "artifact" && $2 == name && $6 != "" { found=1 } END { exit(found ? 0 : 1) }' "$inputs/manifest.tsv" ||
 		fail "boot-input provenance row missing: $artifact"
 done
+grep -Fq 'console=ttySAC0,115200 bootconfig' "$inputs/vendor-cmdline" ||
+	fail 'source-owned vendor command line lacks console and bootconfig'
 for name in vendor-dlkm system-dlkm; do
 	[ -f "$inputs/$name/lib/modules/6.12.0-ferrix/modules.dep" ] || fail "depmod output missing: $name"
 done

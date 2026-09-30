@@ -131,6 +131,8 @@ check_route() {
 		'android_userspace_required = false' \
 		'boot_header_version = 4' \
 		'boot_page_size = 4096' \
+		'vendor_boot_page_size = 2048' \
+		'vendor_dtb_partition = "vendor_kernel_boot"' \
 		'dtbo_tool = "mkdtboimg.py"' \
 		'dtbo_page_size = 4096' \
 		'dynamic_partition_transport = "fastbootd"' \
@@ -265,14 +267,14 @@ verify_boot_input_artifact() {
 	origin=$(field "$row" 6)
 	safe_relative "$relative"
 	case "$name:$relative" in
-		initramfs.cpio:initramfs.cpio|vendor-ramdisk.cpio:vendor-ramdisk.cpio|vendor-kernel-boot.cpio:vendor-kernel-boot.cpio|vendor-bootconfig:vendor-bootconfig) ;;
+		initramfs.cpio:initramfs.cpio|vendor-ramdisk.cpio:vendor-ramdisk.cpio|vendor-kernel-boot.cpio:vendor-kernel-boot.cpio|vendor-bootconfig:vendor-bootconfig|vendor-cmdline:vendor-cmdline) ;;
 		*) die "source-owned boot input $name has a non-canonical path: $relative" ;;
 	esac
 	case "$expected_bytes" in ''|*[!0-9]*) die "source-owned boot input $name has an invalid byte count" ;; esac
 	case "$expected_hash" in ''|*[!0-9a-f]*) die "source-owned boot input $name has an invalid SHA-256" ;; esac
 	[ "${#expected_hash}" -eq 64 ] || die "source-owned boot input $name has an invalid SHA-256 length"
 	case "$name:$origin" in
-		initramfs.cpio:source-built-initramfs|vendor-ramdisk.cpio:source-built-vendor-ramdisk|vendor-kernel-boot.cpio:source-built-early-modules|vendor-bootconfig:source-owned-bootconfig) ;;
+		initramfs.cpio:source-built-initramfs|vendor-ramdisk.cpio:source-built-vendor-ramdisk|vendor-kernel-boot.cpio:source-built-early-modules|vendor-bootconfig:source-owned-bootconfig|vendor-cmdline:source-owned-kernel-cmdline) ;;
 		*) die "source-owned boot input $name has an unreviewed origin: $origin" ;;
 	esac
 	file="$boot_inputs_out/$relative"
@@ -303,10 +305,11 @@ verify_boot_inputs() {
 	[ "$(manifest_value "$boot_inputs_manifest" kernel_backend)" = linux-google-tegu-wwan ] || die 'source-owned boot-input manifest backend is not WWAN/SIT'
 	[ "$(manifest_value "$boot_inputs_manifest" status)" = built-source-inputs ] || die 'source-owned boot-input manifest is not a completed source-input handoff'
 	[ "$(manifest_value "$boot_inputs_manifest" bootable)" = false ] || die 'source-owned boot-input manifest must remain bootable=false'
-	for source in initramfs_source vendor_bootconfig_source modules_initfs_policy modules_vendor_policy modules_system_policy; do
+	for source in initramfs_source vendor_bootconfig_source kernel_cmdline_source modules_initfs_policy modules_vendor_policy modules_system_policy; do
 		case "$source" in
 			initramfs_source) checked_in="$target/pmos/device-google-tegu/initramfs-init" ;;
 			vendor_bootconfig_source) checked_in="$target/pmos/device-google-tegu/vendor-bootconfig" ;;
+			kernel_cmdline_source) checked_in="$target/pmos/device-google-tegu/kernel-cmdline.conf" ;;
 			modules_initfs_policy) checked_in="$target/pmos/device-google-tegu/modules-initfs-radio" ;;
 			modules_vendor_policy) checked_in="$target/pmos/device-google-tegu/modules-vendor-dlkm" ;;
 			modules_system_policy) checked_in="$target/pmos/device-google-tegu/modules-system-dlkm" ;;
@@ -329,6 +332,11 @@ verify_boot_inputs() {
 	vendor_ramdisk=$(verify_boot_input_artifact vendor-ramdisk.cpio)
 	vendor_kernel_boot_cpio=$(verify_boot_input_artifact vendor-kernel-boot.cpio)
 	bootconfig=$(verify_boot_input_artifact vendor-bootconfig)
+	vendor_cmdline_file=$(verify_boot_input_artifact vendor-cmdline)
+	vendor_cmdline=$(cat "$vendor_cmdline_file")
+	expected_cmdline=$(awk 'NF && $1 !~ /^#/ { printf "%s%s", separator, $0; separator=" " } END { print "" }' \
+		"$target/pmos/device-google-tegu/kernel-cmdline.conf")
+	[ "$vendor_cmdline" = "$expected_cmdline" ] || die 'vendor command line differs from checked-in source'
 	for name in vendor_dlkm system_dlkm; do
 		row=$(awk -F "$tab" -v name="$name" '$1 == "module_root" && $2 == name { print; found=1; exit } END { if (!found) exit 1 }' "$boot_inputs_manifest") || die "source-owned boot-input manifest lacks module root: $name"
 		relative=$(field "$row" 3)
@@ -579,7 +587,7 @@ build() {
 	cp "$rootfs_image" "$stage/rootfs.img"
 	"$mkbootimg" --header_version 4 --pagesize 4096 --kernel "$stage/Image" --output "$stage/boot.img"
 	"$mkbootimg" --header_version 4 --pagesize 4096 --ramdisk "$initramfs" --output "$stage/init_boot.img"
-	"$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_ramdisk" --dtb "$stage/dtb.img" --vendor_bootconfig "$bootconfig" --vendor_boot "$stage/vendor_boot.img"
+	"$mkbootimg" --header_version 4 --pagesize 2048 --vendor_ramdisk "$vendor_ramdisk" --vendor_cmdline "$vendor_cmdline" --vendor_bootconfig "$bootconfig" --vendor_boot "$stage/vendor_boot.img"
 	dtbo_inputs="$stage/.dtbo-inputs"
 	awk -F "$tab" '$1 == "source" && $2 ~ /\.dtbo$/ { print $2 }' "$kernel_dist/split-inputs/dtbo-source-set.tsv" | while IFS= read -r relative; do
 		printf '%s\n' "$kernel_dist/split-inputs/dtbo-source-set/$relative"
@@ -591,7 +599,7 @@ build() {
 	"$mkdtboimg" create "$stage/dtbo.img" --page_size=4096 "$@"
 	# vendor_kernel_boot uses the vendor boot container too; a bare CPIO is
 	# only its ramdisk payload and is not a bootloader-readable image.
-	"$mkbootimg" --header_version 4 --pagesize 4096 --vendor_ramdisk "$vendor_kernel_boot_cpio" --dtb "$stage/dtb.img" --vendor_boot "$stage/vendor_kernel_boot.img"
+	"$mkbootimg" --header_version 4 --pagesize 2048 --vendor_ramdisk "$vendor_kernel_boot_cpio" --dtb "$stage/dtb.img" --vendor_boot "$stage/vendor_kernel_boot.img"
 	for partition in boot init_boot vendor_boot vendor_kernel_boot; do
 		check_boot_magic "$partition"
 	done

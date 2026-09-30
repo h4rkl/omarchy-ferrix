@@ -32,11 +32,17 @@ set -eu
 output=
 vendor_output=
 vendor_ramdisk=
+pagesize=
+dtb=
+vendor_cmdline=
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--output) output=$2; shift 2 ;;
 		--vendor_boot) vendor_output=$2; shift 2 ;;
 		--vendor_ramdisk) vendor_ramdisk=$2; shift 2 ;;
+		--pagesize) pagesize=$2; shift 2 ;;
+		--dtb) dtb=$2; shift 2 ;;
+		--vendor_cmdline) vendor_cmdline=$2; shift 2 ;;
 		*) shift ;;
 	esac
 done
@@ -45,9 +51,17 @@ if [ -n "$vendor_ramdisk" ]; then
 		printf '%s\n' 'vendor ramdisk requires --vendor_boot, not --output' >&2
 		exit 1
 	}
+	[ "$pagesize" = 2048 ] || exit 1
+	case "$vendor_output" in
+		*/vendor_boot.img)
+			[ -z "$dtb" ] && [ -n "$vendor_cmdline" ] || exit 1 ;;
+		*/vendor_kernel_boot.img)
+			[ -n "$dtb" ] && [ -z "$vendor_cmdline" ] || exit 1 ;;
+		*) exit 1 ;;
+	esac
 	printf 'VNDRBOOTsynthetic\n' >"$vendor_output"
 else
-	[ -n "$output" ]
+	[ -n "$output" ] && [ "$pagesize" = 4096 ]
 	printf 'ANDROID!synthetic\n' >"$output"
 fi
 EOF
@@ -241,6 +255,8 @@ cp "$work/initramfs" "$boot_inputs/initramfs.cpio"
 cp "$work/vendor-ramdisk" "$boot_inputs/vendor-ramdisk.cpio"
 cp "$work/vendor-kernel-boot.cpio" "$boot_inputs/vendor-kernel-boot.cpio"
 cp "$work/bootconfig" "$boot_inputs/vendor-bootconfig"
+awk 'NF && $1 !~ /^#/ { printf "%s%s", separator, $0; separator=" " } END { print "" }' \
+	"$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/kernel-cmdline.conf" >"$boot_inputs/vendor-cmdline"
 printf '%s\n' '# synthetic depmod' >"$boot_inputs/vendor-dlkm/lib/modules/6.12.0-ferrix/modules.dep"
 printf '%s\n' '# synthetic depmod' >"$boot_inputs/system-dlkm/lib/modules/6.12.0-ferrix/modules.dep"
 {
@@ -256,6 +272,7 @@ printf '%s\n' '# synthetic depmod' >"$boot_inputs/system-dlkm/lib/modules/6.12.0
 	for row in \
 		"initramfs_source|$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/initramfs-init" \
 		"vendor_bootconfig_source|$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/vendor-bootconfig" \
+		"kernel_cmdline_source|$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/kernel-cmdline.conf" \
 		"modules_initfs_policy|$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/modules-initfs-radio" \
 		"modules_vendor_policy|$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/modules-vendor-dlkm" \
 		"modules_system_policy|$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/modules-system-dlkm"; do
@@ -267,7 +284,8 @@ printf '%s\n' '# synthetic depmod' >"$boot_inputs/system-dlkm/lib/modules/6.12.0
 		'initramfs.cpio|source-built-initramfs' \
 		'vendor-ramdisk.cpio|source-built-vendor-ramdisk' \
 		'vendor-kernel-boot.cpio|source-built-early-modules' \
-		'vendor-bootconfig|source-owned-bootconfig'; do
+		'vendor-bootconfig|source-owned-bootconfig' \
+		'vendor-cmdline|source-owned-kernel-cmdline'; do
 		name=${row%%|*}; origin=${row#*|}; file="$boot_inputs/$name"
 		printf 'artifact\t%s\t%s\t%s\t%s\t%s\n' "$name" "$name" "$(wc -c <"$file" | tr -d '[:space:]')" "$(sha256sum "$file" | awk '{ print $1 }')" "$origin"
 	done

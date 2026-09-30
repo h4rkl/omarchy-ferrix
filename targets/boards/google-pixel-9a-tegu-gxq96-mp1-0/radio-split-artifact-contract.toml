@@ -12,6 +12,8 @@ stock_modules_may_be_reused = false
 android_userspace_required = false
 boot_header_version = 4
 boot_page_size = 4096
+vendor_boot_page_size = 2048
+vendor_dtb_partition = "vendor_kernel_boot"
 dtbo_tool = "mkdtboimg.py"
 dtbo_page_size = 4096
 dynamic_partition_transport = "fastbootd"
@@ -31,7 +33,7 @@ source_inputs = ["source-owned Ferrix initramfs.cpio"]
 [artifact.vendor_boot]
 partition = "vendor_boot"
 status = "not-built"
-source_inputs = ["source-built DTB", "source-owned Ferrix vendor-ramdisk.cpio", "source-owned Ferrix bootconfig"]
+source_inputs = ["source-owned Ferrix vendor-ramdisk.cpio", "source-owned Ferrix bootconfig", "source-owned kernel command line"]
 
 [artifact.vendor_kernel_boot]
 partition = "vendor_kernel_boot"
