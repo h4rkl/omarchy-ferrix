@@ -46,6 +46,7 @@ grep -Fqx 'st54_route_status = "not-selected"' "$route" || fail 'radio route sel
 grep -q 'check_split_contract' "$workflow" || fail 'radio workflow does not validate its split-artifact contract'
 grep -q 'modules_install' "$workflow" || fail 'radio workflow does not materialize source-built module inputs'
 grep -q 'dtbo-source-set' "$workflow" || fail 'radio workflow does not preserve source-built DTB/DTBO inputs'
+grep -q 'verify_target_overlay_source' "$workflow" || fail 'radio build lacks the exact tegu MP1.0 source preflight'
 grep -q 'partition-sizes' "$workflow" || fail 'radio workflow does not record split partition build status'
 contract="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/radio-split-artifact-contract.toml"
 [ -f "$contract" ] || fail 'radio split-artifact contract is missing'

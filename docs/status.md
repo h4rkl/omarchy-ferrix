@@ -14,7 +14,9 @@
   not a physical boot result. Both composers now
   require exactly one source-built tegu MP overlay and the observed ID/revision
   in the final DTBO table. They refuse to compose a new bundle until that
-  source and base-tree compatibility are supplied.
+  source and base-tree compatibility are supplied. The kernel build now
+  refuses the current source before starting Kbuild because the MP overlay
+  source and its Kbuild selection are absent.
 - The verified stock comparison showed a version-4 boot image with fixed
   4 KiB pages, but both vendor boot containers use 2 KiB pages. Stock
   `vendor_boot` has no embedded DTB; `vendor_kernel_boot` carries the DTBs.

@@ -354,6 +354,14 @@ verify_source() {
 	printf '%s\n' "PASS radio kernel source: $actual, config and device-tree hashes verified"
 }
 
+verify_target_overlay_source() {
+	overlay_dir="$source_root/arch/arm64/boot/dts/exynos/google"
+	[ -f "$overlay_dir/zumapro-tegu-mp.dts" ] ||
+		die 'pinned kernel source has no tegu MP1.0 overlay source; refusing an unusable build'
+	[ -f "$overlay_dir/Makefile" ] && grep -Fq 'zumapro-tegu-mp.dtbo' "$overlay_dir/Makefile" ||
+		die 'pinned kernel Kbuild does not select the tegu MP1.0 overlay'
+}
+
 preflight() {
 	check_metadata
 	print_resolution
@@ -428,6 +436,8 @@ write_dtbo_source_set() {
 	# reusing a factory overlay.
 	dtb_source_root="$build_out/arch/arm64/boot/dts"
 	[ -d "$dtb_source_root" ] || die "radio kernel DTB output directory is missing: $dtb_source_root"
+	[ -s "$dtb_source_root/exynos/google/zumapro-tegu-mp.dtbo" ] ||
+		die 'radio kernel build produced no tegu MP1.0 DTBO overlay'
 	source_count=$(find "$dtb_source_root" -type f \( -name '*.dtb' -o -name '*.dtbo' \) -print | wc -l | tr -d '[:space:]')
 	[ "$source_count" -gt 0 ] || die 'radio kernel build produced no source-built DTB/DTBO inputs'
 	dtbo_count=$(find "$dtb_source_root" -type f -name '*.dtbo' -print | wc -l | tr -d '[:space:]')
@@ -568,6 +578,7 @@ write_manifest() {
 build_kernel() {
 	preflight >/dev/null
 	verify_source
+	verify_target_overlay_source
 	[ "${FERRIX_PIXEL9A_RADIO_BUILD:-}" = "$build_confirmation" ] ||
 		die "radio kernel build is opt-in; set FERRIX_PIXEL9A_RADIO_BUILD=$build_confirmation"
 	[ ! -e "$kernel_out" ] || die "refusing to overwrite existing radio kernel output; choose a fresh FERRIX_PIXEL9A_RADIO_KERNEL_OUT: $kernel_out"
