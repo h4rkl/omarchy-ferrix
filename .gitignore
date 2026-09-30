@@ -11,6 +11,7 @@
 
 # Local tool state
 /.direnv/
+__pycache__/
 
 # Generated QEMU images and build artifacts
 /artifacts/
@@ -18,7 +19,6 @@
 /.cache/
 /targets/qemu-aarch64/build/
 /targets/qemu-aarch64/out/
-/targets/qemu-aarch64/scripts/__pycache__/
 
 # Physical-device artifacts (firmware, backups, identifiers, keys, dumps, and
 # captures are never safe to publish; keep only redacted checked-in metadata).
