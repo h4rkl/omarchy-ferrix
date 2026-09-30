@@ -6,6 +6,9 @@
 .env.*
 !.env.example
 
+# Machine-local agent access reference (no credentials).
+/DEBA_ACCESS.local.txt
+
 # Local tool state
 /.direnv/
 
