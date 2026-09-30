@@ -26,19 +26,21 @@ were captured at `2026-09-30T01:44:54Z`. A separate same-device read-only
 `userdata` map at `02:02:26Z` correlated Android's `/dev/block/sda34` by-name
 entry with a live unslotted physical 117,543,358,464-byte Fastboot partition.
 The broader inventory remains `partial`. On native Linux x86_64, a fresh
-source-built kernel and boot-input handoff produced a separately verified
-eight-partition static bundle (manifest SHA-256
-`95b5bcf20f74b83eb00f4159f1a69b6b9e31f0ea143953f6b0f4640bb4ebd78a`).
+source-built kernel, product, rootfs, and corrected boot-input handoff produced
+a separately verified eight-partition static bundle (manifest SHA-256
+`17edb90a0ef6ba1e1921279deced2d942e84edc89b74c19e6fd6a728c077c122`).
 It is `composed-not-booted` / `bootable=false`; no Ferrix image has been
 booted or flashed.
 
 The checked-in `static-install-candidate.toml` pins this bundle, fresh
 capacities, same-device discovery, targeted `userdata` map, and tested stock
 recovery. Its separate `just pixel-9a-flash-static-check` read-only admission
-passed on the exact device in ordinary Fastboot on slot A. The owner approved
-one gated temporary boot of the pinned kernel-only `boot.img`; that command
-uses stock `init_boot` and `vendor_boot` and cannot validate the full Ferrix
-split image set.
+passed on the exact device in ordinary Fastboot on slot A at about 04:36 UTC
+on 2026-09-30. The earlier one-probe approval named a different `boot.img`
+hash and is historical. The current kernel-only `boot.img` has SHA-256
+`bffd420dada4cee402977fab39374107c8239b6ba2acbbbb073fd9e898c7964c`.
+A new confirmed temporary boot would use stock `init_boot` and `vendor_boot`
+and could probe kernel progress, not the full Ferrix split image set.
 
 For each new physical loading attempt, rebuild the kernel, product, rootfs,
 boot inputs, and static image bundle on native deba from the reviewed commit
@@ -56,16 +58,17 @@ tegu kernel banner is refused. If the temporary kernel reaches Android ADB,
 set `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` to the boot transcript and run
 `just pixel-9a-flash-static-capture-temp`. It reads `/proc/version` and the
 device-tree model after exact ADB identity checks and writes an ignored,
-redacted capture.
-This matches the live kernel build banner and device-tree model; it is not
+redacted capture. This matches the live kernel build banner and device-tree
+model; it is not
 a readback of the loaded image, a full kernel log, or proof of no earlier
 kernel errors. `observe-temp` also requires a reviewed human account
 of no hang or reboot loop and a fresh ordinary-Fastboot preflight. If ADB does
 not return, use a separately captured serial kernel log with the same banner
-or stop; do not invent boot evidence. These paths are offline-tested
-only; the temporary probe stopped before device action after an optional
-transfer-verifier invocation omitted the named output path. No persistent
-static flash has been run. Separate offline-tested
+or stop; do not invent boot evidence. These paths are offline-tested only.
+The earlier candidate's temporary probe stopped before device action after
+an optional transfer-verifier invocation omitted its named output path. The
+current bundle's exact-path transfer check passed; it has not been booted.
+No persistent static flash has been run. Separate offline-tested
 `pixel-9a-install-static-check`, `-kernel`, `-rootfs`, and `-activate`
 recipes now define three independently confirmed physical stages. The current
 target `image_compatibility=partial` gate refuses them, and no observed temporary

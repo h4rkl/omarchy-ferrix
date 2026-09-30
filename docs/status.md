@@ -23,6 +23,30 @@
   producer default has been corrected to follow `FERRIX_PIXEL9A_RADIO_KERNEL_OUT`;
   its offline regression test now covers a nondefault kernel output. The
   failed boot-input output remains ignored as evidence and is not a candidate.
+- After the owner directed continuation, corrected boot inputs were built into
+  a new directory from commit `80534d7ac34dc116e6ace9e607a0bf8b383bc24e`
+  (manifest SHA-256
+  `4edca3eba008734497b2e8a422bd07d79fff6acc15390789f0d533fd77584399`).
+  Static preflight, composition, and native AVB verification passed. The new
+  bundle `out/pixel-9a/images/tegu-wwan-static-20260930T032948Z` has manifest
+  SHA-256 `17edb90a0ef6ba1e1921279deced2d942e84edc89b74c19e6fd6a728c077c122`,
+  `boot.img` SHA-256
+  `bffd420dada4cee402977fab39374107c8239b6ba2acbbbb073fd9e898c7964c`,
+  and `rootfs.img` SHA-256
+  `dbe076d82d63312bdde9877ff7207d49d2e0c362238148866149ae631a015ef3`.
+  The complete 30-file, 3,033,910,426-byte bundle was transferred to the
+  Mac. `pixel-9a-static-boot-verify-transfer` passed with the exact named
+  output path. Kernel, product, and rootfs outputs were freshly built for
+  this attempt from commit `29eb332`; only the corrected boot-input producer
+  and final composer ran from commit `80534d7`.
+- Read-only `pixel-9a-flash-static-check` passed at about 04:36 UTC on the
+  exact Google Pixel 9a / `tegu` / `GXQ96` / `MP1.0`, in ordinary Fastboot,
+  unlocked, active slot A. It rechecked the new bundle and tested stock
+  recovery artifacts. Ignored redacted transcript:
+  `out/pixel-9a/flash-static/preflight-20260930T043607087786Z-21642.txt`.
+  The candidate remains `composed-not-booted`, and target
+  `image_compatibility=partial` still forbids persistent flash. No temporary
+  boot, partition write, or slot change has run for this bundle.
 
 ## 2026-09-30 (fresh Pixel 9a static capacities and unbooted native images)
 
