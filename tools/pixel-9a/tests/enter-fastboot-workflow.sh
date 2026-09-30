@@ -18,6 +18,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/bin" "$work/state"
 calls="$work/calls.log"
 serial='SYN-FASTBOOT-001'
+tab=$(printf '\t')
 
 cat >"$work/bin/adb" <<'STUB'
 #!/bin/sh
@@ -118,8 +119,8 @@ export STUB_FASTBOOT_VARIANT=N/A
 run_case enter --confirm-enter
 [ "$status" -eq 0 ]
 grep -q '^result=entered-fastboot$' "$work/enter.out"
-grep -q '^adb\t-s\tSYN-FASTBOOT-001\treboot\tbootloader\t$' "$calls"
-grep -q '^fastboot\t-s\tSYN-FASTBOOT-001\tgetvar\tproduct\t$' "$calls"
+grep -Fqx "adb${tab}-s${tab}${serial}${tab}reboot${tab}bootloader${tab}" "$calls"
+grep -Fqx "fastboot${tab}-s${tab}${serial}${tab}getvar${tab}product${tab}" "$calls"
 grep -q '^variant=N/A$' "$work/enter.out"
 grep -q '^sku_gate=adb-correlated-or-fastboot-unavailable$' "$work/enter.out"
 unset STUB_FASTBOOT_VARIANT
@@ -182,7 +183,7 @@ run_case fastbootd-enter --confirm-enter
 [ "$status" -eq 0 ]
 grep -q '^result=entered-fastboot$' "$work/fastbootd-enter.out"
 grep -q '^transport=fastboot$' "$work/fastbootd-enter.out"
-grep -q '^fastboot\t-s\tSYN-FASTBOOT-001\treboot\tbootloader\t$' "$calls"
+grep -Fqx "fastboot${tab}-s${tab}${serial}${tab}reboot${tab}bootloader${tab}" "$calls"
 [ "$(grep -c 'reboot' "$calls")" -eq 1 ]
 unset STUB_START_FASTBOOT STUB_START_FASTBOOTD FERRIX_OUT_DIR
 
