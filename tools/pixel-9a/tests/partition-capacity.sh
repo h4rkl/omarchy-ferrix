@@ -126,6 +126,10 @@ getvar)
 	slot-count) value=${STUB_FASTBOOT_SLOT_COUNT:-2} ;;
 	is-userspace) value=${STUB_FASTBOOT_IS_USERSPACE:-yes} ;;
 	unlocked|secure) value=yes ;;
+	has-slot:userdata) value=no ;;
+	is-logical:userdata) value=${STUB_USERDATA_LOGICAL:-no} ;;
+	partition-type:userdata) value=raw ;;
+	partition-size:userdata) value=0x1b5e215000 ;;
 	super-partition-name) value=super ;;
 	is-logical:vendor_dlkm_*|is-logical:system_dlkm_*) value=yes ;;
 	is-logical:*) value=${STUB_STATIC_IS_LOGICAL:-no} ;;
@@ -415,6 +419,60 @@ for static_failure in wrong-mode logical; do
 		echo "static capacity accepted $static_failure" >&2; exit 1
 	fi
 	[ -z "$(find "$work/static-$static_failure" -name '*.tsv' -print)" ]
+done
+
+if command -v shasum >/dev/null 2>&1; then
+	map_serial_prefix=$(printf SERIAL-F | shasum -a 256 | cut -c1-12)
+else
+	map_serial_prefix=$(printf SERIAL-F | sha256sum | cut -c1-12)
+fi
+cat >"$work/android-inventory.txt" <<EOF
+# Pixel 9a read-only partition inventory, 20260930T013000Z UTC
+# Serial numbers are replaced by a SHA-256 prefix. Never commit this file.
+target_id=google-pixel-9a-tegu-gxq96-mp1-0
+transport=adb
+serial_sha256_prefix=$map_serial_prefix
+product=tegu
+hardware_revision=MP1.0
+sku=GXQ96
+current_slot=_a
+slot_count=2
+partitions=total 0
+lrwxrwxrwx 1 root root 16 userdata -> /dev/block/sda34
+lrwxrwxrwx 1 root root 16 super -> /dev/block/sda33
+inventory_completeness=partial
+result=ok
+EOF
+FERRIX_OUT_DIR="$work/userdata" FERRIX_PIXEL9A_PARTITION_INVENTORY="$work/android-inventory.txt" \
+	STUB_ADB_DEVICES_EMPTY=1 STUB_FASTBOOT_DEVICES='SERIAL-F fastboot usb:1' \
+	STUB_FASTBOOT_IS_USERSPACE=no STUB_SNAPSHOT_STATUS=none \
+	"$workflow" --userdata-map >"$work/userdata.out" 2>"$work/userdata.err"
+userdata_handoff="$work/userdata/pixel-9a/userdata-map-latest.tsv"
+grep -q '^partition_contract[[:space:]]rootfs-userdata-only$' "$userdata_handoff"
+grep -q '^partition[[:space:]]userdata[[:space:]]117543358464[[:space:]]/dev/block/sda34$' "$userdata_handoff"
+grep -q '^inventory_completeness=partial$' "$work/userdata.err"
+for map_failure in stale-inventory other-device logical snapshot; do
+	map_inventory="$work/android-inventory.txt"
+	set -- STUB_ADB_DEVICES_EMPTY=1 'STUB_FASTBOOT_DEVICES=SERIAL-F fastboot usb:1' \
+		STUB_FASTBOOT_IS_USERSPACE=no STUB_SNAPSHOT_STATUS=none
+	case "$map_failure" in
+		stale-inventory)
+			map_inventory="$work/stale-inventory.txt"
+			sed 's/20260930T013000Z/20260930T000000Z/' "$work/android-inventory.txt" >"$map_inventory"
+			;;
+		other-device)
+			map_inventory="$work/other-device-inventory.txt"
+			sed "s/$map_serial_prefix/000000000000/" "$work/android-inventory.txt" >"$map_inventory"
+			;;
+		logical) set -- "$@" STUB_USERDATA_LOGICAL=yes ;;
+		snapshot) set -- "$@" STUB_SNAPSHOT_STATUS=merging ;;
+	esac
+	if env FERRIX_OUT_DIR="$work/userdata-$map_failure" \
+		FERRIX_PIXEL9A_PARTITION_INVENTORY="$map_inventory" "$@" \
+		"$workflow" --userdata-map >"$work/userdata-$map_failure.out" 2>"$work/userdata-$map_failure.err"; then
+		echo "userdata map accepted $map_failure" >&2; exit 1
+	fi
+	[ -z "$(find "$work/userdata-$map_failure" -name '*.tsv' -print)" ]
 done
 
 printf '%s\n' 'pixel-9a partition capacity tests passed'

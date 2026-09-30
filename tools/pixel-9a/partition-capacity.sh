@@ -6,7 +6,9 @@ set -eu
 # and dynamic partitions through /dev/block/mapper; the block sysfs `size`
 # file is defined in 512-byte sectors. An owner-entered Fastbootd mode can
 # provide the same ten capacities through read-only `partition-size:*` getvars.
-# No block node is opened or written.
+# The separate --userdata-map mode correlates a post-restore ADB inventory
+# with live ordinary-Fastboot classification and size for the source initramfs
+# rootfs label. No block node is opened or written.
 #
 # This is deliberately separate from partition-inventory.sh. A capacity
 # handoff can be complete for the ten named targets while the broader Android
@@ -33,7 +35,8 @@ case "$#:${1:-}" in
 	0:) ;;
 	1:--diagnose-fastboot) mode=diagnose-fastboot ;;
 	1:--static-boot) mode=static-boot ;;
-	*) die 'usage: partition-capacity.sh [--diagnose-fastboot|--static-boot]' ;;
+	1:--userdata-map) mode=userdata-map ;;
+	*) die 'usage: partition-capacity.sh [--diagnose-fastboot|--static-boot|--userdata-map]' ;;
 esac
 capacity_partitions='boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta vbmeta_vendor vbmeta_system vendor_dlkm system_dlkm'
 capacity_schema=1
@@ -65,6 +68,10 @@ if [ "$mode" = static-boot ]; then
 	transcript="$out/partition-capacity-static-$stamp-$$.txt"
 	handoff="$out/partition-capacities-static-$stamp-$$.tsv"
 	latest="$out/partition-capacities-static-latest.tsv"
+elif [ "$mode" = userdata-map ]; then
+	transcript="$out/userdata-map-$stamp-$$.txt"
+	handoff="$out/userdata-map-$stamp-$$.tsv"
+	latest="$out/userdata-map-latest.tsv"
 fi
 handoff_tmp="$out/.partition-capacities-latest.$$"
 serial=''
@@ -241,15 +248,16 @@ fastboot_getvar() {
 			line = $0
 			sub(/^[[:space:]]*/, "", line)
 			sub(/^\(bootloader\)[[:space:]]*/, "", line)
+			if (line ~ /^FAILED/) failed = 1
 			prefix = key ":"
 			if (index(line, prefix) == 1) {
 				value = substr(line, length(prefix) + 1)
 				sub(/^[[:space:]]*/, "", value)
 				sub(/[[:space:]]*$/, "", value)
-				if (value != "") { print value; found = 1; exit }
+				count++
 			}
 		}
-		END { if (!found) exit 1 }
+		END { if (failed || count != 1 || value == "") exit 1; print value }
 	'
 }
 
@@ -272,6 +280,93 @@ fastboot_capacity_for_partition() {
 	fastboot_active_raw=$active_raw
 	fastboot_inactive_raw=$inactive_raw
 	fastboot_capacity_bytes=$active_bytes
+}
+
+inventory_value() {
+	awk -F= -v wanted="$1" '
+		$1 == wanted { count++; value=substr($0, length(wanted)+2) }
+		END { if (count != 1 || value == "") exit 1; print value }
+	' "$inventory"
+}
+
+inventory_block() {
+	awk -v wanted="$1" '
+		$0 ~ "[[:space:]]" wanted " -> /dev/block/[a-z]+[0-9]+$" {
+			count++; value=$NF
+		}
+		END { if (count != 1) exit 1; print value }
+	' "$inventory"
+}
+
+userdata_map() {
+	inventory=${FERRIX_PIXEL9A_PARTITION_INVENTORY:-}
+	[ -n "$inventory" ] && [ -f "$inventory" ] && [ ! -L "$inventory" ] ||
+		die 'userdata map requires a regular FERRIX_PIXEL9A_PARTITION_INVENTORY from post-restore ADB'
+	grep -Fxq '# Serial numbers are replaced by a SHA-256 prefix. Never commit this file.' "$inventory" ||
+		die 'ADB inventory has no checked-in redaction header'
+	[ "$(inventory_value result)" = ok ] || die 'ADB inventory did not complete'
+	[ "$(inventory_value target_id)" = "$expected_target_id" ] || die 'ADB inventory names another target'
+	[ "$(inventory_value transport)" = adb ] || die 'rootfs mapping requires an Android ADB inventory'
+	[ "$(inventory_value serial_sha256_prefix)" = "$(sha256_prefix "$serial")" ] || die 'ADB inventory belongs to another device'
+	[ "$(inventory_value product)" = "$expected_product" ] || die 'ADB inventory product differs'
+	[ "$(inventory_value hardware_revision)" = "$expected_revision" ] || die 'ADB inventory hardware revision differs'
+	[ "$(inventory_value sku)" = "$expected_sku" ] || die 'ADB inventory SKU differs'
+	[ "$(inventory_value slot_count)" = 2 ] || die 'ADB inventory slot count differs'
+	case "$(inventory_value current_slot):$slot" in _a:a|_a:_a|_b:b|_b:_b) ;; *) die 'ADB inventory slot differs from live Fastboot slot' ;; esac
+	inventory_stamp=$(awk '
+		/^# Pixel 9a read-only partition inventory, [0-9]{8}T[0-9]{6}Z UTC$/ {
+			count++; value=$7
+		}
+		END { if (count != 1) exit 1; print value }
+	' "$inventory") || die 'ADB inventory timestamp is missing or ambiguous'
+	restored_utc=$(sed -n 's/^recovery_verified_utc = "\([0-9TZ:-]*\)"$/\1/p' "$root/targets/boards/$expected_target_id/manifest.toml")
+	[ -n "$restored_utc" ] || die 'tested stock restore timestamp is missing'
+	restored_stamp=$(printf '%s\n' "$restored_utc" | tr -d ':-')
+	LC_ALL=C awk -v inventory="$inventory_stamp" -v restored="$restored_stamp" 'BEGIN { exit !(inventory > restored) }' ||
+		die 'ADB inventory predates the tested stock restore'
+	userdata_block=$(inventory_block userdata) || die 'ADB inventory has no unique userdata by-name mapping'
+	super_block=$(inventory_block super) || die 'ADB inventory has no unique super by-name mapping'
+	[ "$userdata_block" != "$super_block" ] || die 'userdata and super map to the same block device'
+	[ "$(fastboot_getvar unlocked)" = yes ] || die 'bootloader is not unlocked'
+	[ "$(fastboot_getvar has-slot:userdata)" = no ] || die 'userdata is not verified unslotted'
+	[ "$(fastboot_getvar is-logical:userdata)" = no ] || die 'userdata is not verified physical'
+	[ "$(fastboot_getvar partition-type:userdata)" = raw ] || die 'userdata partition type differs'
+	[ "$(fastboot_getvar snapshot-update-status)" = none ] || die 'a snapshot update is active or unknown'
+	userdata_raw=$(fastboot_getvar partition-size:userdata) || die 'live userdata capacity is unavailable'
+	userdata_bytes=$(parse_fastboot_capacity "$userdata_raw") || die 'live userdata capacity is malformed'
+	[ $((userdata_bytes % 4096)) -eq 0 ] || die 'live userdata capacity is not 4096-byte aligned'
+	rootfs_label=$(cat "$root/targets/boards/$expected_target_id/pmos/device-google-tegu/vendor-ramdisk/ferrix/rootfs-partlabel")
+	[ "$rootfs_label" = userdata ] || die 'source-owned rootfs partlabel differs from userdata'
+	grep -Fxq 'root_partlabel=userdata' "$root/targets/boards/$expected_target_id/pmos/device-google-tegu/initramfs-init" ||
+		die 'source-owned initramfs root mapping differs from userdata'
+	if command -v shasum >/dev/null 2>&1; then
+		inventory_hash=$(shasum -a 256 "$inventory" | awk '{ print $1 }')
+	else
+		inventory_hash=$(sha256sum "$inventory" | awk '{ print $1 }')
+	fi
+	{
+		printf '# source=post-restore ADB by-name inventory plus live ordinary-bootloader Fastboot getvars\n'
+		printf '# observed_utc=%s\n' "$handoff_observed_utc"
+		printf '# recovery_verified_utc=%s\n' "$restored_utc"
+		printf 'schema_version%s1\n' "$tab"
+		printf 'target_id%s%s\n' "$tab" "$expected_target_id"
+		printf 'partition_contract%srootfs-userdata-only\n' "$tab"
+		printf 'serial_sha256_prefix%s%s\n' "$tab" "$(sha256_prefix "$serial")"
+		printf 'current_slot%s%s\n' "$tab" "$slot"
+		printf 'adb_inventory_observed%s%s\n' "$tab" "$inventory_stamp"
+		printf 'adb_inventory%s%s%s%s%s%s\n' "$tab" "$inventory" "$tab" "$(wc -c <"$inventory" | tr -d '[:space:]')" "$tab" "$inventory_hash"
+		printf 'partition%suserdata%s%s%s%s\n' "$tab" "$tab" "$userdata_bytes" "$tab" "$userdata_block"
+		printf 'rootfs_partlabel%suserdata\n' "$tab"
+	} >"$handoff_tmp"
+	mv "$handoff_tmp" "$handoff"
+	cp "$handoff" "$latest"
+	emit userdata_block "$userdata_block"
+	emit userdata_capacity_bytes "$userdata_bytes"
+	emit adb_inventory_sha256 "$inventory_hash"
+	emit handoff_status targeted-rootfs-map-observed-broader-inventory-still-partial
+	trap - EXIT HUP INT TERM
+	printf 'rootfs_map=%s\nrootfs_map_latest=%s\n' "$handoff" "$latest"
+	printf 'inventory_completeness=partial\ntranscript=%s\n' "$transcript" >&2
 }
 
 resolve_dynamic_block() {
@@ -339,8 +434,8 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 		b|_b) active_suffix=_b; inactive_suffix=_a ;;
 		*) die "unexpected current slot: $slot" ;;
 	esac
-	if [ "$mode" = static-boot ]; then
-		[ "$userspace" = no ] || die 'static-boot capacities require ordinary bootloader Fastboot; no reboot was issued'
+	if [ "$mode" = static-boot ] || [ "$mode" = userdata-map ]; then
+		[ "$userspace" = no ] || die 'static-boot capacities and userdata mapping require ordinary bootloader Fastboot; no reboot was issued'
 	else
 		[ "$userspace" = yes ] ||
 			die 'Fastboot capacity handoff requires fastbootd (is-userspace=yes) so both dynamic A/B logical partitions are independently observable; no reboot was issued'
@@ -406,6 +501,10 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 		printf 'result=diagnostic-only\nunavailable_queries=%s\ntranscript=%s\n' "$diagnostic_missing" "$transcript"
 		exit 0
 	fi
+	if [ "$mode" = userdata-map ]; then
+		userdata_map
+		exit 0
+	fi
 
 	{
 		printf '# source=Fastboot getvar partition-size:<partition>_<slot>; values are bytes (hex or decimal)\n'
@@ -445,6 +544,7 @@ fi
 
 [ "$mode" != diagnose-fastboot ] || die 'diagnostic mode requires exactly one Fastbootd device and no ADB transport'
 [ "$mode" != static-boot ] || die 'static-boot handoff requires exactly one bootloader Fastboot device and no ADB transport'
+[ "$mode" != userdata-map ] || die 'userdata map requires exactly one bootloader Fastboot device and no ADB transport'
 
 [ "$adb_count" -eq 1 ] && [ "$fastboot_count" -eq 0 ] ||
 	die "capacity handoff requires exactly one ADB or one Fastboot device (adb=$adb_count fastboot=$fastboot_count)"

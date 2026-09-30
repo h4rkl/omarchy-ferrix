@@ -20,9 +20,21 @@
   `out/pixel-9a/partition-capacity-static-20260930T014454Z-48820.txt`
   (SHA-256 `f99498bbdfd9fe8100b98b9d1430281c1232d33232293f4d8417dd85fa214aa3`).
   The ignored handoff was copied to the authorized native builder. The
-  subsequent Fastboot inventory remains `partial` and does not establish a
-  rootfs mapping (`out/pixel-9a/partition-inventory-20260930T014504Z.txt`,
+  subsequent Fastboot inventory remains `partial` and by itself does not
+  establish a rootfs mapping (`out/pixel-9a/partition-inventory-20260930T014504Z.txt`,
   SHA-256 `08b9eda6bd5a789955d41c2723853f45fbf31135c7683211f4b223b2d0790634`).
+- **Targeted rootfs map:** `just pixel-9a-userdata-map` correlated the
+  post-restore same-device ADB by-name record with live ordinary-Fastboot
+  `has-slot`, `is-logical`, type, snapshot, and size getvars at
+  `2026-09-30T02:02:26Z`. It found unslotted physical `userdata` at Android
+  `/dev/block/sda34`, 117,543,358,464 bytes, distinct from `super`, matching
+  the source initramfs `PARTLABEL=userdata`. The ignored handoff is
+  `out/pixel-9a/userdata-map-20260930T020226Z-97470.tsv` (SHA-256
+  `a0122271f54d467adb4a2feead0288c84a86aaa76b843329455e68a6e65fd316`);
+  its transcript SHA-256 is
+  `9ccf603b5c78287e39e805526e04839c10cbc1b3695bbc3842fe8ebf0e829618`.
+  The broader inventory is still `partial`, and this targeted read-only map
+  authorizes no format, flash, or user-data wipe.
 - **Build status:** A fresh source-pinned radio kernel rebuild is running on
   native Linux x86_64 under a new ignored output directory. No new kernel
   manifest, boot-input handoff, or static image bundle has been validated yet.
@@ -32,8 +44,9 @@
 - **Recovery/storage decision:** The owner chose the tested pinned factory
   restore as the stock recovery path if Ferrix later uses shared `userdata`.
   This is a storage-plan choice, not authorization for a `userdata` wipe or
-  any physical write. Exact live mapping, capacity, image checks, and a
-  separate per-run confirmation remain required.
+  any physical write. The targeted map above still needs a checked-in flash
+  adapter to compare it with the final image and recheck live capacity before
+  a separate per-run confirmation.
 
 ## 2026-09-30 (post-restore Pixel 9a admission and build gate refresh)
 

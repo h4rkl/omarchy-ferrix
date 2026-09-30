@@ -195,8 +195,14 @@ storage plan on 2026-09-30. That choice does not authorize writing `userdata`
 or any other partition; the separate physical preflight and typed per-run
 confirmation still apply. The fresh ordinary-bootloader static-capacity
 handoff at `2026-09-30T01:44:54Z` follows the tested stock restore and covers
-all eight static A/B pairs. It does not establish the shared `userdata`
-mapping or upgrade the broader partial inventory.
+all eight static A/B pairs. A separate read-only `pixel-9a-userdata-map`
+handoff at `02:02:26Z` correlated same-device post-restore Android by-name
+evidence with live ordinary-Fastboot physical classification and capacity:
+`userdata` maps to `/dev/block/sda34` in Android and is an unslotted physical
+117,543,358,464-byte partition. The source initramfs selects that partition
+by label. This targeted map does not upgrade the broader partial inventory
+or authorize its shared-data wipe; the future flash adapter must recheck the
+live device and exact image before asking for a separate per-run confirmation.
 
 The other proposal is an explicit first-stock-recovery-test workflow. Normal
 restore and Ferrix gates must not silently admit an untested recovery route.

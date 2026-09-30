@@ -75,6 +75,12 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
     complete, use only the checked-in route-specific adapter below; it still
     requires the same identity, backup, recovery, inactive-slot, image-hash,
     and confirmation gates before any physical boot or flash is attempted.
+    For the static-only route, `just pixel-9a-userdata-map` `[ro]` in ordinary
+    bootloader Fastboot can correlate a post-restore same-device ADB inventory
+    with live unslotted physical `userdata` classification, snapshot state,
+    and size. Supply `FERRIX_PIXEL9A_PARTITION_INVENTORY` explicitly. This
+    targeted handoff does not make the broader inventory complete and does
+    not authorize formatting or flashing shared storage.
 12. For the canonical Google route only, once a complete, reviewed image set
     exists and the owner authorizes the physical operation:
     `just pixel-9a-flash-check` `[ro]`; `just pixel-9a-flash-boot-temp`

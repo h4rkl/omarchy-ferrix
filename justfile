@@ -125,6 +125,11 @@ pixel-9a-partition-capacity-diagnose:
 pixel-9a-partition-capacity-static:
     @"{{root}}/tools/pixel-9a/partition-capacity.sh" --static-boot
 
+# Same-device ADB by-name plus live ordinary-Fastboot userdata mapping.
+# Supply FERRIX_PIXEL9A_PARTITION_INVENTORY from the post-restore ADB capture.
+pixel-9a-userdata-map:
+    @"{{root}}/tools/pixel-9a/partition-capacity.sh" --userdata-map
+
 pixel-9a-partition-test:
     @sh "{{root}}/tools/pixel-9a/tests/partition-inventory.sh"
 
