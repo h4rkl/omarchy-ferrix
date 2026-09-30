@@ -2,7 +2,7 @@
 
 Status: identity established; bootloader unlocked through the gated workflow;
 official recovery artifacts verified; authorized factory restore completed,
-post-restore Android verification pending.
+matching post-restore stock Android verified.
 
 On 2026-09-30 the owner explicitly authorized the first pinned stock restore,
 including bootloader/radio updates and the development-device data wipe.
@@ -11,10 +11,13 @@ including bootloader/radio updates and the development-device data wipe.
 `out/pixel-9a/restore/20260930T002730Z.txt`. The vendor update selected the
 already-current slot A, wrote stock boot images and shared `super`, erased
 userdata/metadata, and requested reboot without relocking. Subsequent
-discovery returned `no-device`; Android build verification awaits owner
-setup and USB-debugging authorization. This does not promote the recovery
-gate or authorize Ferrix flashing. Pre-restore identity/layout rows below
-remain historical until refreshed.
+discovery initially returned `no-device`. Owner-run discovery at
+`2026-09-30T01:02:38Z` then verified the same exact device running
+`google/tegu/tegu:17/CP3A.260905.009/16091614:user/release-keys`, slot `_a`,
+unlocked/orange; ignored evidence
+`out/pixel-9a/discovery-20260930T010238Z.txt`. Together these records establish
+`recovery_procedure=tested`, not Ferrix flash authorization. Pre-restore
+identity/layout rows below remain historical until refreshed.
 
 Owner authorization: the 2026-09-28 requests authorize read-only Pixel 9a
 discovery, proposal work, official stock-recovery downloads, target-local
@@ -59,7 +62,7 @@ identifiers remain outside Git.
 | postmarketOS device package basis | Target-local `pmos/device-google-tegu` package and native-Linux Ferrix adapter composition are checked in; substrate is not built or bootable | repository target package + target Linux plan | implementation-input |
 | Stock factory image and OTA hashes | CP3A.260905.009 pinned; files downloaded and verified in ignored target folder | official Google image manifests | passed |
 | Backup inventory | — | backup artifacts stored outside Git and verified readable | pending |
-| Tested recovery procedure | Factory restore completed; fresh same-device Android build verification pending. Sideload remains untested on hardware. | `out/pixel-9a/restore/20260930T002730Z.txt` (ignored) | pending |
+| Tested recovery procedure | Factory restore completed and same-device Android CP3A.260905.009 verified. Sideload remains untested on hardware. | Ignored restore `20260930T002730Z` and discovery `20260930T010238Z`; paths/hashes in target manifest | tested |
 | Image compatibility criteria | factory metadata requires `tegu`, bootloader `tegu-17.0-15819938`, baseband `g5300t-260604-260807-B-16036236`; AVB/slot/output-size checks remain required | pinned archive + offline factory inspection | partial |
 | Capability matrix | all Ferrix capabilities conservative `unsupported` pending Linux evidence | target `capabilities.toml` | passed |
 | Evidence and redaction policy | serials, IMEI/IMSI/ICCID, MAC/BSSID, keys, user data, and raw dumps never enter Git | this proposal + ignored output path | partial |
@@ -105,6 +108,7 @@ capability claims require separate, target-specific tests and remain
 
 | Date (UTC) | Result |
 | --- | --- |
+| 2026-09-30 | Owner-run discovery at `01:02:38Z` verified the restored pinned stock build on the same Pixel 9a GXQ96 / tegu / MP1.0, slot A, unlocked/orange. Recovery gate promoted to `tested`; no Ferrix capability promoted. |
 | 2026-09-30 | Owner-authorized pinned stock restore completed with exit 0, expected bootloader/baseband versions, and final reboot request. Discovery at `00:35:32Z` returned `no-device`; stock Android verification pending. |
 | 2026-09-28 | Proposal package recorded after the exact-target read-only discovery; discovery had completed on 2026-09-27. |
 | 2026-09-27 | ADB discovery established Google Pixel 9a / GXQ96 / tegu / MP1.0; bootloader locked, verified boot green, slot `_a`; serial redacted. |

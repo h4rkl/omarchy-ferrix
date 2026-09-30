@@ -357,13 +357,19 @@ pinned build. The owner-authorized first test completed on hardware on
 2026-09-30 with exit 0 / `factory-restore-complete`; ignored transcript
 `out/pixel-9a/restore/20260930T002730Z.txt`. Subsequent discovery returned
 `no-device`, so device operations paused for owner setup/USB authorization.
-The recovery gate remains unpromoted pending fresh same-device Android
-discovery. Do not repeat the destructive test merely to obtain that discovery.
+The owner subsequently ran read-only discovery in the normal terminal at
+`2026-09-30T01:02:38Z`; saved transcript
+`out/pixel-9a/discovery-20260930T010238Z.txt` matches the restore's device
+identity and verifies stock `CP3A.260905.009`, Android 17, slot A, and
+unlocked/orange. The recovery gate is now `tested`. Do not repeat the first
+test; that bootstrap mode requires the former `documented-not-tested` state.
+Normal restore still requires all its other gates and a fresh per-run approval.
 
 **Status:** both workflows Implemented and stub-tested. Factory restoration
-has completed on hardware; OTA sideload remains stub-tested only. Pending
-post-restore Android verification, `manifest.toml` still records
-`recovery_procedure = "documented-not-tested"`.
+has completed on hardware with same-device stock Android verification;
+OTA sideload remains stub-tested only. `manifest.toml` records
+`recovery_procedure = "tested"` for the accepted pinned factory restore.
+This does not promote Ferrix image compatibility or any physical capability.
 
 Choose by device state:
 

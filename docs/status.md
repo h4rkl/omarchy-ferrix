@@ -1,5 +1,31 @@
 # Status
 
+## 2026-09-30 (stock recovery verified on the exact Pixel 9a)
+
+- **Physical target:** `google-pixel-9a-tegu-gxq96-mp1-0`. Owner-run
+  `just pixel-9a-discover` at `2026-09-30T01:02:38Z` returned `result=ok`
+  through one authorized ADB device. The saved, redacted transcript matches
+  the completed restore's device identity and reports
+  `google/tegu/tegu:17/CP3A.260905.009/16091614:user/release-keys`, Android
+  17, security patch `2026-09-05`, bootloader `tegu-17.0-15819938`, slot
+  `_a`, unlocked/orange. The Android slot-count property remains empty;
+  discovery alone does not refresh the partition inventory.
+- **Recovery evidence accepted:** the successful factory restore plus this
+  same-device stock Android discovery satisfy the provisioning skill's
+  recovery-test requirement. `[gates].recovery_procedure` is now `tested`.
+  The manifest records both ignored evidence paths and their SHA-256 hashes;
+  raw transcripts and unique identifiers remain out of Git. This verifies
+  restoration to the accepted newer pinned stock build, not downgrade to the
+  original build or recovery from every possible hardware/firmware failure.
+- **Still gated:** Ferrix `image_compatibility=partial`, native Linux boot
+  not attempted, capabilities unsupported, fresh post-restore partition
+  evidence required, static-only composer/flash adapter still incomplete.
+  Backup/data-policy and per-run confirmation requirements are unchanged.
+  No further phone writes or boot-state changes occurred during verification.
+- The owner's normal-terminal workflow supplied valid device evidence; the
+  agent's earlier sandbox ADB startup failure is a host-access limitation,
+  not evidence that the stock restore failed. No sandbox bypass was used.
+
 ## 2026-09-30 (authorized stock restore completed; Android verification pending)
 
 - **Exact physical target:** `google-pixel-9a-tegu-gxq96-mp1-0`. After

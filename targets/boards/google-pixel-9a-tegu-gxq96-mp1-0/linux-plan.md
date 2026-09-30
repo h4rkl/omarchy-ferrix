@@ -65,9 +65,11 @@ is a scope label required by the host profile, not proof of a physical run.
 The latest read-only physical gates are recorded without promoting them to
 Linux evidence: the exact Fastboot device passed the pinned factory/OTA
 preflight on 2026-09-29T21:11:49Z, and the ordinary-bootloader Fastboot
-partition inventory completed at 2026-09-29T21:12:06Z. The preflight still
-reports `image_compatibility=partial` and
-`recovery_procedure=documented-not-tested`; the Android-side inventory remains
+partition inventory completed at 2026-09-29T21:12:06Z. That preflight
+reported `image_compatibility=partial` and
+`recovery_procedure=documented-not-tested`. Following the completed stock
+restore and matching Android discovery on 2026-09-30, recovery is now
+`tested`; Ferrix image compatibility is still partial. The Android-side inventory remains
 partial. The owner-entered Fastbootd diagnostic on 2026-09-30 established
 that this mode cannot expose six static partition pairs and reports zero
 allocation for both inactive DLKM partitions. Another mode transition alone
@@ -92,15 +94,15 @@ overwrite shared storage, select a slot, or flash without a per-run review.
   rootfs would overwrite Android's shared data filesystem and does not satisfy
   a promise of an immediately bootable stock fallback.
 - Keep tested recovery and exact image compatibility as independent gates.
-  The owner reports a stock restore, but the recorded preflight alone does
-  not establish its completion. The pinned recovery build `CP3A.260905.009`
-  differs from the observed stock build `BD4A.240925.111`; restoring the
-  pinned archive must not be described as restoring that exact old build.
+  The recorded factory restore and subsequent same-device Android discovery
+  now establish tested recovery. The pinned recovery build `CP3A.260905.009`
+  differs from the original stock build `BD4A.240925.111`; this successful
+  restore must not be described as restoring that exact old build.
   The owner explicitly accepted the pinned newer `CP3A.260905.009` build as
-  the recovery destination on 2026-09-30. This resolves the destination
-  choice only, not the completion-evidence or per-run confirmation gates.
-  Do not upgrade bootloader firmware or claim downgrade compatibility to
-  resolve this discrepancy.
+  the recovery destination on 2026-09-30 and separately authorized the stock
+  firmware updates/wipe for the test. That approval does not carry forward
+  to Ferrix writes or authorize further firmware changes. Do not claim
+  downgrade compatibility from this newer-stock recovery evidence.
 
 The current radio-first workflow enforces an **existing-allocation-only**
 policy. The reason is visible in [AOSP's Fastboot implementation](https://android.googlesource.com/platform/system/core/+/3f439a7a887736cb3cf26d6523defc19ff61ec7b/fastboot/fastboot.cpp):
@@ -199,8 +201,10 @@ are now implemented and stub-tested. The live read-only preflight passed on
 2026-09-30. The subsequent owner-authorized execution completed with exit 0
 and `factory-restore-complete` (ignored transcript
 `out/pixel-9a/restore/20260930T002730Z.txt`). Fresh discovery returned
-`no-device`; Android setup/USB authorization and same-device stock-build
-verification are still pending, so the recovery gate is not promoted.
+`no-device`; the later owner-run discovery at `2026-09-30T01:02:38Z`
+verified the same device running accepted stock `CP3A.260905.009`, slot A,
+unlocked/orange (`out/pixel-9a/discovery-20260930T010238Z.txt`). Recovery is
+now `tested`; Ferrix image compatibility and capability gates are unchanged.
 The stock vendor update rewrote shared `super` and wiped userdata/metadata;
 all earlier live-capacity evidence must be refreshed. Normal restore
 still requires its existing tested-recovery gate. First-test mode always
@@ -709,7 +713,7 @@ Outstanding physical gates (all):
 
 - [x] the checked-in dev-device/no-user-data policy gate is present; this does
   not claim a personal-data backup was verified;
-- [ ] stock factory recovery is tested on this exact device;
+- [x] stock factory recovery to accepted CP3A.260905.009 is tested on this exact device, with matching post-restore Android discovery;
 - [ ] the complete live partition inventory is captured read-only and
   redacted;
 - [ ] the complete coherent kernel/module/DTBO split-boot build succeeds from

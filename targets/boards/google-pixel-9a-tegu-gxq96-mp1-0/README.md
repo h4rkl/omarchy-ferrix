@@ -11,10 +11,14 @@ The owner-authorized first stock restore completed on 2026-09-30 with
 bootloader `tegu-17.0-15819938` and baseband
 `g5300t-260604-260807-B-16036236`. The pinned stock update wrote slot-A
 boot images and shared `super`, selected the already-current slot A, wiped
-userdata/metadata, and requested reboot without relocking. Fresh discovery
-returned `no-device`; Android boot/build verification awaits owner setup and
-USB-debugging authorization. Recovery remains `documented-not-tested` until
-that verification succeeds. Earlier partition capacities are now historical.
+userdata/metadata, and requested reboot without relocking. Initial discovery
+returned `no-device`; the owner then ran the read-only workflow successfully
+at `2026-09-30T01:02:38Z`. Saved transcript
+`out/pixel-9a/discovery-20260930T010238Z.txt` matches the restore's device
+identity and verifies Android 17 / `CP3A.260905.009`, security patch
+`2026-09-05`, slot `_a`, and unlocked/orange. Recovery is now `tested` for
+this exact device and accepted stock build. Earlier partition capacities
+remain historical; no Ferrix boot or capability is established.
 
 Initial identity was established by the checked-in read-only workflow
 `just pixel-9a-discover`:
@@ -141,8 +145,8 @@ verified backup. Before any destructive or boot-state mutation, the owner
 must explicitly authorize the session policy with
 `FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data`
 and answer the workflow's exact per-run confirmation prompts. The checked-in
-stock recovery command has completed, but its post-restore Android evidence
-is still pending.
+stock recovery command and matching post-restore Android verification have
+completed. Other provisioning gates still apply independently.
 
 ## Recovery files
 
@@ -238,7 +242,9 @@ Fastbootd on its own.
 
 The owner approved an explicit first-stock-recovery-test contract on
 2026-09-30, accepting pinned stock `CP3A.260905.009` as the recovery
-destination. To test recovery without falsely marking it tested first:
+destination. The following bootstrap commands were used while recovery was
+`documented-not-tested`; they are no longer appropriate now that recovery is
+`tested`:
 
 ```sh
 just pixel-9a-factory-restore --preflight-first-test
@@ -265,8 +271,8 @@ remains preferred while stock recovery is intact.
 
 Both stock recovery routes now have checked-in, target-scoped workflows.
 Both are stub-tested offline (`just pixel-9a-tools-test`). The first-test
-factory workflow completed on the physical device on 2026-09-30; its
-post-restore Android verification is pending. OTA sideload remains untested
+factory workflow and matching post-restore Android verification completed
+on the physical device on 2026-09-30. OTA sideload remains untested
 on hardware.
 
 For an OTA sideload, `just pixel-9a-sideload-ota --preflight` re-hashes the
@@ -291,13 +297,14 @@ can select a slot, write shared `super`, and erase userdata/metadata, as
 observed in the approved first test. Only serial-redacted transcripts remain
 under `out/pixel-9a/{sideload,restore}/`. Do not run the vendor script
 directly. Command completion alone does not establish a tested restore path;
-the fresh same-device Android verification is still required.
+fresh same-device Android verification was also captured for the recorded test.
 
 The read-only factory preflight passed on `2026-09-29T21:11:49Z`: both pinned
 official recovery archives, the offline factory inventory, the required
 bootloader/baseband versions, and the reviewed vendor sequence matched. This
-does not test stock recovery or change the manifest's
-`recovery_procedure=documented-not-tested` gate.
+did not test stock recovery or change the then-current
+`recovery_procedure=documented-not-tested` gate. The later completed restore
+and stock Android discovery, not this preflight, established `tested`.
 
 For expected failure states, use the route matching the transport: stock
 Android or stock recovery can use the verified full OTA with `adb sideload`;

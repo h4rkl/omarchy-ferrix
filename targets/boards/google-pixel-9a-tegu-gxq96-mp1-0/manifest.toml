@@ -1,7 +1,7 @@
 schema_version = 1
 target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
 kind = "physical"
-status = "bootloader-unlocked-recovery-prepared"
+status = "bootloader-unlocked-recovery-tested"
 
 manufacturer = "Google"
 marketing_name = "Pixel 9a"
@@ -23,6 +23,24 @@ recovery_preflight_utc = "2026-09-29T21:11:49Z"
 recovery_preflight_workflow = "just pixel-9a-factory-restore --preflight"
 recovery_preflight_result = "passed-read-only"
 
+# Tested recovery scope: this exact device, pinned stock CP3A.260905.009,
+# successful factory update followed by matching Android ADB discovery.
+# Raw/redacted device transcripts remain ignored; no unique identifier here.
+recovery_restore_workflow = "just pixel-9a-factory-restore --confirm-first-test"
+recovery_restore_result = "factory-restore-complete"
+recovery_restore_evidence = "out/pixel-9a/restore/20260930T002730Z.txt"
+recovery_restore_evidence_sha256 = "5a72400d2cca3f97fdcc5265a0917d42411b4612b7d6cdd8f4e83f35d3076dd2"
+recovery_verified_utc = "2026-09-30T01:02:38Z"
+recovery_verification_workflow = "just pixel-9a-discover"
+recovery_verification_evidence = "out/pixel-9a/discovery-20260930T010238Z.txt"
+recovery_verification_evidence_sha256 = "28508361e0efc68f0f505f854404ea828f4faab53869750397ba4087ac13b169"
+restored_stock_build_fingerprint = "google/tegu/tegu:17/CP3A.260905.009/16091614:user/release-keys"
+restored_stock_android_release = "17"
+restored_stock_security_patch = "2026-09-05"
+restored_bootloader_version = "tegu-17.0-15819938"
+restored_baseband_version = "g5300t-260604-260807-B-16036236"
+
+# Historical initial stock identity; restored values are recorded above.
 stock_build_fingerprint = "google/tegu/tegu:15/BD4A.240925.111/12859276:user/release-keys"
 stock_android_release = "15"
 stock_security_patch = "2025-01-05"
@@ -90,5 +108,5 @@ image_compatibility = "partial"
 backup = "not-required-dev-device"
 data_policy = "dev-device-no-user-data"
 bootloader_unlock = "passed"
-recovery_procedure = "documented-not-tested"
+recovery_procedure = "tested"
 per_run_confirmation = "required"

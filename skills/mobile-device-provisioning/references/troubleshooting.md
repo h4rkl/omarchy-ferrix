@@ -105,8 +105,11 @@ and flash workflows reboot as part of their confirmed sequence.
 | No USB enumeration at all | Hardware/cable/bootloader fault; owner decision |
 
 Both routes verify the archive hashes against `recovery.pins` before touching
-the device, and neither has run on hardware yet
-(`recovery_procedure = "documented-not-tested"`). If the restore stops between
+the device. The owner-authorized factory restore completed on 2026-09-30,
+and same-device Android discovery verified accepted stock CP3A.260905.009
+(`recovery_procedure = "tested"`). OTA sideload remains untested on hardware;
+normal restore's other compatibility/data/confirmation gates still apply.
+If the restore stops between
 stages with `REFUSING:` because `version-bootloader`/`version-baseband` do not
 match the archive's `require` lines, the phone is still in Fastboot; report,
 and re-run only with a fresh go-ahead (bootloader/radio flashing is
