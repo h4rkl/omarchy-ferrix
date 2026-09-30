@@ -71,12 +71,24 @@ set -eu
 [ "${1:-}" = create ]
 output=${2:-}
 [ -n "$output" ]
-	[ "$#" -ge 4 ]
+[ "$#" -ge 6 ]
+printf '%s\n' "$@" | grep -Fqx -- '--id=/:board_id'
+printf '%s\n' "$@" | grep -Fqx -- '--rev=/:board_rev'
 case "$*" in
-	*tegu.dtbo*) ;;
+	*zumapro-tegu-mp.dtbo*) ;;
 	*) printf '%s\n' 'mkdtboimg received no source-built DTBO input' >&2; exit 1 ;;
 esac
-printf 'synthetic-mkdtboimg\n' >"$output"
+python3 - "$output" <<'PY'
+import struct
+import sys
+
+table = bytearray(104)
+struct.pack_into(">8I", table, 0, 0xd7b7ab1e, 104, 32, 32, 1, 32, 4096, 0)
+struct.pack_into(">8I", table, 32, 40, 64, 0x60b06, 0x10000, 0, 0, 0, 0)
+struct.pack_into(">2I", table, 64, 0xd00dfeed, 40)
+with open(sys.argv[1], "wb") as image:
+    image.write(table)
+PY
 EOF
 cat >"$work/bin/mke2fs" <<'EOF'
 #!/bin/sh
@@ -182,14 +194,15 @@ dist="$kernel/dist"
 rootfs="$work/out/pixel-9a/rootfs/tegu"
 printf image >"$dist/Image"
 printf dtb >"$dist/dtb.img"
-printf dtbo >"$dist/split-inputs/dtbo-source-set/tegu.dtbo"
+mkdir -p "$dist/split-inputs/dtbo-source-set/exynos/google"
+printf dtbo >"$dist/split-inputs/dtbo-source-set/exynos/google/zumapro-tegu-mp.dtbo"
 printf dtb >"$dist/split-inputs/dtbo-source-set/tegu.dtb"
 printf module >"$dist/split-inputs/module-install/s5300_modem.ko"
-printf 'schema_version\t1\nsource_root\tarch/arm64/boot/dts\nsource\ttegu.dtb\t%s\t%s\nsource\ttegu.dtbo\t%s\t%s\n' \
+printf 'schema_version\t1\nsource_root\tarch/arm64/boot/dts\nsource\ttegu.dtb\t%s\t%s\nsource\texynos/google/zumapro-tegu-mp.dtbo\t%s\t%s\n' \
 	"$(wc -c <"$dist/split-inputs/dtbo-source-set/tegu.dtb" | tr -d '[:space:]')" \
 	"$(sha256sum "$dist/split-inputs/dtbo-source-set/tegu.dtb" | awk '{ print $1 }')" \
-	"$(wc -c <"$dist/split-inputs/dtbo-source-set/tegu.dtbo" | tr -d '[:space:]')" \
-	"$(sha256sum "$dist/split-inputs/dtbo-source-set/tegu.dtbo" | awk '{ print $1 }')" \
+	"$(wc -c <"$dist/split-inputs/dtbo-source-set/exynos/google/zumapro-tegu-mp.dtbo" | tr -d '[:space:]')" \
+	"$(sha256sum "$dist/split-inputs/dtbo-source-set/exynos/google/zumapro-tegu-mp.dtbo" | awk '{ print $1 }')" \
 	>"$dist/split-inputs/dtbo-source-set.tsv"
 printf 'schema_version\t1\ninstall_root\tsplit-inputs/module-install\nfile\ts5300_modem.ko\t%s\t%s\n' \
 	"$(wc -c <"$dist/split-inputs/module-install/s5300_modem.ko" | tr -d '[:space:]')" \

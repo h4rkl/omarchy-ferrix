@@ -2,6 +2,19 @@
 
 ## 2026-10-01 (Pixel 9a vendor boot layout correction; no new device load)
 
+- A further offline check found that the failed candidate's `dtbo.img` has
+  266 entries from generic ARM board builds; its first entry has ID/revision
+  zero. The verified stock image has 10 entries. Its exact tegu MP overlay
+  has board ID `0x60b06` and revision `0x10000`, consistent with Google's
+  [pinned `zumapro-tegu-mp.dts`](https://android.googlesource.com/kernel/devices/google/tegu/+/6276884d9940694b25a6934671918ec8ac412ee8/dts/zumapro-tegu-mp.dts).
+  The selected experimental kernel source currently has no tegu `.dtbo`.
+  Applying the stock MP overlay to its candidate DTB with `fdtoverlay`
+  failed with `FDT_ERR_BADOFFSET`. The DTB also lacks `/__symbols__`, which
+  can prevent overlay fixups. This is an offline compatibility diagnostic,
+  not a physical boot result. Both composers now
+  require exactly one source-built tegu MP overlay and the observed ID/revision
+  in the final DTBO table. They refuse to compose a new bundle until that
+  source and base-tree compatibility are supplied.
 - The verified stock comparison showed a version-4 boot image with fixed
   4 KiB pages, but both vendor boot containers use 2 KiB pages. Stock
   `vendor_boot` has no embedded DTB; `vendor_kernel_boot` carries the DTBs.
@@ -16,6 +29,14 @@
   previously built candidate is still blocked and cannot be reused under
   the revised contracts. No phone command or new physical loading occurred
   for this correction. Hardware compatibility remains unproved.
+- A new clean native attempt `20260930T190221Z` began at source commit
+  `ec8c4015ad162da7e7916b6ca95739042a74159b` with the same named
+  capacity handoff. Source verification passed, but the kernel build was
+  stopped with exit 143 after the missing exact-target overlay was found;
+  it produced no image candidate. Its ignored kernel log remains on deba.
+  Product, rootfs, boot-input, and image stages were not started for this
+  attempt. The later exact-MP DTBO gate is a new source contract and needs a
+  separate source-bound attempt after the overlay/base-tree work is complete.
 
 ## 2026-10-01 (Pixel 9a temporary probe not observed)
 

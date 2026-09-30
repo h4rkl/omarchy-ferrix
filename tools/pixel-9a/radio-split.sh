@@ -133,6 +133,9 @@ check_route() {
 		'boot_page_size = 4096' \
 		'vendor_boot_page_size = 2048' \
 		'vendor_dtb_partition = "vendor_kernel_boot"' \
+		'dtbo_source = "exynos/google/zumapro-tegu-mp.dtbo"' \
+		'dtbo_board_id = 0x60b06' \
+		'dtbo_board_rev = 0x10000' \
 		'dtbo_tool = "mkdtboimg.py"' \
 		'dtbo_page_size = 4096' \
 		'dynamic_partition_transport = "fastbootd"' \
@@ -184,14 +187,15 @@ verify_dtbo_sources() {
 	source_manifest="$kernel_dist/$(field "$source_row" 2)"
 	require_file "$source_manifest" 'DTB/DTBO source manifest'
 	source_dir="$kernel_dist/split-inputs/dtbo-source-set"
-	dtbo_count=0
+	exact_dtbo_count=0
 	while IFS="$tab" read -r kind relative bytes hash extra; do
 		case "$kind" in
 			''|'#'*) continue ;;
 			schema_version) [ "$relative" = 1 ] && [ -z "${bytes:-}" ] && [ -z "${hash:-}" ] && [ -z "${extra:-}" ] || die 'DTB/DTBO source manifest schema row is malformed' ;;
 			source)
 				safe_relative "$relative"
-				case "$relative" in *.dtbo) dtbo_count=$((dtbo_count + 1)) ;; *.dtb) ;; *) die "DTB/DTBO source manifest contains a non-DTB path: $relative" ;; esac
+				case "$relative" in *.dtbo|*.dtb) ;; *) die "DTB/DTBO source manifest contains a non-DTB path: $relative" ;; esac
+				[ "$relative" != exynos/google/zumapro-tegu-mp.dtbo ] || exact_dtbo_count=$((exact_dtbo_count + 1))
 				case "$bytes" in ''|*[!0-9]*) die "DTB/DTBO source manifest has invalid size: $relative" ;; esac
 				case "$hash" in ''|*[!0-9a-f]*) die "DTB/DTBO source manifest has invalid hash: $relative" ;; esac
 				[ "${#hash}" -eq 64 ] || die "DTB/DTBO source manifest has invalid hash length: $relative"
@@ -205,7 +209,7 @@ verify_dtbo_sources() {
 				*) die "DTB/DTBO source manifest has an unknown row: $kind" ;;
 		esac
 	done <"$source_manifest"
-	[ "$dtbo_count" -gt 0 ] || die 'source-built DTBO overlay set is empty'
+	[ "$exact_dtbo_count" -eq 1 ] || die 'exact tegu MP1.0 source-built DTBO overlay is missing or duplicated'
 }
 
 verify_partition_sizes() {
@@ -446,7 +450,7 @@ verify_required_inputs() {
 }
 
 check_tools() {
-	for command_name in awk cat cp dd dirname find grep mkdir mktemp mv rm tr wc; do
+	for command_name in awk cat cp dd dirname find grep mkdir mktemp mv python3 rm tr wc; do
 		command -v "$command_name" >/dev/null 2>&1 || die "missing prerequisite '$command_name'"
 	done
 	command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || die 'missing sha256sum or shasum'
@@ -589,14 +593,14 @@ build() {
 	"$mkbootimg" --header_version 4 --pagesize 4096 --ramdisk "$initramfs" --output "$stage/init_boot.img"
 	"$mkbootimg" --header_version 4 --pagesize 2048 --vendor_ramdisk "$vendor_ramdisk" --vendor_cmdline "$vendor_cmdline" --vendor_bootconfig "$bootconfig" --vendor_boot "$stage/vendor_boot.img"
 	dtbo_inputs="$stage/.dtbo-inputs"
-	awk -F "$tab" '$1 == "source" && $2 ~ /\.dtbo$/ { print $2 }' "$kernel_dist/split-inputs/dtbo-source-set.tsv" | while IFS= read -r relative; do
+	awk -F "$tab" '$1 == "source" && $2 == "exynos/google/zumapro-tegu-mp.dtbo" { print $2 }' "$kernel_dist/split-inputs/dtbo-source-set.tsv" | while IFS= read -r relative; do
 		printf '%s\n' "$kernel_dist/split-inputs/dtbo-source-set/$relative"
 	done >"$dtbo_inputs"
-	# mkdtboimg.py accepts the output followed by source-built DTBO blobs. The
-	# source manifest is sorted by Kbuild output order, so the table is stable.
+	# Compose only the exact source-built MP1.0 overlay.
 	set --
 	while IFS= read -r dtbo; do set -- "$@" "$dtbo"; done <"$dtbo_inputs"
-	"$mkdtboimg" create "$stage/dtbo.img" --page_size=4096 "$@"
+	"$mkdtboimg" create "$stage/dtbo.img" --page_size=4096 --id=/:board_id --rev=/:board_rev "$@"
+	"$root/tools/pixel-9a/static-boot.py" verify-dtbo "$stage/dtbo.img" || die 'generated DTBO table failed the exact tegu MP1.0 layout check'
 	# vendor_kernel_boot uses the vendor boot container too; a bare CPIO is
 	# only its ramdisk payload and is not a bootloader-readable image.
 	"$mkbootimg" --header_version 4 --pagesize 2048 --vendor_ramdisk "$vendor_kernel_boot_cpio" --dtb "$stage/dtb.img" --vendor_boot "$stage/vendor_kernel_boot.img"

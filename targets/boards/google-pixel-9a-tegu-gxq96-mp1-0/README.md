@@ -52,6 +52,11 @@ banner, so the candidate is now `probe-unobserved` and must not be loaded
 again without a new build and compatibility investigation.
 The boot-only probe cannot test the candidate device tree and full boot image
 set together; the subsequent watchdog reason does not isolate the fault.
+The static and split composers now refuse the generic Kbuild DTBO inventory:
+the selected experimental source has no source-built tegu MP1.0 overlay, while
+the verified stock table identifies MP1.0 as ID `0x60b06` / revision
+`0x10000`. A new bundle needs a compatible source-built overlay before image
+composition; the historical bundle remains blocked.
 The read-only `just pixel-9a-postprobe-diagnose` workflow checks exact Android
 identity and records boot-reason properties and bounded console pstore summaries
 under ignored `out/pixel-9a/postprobe/`. After this probe, Android reported a

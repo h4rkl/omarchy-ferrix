@@ -57,6 +57,7 @@ SOURCE = Path(
 TARGET_ID = "google-pixel-9a-tegu-gxq96-mp1-0"
 SOURCE_ROUTE = "experimental-linux-google-tegu-s5300-wwan"
 STATIC_ROUTE = "experimental-linux-google-tegu-s5300-wwan-static"
+TEGU_MP_DTBO = "exynos/google/zumapro-tegu-mp.dtbo"
 PARTITIONS = (
     "boot",
     "init_boot",
@@ -130,6 +131,26 @@ def require_vendor_layout(path: Path, dtb_bytes: int, cmdline: str) -> None:
             "vendor boot DTB placement differs from reviewed stock layout")
     require(actual_cmdline == cmdline.encode("ascii"),
             "vendor boot command line differs from source-owned input")
+
+
+def require_dtbo_layout(path: Path) -> None:
+    with regular(path, "DTBO image").open("rb") as stream:
+        header = stream.read(64)
+        require(len(header) == 64, "DTBO image lacks a complete table header")
+        magic, total, header_size, entry_size, count, entry_offset, page_size, version = (
+            struct.unpack_from(">8I", header))
+        require((magic, header_size, entry_size, count, entry_offset, page_size, version) ==
+                (0xd7b7ab1e, 32, 32, 1, 32, 4096, 0),
+                "DTBO table is not one exact-target tegu MP1.0 overlay")
+        dtb_size, dtb_offset, board_id, board_rev = struct.unpack_from(">4I", header, 32)
+        require(board_id == 0x60b06 and board_rev == 0x10000 and
+                dtb_size >= 40 and dtb_offset == 64 and
+                dtb_offset + dtb_size <= total <= size(path),
+                "DTBO entry does not match stock-observed tegu MP1.0 board id and revision")
+        stream.seek(dtb_offset)
+        fdt_magic, fdt_size = struct.unpack(">2I", stream.read(8))
+        require(fdt_magic == 0xd00dfeed and fdt_size == dtb_size,
+                "DTBO entry is not a complete flattened device tree")
 
 
 def run(*args: str, capture: bool = False) -> bytes:
@@ -271,6 +292,9 @@ def validate() -> dict[str, object]:
             contract.get("boot_page_size") == 4096 and
             contract.get("vendor_boot_page_size") == 2048 and
             contract.get("vendor_dtb_partition") == "vendor_kernel_boot" and
+            contract.get("dtbo_source") == TEGU_MP_DTBO and
+            contract.get("dtbo_board_id") == 0x60b06 and
+            contract.get("dtbo_board_rev") == 0x10000 and
             contract.get("capacity_schema_version") == 2 and
             contract.get("capacity_contract") == "static-boot-only",
             "static contract no longer requires source-only native Linux")
@@ -334,9 +358,10 @@ def validate() -> dict[str, object]:
         seen_sources.add(row[1])
         source = checked(KERNEL_DIST / "split-inputs/dtbo-source-set" / relative(row[1]),
                          row[2], row[3], f"DTBO source {row[1]}")
-        if source.suffix == ".dtbo":
+        if row[1] == TEGU_MP_DTBO:
             dtbo_files.append(source)
-    require(dtbo_files, "source-built DTBO overlay set is empty")
+    require(len(dtbo_files) == 1,
+            "exact tegu MP1.0 source-built DTBO overlay is missing")
     module_row = one(kernel, "module_install", 4)
     require(module_row[1] == "split-inputs/module-install.tsv", "module-install path differs")
     checked(KERNEL_DIST / module_row[1], module_row[2], module_row[3], "module-install manifest")
@@ -505,7 +530,9 @@ def build(inputs: dict[str, object]) -> None:
             "--dtb", str(stage / "dtb.img"),
             "--vendor_boot", str(stage / "vendor_kernel_boot.img"))
         run(mkdtboimg, "create", str(stage / "dtbo.img"), "--page_size=4096",
+            "--id=/:board_id", "--rev=/:board_rev",
             *(str(path) for path in inputs["dtbo_files"]))
+        require_dtbo_layout(stage / "dtbo.img")
         for partition in ("boot", "init_boot", "vendor_boot", "vendor_kernel_boot"):
             expected_magic = b"ANDROID!" if partition in ("boot", "init_boot") else b"VNDRBOOT"
             require((stage / f"{partition}.img").open("rb").read(8) == expected_magic,
@@ -722,6 +749,7 @@ def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False,
     require_vendor_layout(bundle / "vendor_boot.img", 0,
                           (bundle / "provenance/vendor-cmdline").read_text().strip())
     require_vendor_layout(bundle / "vendor_kernel_boot.img", size(bundle / "dtb.img"), "")
+    require_dtbo_layout(bundle / "dtbo.img")
     for source_rows, source_name, final_name in ((kernel, "Image", "Image"),
                                                 (kernel, "dtb.img", "dtb.img"),
                                                 (rootfs, "rootfs.tar", "rootfs_handoff"),
@@ -764,8 +792,15 @@ def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False,
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "verify-dtbo":
+        try:
+            require_dtbo_layout(Path(sys.argv[2]))
+        except Refusal as error:
+            print(f"FAIL pixel-9a-dtbo: {error}", file=sys.stderr)
+            return 1
+        return 0
     if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "build", "verify", "verify-transfer"):
-        print("usage: static-boot.py preflight|build|verify|verify-transfer", file=sys.stderr)
+        print("usage: static-boot.py preflight|build|verify|verify-transfer|verify-dtbo IMAGE", file=sys.stderr)
         return 2
     try:
         if sys.argv[1] == "verify":

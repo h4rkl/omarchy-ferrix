@@ -98,6 +98,26 @@ with tempfile.TemporaryDirectory(prefix="ferrix-static-capacity-test.") as tempo
     else:
         raise AssertionError("unsafe vendor command line was accepted")
 
+    dtbo = Path(temporary) / "dtbo.img"
+    table = bytearray(104)
+    struct.pack_into(">8I", table, 0, 0xd7b7ab1e, 104, 32, 32, 1, 32, 4096, 0)
+    struct.pack_into(">8I", table, 32, 40, 64, 0x60b06, 0x10000, 0, 0, 0, 0)
+    struct.pack_into(">2I", table, 64, 0xd00dfeed, 40)
+    dtbo.write_bytes(table)
+    workflow.require_dtbo_layout(dtbo)
+    for offset, bad_value, reason in ((16, 266, "one exact-target"),
+                                      (40, 0, "board id and revision"),
+                                      (64, 0, "flattened device tree")):
+        broken = bytearray(table)
+        struct.pack_into(">I", broken, offset, bad_value)
+        dtbo.write_bytes(broken)
+        try:
+            workflow.require_dtbo_layout(dtbo)
+        except workflow.Refusal as error:
+            assert reason in str(error), (reason, str(error))
+        else:
+            raise AssertionError(f"DTBO table unexpectedly accepted wrong {reason}")
+
 assert workflow.relative("provenance/kernel-manifest.tsv") == Path("provenance/kernel-manifest.tsv")
 for unsafe in ("../kernel-manifest.tsv", "/tmp/kernel-manifest.tsv", "provenance/../manifest.tsv"):
     try:

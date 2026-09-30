@@ -209,6 +209,24 @@ bootloader selects or which difference, if any, caused the watchdog. It does
 show that the complete candidate image set has not been matched to the known
 working stock boot layout. Full-image compatibility cannot be promoted from
 the accepted `fastboot boot` command.
+
+The old candidate's DTBO table contains 266 generic ARM overlays with zero
+ID/revision metadata at its first entry. Stock contains 10 entries; its MP
+overlay is ID `0x60b06`, revision `0x10000`, as also declared by the pinned
+Google [`zumapro-tegu-mp.dts`](https://android.googlesource.com/kernel/devices/google/tegu/+/6276884d9940694b25a6934671918ec8ac412ee8/dts/zumapro-tegu-mp.dts).
+The selected experimental source has no tegu `.dtbo`. The candidate base DTB
+also lacks `/__symbols__`: an offline `fdtoverlay` attempt with the stock MP
+overlay refused `FDT_ERR_BADOFFSET`, consistent with the kernel's
+[overlay symbol requirements](https://docs.kernel.org/devicetree/overlay-notes.html).
+Google's [tegu common source](https://android.googlesource.com/kernel/devices/google/tegu/+/6276884d9940694b25a6934671918ec8ac412ee8/dts/zumapro-tegu-common.dtsi)
+includes the ZumaPro base and many board and modem definitions; the
+MP overlay cannot be transplanted as a standalone one-file patch.
+This diagnostic does not prove the bootloader applied that overlay during the
+temporary probe. Both composers now select only a future source-built
+`exynos/google/zumapro-tegu-mp.dtbo` and require an exact MP ID/revision DTBO
+table. The current source cannot meet that gate. Port and test the matching
+overlay against the source-built base DTB before any new image composition;
+never copy the stock binary into the Ferrix route.
 For the eight physical boot partitions, the static adapter uses an explicit
 `--slot b flash <base>` operation and checks that Fastboot reports writing
 the corresponding `_b` target. [AOSP Fastboot's partition and flash paths](https://android.googlesource.com/platform/system/core/+/ee9d6382d13411614c27b25de8c97273f066a8d3/fastboot/fastboot.cpp)

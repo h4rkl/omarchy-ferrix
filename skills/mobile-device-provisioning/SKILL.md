@@ -71,8 +71,12 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
    workflow requires a current source-built kernel, matching boot inputs,
    built-in early drivers, no selected loadable modules, and fresh AVB
    descriptors. It cannot consume the ten-partition split handoff and cannot
-   authorize a device write. Its separate checked-in static candidate and
-   `pixel-9a-flash-static-check` admit an exact target read-only; the
+   authorize a device write. The current experimental kernel source lacks
+   the exact tegu MP1.0 DTBO; both image composers now refuse generic ARM
+   overlays until a compatible
+   source-built MP overlay passes the board ID/revision gate and a separate
+   base-tree compatibility review. Its separate checked-in static candidate
+   and `pixel-9a-flash-static-check` admit an exact target read-only; the
    `pixel-9a-flash-static-boot-temp` workflow can issue only one confirmed
    kernel-only `fastboot boot`. For a named build output, set
    `FERRIX_PIXEL9A_STATIC_BOOT_OUT` when running
