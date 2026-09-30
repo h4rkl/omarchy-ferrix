@@ -208,6 +208,9 @@ fi
 PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
   FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
   FERRIX_PIXEL9A_FIRMWARE_DIR="$root/out/pixel-9a/firmware/tegu/staged" \
+  FERRIX_PIXEL9A_PRODUCT_OUT="$root/out/pixel-9a/product/tegu-attempt-test" \
+  FERRIX_PIXEL9A_PRODUCT_DIR="$root/out/pixel-9a/product/tegu-attempt-test" \
+  FERRIX_PIXEL9A_ROOTFS_OUT="$root/out/pixel-9a/rootfs/tegu-attempt-test" \
   FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
   "$script" run rootfs validate >/dev/null
 grep -F -- '--mount type=bind,src=' "$log" >/dev/null
@@ -220,6 +223,15 @@ grep -Fx -- 'FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password' "$env_log" >/dev/null
   echo 'builder run dropped the one-time rootfs password handoff' >&2
   exit 1
 }
+for handoff in \
+  'FERRIX_PIXEL9A_PRODUCT_OUT=/workspace/out/pixel-9a/product/tegu-attempt-test' \
+  'FERRIX_PIXEL9A_PRODUCT_DIR=/workspace/out/pixel-9a/product/tegu-attempt-test' \
+  'FERRIX_PIXEL9A_ROOTFS_OUT=/workspace/out/pixel-9a/rootfs/tegu-attempt-test'; do
+  grep -Fx -- "$handoff" "$env_log" >/dev/null || {
+    echo "builder dropped fresh attempt output: $handoff" >&2
+    exit 1
+  }
+done
 if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
   echo 'builder run workflow exposed a physical transport' >&2
   exit 1

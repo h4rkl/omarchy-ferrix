@@ -38,8 +38,19 @@ recovery. Its separate `just pixel-9a-flash-static-check` read-only admission
 passed on the exact device in ordinary Fastboot on slot A. The owner approved
 one gated temporary boot of the pinned kernel-only `boot.img`; that command
 uses stock `init_boot` and `vendor_boot` and cannot validate the full Ferrix
-split image set. The `observe-temp` step requires a reviewed kernel capture
-and binds its redacted copy to the exact boot transcript. The capture must
+split image set.
+
+For each new physical loading attempt, rebuild the kernel, product, rootfs,
+boot inputs, and static image bundle on native deba from the reviewed commit
+into new attempt-specific output directories. Recheck the complete bundle
+after transfer to the Mac with `FERRIX_PIXEL9A_STATIC_BOOT_OUT` set to its
+exact path, then update the checked-in candidate hashes and run a fresh
+read-only device preflight. An earlier probe approval names the earlier boot
+hash; obtain a new per-run go-ahead for a changed image. The temporary probe
+and any later staged install must use the same hash-bound bundle.
+
+The `observe-temp` step requires a reviewed kernel capture and binds its
+redacted copy to the exact boot transcript. The capture must
 contain the complete build banner embedded in the pinned `boot.img`; a stock
 tegu kernel banner is refused. If the temporary kernel reaches Android ADB,
 set `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` to the boot transcript and run

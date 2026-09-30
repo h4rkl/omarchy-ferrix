@@ -37,7 +37,18 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
 7. Human makes and verifies a backup outside Git.
 8. `just pixel-9a-unlock-bootloader --preflight` `[ro]`; `--confirm-unlock` `[confirm]` (wipes data).
 9. Stock paths when needed: `just pixel-9a-sideload-ota --preflight` `[ro]` / `--confirm-sideload` `[confirm]`; `just pixel-9a-factory-restore --preflight` `[ro]` / `--confirm-restore` `[confirm]`.
-10. Build the selected radio-first chain on native Linux `[linux]` `[opt-in]`:
+10. For each new physical loading attempt, build the selected image chain
+   again from the reviewed repository commit on native Linux `[linux]`
+   `[opt-in]`. Give its kernel, product, rootfs, boot-input, and final image
+   outputs a new attempt-specific path; never select an older bundle merely
+   because its hashes still match. Record the commit, build transcript, output
+   paths, and hashes under ignored `out/pixel-9a/`. Transfer that attempt's
+   complete final bundle to the Mac, run the transfer verifier with its exact
+   `FERRIX_PIXEL9A_STATIC_BOOT_OUT` path, and pin the verified manifest and
+   image hashes in the checked-in candidate before physical preflight. A
+   temporary probe and later staged installation of those same reviewed bytes
+   belong to one attempt; a new build starts a new attempt and requires new
+   hash-bound evidence and owner authorization. Build order:
    `pixel-9a-kernel-radio-check/sync/verify/build`,
    `pixel-9a-product-check/build`, firmware
    `check/inventory/stage`, rootfs `check/validate/build`, and
@@ -63,7 +74,8 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
    `pixel-9a-flash-static-boot-temp` workflow can issue only one confirmed
    kernel-only `fastboot boot`. For a named build output, set
    `FERRIX_PIXEL9A_STATIC_BOOT_OUT` when running
-   `pixel-9a-static-boot-verify-transfer`. A separate persistent static
+   `pixel-9a-static-boot-verify-transfer`; a default-path verifier result is
+   not a check of the named candidate. A separate persistent static
    adapter is offline-tested but refuses the current partial image-compatibility
    gate and missing observed boot evidence; do not run its mutations until
    those gates and each new owner confirmation pass.
@@ -515,6 +527,18 @@ canonical Git repository (for example, push with `gh`/Git and pull the reviewed
 commit on the builder) rather than copying ignored caches, firmware, images, or
 device evidence. The checked-in `tools/pixel-9a/native-builder.sh` wrapper may
 then run only the device-free stages inside the pinned builder image:
+
+Before each physical loading attempt, confirm the builder checkout is at the
+reviewed commit and run the kernel, product, rootfs, boot-input, and final
+composer builds into new paths named for that attempt. Reusing a pinned source
+archive, clean source checkout, Cargo cache, or pmaports checkout is permitted;
+reusing their earlier output images as this attempt's build is not. Do not
+overwrite or rename an old bundle to make it appear new. Save the native build
+transcript and SHA-256 manifest, transfer the complete output bundle to the
+Mac under the same attempt name, and verify every recorded hash there. Point
+the checked-in candidate at only that verified bundle. If any build, transfer,
+or hash check fails, stop before a phone command. Rebuilding after a probe
+invalidates that probe's image-bound observation for later flash stages.
 
 ```sh
 tools/pixel-9a/native-builder.sh image
