@@ -160,6 +160,7 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
 
 Offline test recipes that must pass before any hardware session:
 `just device-tools-test`, `just pixel-9a-tools-test`,
+`just pixel-9a-env-test`,
 `just pixel-9a-kernel-radio-test`, `just pixel-9a-product-test`,
 `just pixel-9a-firmware-test`, `just pixel-9a-rootfs-test`,
 `just pixel-9a-enter-fastboot-test`,
@@ -488,11 +489,13 @@ Choose by device state:
 
 ## Phase 5 - Build Ferrix images
 
-**Status:** Implemented and Stub-tested only. The radio-first source archive and
-clean detached checkout were source-synced and hash-verified on a provisioned
-native Linux x86_64 builder on 2026-09-29; this does not mean that the kernel,
-product, rootfs, or boot artifacts are complete. Their manifests remain the
-authority for each stage, and no physical boot or radio capability is claimed.
+**Status:** Device-free route implemented and offline tested. A radio kernel,
+product, rootfs, boot inputs, and static bundle were built on native Linux
+x86_64 on 2026-09-30; see `docs/status.md` for the exact attempt and hashes.
+Their manifests remain the authority for each stage. No physical Ferrix boot
+or radio capability is claimed. For each new physical loading attempt, use
+the fresh-output handoff in
+`targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/dev/README.md`.
 Native Linux x86_64 is still required. For the current Pixel 9a objective, use
 the remote `deba` build machine for Docker, UTM, QEMU, kernel and radio-kernel
 builds, product builds, and postmarketOS rootfs construction:
@@ -539,6 +542,13 @@ Mac under the same attempt name, and verify every recorded hash there. Point
 the checked-in candidate at only that verified bundle. If any build, transfer,
 or hash check fails, stop before a phone command. Rebuilding after a probe
 invalidates that probe's image-bound observation for later flash stages.
+For the selected static route, run `just pixel-9a-attempt-env <UTC-attempt-id>
+<exact-named-static-capacity-TSV>` on the clean builder checkout, then source
+the generated `out/pixel-9a/attempts/<id>/env.sh` after
+`tools/pixel-9a/env.sh`. The native wrapper verifies that source commit and
+capacity hash before each stage. The commands below with default output paths
+describe individual stages; the attempt environment supplies the fresh paths
+for a physical candidate.
 
 ```sh
 tools/pixel-9a/native-builder.sh image

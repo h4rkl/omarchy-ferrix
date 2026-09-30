@@ -1,5 +1,51 @@
 # Status
 
+## 2026-09-30 (Pixel 9a build, radios, and setup audit)
+
+- The phone was detached for the initial audit. A read-only static preflight
+  refused `requires exactly one Fastboot device and no ADB device`. The owner
+  later attached it and authorized ADB/Fastboot use. macOS detected a Google
+  Pixel 9a USB device (`18d1:4ee0`) with a Fastboot-protocol interface named
+  `fastbootd@0`; this interface name alone does not verify userspace Fastboot.
+  Checked-in `just device-discover` recorded
+  `adb_devices=0 fastboot_devices=0 result=no-device`. IOKit also showed USB
+  device clients from Opera, Brave, and Spotify; whether one holds the
+  interface is unverified. No current exact-target transport identity or
+  physical mutation was established. The
+  recorded GXQ96 / tegu / MP1.0 identity, tested stock recovery, and previous
+  static bundle remain historical evidence, not a current Ferrix boot claim.
+- The selected physical build path remains the eight-static-partition
+  WWAN/SIT bundle. The ten-partition split path is still blocked by missing
+  positive inactive DLKM capacities. The current static candidate remains
+  `composed-not-booted` / `bootable=false`, and `image_compatibility=partial`
+  refuses persistent installation. A successful offline build or Fastboot
+  command cannot resolve that gate; an observed kernel probe and separate
+  compatibility review are still needed.
+- Added `pixel-9a-attempt-env` to generate one ignored, fresh-output handoff
+  from a clean reviewed commit and exact named static capacity TSV. The native
+  builder rechecks the commit and capacity SHA-256 before each device-free
+  stage. This closes the prior manual override mismatch that made boot inputs
+  name a different kernel manifest during a fresh attempt. The target dev
+  README now gives one concise stage order and exact-path transfer check.
+- The radio inventory correctly keeps telephony unsupported without live
+  WWAN/SIT and Ferrix evidence. Its radio-enable fallback had used a CPIF-only
+  explanation even for the selected WWAN/SIT route; that diagnostic is now
+  route neutral. The target README and Linux plan no longer describe the
+  unbooted native builds as absent or state that CPIF is the reason all
+  telephony remains unsupported. The runtime firmware, SIT, and ModemManager
+  service chain was inspected offline; no physical radio functionality is
+  inferred.
+- Device-free verification passed: the selected Pixel build, static install,
+  guest evidence, and radio recipes (including the attempt generator), plus
+  the generic device, canonical comparison, radio split/flash, inactive-slot,
+  and partition workflow suites;
+  `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  and `cargo test --workspace`. `just host-check` reported that the local
+  Docker engine is not running; no host tools were installed and no native
+  image was built in this audit. QEMU graphics and physical device behavior
+  remain untested by this change set.
+
 ## 2026-09-30 (fresh Pixel 9a attempt and build gate refusal)
 
 - The owner now requires a new native build before every physical loading
@@ -54,7 +100,7 @@
   `just pixel-9a-enter-fastboot --confirm-enter` rechecked the exact Pixel 9a /
   `tegu` / `GXQ96` / `MP1.0`, active slot A, and entered ordinary bootloader
   Fastboot at about 01:44 UTC. It changed no partition, slot, bootloader
-  state, or user data. The phone remains in Fastboot; no Ferrix image has
+  state, or user data. The phone remained in Fastboot at that point; no Ferrix image has
   been booted or flashed.
 - **Fresh static capacities:** `just pixel-9a-partition-capacity-static`
   passed at `2026-09-30T01:44:54Z`, after the verified stock restore. Both

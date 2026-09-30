@@ -98,6 +98,64 @@ validation remain device-free and consume only hash-verified manifests.
 
 ## Native builder handoff contract
 
+### One fresh static build attempt
+
+The selected physical candidate is the eight-static-partition WWAN/SIT route.
+The ten-partition split route still lacks positive inactive DLKM capacities.
+Use the exact, named static capacity TSV already reviewed for this device;
+do not use a `latest` alias. On the native Linux x86_64 builder, at a clean
+reviewed Git commit:
+
+```sh
+attempt=$(date -u +%Y%m%dT%H%M%SZ)
+capacity='out/pixel-9a/partition-capacities-static-EXACT-CAPTURE.tsv' # replace with the reviewed named file
+just pixel-9a-attempt-env "$attempt" "$capacity"
+. tools/pixel-9a/env.sh
+. "out/pixel-9a/attempts/$attempt/env.sh"
+tools/pixel-9a/native-builder.sh image
+tools/pixel-9a/native-builder.sh run kernel-radio verify
+```
+
+Use a new UTC attempt ID for each physical loading attempt. The generated
+environment binds kernel, product, rootfs, boot-input, and static image
+outputs to that ID and refuses an existing output or dirty checkout. Source
+it **after** the canonical loader, which otherwise restores default paths.
+The generated file is ignored and remains on the builder. The container
+wrapper maps its relative paths to `/workspace` and passes only device-free
+workflows. The capacity file and pinned source/firmware inputs must already
+be present; preparation neither fetches nor builds them.
+
+After the separate build-stage opt-ins in the provisioning playbook, run the
+selected stages in order using the same sourced environment:
+
+```sh
+FERRIX_PIXEL9A_RADIO_BUILD=I-understand-this-runs-the-radio-first-kernel-build tools/pixel-9a/native-builder.sh run kernel-radio build
+FERRIX_PIXEL9A_PRODUCT_BUILD=I-understand-this-builds-the-pixel-9a-product tools/pixel-9a/native-builder.sh run product build
+FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap tools/pixel-9a/native-builder.sh run rootfs build
+FERRIX_PIXEL9A_BOOT_INPUTS_BUILD=I-understand-this-builds-source-owned-pixel-9a-boot-inputs tools/pixel-9a/native-builder.sh run boot-inputs build
+FERRIX_PIXEL9A_STATIC_BOOT_BUILD=I-understand-this-composes-source-built-pixel-9a-static-boot-images tools/pixel-9a/native-builder.sh run static-boot build
+tools/pixel-9a/native-builder.sh run static-boot verify
+```
+
+`rootfs build` also requires a reviewed, clean
+`FERRIX_PIXEL9A_PMAPORTS_DIR`, verified staged firmware, and a one-time
+`FERRIX_PIXEL9A_ROOTFS_PASSWORD` supplied outside the repository. Retain the
+build transcript and record the reviewed Git commit, the generated env path,
+the named capacity hash, every stage manifest hash, and the complete final
+bundle hash under ignored `out/pixel-9a/`. Transfer the entire final bundle
+to the device host. There, set `FERRIX_PIXEL9A_STATIC_BOOT_OUT` to the exact
+transferred path and run `just pixel-9a-static-boot-verify-transfer` before
+pinning a new candidate. The transfer verifier checks bytes; it does not
+prove a phone boot. The target's `image_compatibility=partial` gate still
+refuses persistent installation until independently reviewed boot evidence
+and compatibility work justify changing that gate.
+Android's [generic boot layout](https://source.android.com/docs/core/architecture/partitions/generic-boot)
+separates `boot`, `init_boot`, and `vendor_boot`, so a kernel-only temporary
+boot cannot validate the complete split image set. Its
+[Fastbootd contract](https://source.android.com/docs/core/architecture/bootloader/fastbootd)
+handles logical partition management in userspace; it does not supply the
+missing positive inactive DLKM allocation for this exact target.
+
 The physical route needs Linux `x86_64` running on x86_64 hardware. An
 Apple-Silicon OrbStack VM/container, Apple-Silicon UTM/QEMU CPU emulation,
 Rosetta, or an x86 cross-build does not satisfy this contract, even when

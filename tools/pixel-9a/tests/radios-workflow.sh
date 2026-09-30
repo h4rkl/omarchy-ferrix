@@ -12,6 +12,7 @@ radios="$root/tools/pixel-9a/radios.sh"
 fixtures="$root/tools/pixel-9a/tests/fixtures/radios"
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
 cpif_sentence='S5300 CPIF exposes no ModemManager modem; CPIF backend not implemented'
+no_modem_sentence='ModemManager lists no modem; inspect the WWAN/SIT loader and service chain with inventory'
 cpif_evidence="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-source-evidence.md"
 fails=0
 
@@ -370,8 +371,8 @@ check "enable: exact ordered mutation commands" [ "$actual_mutations" = "$expect
 [ "$actual_mutations" = "$expected_mutations" ] || printf 'actual:\n%s\n' "$actual_mutations"
 check "enable: prints mutation= before each command" \
   sh -c 'test "$(grep -c "^mutation=doas " "$1")" -eq 4' sh "$work/enable_ok/stdout"
-check "enable: modem skipped with the CPIF note when mmcli lists none" \
-  sh -c 'grep "^modem=skipped" "$1" | grep -Fq "$2"' sh "$work/enable_ok/stdout" "$cpif_sentence"
+check "enable: modem skipped with a route-neutral diagnostic when mmcli lists none" \
+  sh -c 'grep "^modem=skipped" "$1" | grep -Fq "$2"' sh "$work/enable_ok/stdout" "$no_modem_sentence"
 check "enable: no wwan/modem mutation without a modem" sh -c '! grep -Eq "wwan|--enable" "$1"' sh "$calls"
 check "enable: confirmation happens after identity verification" \
   sh -c 'grep -q "^guest_identity=verified$" "$1" && grep -q "^confirmation=accepted$" "$1"' sh "$work/enable_ok/stdout"

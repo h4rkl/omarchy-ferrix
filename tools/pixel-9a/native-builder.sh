@@ -29,6 +29,36 @@ check_docker() {
 	esac
 }
 
+check_attempt() {
+	[ -n "${FERRIX_PIXEL9A_ATTEMPT_COMMIT:-}" ] || return 0
+	case "$FERRIX_PIXEL9A_ATTEMPT_COMMIT" in
+		*[!0-9a-f]*|'') die 'attempt source commit is malformed' ;;
+	esac
+	[ "${#FERRIX_PIXEL9A_ATTEMPT_COMMIT}" -eq 40 ] || die 'attempt source commit must be a full Git SHA'
+	actual_commit=$(git -C "$root" rev-parse --verify HEAD) || die 'cannot resolve current source commit'
+	[ "$actual_commit" = "$FERRIX_PIXEL9A_ATTEMPT_COMMIT" ] || die 'source commit changed during this build attempt'
+	source_status=$(git -C "$root" status --porcelain --untracked-files=normal) || die 'cannot inspect current source checkout'
+	[ -z "$source_status" ] || die 'builder checkout changed during this build attempt'
+	capacity=${FERRIX_PIXEL9A_STATIC_PARTITION_SIZES:-}
+	case "$capacity" in
+		out/pixel-9a/partition-capacities-static-*.tsv) ;;
+		*) die 'attempt capacity path is not an exact named static handoff' ;;
+	esac
+	case "$capacity" in
+		*'..'*|*[!A-Za-z0-9_./-]*) die 'attempt capacity path has an unsafe component' ;;
+	esac
+	case "${capacity#out/pixel-9a/}" in
+		*/*) die 'attempt capacity handoff must be one named file' ;;
+	esac
+	[ -f "$root/$capacity" ] && [ ! -L "$root/$capacity" ] || die 'attempt capacity handoff is missing or a symlink'
+	if command -v sha256sum >/dev/null 2>&1; then
+		actual_capacity_sha256=$(sha256sum "$root/$capacity" | awk '{ print $1 }')
+	else
+		actual_capacity_sha256=$(shasum -a 256 "$root/$capacity" | awk '{ print $1 }')
+	fi
+	[ "$actual_capacity_sha256" = "${FERRIX_PIXEL9A_ATTEMPT_CAPACITY_SHA256:-}" ] || die 'attempt capacity handoff changed'
+}
+
 build_image() {
 	check_docker
 	safe_image
@@ -48,6 +78,7 @@ map_workspace_path() {
 run_workflow() {
 	check_docker
 	safe_image
+	check_attempt
 	workflow=$1
 	verb=$2
 	shift 2

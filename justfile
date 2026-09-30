@@ -59,6 +59,12 @@ pixel-9a-env-check group="all":
 
 pixel-9a-env-test:
     @sh "{{root}}/tools/pixel-9a/tests/env.sh"
+    @sh "{{root}}/tools/pixel-9a/tests/attempt-env.sh"
+
+# Device-free fresh-output handoff for the selected static route. Source the
+# generated env.sh after tools/pixel-9a/env.sh on the native builder.
+pixel-9a-attempt-env attempt capacity:
+    @sh "{{root}}/tools/pixel-9a/attempt-env.sh" "{{attempt}}" "{{capacity}}"
 
 pixel-9a-recovery-download:
     @"{{root}}/tools/pixel-9a/recovery-download.sh"

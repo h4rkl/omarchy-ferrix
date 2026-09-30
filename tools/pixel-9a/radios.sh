@@ -29,6 +29,7 @@ firmware_allowlist="$target/pmos/device-google-tegu/firmware-allowlist.tsv"
 out="${FERRIX_OUT_DIR:-$root/out}/pixel-9a/radios"
 evidence_label="physical: $target_id"
 cpif_sentence='S5300 CPIF exposes no ModemManager modem; CPIF backend not implemented'
+no_modem_sentence='ModemManager lists no modem; inspect the WWAN/SIT loader and service chain with inventory'
 
 # Connection settings. Defaults are the postmarketOS USB-network conventions:
 # the guest is 172.16.42.1 and the SSH user is the one configured for the
@@ -844,7 +845,7 @@ enable_radios() {
           mutate "${priv:+$priv }rfkill unblock wwan"
           mutate "${priv:+$priv }mmcli -m any --enable"
         else
-          say "modem=skipped; $cpif_sentence"
+          say "modem=skipped; $no_modem_sentence"
         fi
         ;;
     esac

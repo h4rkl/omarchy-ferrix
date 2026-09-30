@@ -4,6 +4,10 @@ This is an exact physical-target identity and stock-recovery package for the
 identified device. It is not a claim that Ferrix Linux boots on this phone.
 Ferrix product code remains target-neutral; the capability matrix is
 conservatively `unsupported` until target-specific Linux evidence exists.
+The current [fresh static build handoff](dev/README.md#one-fresh-static-build-attempt)
+is the selected WWAN/SIT route. The checked-in `image_compatibility=partial`
+gate still refuses persistent installation; a temporary kernel probe and a
+reviewed observation are separate steps.
 
 The owner-authorized first stock restore completed on 2026-09-30 with
 `result=factory-restore-complete` and exit 0; ignored transcript
@@ -812,8 +816,10 @@ fragment for the owner to paste. Transcripts under `out/pixel-9a/radios/`
 redact MAC, IMEI/IMSI/ICCID, serial, SSID, and IPv6 values; every evidence
 line is labelled `physical: google-pixel-9a-tegu-gxq96-mp1-0`. `status`
 follows `CapabilityStatus` (`supported|unsupported`); a `progress` column
-carries intermediate findings, and telephony stays `unsupported` because the
-S5300 CPIF exposes no ModemManager modem. Wi-Fi is promoted only after full
+carries intermediate findings. Telephony remains `unsupported` until the
+selected WWAN/SIT route produces exact-device ModemManager, Ferrix adapter,
+registration, data, SMS, and call evidence; modem enumeration alone is
+insufficient. Wi-Fi is promoted only after full
 NetworkManager connectivity, an associated IPv4 address, and successful typed
 Ferrix network/core state replies plus per-file size/SHA-256 verification from
 the guest `firmware-manifest.tsv`; Bluetooth requires a powered controller and

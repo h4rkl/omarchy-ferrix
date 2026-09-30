@@ -90,9 +90,10 @@ overwrite shared storage, select a slot, or flash without a per-run review.
   untouched cannot deliver the current native Linux route.
 - Treat `super`, logical-partition allocation, snapshots, `metadata`, and
   `userdata` as shared-storage concerns, not independent inactive-slot
-  storage. The currently unset rootfs mapping stays unset. A `userdata`
-  rootfs would overwrite Android's shared data filesystem and does not satisfy
-  a promise of an immediately bootable stock fallback.
+  storage. The ten-partition route has no approved rootfs mapping. The
+  separate static candidate has a read-only, same-device `userdata` map;
+  writing that rootfs would overwrite Android's shared data filesystem and
+  does not provide an immediately bootable stock fallback.
 - Keep tested recovery and exact image compatibility as independent gates.
   The recorded factory restore and subsequent same-device Android discovery
   now establish tested recovery. The pinned recovery build `CP3A.260905.009`
@@ -740,10 +741,11 @@ manifests do not substitute for physical evidence:
 9. repeated suspend/resume with charger, Wi-Fi, Bluetooth, and modem wake
    cases.
 
-Cellular transport source is available, and the target package now carries a
-source-pinned native-Linux S5300 loader plus SIT ModemManager integration. No
-native build, modem object, registration, or bearer has yet been observed on
-this exact device. Modem enumeration alone is not phone support. Calls,
+Cellular transport source is available, and the target package carries a
+source-pinned native-Linux S5300 loader plus SIT ModemManager integration.
+Native kernel and rootfs builds passed on the authorized x86_64 builder; no
+modem object, registration, or bearer has been observed on this exact device.
+Modem enumeration alone is not phone support. Calls,
 VoLTE/IMS, emergency calling, carrier certification, and call audio remain
 unsupported until independently implemented and tested; no Android RIL/HAL or
 Binder service is part of this route.
