@@ -22,6 +22,11 @@
   of copying every unrelated ARM board overlay, and the kernel workflow will
   require the compiled overlay to apply to its source-built base DTB before
   emitting a manifest. This offline check cannot establish hardware boot.
+- A fresh checked-in, read-only ADB discovery on 2026-09-30T19:38Z again
+  identified the exact `tegu` / `GXQ96` / `MP1.0` device on stock Android
+  slot A with an unlocked bootloader. The checked-in static flash preflight
+  still refused the old `probe-unobserved` candidate. Neither command
+  changed the device.
 - The verified stock comparison showed a version-4 boot image with fixed
   4 KiB pages, but both vendor boot containers use 2 KiB pages. Stock
   `vendor_boot` has no embedded DTB; `vendor_kernel_boot` carries the DTBs.
