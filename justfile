@@ -357,6 +357,14 @@ pixel-9a-install-static-activate:
 pixel-9a-install-static-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/install-static-contract.py"
 
+# Exact-target, read-only inventory after the separately confirmed static
+# install and slot-B activation. Presence is not functional evidence.
+pixel-9a-guest-evidence-inventory:
+    @"{{root}}/tools/pixel-9a/guest-evidence.py" inventory
+
+pixel-9a-guest-evidence-test:
+    @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/guest-evidence-contract.py"
+
 # Select and boot the already-flashed inactive radio-first slot through the
 # checked-in workflow; it never accepts a raw set_active command.
 [positional-arguments]

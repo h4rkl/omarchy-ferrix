@@ -95,6 +95,16 @@
   selection was attempted. Kernel progress and
   full Ferrix boot remain unobserved; an accepted Fastboot write would not be
   a readback verification of its bytes.
+- **Post-activation guest inventory (offline only):** A target-scoped,
+  read-only SSH workflow now checks the exact tegu device tree after
+  validating the pinned candidate, temporary-boot observation, both static
+  flash-stage records, and the slot-B activation record. It records
+  normalized slot, OpenRC, socket, pidfile, DRM, and input inventory under
+  ignored `out/pixel-9a/guest-evidence/`. Stub tests include wrong-device
+  refusal and refuse SSH before activation evidence. Presence is explicitly
+  separate from a connected Wayland client, an inspected display capture,
+  delivered touch, or working services. No Ferrix guest exists on the phone
+  yet; this workflow has not run against hardware.
 - **Recovery/storage decision:** The owner chose the tested pinned factory
   restore as the stock recovery path if Ferrix later uses shared `userdata`.
   This is a storage-plan choice, not authorization for a `userdata` wipe or

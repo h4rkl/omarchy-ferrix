@@ -756,6 +756,28 @@ It binds the operator-reviewed kernel capture to the same temporary-boot
 transcript, image hash, and device. A successful Fastboot command alone does
 not satisfy the observation requirement.
 
+## Read-only static guest inventory
+
+After a separately approved static installation and slot-B activation, set
+`FERRIX_PIXEL9A_STATIC_ACTIVATION_EVIDENCE` to the ignored activation
+transcript and run `just pixel-9a-guest-evidence-inventory` when the pmOS
+guest is reachable over SSH. The host verifies the pinned candidate, the
+temporary-boot observation, both complete flash-stage records, and the
+activation record before opening SSH. The guest probe checks the exact tegu
+device-tree model and compatible string before reading its slot suffix,
+OpenRC statuses, Ferrix sockets and pidfiles, DRM connector counts, and input
+device counts. The normalized record stays under ignored
+`out/pixel-9a/guest-evidence/` and carries the activation transcript hash.
+
+This is an inventory, even when slot B, a connected DRM connector, a Wayland
+socket, and a touch-named input device are present. It cannot prove that a
+client is connected, a frame was rendered on the phone, a touch event was
+delivered, or a service works. Inspect a real display capture and observe
+physical touch before recording those capabilities. The SSH device-tree check
+and prior activation record should be correlated with the owner's continuous
+USB session; neither is a cryptographic same-device attestation. This
+workflow is offline-tested only and has not run on Ferrix hardware.
+
 ## Radios on a booted guest
 
 Once a Ferrix/pmOS guest is booted and reachable over the USB network

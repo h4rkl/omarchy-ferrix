@@ -236,6 +236,26 @@ def activation_policy(context: dict) -> str:
     return digest
 
 
+def activation_record(path: Path, context: dict, kernel_hash: str,
+                      rootfs_hash: str, proposal_hash: str) -> None:
+    expected = {
+        "operation": "pixel-9a-static-activate", "target_id": TARGET_ID,
+        "serial_sha256_prefix": context["prefix"],
+        "gate_manifest_sha256": context["gate_manifest_hash"],
+        "candidate_sha256": context["candidate_hash"],
+        "manifest_sha256": context["candidate"]["manifest_sha256"],
+        "boot_img_sha256": context["boot_hash"],
+        "boot_transcript_sha256": context["boot_record_hash"],
+        "observation_sha256": context["observation_hash"],
+        "kernel_stage_sha256": kernel_hash,
+        "rootfs_stage_sha256": rootfs_hash,
+        "activation_proposal_sha256": proposal_hash,
+        "slot_selection": "issued-b", "result": "slot-b-boot-requested",
+    }
+    require(static_flash.key_values(path) == expected,
+            "static activation record is incomplete or differs")
+
+
 def flash_kernel() -> None:
     context = admission()
     mutation_policy()
@@ -344,6 +364,7 @@ def activate() -> None:
         require("FAILED" not in output and "OKAY" in output,
                 "bootloader did not confirm reboot request")
         stream.write("result=slot-b-boot-requested\n")
+    activation_record(record, context, kernel_hash, rootfs_hash, activation_hash)
     print(f"result=slot-b-boot-requested transcript={record}")
 
 

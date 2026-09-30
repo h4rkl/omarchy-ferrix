@@ -241,6 +241,20 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-install-static-test.") as temp
     install.activate()
     assert [call[3] for call in calls] == ["set_active", "reboot"]
     assert calls[0][4] == "b"
+    activation_record = list(install.EVIDENCE_DIR.glob("activate-*.txt"))[0]
+    install.activation_record(activation_record, context, probe.sha(kernel_record),
+                              probe.sha(rootfs_record), probe.sha(activation_candidate))
+    valid_activation = activation_record.read_text()
+    activation_record.write_text(valid_activation.replace(
+        "result=slot-b-boot-requested", "result=incomplete"))
+    try:
+        install.activation_record(activation_record, context, probe.sha(kernel_record),
+                                  probe.sha(rootfs_record), probe.sha(activation_candidate))
+    except install.Refusal as error:
+        assert "activation record is incomplete" in str(error)
+    else:
+        raise AssertionError("incomplete activation record was accepted")
+    activation_record.write_text(valid_activation)
 
     calls.clear()
     selected["value"] = False
