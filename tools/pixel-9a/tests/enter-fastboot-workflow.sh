@@ -147,7 +147,11 @@ run_case fastbootd-missing --preflight
 grep -q 'same-serial Android identity' "$work/fastbootd-missing.err"
 ! grep -q 'reboot' "$calls"
 
-prefix=$(printf '%s' "$serial" | shasum -a 256 | cut -c1-12)
+if command -v shasum >/dev/null 2>&1; then
+	prefix=$(printf '%s' "$serial" | shasum -a 256 | cut -c1-12)
+else
+	prefix=$(printf '%s' "$serial" | sha256sum | cut -c1-12)
+fi
 cat >"$FERRIX_OUT_DIR/discovery-synthetic.txt" <<EOF
 transport=adb
 result=ok
