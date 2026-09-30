@@ -163,6 +163,12 @@ The host-only Python tooling reuses the strict TOML/TSV image verifier and
 pinned Python Android image utilities; it is outside guest/product code.
 The temporary command still uses stock `init_boot` and `vendor_boot`, so it
 cannot establish a full Ferrix split boot even if the bootloader accepts it.
+An offline-tested `observe-temp` mode requires the exact temporary-boot
+transcript, same-device identity, image hash, and a reviewed tegu kernel
+capture without a panic marker. Its record is limited to kernel progress;
+there is no physical observation yet, and the optional transfer-verification
+invocation that omitted the named output path stopped the approved probe
+before any device action.
 
 Read-only inspection of deba at source commit
 `26fc9f9beb1d1faf041a8d4df71fe6142353c133` found empty selected initfs/vendor/

@@ -328,6 +328,10 @@ pixel-9a-flash-static-check:
 pixel-9a-flash-static-boot-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" boot-temp
 
+# Bind a reviewed kernel capture to this exact static boot transcript.
+pixel-9a-flash-static-observe-temp:
+    @"{{root}}/tools/pixel-9a/flash-static.py" observe-temp
+
 pixel-9a-flash-static-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/flash-static-contract.py"
 

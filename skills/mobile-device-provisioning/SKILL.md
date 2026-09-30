@@ -94,9 +94,14 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
     development-device data-policy token. Manually type the prompted phrase;
     the workflow repeats every read-only gate before `fastboot boot`. This
     probes kernel progress with currently flashed stock `init_boot` and
-    `vendor_boot`, not the full Ferrix split image set. Stop on a failed gate,
-    bootloader refusal, hang, or loop. Do not use this as persistent flash
-    authorization or as evidence of a Ferrix Linux boot.
+    `vendor_boot`, not the full Ferrix split image set. With a reviewed text
+    kernel capture, set `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` to the
+    ignored boot transcript and `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_KERNEL_LOG`
+    to the capture, then run `just pixel-9a-flash-static-observe-temp`. It
+    requires an exact typed attestation and writes a redacted, hash-bound
+    observation. Stop on a failed gate, bootloader refusal, hang, or loop.
+    A temporary boot command or observation alone is not persistent flash
+    authorization or evidence of a Ferrix Linux userspace boot.
 12. For the canonical Google route only, once a complete, reviewed image set
     exists and the owner authorizes the physical operation:
     `just pixel-9a-flash-check` `[ro]`; `just pixel-9a-flash-boot-temp`

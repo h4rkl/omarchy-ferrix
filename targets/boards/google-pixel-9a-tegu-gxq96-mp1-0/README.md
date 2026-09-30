@@ -38,7 +38,11 @@ recovery. Its separate `just pixel-9a-flash-static-check` read-only admission
 passed on the exact device in ordinary Fastboot on slot A. The owner approved
 one gated temporary boot of the pinned kernel-only `boot.img`; that command
 uses stock `init_boot` and `vendor_boot` and cannot validate the full Ferrix
-split image set. No persistent static flash command is implemented.
+split image set. The `observe-temp` step requires a reviewed kernel capture
+and binds its redacted copy to the exact boot transcript. It is offline-tested
+only; the temporary probe stopped before device action after an optional
+transfer-verifier invocation omitted the named output path. No persistent
+static flash command is implemented.
 
 Initial identity was established by the checked-in read-only workflow
 `just pixel-9a-discover`:
@@ -154,8 +158,8 @@ the reviewed handoff and requires logical images to match existing allocation
 exactly. After confirmation, it verifies Fastbootd identity, logical sizes,
 and idle snapshot state in an initial transport round trip before any image
 write, and rechecks at write time. This is offline-tested safety behavior,
-not permission to resize the zero-capacity inactive partitions. Shared
-The targeted read-only `userdata` map does not authorize a shared-data wipe.
+not permission to resize the zero-capacity inactive partitions. The targeted
+read-only `userdata` map does not authorize a shared-data wipe.
 The tested pinned factory restore is the owner's selected stock recovery
 route, while persistent static flash and a separate per-run confirmation remain
 outstanding.

@@ -73,6 +73,10 @@
   rebuild bundle. The prior bundle hash check and native AVB verifier remain
   recorded above, but the failed invocation was not retried. No temporary
   boot command was issued; the owner's one-probe approval remains unused.
+  The checked-in static workflow now has an offline-tested `observe-temp`
+  mode that binds a reviewed kernel capture to the exact boot transcript and
+  image hash. It has not been run on physical evidence and does not change
+  the stopped device route.
 - **Recovery/storage decision:** The owner chose the tested pinned factory
   restore as the stock recovery path if Ferrix later uses shared `userdata`.
   This is a storage-plan choice, not authorization for a `userdata` wipe or

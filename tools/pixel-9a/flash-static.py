@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact-target read-only admission and gated kernel probe for the static route.
+"""Exact-target admission, gated kernel probe, and observation for the static route.
 
 This host-only target workflow reuses static-boot.py's strict TOML/TSV and
 hash verifier. Python is limited to target tooling; no guest or product code
@@ -31,6 +31,8 @@ BOOT_PARTITIONS = (
 TARGET_ID = "google-pixel-9a-tegu-gxq96-mp1-0"
 ROUTE_ID = "experimental-linux-google-tegu-s5300-wwan-static"
 DATA_TOKEN = "I-understand-this-is-a-new-development-device-with-no-personal-data"
+KERNEL_FAILURE = re.compile(r"Kernel panic|Oops:|BUG:|watchdog.*lockup|soft lockup|hard LOCKUP",
+                            re.IGNORECASE)
 
 spec = importlib.util.spec_from_file_location("pixel9a_static_boot", ROOT / "tools/pixel-9a/static-boot.py")
 assert spec is not None and spec.loader is not None
@@ -119,6 +121,69 @@ def key_values(path: Path, wanted: set[str] | None = None) -> dict[str, str]:
         require(key not in values, f"duplicate evidence key {key} in {path.name}")
         values[key] = value
     return values
+
+
+def evidence_path(value: str, directory: Path, label: str) -> Path:
+    require(bool(value), f"{label} path is required")
+    path = Path(value)
+    require(path.is_file() and not path.is_symlink() and
+            path.resolve().is_relative_to(directory.resolve()),
+            f"{label} must be a regular file under {directory}")
+    return path
+
+
+def boot_evidence(path: Path, prefix: str, boot_hash: str) -> None:
+    values = key_values(path)
+    require(set(values) == {"operation", "target_id", "serial_sha256_prefix",
+                            "boot_img_sha256", "boot_exit_status", "result", "output"},
+            "temporary-boot transcript fields differ from reviewed contract")
+    expected = {
+        "operation": "pixel-9a-static-boot-temp", "target_id": TARGET_ID,
+        "serial_sha256_prefix": prefix, "boot_img_sha256": boot_hash,
+        "boot_exit_status": "0", "result": "temporary-boot-issued",
+    }
+    for key, value in expected.items():
+        require(values[key] == value, f"temporary-boot transcript {key} differs")
+
+
+def kernel_capture(path: Path) -> str:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeError as error:
+        raise Refusal("temporary-boot kernel capture must be UTF-8 text") from error
+    require(re.search(r"Linux version [0-9]", content) is not None,
+            "temporary-boot observation has no Linux kernel version record")
+    require("ZUMA PRO TEGU" in content,
+            "temporary-boot observation has no tegu machine record")
+    require(KERNEL_FAILURE.search(content) is None,
+            "temporary-boot observation contains a kernel failure; stop and review recovery")
+    return content
+
+
+def observation_evidence(path: Path, transcript: Path, prefix: str,
+                         boot_hash: str) -> None:
+    values = key_values(path)
+    require(set(values) == {"operation", "target_id", "serial_sha256_prefix",
+                            "boot_img_sha256", "boot_transcript_sha256",
+                            "kernel_log", "kernel_log_bytes", "kernel_log_sha256", "result"},
+            "temporary-boot observation fields differ from reviewed contract")
+    expected = {
+        "operation": "pixel-9a-static-observe-temp", "target_id": TARGET_ID,
+        "serial_sha256_prefix": prefix, "boot_img_sha256": boot_hash,
+        "boot_transcript_sha256": sha(transcript),
+        "result": "temporary-boot-observed",
+    }
+    for key, value in expected.items():
+        require(values[key] == value, f"temporary-boot observation {key} differs")
+    name = values["kernel_log"]
+    require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) is not None,
+            "temporary-boot observation kernel log filename is unsafe")
+    log = evidence_path(str(path.parent / name), path.parent, "observation kernel log")
+    require(values["kernel_log_bytes"].isdigit() and
+            log.stat().st_size == int(values["kernel_log_bytes"]) and
+            sha(log) == values["kernel_log_sha256"],
+            "temporary-boot observation kernel log size or hash differs")
+    kernel_capture(log)
 
 
 def discovery_prefix(path: Path) -> str:
@@ -325,19 +390,66 @@ def boot_temp() -> None:
     with transcript.open("x") as stream:
         stream.write(f"operation=pixel-9a-static-boot-temp\ntarget_id={TARGET_ID}\n"
                      f"serial_sha256_prefix={prefix}\nboot_img_sha256={boot_hash}\n"
-                     f"result=temporary-boot-issued\noutput={redacted_output}\n")
+                     f"boot_exit_status=0\nresult=temporary-boot-issued\n"
+                     f"output={redacted_output}\n")
     print(f"result=temporary-boot-issued transcript={transcript}")
 
 
+def observe_temp() -> None:
+    _, bundle, serial, prefix, _ = preflight()
+    boot_hash = sha(bundle / "boot.img")
+    evidence_dir = OUT / "flash-static"
+    transcript = evidence_path(
+        os.environ.get("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE", ""),
+        evidence_dir, "temporary-boot transcript")
+    capture = evidence_path(
+        os.environ.get("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_KERNEL_LOG", ""),
+        OUT, "temporary-boot kernel capture")
+    boot_evidence(transcript, prefix, boot_hash)
+    content = kernel_capture(capture)
+    transcript_hash = sha(transcript)
+    capture_hash = sha(capture)
+    phrase = f"CONFIRM PIXEL 9A STATIC KERNEL PROGRESS OBSERVED boot.img@{boot_hash[:12]}"
+    print("Confirm this capture came from the displayed device and temporary boot, "
+          "shows kernel progress, and has no hang or reboot loop.")
+    print("This records kernel progress only; it does not establish Ferrix userspace or radios.")
+    print(f"Type exactly: {phrase}", flush=True)
+    require(input("> ") == phrase, "observation confirmation did not match")
+    _, checked_bundle, checked_serial, checked_prefix, _ = preflight()
+    require(checked_bundle == bundle and checked_serial == serial and checked_prefix == prefix and
+            sha(bundle / "boot.img") == boot_hash and sha(transcript) == transcript_hash and
+            sha(capture) == capture_hash,
+            "device, boot image, or observation input changed before recording")
+    boot_evidence(transcript, prefix, boot_hash)
+    kernel_capture(capture)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    redacted_log = evidence_dir / f"observe-temp-{stamp}-{os.getpid()}-kernel.txt"
+    redacted_log.write_text(content.replace(serial, f"serial-sha256:{prefix}"),
+                            encoding="utf-8")
+    observation = evidence_dir / f"observe-temp-{stamp}-{os.getpid()}.txt"
+    with observation.open("x") as stream:
+        stream.write(f"operation=pixel-9a-static-observe-temp\ntarget_id={TARGET_ID}\n"
+                     f"serial_sha256_prefix={prefix}\nboot_img_sha256={boot_hash}\n"
+                     f"boot_transcript_sha256={transcript_hash}\n"
+                     f"kernel_log={redacted_log.name}\n"
+                     f"kernel_log_bytes={redacted_log.stat().st_size}\n"
+                     f"kernel_log_sha256={sha(redacted_log)}\n"
+                     "result=temporary-boot-observed\n")
+    observation_evidence(observation, transcript, prefix, boot_hash)
+    print(f"result=temporary-boot-observed transcript={observation}")
+
+
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "boot-temp"):
-        print("usage: flash-static.py preflight|boot-temp", file=sys.stderr)
+    if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "boot-temp", "observe-temp"):
+        print("usage: flash-static.py preflight|boot-temp|observe-temp", file=sys.stderr)
         return 2
     try:
         if sys.argv[1] == "preflight":
             preflight()
-        else:
+        elif sys.argv[1] == "boot-temp":
             boot_temp()
+        else:
+            observe_temp()
     except (Refusal, static.Refusal, ValueError, EOFError) as error:
         print(f"REFUSING pixel-9a static physical workflow: {error}", file=sys.stderr)
         return 1

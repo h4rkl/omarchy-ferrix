@@ -124,9 +124,68 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-static-flash-test.") as tempor
     assert checks == ["preflight", "preflight"], checks
     assert boot_commands == [("fastboot", "-s", serial, "boot", str(Path(temporary) / "boot.img"))]
     assert list(Path(temporary, "flash-static").glob("boot-temp-*.txt"))
+    boot_record = list(Path(temporary, "flash-static").glob("boot-temp-*.txt"))[0]
+    assert workflow.key_values(boot_record)["boot_exit_status"] == "0"
     os.environ.pop("FERRIX_PIXEL9A_NO_USER_DATA", None)
     builtins.input = original_input
     workflow.preflight = original_preflight
     workflow.sha = original_sha
+
+with tempfile.TemporaryDirectory(prefix="pixel-9a-static-observe-test.") as temporary:
+    root = Path(temporary)
+    evidence_dir = root / "flash-static"
+    evidence_dir.mkdir()
+    bundle = root / "images"
+    bundle.mkdir()
+    (bundle / "boot.img").write_bytes(b"test boot image")
+    boot_hash = workflow.sha(bundle / "boot.img")
+    transcript = evidence_dir / "boot-temp-test.txt"
+    transcript.write_text(
+        f"operation=pixel-9a-static-boot-temp\ntarget_id={workflow.TARGET_ID}\n"
+        f"serial_sha256_prefix={prefix}\nboot_img_sha256={boot_hash}\n"
+        "boot_exit_status=0\nresult=temporary-boot-issued\noutput=Booting OKAY\n")
+    capture = root / "kernel-capture.txt"
+    capture.write_text(f"Linux version 6.1 test\nZUMA PRO TEGU\nserial={serial}\n")
+    workflow.OUT = root
+    checks = []
+    workflow.preflight = lambda: (checks.append("preflight") or
+                                  ({}, bundle, serial, prefix, root))
+    workflow.command = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("observation must not issue a device command"))
+    os.environ["FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE"] = str(transcript)
+    os.environ["FERRIX_PIXEL9A_STATIC_TEMP_BOOT_KERNEL_LOG"] = str(capture)
+    builtins.input = lambda prompt: (
+        f"CONFIRM PIXEL 9A STATIC KERNEL PROGRESS OBSERVED boot.img@{boot_hash[:12]}")
+    workflow.observe_temp()
+    assert checks == ["preflight", "preflight"], checks
+    observation = list(evidence_dir.glob("observe-temp-*.txt"))[0]
+    workflow.observation_evidence(observation, transcript, prefix, boot_hash)
+    assert serial not in (evidence_dir / workflow.key_values(observation)["kernel_log"]).read_text()
+    original_transcript = transcript.read_text()
+    transcript.write_text(original_transcript.replace("boot_exit_status=0", "boot_exit_status=1"))
+    try:
+        workflow.boot_evidence(transcript, prefix, boot_hash)
+    except workflow.Refusal as error:
+        assert "boot_exit_status" in str(error)
+    else:
+        raise AssertionError("failed boot transcript was accepted")
+    try:
+        workflow.observation_evidence(observation, transcript, prefix, boot_hash)
+    except workflow.Refusal as error:
+        assert "boot_transcript_sha256" in str(error)
+    else:
+        raise AssertionError("changed boot transcript was accepted")
+    transcript.write_text(original_transcript)
+    capture.write_text("Linux version 6.1 test\nZUMA PRO TEGU\nKernel panic\n")
+    try:
+        workflow.observe_temp()
+    except workflow.Refusal as error:
+        assert "kernel failure" in str(error)
+    else:
+        raise AssertionError("kernel panic was accepted as boot progress")
+    os.environ.pop("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE", None)
+    os.environ.pop("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_KERNEL_LOG", None)
+    builtins.input = original_input
+    workflow.preflight = original_preflight
 
 print('{"event":"pixel-9a-flash-static-contract-test","status":"passed"}')
