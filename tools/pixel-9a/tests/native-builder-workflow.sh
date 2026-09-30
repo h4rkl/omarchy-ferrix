@@ -227,6 +227,23 @@ fi
 
 : >"$log"
 PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
+  FERRIX_PIXEL9A_RADIO_KERNEL_OUT="$root/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild" \
+  "$script" run kernel-radio preflight >/dev/null
+grep -Fx -- 'FERRIX_PIXEL9A_RADIO_KERNEL_OUT=/workspace/out/pixel-9a/kernel-radio/tegu-wwan-static-rebuild' "$env_log" >/dev/null || {
+  echo 'builder did not confine and forward the new kernel output path' >&2
+  exit 1
+}
+for unsafe in "$root/out/pixel-9a/../escape" "$root/out/elsewhere"; do
+  if PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
+    FERRIX_PIXEL9A_RADIO_KERNEL_OUT="$unsafe" \
+    "$script" run kernel-radio preflight >/dev/null 2>&1; then
+    echo "builder accepted an unsafe kernel output path: $unsafe" >&2
+    exit 1
+  fi
+done
+
+: >"$log"
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
   FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
   FERRIX_PIXEL9A_FIRMWARE_DIR="$root/out/pixel-9a/firmware/tegu/staged" \
   "$script" run rootfs finalize >/dev/null

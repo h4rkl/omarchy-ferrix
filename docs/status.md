@@ -1,5 +1,38 @@
 # Status
 
+## 2026-09-30 (post-restore Pixel 9a admission and build gate refresh)
+
+- **Exact physical target:** Read-only `just device-discover`, `device-match`,
+  and `pixel-9a-discover` at 01:19–01:20 UTC found one authorized Google
+  Pixel 9a / `tegu` / `GXQ96` / `MP1.0`, still on stock Android
+  `CP3A.260905.009`, active slot A, unlocked/orange. Redacted discovery:
+  `out/pixel-9a/discovery-20260930T012016Z.txt` (SHA-256
+  `e00ec15ae3e8fec30a4cd03cf469e9d0e37fa98cdefec1fdbb8d099e69f71ff3`).
+  The fresh ADB partition inventory is still `partial`; its ignored transcript
+  is `out/pixel-9a/partition-inventory-20260930T012016Z.txt` (SHA-256
+  `d6b3e4af551650cb185c5e25e0e99964b02764dbb8867b7c7805854e1aa58ef8`).
+- **Capacity refusal:** The read-only Android handoff stopped with
+  `REFUSING pixel-9a partition capacity handoff: boot_a capacity is not readable from /sys/class/block/sda13/size`.
+  Transcript: `out/pixel-9a/partition-capacity-20260930T012016Z.txt`
+  (SHA-256 `0ee63a7a0432108bcddf893334ca5208fab28f3c47f897a853c5e708926d549f`).
+  No post-restore static or ten-partition capacity handoff was published;
+  the pre-restore static capacity file is historical only.
+- **Native builder refusal:** The authorized `deba` Linux x86_64 checkout at
+  `/home/ezy/github-projects/omarchy-ferrix` remains clean at `26fc9f9`.
+  `tools/pixel-9a/native-builder.sh run boot-radio preflight` refused:
+  `FAIL pixel-9a-radio-boot: radio kernel manifest split-artifact contract hash differs from the checked-in contract`.
+  The existing kernel manifest names SHA-256 `221347949752c3a7865264958bd5ad58e0fec1f9a080630902b3c384488bac12`;
+  the current checked-in contract and route pin are
+  `0af2c011b468cbf97837abca29d666f828109999cb30f4c158534530e202046e`.
+  No image composition or rebuild followed that refusal. The kernel, rootfs,
+  and boot-input outputs remain prior, unbooted handoffs, not a current
+  static-only image set.
+- **Physical boundary:** No reboot, temporary boot, flash, slot change,
+  rootfs write, firmware write, or radio test was performed. The tested stock
+  restore remains available. The static-only composer and flash adapter,
+  fresh bootloader capacities, complete rootfs mapping, AVB validation, and
+  exact-device boot evidence remain outstanding.
+
 ## 2026-09-30 (stock recovery verified on the exact Pixel 9a)
 
 - **Physical target:** `google-pixel-9a-tegu-gxq96-mp1-0`. Owner-run

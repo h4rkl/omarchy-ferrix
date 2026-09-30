@@ -83,6 +83,7 @@ run_workflow() {
 	# USB path, ADB socket, or arbitrary command is forwarded into the image.
 	for name in \
 		FERRIX_PIXEL9A_RADIO_SYNC FERRIX_PIXEL9A_RADIO_BUILD \
+		FERRIX_PIXEL9A_RADIO_KERNEL_OUT \
 		FERRIX_PIXEL9A_PRODUCT_BUILD FERRIX_PIXEL9A_FIRMWARE \
 		FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST FERRIX_PIXEL9A_FIRMWARE_DIR \
 		FERRIX_PIXEL9A_ROOTFS_BUILD FERRIX_PIXEL9A_ROOTFS_PASSWORD \
@@ -96,6 +97,16 @@ run_workflow() {
 		value=$(printenv "$name" 2>/dev/null || true)
 		[ -n "$value" ] || continue
 		case "$name" in
+			FERRIX_PIXEL9A_RADIO_KERNEL_OUT)
+				case "$value" in
+					"$root/out/pixel-9a/"*|out/pixel-9a/*) ;;
+					*) die 'FERRIX_PIXEL9A_RADIO_KERNEL_OUT must stay under out/pixel-9a' ;;
+				esac
+				case "$value" in
+					*/../*|*/..|*/./*|*/.|*/../|*/./) die 'FERRIX_PIXEL9A_RADIO_KERNEL_OUT contains a traversal component' ;;
+				esac
+				value=$(map_workspace_path "$value")
+				;;
 			*_DIR|*_ARCHIVE|*_SIZES|*_CPIO|*_ROOT|*_INITRAMFS|*_RAMDISK|*_BOOTCONFIG|FERRIX_PIXEL9A_BOOT_INPUTS_OUT|FERRIX_PIXEL9A_BOOT_INPUTS_MANIFEST|FERRIX_PIXEL9A_AVB_KEY|FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST)
 				value=$(map_workspace_path "$value") ;;
 		esac
