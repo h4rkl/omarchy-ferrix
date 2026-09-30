@@ -147,13 +147,25 @@ def boot_evidence(path: Path, prefix: str, boot_hash: str) -> None:
         require(values[key] == value, f"temporary-boot transcript {key} differs")
 
 
-def kernel_capture(path: Path) -> str:
+def image_kernel_banner(boot: Path) -> str:
+    """Extract the complete built kernel version from the pinned boot image."""
+    image = boot.read_bytes()
+    banners = {
+        match.group().decode("ascii")
+        for match in re.finditer(rb"Linux version [^\x00\r\n]{1,400}", image)
+        if re.search(rb"\) #[0-9]+ (?:SMP|PREEMPT)", match.group())
+    }
+    require(len(banners) == 1, "boot image lacks one unambiguous complete kernel banner")
+    return next(iter(banners))
+
+
+def kernel_capture(path: Path, boot: Path) -> str:
     try:
         content = path.read_text(encoding="utf-8")
     except UnicodeError as error:
         raise Refusal("temporary-boot kernel capture must be UTF-8 text") from error
-    require(re.search(r"Linux version [0-9]", content) is not None,
-            "temporary-boot observation has no Linux kernel version record")
+    require(image_kernel_banner(boot) in content,
+            "temporary-boot observation lacks the pinned boot image kernel banner")
     require("ZUMA PRO TEGU" in content,
             "temporary-boot observation has no tegu machine record")
     require(KERNEL_FAILURE.search(content) is None,
@@ -161,8 +173,27 @@ def kernel_capture(path: Path) -> str:
     return content
 
 
+def capture_provenance(content: str, prefix: str, boot_hash: str,
+                       transcript_hash: str) -> None:
+    if not content.startswith("capture_source="):
+        return  # A separately reviewed raw kernel log has no generated header.
+    fields = {}
+    for line in content.splitlines():
+        if line.startswith("Linux version "):
+            break
+        require("=" in line, "generated kernel capture header is malformed")
+        key, value = line.split("=", 1)
+        require(key not in fields, "generated kernel capture header has a duplicate field")
+        fields[key] = value
+    require(fields == {
+        "capture_source": "adb-procfs-read-only", "target_id": TARGET_ID,
+        "serial_sha256_prefix": prefix, "boot_img_sha256": boot_hash,
+        "boot_transcript_sha256": transcript_hash,
+    }, "generated kernel capture differs from reviewed boot provenance")
+
+
 def observation_evidence(path: Path, transcript: Path, prefix: str,
-                         boot_hash: str) -> None:
+                         boot: Path, boot_hash: str) -> None:
     values = key_values(path)
     require(set(values) == {"operation", "target_id", "serial_sha256_prefix",
                             "boot_img_sha256", "boot_transcript_sha256",
@@ -184,7 +215,8 @@ def observation_evidence(path: Path, transcript: Path, prefix: str,
             log.stat().st_size == int(values["kernel_log_bytes"]) and
             sha(log) == values["kernel_log_sha256"],
             "temporary-boot observation kernel log size or hash differs")
-    kernel_capture(log)
+    require(sha(boot) == boot_hash, "observation boot image hash differs")
+    capture_provenance(kernel_capture(log, boot), prefix, boot_hash, sha(transcript))
 
 
 def discovery_prefix(path: Path) -> str:
@@ -396,6 +428,61 @@ def boot_temp() -> None:
     print(f"result=temporary-boot-issued transcript={transcript}")
 
 
+def capture_temp() -> None:
+    """Read live Android procfs after a temporary kernel boot, if ADB returns."""
+    _, bundle, discovery, _ = read_candidate()
+    prefix = discovery_prefix(discovery)
+    boot = bundle / "boot.img"
+    boot_hash = sha(boot)
+    evidence_dir = OUT / "flash-static"
+    transcript = evidence_path(
+        os.environ.get("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE", ""),
+        evidence_dir, "temporary-boot transcript")
+    boot_evidence(transcript, prefix, boot_hash)
+    transcript_hash = sha(transcript)
+    adb = command("adb", "devices", "-l")
+    rows = [line.split() for line in adb.splitlines()
+            if line.strip() and not line.startswith("List of devices")]
+    fastboot = command("fastboot", "devices", "-l")
+    require(len(rows) == 1 and len(rows[0]) >= 2 and rows[0][1] == "device" and
+            not fastboot.strip(), "requires exactly one authorized ADB device and no Fastboot device")
+    serial = rows[0][0]
+    require(hashlib.sha256(serial.encode()).hexdigest()[:12] == prefix,
+            "ADB serial differs from the post-restore discovery and temporary-boot transcript")
+    expected = {
+        "ro.product.manufacturer": "Google", "ro.product.model": "Pixel 9a",
+        "ro.product.device": "tegu", "ro.boot.hardware.revision": "MP1.0",
+        "ro.boot.hardware.sku": "GXQ96", "ro.boot.slot_suffix": "_a",
+        "ro.boot.vbmeta.device_state": "unlocked", "ro.build.version.release": "17",
+    }
+    for property_name, value in expected.items():
+        observed = command("adb", "-s", serial, "shell", "getprop", property_name).strip()
+        require(observed == value, f"post-probe ADB {property_name} differs from reviewed identity")
+    version = command("adb", "-s", serial, "shell", "cat", "/proc/version").strip()
+    model = command("adb", "-s", serial, "shell", "cat", "/proc/device-tree/model").strip("\x00\r\n ")
+    require("\n" not in version and version == image_kernel_banner(boot),
+            "live /proc/version differs from the pinned boot image kernel")
+    require(model == "ZUMA PRO TEGU MP on ZUMA PRO",
+            "live device tree model differs from pinned tegu board")
+    require(sha(boot) == boot_hash and sha(transcript) == transcript_hash and
+            hashlib.sha256(serial.encode()).hexdigest()[:12] == prefix,
+            "image or identity changed while collecting temporary-boot evidence")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    capture = evidence_dir / f"capture-temp-{stamp}-{os.getpid()}.txt"
+    with capture.open("x", encoding="utf-8") as stream:
+        stream.write(f"capture_source=adb-procfs-read-only\n"
+                     f"target_id={TARGET_ID}\nserial_sha256_prefix={prefix}\n"
+                     f"boot_img_sha256={boot_hash}\n"
+                     f"boot_transcript_sha256={transcript_hash}\n"
+                     f"{version}\n{model}\n")
+    kernel_capture(capture, boot)
+    print(f"result=live-kernel-banner-matched source=adb-procfs-read-only "
+          f"capture={capture} sha256={sha(capture)}")
+    print("The running kernel's build banner and device-tree model match the pinned candidate. "
+          "This does not prove every loaded image byte, Ferrix userspace, absence of earlier "
+          "kernel errors, or hardware capability.")
+
+
 def observe_temp() -> None:
     _, bundle, serial, prefix, _ = preflight()
     boot_hash = sha(bundle / "boot.img")
@@ -407,8 +494,9 @@ def observe_temp() -> None:
         os.environ.get("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_KERNEL_LOG", ""),
         OUT, "temporary-boot kernel capture")
     boot_evidence(transcript, prefix, boot_hash)
-    content = kernel_capture(capture)
     transcript_hash = sha(transcript)
+    content = kernel_capture(capture, bundle / "boot.img")
+    capture_provenance(content, prefix, boot_hash, transcript_hash)
     capture_hash = sha(capture)
     phrase = f"CONFIRM PIXEL 9A STATIC KERNEL PROGRESS OBSERVED boot.img@{boot_hash[:12]}"
     print("Confirm this capture came from the displayed device and temporary boot, "
@@ -422,7 +510,8 @@ def observe_temp() -> None:
             sha(capture) == capture_hash,
             "device, boot image, or observation input changed before recording")
     boot_evidence(transcript, prefix, boot_hash)
-    kernel_capture(capture)
+    capture_provenance(kernel_capture(capture, bundle / "boot.img"),
+                       prefix, boot_hash, transcript_hash)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     redacted_log = evidence_dir / f"observe-temp-{stamp}-{os.getpid()}-kernel.txt"
     redacted_log.write_text(content.replace(serial, f"serial-sha256:{prefix}"),
@@ -436,19 +525,21 @@ def observe_temp() -> None:
                      f"kernel_log_bytes={redacted_log.stat().st_size}\n"
                      f"kernel_log_sha256={sha(redacted_log)}\n"
                      "result=temporary-boot-observed\n")
-    observation_evidence(observation, transcript, prefix, boot_hash)
+    observation_evidence(observation, transcript, prefix, bundle / "boot.img", boot_hash)
     print(f"result=temporary-boot-observed transcript={observation}")
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "boot-temp", "observe-temp"):
-        print("usage: flash-static.py preflight|boot-temp|observe-temp", file=sys.stderr)
+    if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "boot-temp", "capture-temp", "observe-temp"):
+        print("usage: flash-static.py preflight|boot-temp|capture-temp|observe-temp", file=sys.stderr)
         return 2
     try:
         if sys.argv[1] == "preflight":
             preflight()
         elif sys.argv[1] == "boot-temp":
             boot_temp()
+        elif sys.argv[1] == "capture-temp":
+            capture_temp()
         else:
             observe_temp()
     except (Refusal, static.Refusal, ValueError, EOFError) as error:

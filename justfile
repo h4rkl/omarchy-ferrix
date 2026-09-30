@@ -328,6 +328,11 @@ pixel-9a-flash-static-check:
 pixel-9a-flash-static-boot-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" boot-temp
 
+# If the temporary kernel reaches stock Android ADB, bind live procfs to the
+# pinned image and exact prior boot transcript. This performs no device write.
+pixel-9a-flash-static-capture-temp:
+    @"{{root}}/tools/pixel-9a/flash-static.py" capture-temp
+
 # Bind a reviewed kernel capture to this exact static boot transcript.
 pixel-9a-flash-static-observe-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" observe-temp

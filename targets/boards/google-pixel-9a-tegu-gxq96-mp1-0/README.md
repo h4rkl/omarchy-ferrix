@@ -39,7 +39,19 @@ passed on the exact device in ordinary Fastboot on slot A. The owner approved
 one gated temporary boot of the pinned kernel-only `boot.img`; that command
 uses stock `init_boot` and `vendor_boot` and cannot validate the full Ferrix
 split image set. The `observe-temp` step requires a reviewed kernel capture
-and binds its redacted copy to the exact boot transcript. It is offline-tested
+and binds its redacted copy to the exact boot transcript. The capture must
+contain the complete build banner embedded in the pinned `boot.img`; a stock
+tegu kernel banner is refused. If the temporary kernel reaches Android ADB,
+set `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` to the boot transcript and run
+`just pixel-9a-flash-static-capture-temp`. It reads `/proc/version` and the
+device-tree model after exact ADB identity checks and writes an ignored,
+redacted capture.
+This matches the live kernel build banner and device-tree model; it is not
+a readback of the loaded image, a full kernel log, or proof of no earlier
+kernel errors. `observe-temp` also requires a reviewed human account
+of no hang or reboot loop and a fresh ordinary-Fastboot preflight. If ADB does
+not return, use a separately captured serial kernel log with the same banner
+or stop; do not invent boot evidence. These paths are offline-tested
 only; the temporary probe stopped before device action after an optional
 transfer-verifier invocation omitted the named output path. No persistent
 static flash has been run. Separate offline-tested

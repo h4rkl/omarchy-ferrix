@@ -47,11 +47,14 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-install-static-test.") as temp
     reported = []
     install.print = lambda *values, **kwargs: reported.append(" ".join(map(str, values)))
 
+    banner = ("Linux version 7.2.3-test (builder@test) (clang 19) "
+              "#1 SMP PREEMPT Wed Sep 30 01:59:37 UTC 2026")
     rows = []
     image_hashes = {}
     for name in install.BOOT_PARTITIONS:
         image = bundle / f"{name}.img"
-        image.write_bytes(f"test image {name}".encode())
+        image.write_bytes(f"test image {name}".encode() +
+                          (b"\0" + banner.encode() + b"\0" if name == "boot" else b""))
         digest = probe.sha(image)
         image_hashes[name] = digest
         rows.append(f"artifact\t{name}\t{name}.img\t{image.stat().st_size}\t{digest}\tgenerated")
@@ -72,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-install-static-test.") as temp
         f"serial_sha256_prefix={prefix}\nboot_img_sha256={boot_hash}\n"
         "boot_exit_status=0\nresult=temporary-boot-issued\noutput=Booting OKAY\n")
     kernel_log = probe_dir / "observe-temp-test-kernel.txt"
-    kernel_log.write_text("Linux version 6.1 test\nZUMA PRO TEGU\n")
+    kernel_log.write_text(f"{banner}\nZUMA PRO TEGU\n")
     observation = probe_dir / "observe-temp-test.txt"
     observation.write_text(
         f"operation=pixel-9a-static-observe-temp\ntarget_id={install.TARGET_ID}\n"

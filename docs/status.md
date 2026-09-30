@@ -75,8 +75,15 @@
   boot command was issued; the owner's one-probe approval remains unused.
   The checked-in static workflow now has an offline-tested `observe-temp`
   mode that binds a reviewed kernel capture to the exact boot transcript and
-  image hash. It has not been run on physical evidence and does not change
-  the stopped device route.
+  image hash. Offline tests now also require the complete kernel banner
+  embedded in the pinned image, rejecting a stock tegu banner. A checked-in
+  read-only `capture-temp` mode can collect matching `/proc/version` and
+  device-tree model if Android ADB returns on the exact phone after a future
+  probe. Its procfs snapshot would match the running build banner but would
+  not prove loaded image bytes, absence of earlier kernel errors, or a Ferrix
+  userspace boot. Both modes are
+  stub-tested only; neither has run on physical evidence or changes the
+  stopped device route.
 - **Persistent static adapter (offline only):** A separate target workflow now
   defines exact inactive slot B boot writes, a separately confirmed shared
   `userdata` rootfs write, and later slot B activation. Its mock transport

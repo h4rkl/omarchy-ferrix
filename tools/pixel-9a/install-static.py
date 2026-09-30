@@ -69,7 +69,8 @@ def admission(require_policy: bool = False) -> dict:
         os.environ.get("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_OBSERVATION", ""),
         PROBE_DIR, "temporary-boot observation")
     static_flash.boot_evidence(boot_record, prefix, boot_hash)
-    static_flash.observation_evidence(observation, boot_record, prefix, boot_hash)
+    static_flash.observation_evidence(observation, boot_record, prefix,
+                                      bundle / "boot.img", boot_hash)
     context = {
         "candidate": candidate, "bundle": bundle, "serial": serial, "prefix": prefix,
         "boot_hash": boot_hash, "boot_record_hash": static_flash.sha(boot_record),

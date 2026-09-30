@@ -137,7 +137,9 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-static-observe-test.") as temp
     evidence_dir.mkdir()
     bundle = root / "images"
     bundle.mkdir()
-    (bundle / "boot.img").write_bytes(b"test boot image")
+    banner = ("Linux version 7.2.3-test (builder@test) (clang 19) "
+              "#1 SMP PREEMPT Wed Sep 30 01:59:37 UTC 2026")
+    (bundle / "boot.img").write_bytes(b"test boot image\0" + banner.encode() + b"\0")
     boot_hash = workflow.sha(bundle / "boot.img")
     transcript = evidence_dir / "boot-temp-test.txt"
     transcript.write_text(
@@ -145,7 +147,7 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-static-observe-test.") as temp
         f"serial_sha256_prefix={prefix}\nboot_img_sha256={boot_hash}\n"
         "boot_exit_status=0\nresult=temporary-boot-issued\noutput=Booting OKAY\n")
     capture = root / "kernel-capture.txt"
-    capture.write_text(f"Linux version 6.1 test\nZUMA PRO TEGU\nserial={serial}\n")
+    capture.write_text(f"{banner}\nZUMA PRO TEGU\nserial={serial}\n")
     workflow.OUT = root
     checks = []
     workflow.preflight = lambda: (checks.append("preflight") or
@@ -158,8 +160,10 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-static-observe-test.") as temp
         f"CONFIRM PIXEL 9A STATIC KERNEL PROGRESS OBSERVED boot.img@{boot_hash[:12]}")
     workflow.observe_temp()
     assert checks == ["preflight", "preflight"], checks
-    observation = list(evidence_dir.glob("observe-temp-*.txt"))[0]
-    workflow.observation_evidence(observation, transcript, prefix, boot_hash)
+    observation = next(path for path in evidence_dir.glob("observe-temp-*.txt")
+                       if not path.name.endswith("-kernel.txt"))
+    workflow.observation_evidence(observation, transcript, prefix,
+                                  bundle / "boot.img", boot_hash)
     assert serial not in (evidence_dir / workflow.key_values(observation)["kernel_log"]).read_text()
     original_transcript = transcript.read_text()
     transcript.write_text(original_transcript.replace("boot_exit_status=0", "boot_exit_status=1"))
@@ -170,19 +174,75 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-static-observe-test.") as temp
     else:
         raise AssertionError("failed boot transcript was accepted")
     try:
-        workflow.observation_evidence(observation, transcript, prefix, boot_hash)
+        workflow.observation_evidence(observation, transcript, prefix,
+                                      bundle / "boot.img", boot_hash)
     except workflow.Refusal as error:
         assert "boot_transcript_sha256" in str(error)
     else:
         raise AssertionError("changed boot transcript was accepted")
     transcript.write_text(original_transcript)
-    capture.write_text("Linux version 6.1 test\nZUMA PRO TEGU\nKernel panic\n")
+    capture.write_text(f"{banner}\nZUMA PRO TEGU\nKernel panic\n")
     try:
         workflow.observe_temp()
     except workflow.Refusal as error:
         assert "kernel failure" in str(error)
     else:
         raise AssertionError("kernel panic was accepted as boot progress")
+    capture.write_text("Linux version 6.1-stock (stock@google) #1 SMP\nZUMA PRO TEGU\n")
+    try:
+        workflow.observe_temp()
+    except workflow.Refusal as error:
+        assert "pinned boot image kernel banner" in str(error)
+    else:
+        raise AssertionError("stock tegu kernel log was accepted as Ferrix boot progress")
+    observed_properties = {
+        "ro.product.manufacturer": "Google", "ro.product.model": "Pixel 9a",
+        "ro.product.device": "tegu", "ro.boot.hardware.revision": "MP1.0",
+        "ro.boot.hardware.sku": "GXQ96", "ro.boot.slot_suffix": "_a",
+        "ro.boot.vbmeta.device_state": "unlocked", "ro.build.version.release": "17",
+    }
+    workflow.read_candidate = lambda: ({}, bundle, root / "discovery.txt", root)
+    workflow.discovery_prefix = lambda path: prefix
+    commands = []
+
+    def adb_capture_command(*args: str, **kwargs) -> str:
+        commands.append(args)
+        if args == ("adb", "devices", "-l"):
+            return f"List of devices attached\n{serial} device usb:1\n"
+        if args == ("fastboot", "devices", "-l"):
+            return ""
+        assert args[:4] == ("adb", "-s", serial, "shell"), args
+        if args[4] == "getprop":
+            return observed_properties[args[5]] + "\n"
+        if args[4:] == ("cat", "/proc/version"):
+            return banner + "\n"
+        if args[4:] == ("cat", "/proc/device-tree/model"):
+            return "ZUMA PRO TEGU MP on ZUMA PRO\x00"
+        raise AssertionError(args)
+
+    workflow.command = adb_capture_command
+    workflow.capture_temp()
+    assert all("boot" not in call and "flash" not in call and "set_active" not in call
+               for call in commands)
+    generated_capture = next(evidence_dir.glob("capture-temp-*.txt"))
+    assert workflow.kernel_capture(generated_capture, bundle / "boot.img")
+    workflow.capture_provenance(generated_capture.read_text(), prefix, boot_hash,
+                                workflow.sha(transcript))
+    try:
+        workflow.capture_provenance(generated_capture.read_text(), prefix, boot_hash,
+                                    "0" * 64)
+    except workflow.Refusal as error:
+        assert "boot provenance" in str(error)
+    else:
+        raise AssertionError("capture from another temporary boot was accepted")
+    assert serial not in generated_capture.read_text()
+    observed_properties["ro.boot.hardware.revision"] = "MP2.0"
+    try:
+        workflow.capture_temp()
+    except workflow.Refusal as error:
+        assert "hardware.revision" in str(error)
+    else:
+        raise AssertionError("wrong hardware revision was accepted for capture")
     os.environ.pop("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE", None)
     os.environ.pop("FERRIX_PIXEL9A_STATIC_TEMP_BOOT_KERNEL_LOG", None)
     builtins.input = original_input
