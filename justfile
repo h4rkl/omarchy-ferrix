@@ -234,6 +234,12 @@ pixel-9a-static-boot-build:
 pixel-9a-static-boot-verify:
     @"{{root}}/tools/pixel-9a/static-boot.py" verify
 
+# Transfer check runs on the device host without the native AVB utility. Set
+# FERRIX_PIXEL9A_STATIC_BOOT_OUT for a named build output. It verifies pinned
+# hashes and stored AVB metadata; the native verifier remains independent.
+pixel-9a-static-boot-verify-transfer:
+    @"{{root}}/tools/pixel-9a/static-boot.py" verify-transfer
+
 pixel-9a-static-boot-test:
     @python3 "{{root}}/tools/pixel-9a/tests/static-boot-contract.py"
 
@@ -313,6 +319,17 @@ pixel-9a-flash-radio *args:
 
 pixel-9a-flash-radio-test:
     @sh "{{root}}/tools/pixel-9a/tests/flash-radio-workflow.sh"
+
+# Separate eight-static-partition candidate. The temporary command probes
+# kernel progress only; these recipes do not flash or select a slot.
+pixel-9a-flash-static-check:
+    @"{{root}}/tools/pixel-9a/flash-static.py" preflight
+
+pixel-9a-flash-static-boot-temp:
+    @"{{root}}/tools/pixel-9a/flash-static.py" boot-temp
+
+pixel-9a-flash-static-test:
+    @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/flash-static-contract.py"
 
 # Select and boot the already-flashed inactive radio-first slot through the
 # checked-in workflow; it never accepts a raw set_active command.

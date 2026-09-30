@@ -560,8 +560,9 @@ def build(inputs: dict[str, object]) -> None:
     print(f"PASS pixel-9a-static-boot composed, hash-recorded, unbooted images: {IMAGE_OUT}")
 
 
-def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False) -> None:
-    """Recheck a transferred static bundle without trusting builder state."""
+def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False,
+                  native_avb: bool = True) -> None:
+    """Recheck a transferred static bundle and optionally run native AVB tools."""
     require(bundle.is_dir() and not bundle.is_symlink(), "static image bundle is missing or a symlink")
     manifest = tsv(bundle / "boot-manifest.tsv")
     expected_scalars = {
@@ -690,7 +691,7 @@ def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False) -> None:
                        "vbmeta_system": set()}
     require(len([row for row in manifest if row[0] == "avb_descriptor_set"]) == 3,
             "static manifest has wrong AVB descriptor-set count")
-    avbtool = tool("avbtool")
+    avbtool = tool("avbtool") if native_avb else None
     for vbmeta, expected in descriptor_sets.items():
         row = named(manifest, "avb_descriptor_set", vbmeta, 3)
         require(row[2] == (",".join(sorted(expected, key=PARTITIONS.index)) or "empty"),
@@ -699,23 +700,29 @@ def verify_bundle(bundle: Path = IMAGE_OUT, quiet: bool = False) -> None:
         for key, suffix in (("avb_verification", "verification"), ("avb_info", "info")):
             record = named(manifest, key, f"provenance/{vbmeta}-{suffix}.txt", 4)
             checked(bundle / record[1], record[2], record[3], f"{vbmeta} {suffix}")
-        run(avbtool, "verify_image", "--image", str(image), capture=True)
-        info = run(avbtool, "info_image", "--image", str(image), capture=True)
+        if avbtool is not None:
+            run(avbtool, "verify_image", "--image", str(image), capture=True)
+            info = run(avbtool, "info_image", "--image", str(image), capture=True)
+        else:
+            info = (bundle / f"provenance/{vbmeta}-info.txt").read_bytes()
         names = re.findall(rb"^\s*Partition Name:\s*(\S+)", info, re.MULTILINE)
         decoded = tuple(name.decode("ascii") for name in names)
         require(len(decoded) == len(expected) and set(decoded) == expected,
                 f"{vbmeta} actual AVB descriptors differ from final static images")
     if not quiet:
-        print(f"PASS pixel-9a-static-boot verified bundle and AVB payloads: {bundle}")
+        scope = "bundle and AVB payloads" if native_avb else "transferred bundle hashes and recorded AVB metadata"
+        print(f"PASS pixel-9a-static-boot verified {scope}: {bundle}")
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "build", "verify"):
-        print("usage: static-boot.py preflight|build|verify", file=sys.stderr)
+    if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "build", "verify", "verify-transfer"):
+        print("usage: static-boot.py preflight|build|verify|verify-transfer", file=sys.stderr)
         return 2
     try:
         if sys.argv[1] == "verify":
             verify_bundle()
+        elif sys.argv[1] == "verify-transfer":
+            verify_bundle(native_avb=False)
         else:
             inputs = validate()
             if sys.argv[1] == "preflight":

@@ -1,6 +1,6 @@
 # Status
 
-## 2026-09-30 (fresh Pixel 9a static capacities; native static composer in progress)
+## 2026-09-30 (fresh Pixel 9a static capacities and unbooted native images)
 
 - **Physical target and transport:** One owner-approved run of
   `just pixel-9a-enter-fastboot --confirm-enter` rechecked the exact Pixel 9a /
@@ -35,18 +35,49 @@
   `9ccf603b5c78287e39e805526e04839c10cbc1b3695bbc3842fe8ebf0e829618`.
   The broader inventory is still `partial`, and this targeted read-only map
   authorizes no format, flash, or user-data wipe.
-- **Build status:** A fresh source-pinned radio kernel rebuild is running on
-  native Linux x86_64 under a new ignored output directory. No new kernel
-  manifest, boot-input handoff, or static image bundle has been validated yet.
-  The separate static composer and capacity/manifest gate have offline tests;
-  actual native composition and AVB verification remain to be run. Its
-  output declares `composed-not-booted` and `bootable=false`.
+- **Native build and validation:** The fresh source-pinned radio kernel rebuild
+  completed on deba Linux x86_64. Its ignored `build-manifest.tsv` SHA-256 is
+  `5e45844cab8841f6b3cfe359bafe612db917a480372078b7ea46cffdf8708eec`,
+  with the current split-contract hash
+  `0af2c011b468cbf97837abca29d666f828109999cb30f4c158534530e202046e`.
+  Rebuilt source-owned boot inputs have manifest SHA-256
+  `29a1adcc2128512dbdc9d3111486532ff254ab981583f9751db1d8b267e07e20`.
+  `pixel-9a-static-boot` preflight, opt-in build, and a separate native
+  verifier run passed. The output manifest at
+  `out/pixel-9a/images/tegu-wwan-static-rebuild-20260930/boot-manifest.tsv`
+  has SHA-256 `95b5bcf20f74b83eb00f4159f1a69b6b9e31f0ea143953f6b0f4640bb4ebd78a`.
+  It records eight static images, checked source and rootfs handoffs, fresh
+  AVB descriptors, `composed-not-booted`, and `bootable=false`. After
+  transfer to the Mac, the manifest and all 29 recorded file hashes matched.
+  Kbuild's `depmod` reported unresolved symbols in optional installed
+  modules; no loadable module is selected for the static boot path, and this
+  build evidence does not establish a successful device boot.
+- **Static physical preflight:** A separate checked-in candidate pins the
+  transferred bundle, fresh capacity handoff, same-device Android discovery,
+  targeted `userdata` map, and tested factory/OTA recovery artifacts.
+  `just pixel-9a-flash-static-check` passed read-only on the exact device in
+  ordinary Fastboot on slot A. Its ignored, serial-redacted transcript is
+  `out/pixel-9a/flash-static/preflight-20260930T022033Z-23683.txt` (SHA-256
+  `b7caf1095175d9748e947eabc698b01f08ef31f2e20ecbc418eeb28d549171b8`).
+  The candidate's image-compatibility gate remains `partial`; it authorizes
+  no persistent write. The owner approved one temporary `fastboot boot` of
+  the pinned kernel-only `boot.img` (SHA-256
+  `be3c389af8d8e49914ccddefb7f00c8820a2a8ec7f950ef76c2adfd74bd8a5c8`)
+  after checked-in gate and per-run confirmation. It can probe kernel
+  progress with stock `init_boot` and `vendor_boot`, not the full Ferrix boot.
+- **Probe stopped before device action:** A later optional
+  `just pixel-9a-static-boot-verify-transfer` invocation omitted the custom
+  `FERRIX_PIXEL9A_STATIC_BOOT_OUT` path and refused verbatim:
+  `FAIL pixel-9a-static-boot: static image bundle is missing or a symlink`.
+  This invocation inspected the default output location, not the pinned
+  rebuild bundle. The prior bundle hash check and native AVB verifier remain
+  recorded above, but the failed invocation was not retried. No temporary
+  boot command was issued; the owner's one-probe approval remains unused.
 - **Recovery/storage decision:** The owner chose the tested pinned factory
   restore as the stock recovery path if Ferrix later uses shared `userdata`.
   This is a storage-plan choice, not authorization for a `userdata` wipe or
-  any physical write. The targeted map above still needs a checked-in flash
-  adapter to compare it with the final image and recheck live capacity before
-  a separate per-run confirmation.
+  any physical write. A persistent static flash adapter, independent boot
+  observation, and separate per-run confirmation remain outstanding.
 
 ## 2026-09-30 (post-restore Pixel 9a admission and build gate refresh)
 

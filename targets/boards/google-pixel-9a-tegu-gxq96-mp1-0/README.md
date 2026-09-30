@@ -20,6 +20,26 @@ identity and verifies Android 17 / `CP3A.260905.009`, security patch
 this exact device and accepted stock build. Earlier partition capacities
 remain historical; no Ferrix boot or capability is established.
 
+After the verified restore, the owner-approved Android-to-bootloader workflow
+entered ordinary Fastboot without writing storage. Fresh static A/B capacities
+were captured at `2026-09-30T01:44:54Z`. A separate same-device read-only
+`userdata` map at `02:02:26Z` correlated Android's `/dev/block/sda34` by-name
+entry with a live unslotted physical 117,543,358,464-byte Fastboot partition.
+The broader inventory remains `partial`. On native Linux x86_64, a fresh
+source-built kernel and boot-input handoff produced a separately verified
+eight-partition static bundle (manifest SHA-256
+`95b5bcf20f74b83eb00f4159f1a69b6b9e31f0ea143953f6b0f4640bb4ebd78a`).
+It is `composed-not-booted` / `bootable=false`; no Ferrix image has been
+booted or flashed.
+
+The checked-in `static-install-candidate.toml` pins this bundle, fresh
+capacities, same-device discovery, targeted `userdata` map, and tested stock
+recovery. Its separate `just pixel-9a-flash-static-check` read-only admission
+passed on the exact device in ordinary Fastboot on slot A. The owner approved
+one gated temporary boot of the pinned kernel-only `boot.img`; that command
+uses stock `init_boot` and `vendor_boot` and cannot validate the full Ferrix
+split image set. No persistent static flash command is implemented.
+
 Initial identity was established by the checked-in read-only workflow
 `just pixel-9a-discover`:
 
@@ -135,8 +155,10 @@ exactly. After confirmation, it verifies Fastbootd identity, logical sizes,
 and idle snapshot state in an initial transport round trip before any image
 write, and rechecks at write time. This is offline-tested safety behavior,
 not permission to resize the zero-capacity inactive partitions. Shared
-`userdata` remains unmapped for Ferrix, and stock recovery still needs its
-independent evidence gate.
+The targeted read-only `userdata` map does not authorize a shared-data wipe.
+The tested pinned factory restore is the owner's selected stock recovery
+route, while persistent static flash and a separate per-run confirmation remain
+outstanding.
 
 This is an owner-declared new development device with no personal data. The
 checked-in gate records `backup = "not-required-dev-device"` and

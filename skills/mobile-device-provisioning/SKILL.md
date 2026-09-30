@@ -58,8 +58,13 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
    workflow requires a current source-built kernel, matching boot inputs,
    built-in early drivers, no selected loadable modules, and fresh AVB
    descriptors. It cannot consume the ten-partition split handoff and cannot
-   authorize a device write. The rootfs `userdata` mapping and static flash
-   adapter remain separate gates.
+   authorize a device write. Its separate checked-in static candidate and
+   `pixel-9a-flash-static-check` admit an exact target read-only; the
+   `pixel-9a-flash-static-boot-temp` workflow can issue only one confirmed
+   kernel-only `fastboot boot`. For a named build output, set
+   `FERRIX_PIXEL9A_STATIC_BOOT_OUT` when running
+   `pixel-9a-static-boot-verify-transfer`. No persistent static flash command
+   exists.
 11. `just pixel-9a-partition-inventory` `[ro]`; when the exact Android
     transport is available, also run `just pixel-9a-partition-capacity` `[ro]`
     to record the ten static/dynamic partition capacities used by the
@@ -81,6 +86,17 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
     and size. Supply `FERRIX_PIXEL9A_PARTITION_INVENTORY` explicitly. This
     targeted handoff does not make the broader inventory complete and does
     not authorize formatting or flashing shared storage.
+    For the eight-partition static candidate, run
+    `just pixel-9a-flash-static-check` `[ro]` and inspect all exact identity,
+    capacity, image-hash, recovery, and partial compatibility output. Only a
+    separately owner-approved run may use
+    `just pixel-9a-flash-static-boot-temp` `[confirm]` with the accepted
+    development-device data-policy token. Manually type the prompted phrase;
+    the workflow repeats every read-only gate before `fastboot boot`. This
+    probes kernel progress with currently flashed stock `init_boot` and
+    `vendor_boot`, not the full Ferrix split image set. Stop on a failed gate,
+    bootloader refusal, hang, or loop. Do not use this as persistent flash
+    authorization or as evidence of a Ferrix Linux boot.
 12. For the canonical Google route only, once a complete, reviewed image set
     exists and the owner authorizes the physical operation:
     `just pixel-9a-flash-check` `[ro]`; `just pixel-9a-flash-boot-temp`
@@ -106,6 +122,7 @@ Offline test recipes that must pass before any hardware session:
 `just pixel-9a-enter-fastboot-test`,
 `just pixel-9a-boot-radio-test`, `just pixel-9a-radio-split-test`,
 `just pixel-9a-static-boot-test`,
+`just pixel-9a-flash-static-test`,
 `just pixel-9a-artifacts-test`, `just pixel-9a-flash-test`,
 `just pixel-9a-flash-radio-test`,
 `just pixel-9a-partition-capacity-test`, and `just pixel-9a-radios-test`.

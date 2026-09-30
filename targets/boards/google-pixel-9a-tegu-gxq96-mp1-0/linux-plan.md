@@ -150,11 +150,19 @@ on 2026-09-30. This does not authorize a device write. The source-only
 `native-static-artifact-contract.toml` declares the independent eight
 partition, built-in-driver and AVB requirements. A separate device-free
 `static-boot.py` composer now validates those inputs and has offline gate
-tests; native composition and actual AVB verification remain pending. Its
-flash adapter remains to be implemented, and the existing ten-partition
-route cannot consume its contract. The host-only Python workflow fits the
-pinned Python Android image utilities and uses `tomllib` to validate their
-variable-width manifest handoffs before invoking them.
+tests. Native composition and an independent AVB payload verifier passed on
+deba on 2026-09-30; the ignored static bundle manifest has SHA-256
+`95b5bcf20f74b83eb00f4159f1a69b6b9e31f0ea143953f6b0f4640bb4ebd78a`.
+It remains `composed-not-booted` / `bootable=false`. A checked-in static
+candidate and `flash-static.py` adapter now perform strict read-only physical
+admission and a separately confirmed kernel-only `fastboot boot` probe.
+Read-only admission passed on the exact device in ordinary Fastboot on slot A.
+The owner approved one temporary probe; no persistent static flash command
+exists, and the existing ten-partition route cannot consume this contract.
+The host-only Python tooling reuses the strict TOML/TSV image verifier and
+pinned Python Android image utilities; it is outside guest/product code.
+The temporary command still uses stock `init_boot` and `vendor_boot`, so it
+cannot establish a full Ferrix split boot even if the bootloader accepts it.
 
 Read-only inspection of deba at source commit
 `26fc9f9beb1d1faf041a8d4df71fe6142353c133` found empty selected initfs/vendor/

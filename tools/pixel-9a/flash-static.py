@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Exact-target read-only admission and gated kernel probe for the static route.
+
+This host-only target workflow reuses static-boot.py's strict TOML/TSV and
+hash verifier. Python is limited to target tooling; no guest or product code
+depends on it. Only `boot-temp` can change device boot state, after a typed
+per-run confirmation. Neither mode writes a partition or selects a slot.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+TARGET = ROOT / "targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
+CANDIDATE = TARGET / "static-install-candidate.toml"
+OUT = ROOT / "out/pixel-9a"
+BOOT_PARTITIONS = (
+    "boot", "init_boot", "vendor_boot", "vendor_kernel_boot",
+    "dtbo", "vbmeta", "vbmeta_vendor", "vbmeta_system",
+)
+TARGET_ID = "google-pixel-9a-tegu-gxq96-mp1-0"
+ROUTE_ID = "experimental-linux-google-tegu-s5300-wwan-static"
+DATA_TOKEN = "I-understand-this-is-a-new-development-device-with-no-personal-data"
+
+spec = importlib.util.spec_from_file_location("pixel9a_static_boot", ROOT / "tools/pixel-9a/static-boot.py")
+assert spec is not None and spec.loader is not None
+static = importlib.util.module_from_spec(spec)
+sys.dont_write_bytecode = True
+spec.loader.exec_module(static)
+
+
+class Refusal(Exception):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise Refusal(message)
+
+
+def sha(path: Path) -> str:
+    require(path.is_file() and not path.is_symlink(), f"missing or linked file: {path}")
+    return static.digest(path)
+
+
+def pinned_path(relative: str, base: Path) -> Path:
+    path = ROOT / static.relative(relative)
+    require(path.resolve().is_relative_to(base.resolve()), f"path outside reviewed output: {relative}")
+    return path
+
+
+def read_candidate() -> tuple[dict, Path, Path, Path]:
+    config = tomllib.loads(CANDIDATE.read_text())
+    expected = {
+        "schema_version": 1, "target_id": TARGET_ID, "product": "tegu",
+        "sku": "GXQ96", "hardware_revision": "MP1.0", "route_id": ROUTE_ID,
+        "status": "composed-not-booted", "stock_slot": "a", "inactive_slot": "b",
+        "rootfs_partition": "userdata", "rootfs_image_bytes": 2147483648,
+        "recovery_build": "CP3A.260905.009",
+    }
+    for key, value in expected.items():
+        require(config.get(key) == value, f"candidate {key} differs from reviewed value")
+    policy = config.get("write_policy", {})
+    require(policy == {
+        "stock_slot_writes": False, "bootloader_or_radio_writes": False,
+        "logical_partition_writes": False, "slot_selection": False,
+        "temporary_boot_before_persistent_write": True,
+        "userdata_write_requires_separate_confirmation": True,
+    }, "candidate write policy differs")
+    for key in ("manifest_sha256", "static_capacity_sha256", "adb_discovery_sha256",
+                "userdata_map_sha256", "rootfs_image_sha256"):
+        require(re.fullmatch(r"[0-9a-f]{64}", config.get(key, "")) is not None,
+                f"candidate {key} is malformed")
+    bundle = pinned_path(config["bundle"], OUT / "images")
+    discovery = pinned_path(config["adb_discovery"], OUT)
+    rootfs_map = pinned_path(config["userdata_map"], OUT)
+    require(sha(bundle / "boot-manifest.tsv") == config["manifest_sha256"],
+            "static bundle manifest differs from checked-in candidate")
+    require(sha(discovery) == config["adb_discovery_sha256"],
+            "ADB discovery differs from checked-in candidate")
+    require(sha(rootfs_map) == config["userdata_map_sha256"],
+            "userdata map differs from checked-in candidate")
+    try:
+        static.verify_bundle(bundle, quiet=True, native_avb=False)
+    except static.Refusal as error:
+        raise Refusal(f"static bundle transfer verifier refused: {error}") from error
+    manifest = static.tsv(bundle / "boot-manifest.tsv")
+    capacities = static.one(manifest, "partition_capacities", 4)
+    require(capacities[1] == "provenance/partition-capacities.tsv" and
+            capacities[3] == config["static_capacity_sha256"],
+            "bundle capacity evidence differs from candidate")
+    rootfs = static.named(manifest, "artifact", "rootfs_image", 6)
+    require(rootfs[3:5] == (str(config["rootfs_image_bytes"]), config["rootfs_image_sha256"]),
+            "rootfs image differs from candidate")
+    return config, bundle, discovery, rootfs_map
+
+
+def key_values(path: Path, wanted: set[str] | None = None) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            require(wanted is not None, f"malformed evidence line in {path.name}")
+            continue
+        key, value = line.split("=", 1)
+        if wanted is not None and key not in wanted:
+            continue
+        require(key not in values, f"duplicate evidence key {key} in {path.name}")
+        values[key] = value
+    return values
+
+
+def discovery_prefix(path: Path) -> str:
+    values = key_values(path)
+    expected = {
+        "transport": "adb", "result": "ok", "ro.product.manufacturer": "Google",
+        "ro.product.model": "Pixel 9a", "ro.product.device": "tegu",
+        "ro.boot.hardware.revision": "MP1.0", "ro.boot.hardware.sku": "GXQ96",
+        "ro.boot.slot_suffix": "_a", "ro.boot.vbmeta.device_state": "unlocked",
+        "ro.build.version.release": "17",
+    }
+    for key, value in expected.items():
+        require(values.get(key) == value, f"ADB discovery {key} differs")
+    prefix = values.get("serial_sha256_prefix", "")
+    require(re.fullmatch(r"[0-9a-f]{12}", prefix) is not None,
+            "ADB discovery has no redacted serial hash")
+    return prefix
+
+
+def rootfs_mapping(path: Path, serial_prefix: str, candidate: dict) -> int:
+    rows = static.tsv(path)
+    for key, value in (("schema_version", "1"), ("target_id", TARGET_ID),
+                       ("partition_contract", "rootfs-userdata-only"),
+                       ("serial_sha256_prefix", serial_prefix),
+                       ("current_slot", "a"), ("rootfs_partlabel", "userdata")):
+        require(static.one(rows, key, 2)[1] == value, f"userdata map {key} differs")
+    partition = static.one(rows, "partition", 4)
+    require(partition[1] == "userdata" and partition[3] == "/dev/block/sda34" and
+            partition[2].isdigit() and int(partition[2]) > candidate["rootfs_image_bytes"],
+            "userdata map partition differs from reviewed mapping")
+    inventory = static.one(rows, "adb_inventory", 4)
+    inventory_path = pinned_path(inventory[1], OUT)
+    require(inventory_path.stat().st_size == int(inventory[2]) and
+            sha(inventory_path) == inventory[3], "map source ADB inventory differs")
+    values = key_values(inventory_path, {"target_id", "transport", "serial_sha256_prefix", "result"})
+    require(values.get("target_id") == TARGET_ID and values.get("transport") == "adb" and
+            values.get("serial_sha256_prefix") == serial_prefix and
+            values.get("result") == "ok", "map source ADB inventory identity differs")
+    return int(partition[2])
+
+
+def command(*args: str, timeout: int = 30) -> str:
+    try:
+        done = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Refusal(f"command unavailable or timed out: {args[0]}: {error}") from error
+    require(done.returncode == 0, f"{args[0]} command failed with exit {done.returncode}: {done.stderr.strip()}")
+    return done.stdout + done.stderr
+
+
+def attached_fastboot() -> str:
+    adb = command("adb", "devices", "-l")
+    adb_rows = [line for line in adb.splitlines() if line.strip() and not line.startswith("List of devices")]
+    fastboot = command("fastboot", "devices", "-l")
+    fastboot_rows = [line.split() for line in fastboot.splitlines() if line.strip()]
+    require(not adb_rows and len(fastboot_rows) == 1 and len(fastboot_rows[0]) >= 2 and
+            fastboot_rows[0][1] == "fastboot", "requires exactly one Fastboot device and no ADB device")
+    return fastboot_rows[0][0]
+
+
+def getvar(serial: str, name: str) -> str:
+    output = command("fastboot", "-s", serial, "getvar", name)
+    require("FAILED" not in output, f"Fastboot reported failure for {name}")
+    pattern = re.compile(rf"^(?:\(bootloader\)\s*)?{re.escape(name)}:\s*(.*?)\s*$")
+    values = [match.group(1) for line in output.splitlines() if (match := pattern.fullmatch(line.strip()))]
+    require(len(values) == 1 and bool(values[0]), f"Fastboot {name} is missing or ambiguous")
+    return values[0]
+
+
+def recovery() -> tuple[Path, Path]:
+    pins = [line.split("\t") for line in (TARGET / "recovery.pins").read_text().splitlines()
+            if line and not line.startswith("#")]
+    require(len(pins) == 2 and {row[0] for row in pins} == {"factory", "ota"},
+            "stock recovery pins differ")
+    result: dict[str, Path] = {}
+    for row in pins:
+        require(len(row) == 8 and row[1] == "CP3A.260905.009" and
+                re.fullmatch(r"[0-9a-f]{64}", row[5]) is not None and row[6].isdigit(),
+                "stock recovery pin is malformed")
+        path = TARGET / "recovery" / static.relative(row[3])
+        require(path.is_file() and not path.is_symlink() and
+                path.stat().st_size == int(row[6]) and sha(path) == row[5],
+                f"stock {row[0]} recovery artifact differs")
+        result[row[0]] = path
+    return result["factory"], result["ota"]
+
+
+def gates() -> str:
+    target = tomllib.loads((TARGET / "manifest.toml").read_text())
+    require(target.get("target_id") == TARGET_ID and
+            target.get("recovery_verified_utc") == "2026-09-30T01:02:38Z",
+            "target or tested stock restore differs")
+    values = target["gates"]
+    for key, expected in (("identity", "passed"), ("backup", "not-required-dev-device"),
+                          ("data_policy", "dev-device-no-user-data"),
+                          ("recovery_procedure", "tested"),
+                          ("per_run_confirmation", "required")):
+        require(values.get(key) == expected, f"target {key} gate differs")
+    require(values.get("image_compatibility") == "partial",
+            "target image compatibility gate changed; review this probe workflow")
+    return values["image_compatibility"]
+
+
+def live(candidate: dict, discovery: Path, rootfs_map: Path,
+         capacities: dict[str, int]) -> tuple[str, str, int]:
+    serial = attached_fastboot()
+    prefix = hashlib.sha256(serial.encode()).hexdigest()[:12]
+    require(discovery_prefix(discovery) == prefix, "live Fastboot serial lacks matching post-restore Android identity")
+    expected = {
+        "product": "tegu", "hw-revision": "MP1.0", "current-slot": "a",
+        "slot-count": "2", "unlocked": "yes", "secure": "yes",
+        "is-userspace": "no", "snapshot-update-status": "none",
+    }
+    for name, value in expected.items():
+        require(getvar(serial, name) == value, f"live Fastboot {name} differs from reviewed value")
+    variant = getvar(serial, "variant")
+    require(variant in ("GXQ96", "N/A", "NA", "unknown", "unavailable"),
+            "Fastboot variant differs from GXQ96 or reviewed unavailable values")
+    serialno = getvar(serial, "serialno")
+    require(serialno == serial, "Fastboot serialno differs from transport serial")
+    for partition in BOOT_PARTITIONS:
+        require(getvar(serial, f"has-slot:{partition}") == "yes",
+                f"{partition} is not an A/B partition")
+        for slot in ("a", "b"):
+            target = f"{partition}_{slot}"
+            require(getvar(serial, f"is-logical:{target}") == "no",
+                    f"{target} is not verified physical")
+            observed = int(getvar(serial, f"partition-size:{target}"), 0)
+            require(observed == capacities[partition], f"{target} capacity changed")
+    mapped_size = rootfs_mapping(rootfs_map, prefix, candidate)
+    require(getvar(serial, "has-slot:userdata") == "no" and
+            getvar(serial, "is-logical:userdata") == "no" and
+            getvar(serial, "partition-type:userdata") == "raw",
+            "live userdata is not verified unslotted physical storage")
+    require(int(getvar(serial, "partition-size:userdata"), 0) == mapped_size,
+            "live userdata capacity differs from targeted map")
+    return serial, prefix, mapped_size
+
+
+def preflight() -> tuple[dict, Path, str, str, Path]:
+    candidate, bundle, discovery, rootfs_map = read_candidate()
+    manifest = static.tsv(bundle / "boot-manifest.tsv")
+    capacities = {name: int(static.named(manifest, "partition_capacity", name, 3)[2])
+                  for name in BOOT_PARTITIONS}
+    compatibility = gates()
+    factory, ota = recovery()
+    serial, prefix, userdata_bytes = live(candidate, discovery, rootfs_map, capacities)
+    lines: list[str] = []
+
+    def emit(line: str) -> None:
+        lines.append(line)
+        print(line)
+
+    emit(f"transport=fastboot serial={serial} serial_sha256_prefix={prefix}")
+    emit("manufacturer=Google model=Pixel 9a product=tegu sku=GXQ96 hardware_revision=MP1.0")
+    emit("current_slot=a target_inactive_slot=b is_userspace=no unlocked=yes")
+    emit(f"static_manifest_sha256={candidate['manifest_sha256']} image_compatibility={compatibility}")
+    emit(f"recovery_factory={factory.name} sha256={sha(factory)}")
+    emit(f"recovery_ota={ota.name} sha256={sha(ota)}")
+    for name in BOOT_PARTITIONS:
+        row = static.named(manifest, "artifact", name, 6)
+        emit(f"plan=partition_target={name}_b input_image_sha256={row[4]} bytes={row[3]}")
+    emit(f"plan=partition_target=userdata input_image_sha256={candidate['rootfs_image_sha256']} "
+         f"bytes={candidate['rootfs_image_bytes']} live_capacity={userdata_bytes} separate_confirmation=required")
+    emit("plan=partition_target=none input_image_sha256=none operation=temporary-kernel-probe-only")
+    emit("preflight=passed-read-only bootable=false persistent_flash=not-authorized")
+    evidence_dir = OUT / "flash-static"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    transcript = evidence_dir / f"preflight-{stamp}-{os.getpid()}.txt"
+    with transcript.open("x") as stream:
+        stream.write("# Pixel 9a static route read-only preflight; serial redacted. Never commit.\n")
+        stream.write("\n".join(line.replace(serial, f"serial-sha256:{prefix}") for line in lines) + "\n")
+    print(f"transcript={transcript}")
+    return candidate, bundle, serial, prefix, factory
+
+
+def boot_temp() -> None:
+    _, bundle, serial, prefix, _ = preflight()
+    require(os.environ.get("FERRIX_PIXEL9A_NO_USER_DATA") == DATA_TOKEN,
+            "exact development-device data policy token is required for a temporary boot")
+    boot = bundle / "boot.img"
+    boot_hash = sha(boot)
+    phrase = f"CONFIRM PIXEL 9A STATIC TEMPORARY BOOT boot.img@{boot_hash[:12]}"
+    print("The next command sends this exact kernel-only image to the device; no partition or slot is changed.")
+    print("This probes kernel progress with the current stock init_boot/vendor_boot and does not validate the full Ferrix image set.")
+    print(f"Type exactly: {phrase}", flush=True)
+    entered = input("> ")
+    require(entered == phrase, "confirmation did not match; no device operation performed")
+    # Repeat every read-only device, capacity, image and recovery gate after
+    # confirmation, before sending any bytes to the bootloader.
+    _, checked_bundle, checked_serial, checked_prefix, _ = preflight()
+    require(checked_bundle == bundle and checked_serial == serial and
+            checked_prefix == prefix and sha(boot) == boot_hash,
+            "identity or boot image changed before temporary boot")
+    print(f"mutation=fastboot boot exact_serial={serial} partition_target=none input_image_sha256={boot_hash}", flush=True)
+    output = command("fastboot", "-s", serial, "boot", str(boot), timeout=180)
+    require("FAILED" not in output, "bootloader reported a temporary-boot failure")
+    transcript_dir = OUT / "flash-static"
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    transcript = transcript_dir / f"boot-temp-{stamp}-{os.getpid()}.txt"
+    redacted_output = output.replace(serial, "[redacted]").strip().replace("\n", "\\n")
+    with transcript.open("x") as stream:
+        stream.write(f"operation=pixel-9a-static-boot-temp\ntarget_id={TARGET_ID}\n"
+                     f"serial_sha256_prefix={prefix}\nboot_img_sha256={boot_hash}\n"
+                     f"result=temporary-boot-issued\noutput={redacted_output}\n")
+    print(f"result=temporary-boot-issued transcript={transcript}")
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or sys.argv[1] not in ("preflight", "boot-temp"):
+        print("usage: flash-static.py preflight|boot-temp", file=sys.stderr)
+        return 2
+    try:
+        if sys.argv[1] == "preflight":
+            preflight()
+        else:
+            boot_temp()
+    except (Refusal, static.Refusal, ValueError, EOFError) as error:
+        print(f"REFUSING pixel-9a static physical workflow: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
