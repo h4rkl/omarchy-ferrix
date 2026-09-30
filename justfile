@@ -81,6 +81,15 @@ pixel-9a-dt-inspect file:
 pixel-9a-dt-fixups file:
     @"{{root}}/tools/pixel-9a/dt-inspect.sh" --fixups "{{file}}"
 
+pixel-9a-dt-symbols file:
+    @"{{root}}/tools/pixel-9a/dt-inspect.sh" --symbols "{{file}}"
+
+pixel-9a-dt-symbol-probe base overlay:
+    @"{{root}}/tools/pixel-9a/dt-symbol-probe.sh" "{{base}}" "{{overlay}}"
+
+pixel-9a-dt-apply-probe base overlay:
+    @"{{root}}/tools/pixel-9a/dt-symbol-probe.sh" --base-dtb "{{base}}" "{{overlay}}"
+
 # Native-Linux-only, device-free Google downstream kernel workflow. Sync is a
 # large opt-in download; build uses Google's Kleaf/Bazel target and writes only
 # to ignored cache/output paths.

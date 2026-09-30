@@ -1,5 +1,20 @@
 # Status
 
+## 2026-10-01 (Pixel 9a device-tree compatibility probe; device-free)
+
+- The checked-in `pixel-9a-dt-symbol-probe` recompiled the prior native
+  kernel's preprocessed tegu DTS (SHA-256
+  `b09099ace1b253d4fdc180c3da8b1f75b2df27580b61537f716ac0446b281776`)
+  with `dtc -@`, producing a base DTB with 298 symbols. The verified stock
+  MP1.0 overlay has 113 external fixups; only 49 names exist in that native
+  base. `fdtoverlay` refused the combination with `FDT_ERR_NOTFOUND`.
+- As a positive control, the same checked-in offline workflow applied that
+  stock MP overlay to each of the four extracted stock base DTBs. All four
+  succeeded; the merged tree reports model `ZUMA PRO TEGU MP on ZUMA PRO`.
+  This confirms a source-tree mismatch beyond the original missing-symbol
+  diagnostic. The stock overlay was used only for ignored comparison output,
+  never for a Ferrix image. No phone command occurred.
+
 ## 2026-10-01 (Pixel 9a vendor boot layout correction; no new device load)
 
 - A further offline check found that the failed candidate's `dtbo.img` has

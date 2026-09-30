@@ -4,8 +4,8 @@ set -eu
 # Read-only Pixel 9a device-tree comparison. Inputs remain under ignored out/.
 root=$(CDPATH= cd -P -- "$(dirname -- "$0")/../.." && pwd)
 mode=summary
-if [ "${1:-}" = --fixups ]; then mode=fixups; shift; fi
-[ "$#" -eq 1 ] || { printf 'usage: tools/pixel-9a/dt-inspect.sh [--fixups] out/pixel-9a/FILE.dtb\n' >&2; exit 2; }
+case "${1:-}" in --fixups|--symbols) mode=${1#--}; shift ;; esac
+[ "$#" -eq 1 ] || { printf 'usage: tools/pixel-9a/dt-inspect.sh [--fixups|--symbols] out/pixel-9a/FILE.dtb\n' >&2; exit 2; }
 case "$1" in
 	"$root/out/pixel-9a/"*) file=$1 ;;
 	out/pixel-9a/*) file="$root/$1" ;;
@@ -22,6 +22,10 @@ command -v fdtget >/dev/null 2>&1 || { printf 'FAIL pixel-9a-dt-inspect: fdtget 
 fdtget -p "$file" / >/dev/null 2>&1 || { printf 'FAIL pixel-9a-dt-inspect: input is not a readable device tree\n' >&2; exit 1; }
 if [ "$mode" = fixups ]; then
 	fdtget -p "$file" /__fixups__
+	exit 0
+fi
+if [ "$mode" = symbols ]; then
+	fdtget -p "$file" /__symbols__
 	exit 0
 fi
 if command -v sha256sum >/dev/null 2>&1; then

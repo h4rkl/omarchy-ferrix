@@ -229,10 +229,14 @@ source revisions supply a 55-file,
 MP overlay has 113 external fixup labels. Each of the four stock base DTBs
 has 1,009 symbols; the old candidate base has none. A source-text comparison
 finds only 49 of those 113 labels in the selected native base DTS include
-closure. This label comparison is an offline port estimate, not a successful
-overlay application or evidence of hardware function. Use the checked-in
-`tools/pixel-9a/dt-inspect.sh` on ignored stock comparison files to repeat
-the DTB header, symbol, and fixup inventory.
+closure. A stronger offline test recompiled that native base with `dtc -@`:
+its 298 compiled symbols still include only 49 of the 113 required labels,
+and `fdtoverlay` then returned `FDT_ERR_NOTFOUND`. The same stock MP overlay
+applied to all four stock base DTBs and produced the expected MP model. This
+is a source compatibility result, not physical boot evidence. The checked-in
+`pixel-9a-dt-inspect`, `pixel-9a-dt-symbol-probe`, and
+`pixel-9a-dt-apply-probe` recipes reproduce the inspection and offline
+application checks from ignored extracted inputs.
 This diagnostic does not prove the bootloader applied that overlay during the
 temporary probe. Both composers now select only a future source-built
 `exynos/google/zumapro-tegu-mp.dtbo` and require an exact MP ID/revision DTBO
