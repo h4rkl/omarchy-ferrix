@@ -2,7 +2,7 @@
 set -eu
 
 # Read-only Pixel 9a device-tree comparison. Inputs remain under ignored out/.
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH= cd -P -- "$(dirname -- "$0")/../.." && pwd)
 mode=summary
 if [ "${1:-}" = --fixups ]; then mode=fixups; shift; fi
 [ "$#" -eq 1 ] || { printf 'usage: tools/pixel-9a/dt-inspect.sh [--fixups] out/pixel-9a/FILE.dtb\n' >&2; exit 2; }
@@ -13,6 +13,11 @@ case "$1" in
 esac
 case "$file" in *'/../'*|*'/./'*|*'/..'|*'/.' ) printf 'FAIL pixel-9a-dt-inspect: unsafe input path\n' >&2; exit 1 ;; esac
 [ -f "$file" ] && [ ! -L "$file" ] || { printf 'FAIL pixel-9a-dt-inspect: input is missing or a symlink\n' >&2; exit 1; }
+physical_file="$(CDPATH= cd -P -- "$(dirname -- "$file")" && pwd)/$(basename -- "$file")"
+case "$physical_file" in
+	"$root/out/pixel-9a/"*) ;;
+	*) printf 'FAIL pixel-9a-dt-inspect: input resolves outside out/pixel-9a/\n' >&2; exit 1 ;;
+esac
 command -v fdtget >/dev/null 2>&1 || { printf 'FAIL pixel-9a-dt-inspect: fdtget is required\n' >&2; exit 1; }
 fdtget -p "$file" / >/dev/null 2>&1 || { printf 'FAIL pixel-9a-dt-inspect: input is not a readable device tree\n' >&2; exit 1; }
 if [ "$mode" = fixups ]; then
