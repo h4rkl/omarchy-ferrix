@@ -266,6 +266,10 @@ with tempfile.TemporaryDirectory(prefix="pixel-9a-static-observe-test.") as temp
         assert "differs from the pinned boot image kernel" in str(error)
     else:
         raise AssertionError("stock kernel version was accepted as the temporary image")
+    mismatch = next(evidence_dir.glob("capture-mismatch-*.txt"))
+    assert "result=kernel-banner-mismatch" in mismatch.read_text()
+    assert "observed_banner_sha256=" in mismatch.read_text()
+    assert serial not in mismatch.read_text()
     workflow.command = adb_capture_command
     observed_properties["ro.boot.hardware.revision"] = "MP2.0"
     try:

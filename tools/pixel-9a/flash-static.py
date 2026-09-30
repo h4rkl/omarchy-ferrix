@@ -459,8 +459,24 @@ def capture_temp() -> None:
         observed = command("adb", "-s", serial, "shell", "getprop", property_name).strip()
         require(observed == value, f"post-probe ADB {property_name} differs from reviewed identity")
     version = command("adb", "-s", serial, "shell", "cat", "/proc/version").strip()
-    require("\n" not in version and version == image_kernel_banner(boot),
-            "live /proc/version differs from the pinned boot image kernel")
+    require("\n" not in version and 0 < len(version) <= 400,
+            "live /proc/version is missing or malformed")
+    expected_version = image_kernel_banner(boot)
+    if version != expected_version:
+        require(sha(boot) == boot_hash and sha(transcript) == transcript_hash,
+                "image or boot transcript changed while collecting mismatch evidence")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        mismatch = evidence_dir / f"capture-mismatch-{stamp}-{os.getpid()}.txt"
+        with mismatch.open("x", encoding="utf-8") as stream:
+            stream.write(f"capture_source=adb-procfs-read-only\n"
+                         f"target_id={TARGET_ID}\nserial_sha256_prefix={prefix}\n"
+                         f"boot_img_sha256={boot_hash}\n"
+                         f"boot_transcript_sha256={transcript_hash}\n"
+                         f"expected_banner_sha256={hashlib.sha256(expected_version.encode()).hexdigest()}\n"
+                         f"observed_banner_sha256={hashlib.sha256(version.encode()).hexdigest()}\n"
+                         "result=kernel-banner-mismatch\n")
+        raise Refusal(f"live /proc/version differs from the pinned boot image kernel; "
+                      f"diagnostic={mismatch}")
     try:
         model = command("adb", "-s", serial, "shell", "cat", "/proc/device-tree/model").strip("\x00\r\n ")
     except Refusal as error:
