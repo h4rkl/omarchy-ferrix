@@ -147,10 +147,14 @@ Next acquisition/layout review, before enabling any allocation change:
 
 The owner approved the static-only and first-recovery-test tooling changes
 on 2026-09-30. This does not authorize a device write. The source-only
-`native-static-artifact-contract.toml` now declares the independent eight
-partition, built-in-driver and AVB requirements. Its composer and flash
-adapter remain to be implemented; the existing ten-partition route cannot
-consume it.
+`native-static-artifact-contract.toml` declares the independent eight
+partition, built-in-driver and AVB requirements. A separate device-free
+`static-boot.py` composer now validates those inputs and has offline gate
+tests; native composition and actual AVB verification remain pending. Its
+flash adapter remains to be implemented, and the existing ten-partition
+route cannot consume its contract. The host-only Python workflow fits the
+pinned Python Android image utilities and uses `tomllib` to validate their
+variable-width manifest handoffs before invoking them.
 
 Read-only inspection of deba at source commit
 `26fc9f9beb1d1faf041a8d4df71fe6142353c133` found empty selected initfs/vendor/
@@ -185,6 +189,14 @@ Proposed resolution instead of reallocating shared `super`:
   `userdata`; writing it is a shared-data wipe, not a dual-boot installation.
   Recovering stock would require the accepted pinned factory restore. Exact
   live mapping and size evidence and explicit per-run approval remain required.
+
+The owner chose pinned factory restore as the stock recovery route for this
+storage plan on 2026-09-30. That choice does not authorize writing `userdata`
+or any other partition; the separate physical preflight and typed per-run
+confirmation still apply. The fresh ordinary-bootloader static-capacity
+handoff at `2026-09-30T01:44:54Z` follows the tested stock restore and covers
+all eight static A/B pairs. It does not establish the shared `userdata`
+mapping or upgrade the broader partial inventory.
 
 The other proposal is an explicit first-stock-recovery-test workflow. Normal
 restore and Ferrix gates must not silently admit an untested recovery route.

@@ -52,6 +52,14 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
    descriptors from the final image bytes; external or stock AVB metadata is
    rejected. It still emits
    `composed-not-booted` / `bootable=false`.
+   The separate static-only route takes a fresh ordinary-bootloader
+   `pixel-9a-partition-capacity-static` handoff for eight physical boot
+   partitions. Its device-free `pixel-9a-static-boot-check/build/verify`
+   workflow requires a current source-built kernel, matching boot inputs,
+   built-in early drivers, no selected loadable modules, and fresh AVB
+   descriptors. It cannot consume the ten-partition split handoff and cannot
+   authorize a device write. The rootfs `userdata` mapping and static flash
+   adapter remain separate gates.
 11. `just pixel-9a-partition-inventory` `[ro]`; when the exact Android
     transport is available, also run `just pixel-9a-partition-capacity` `[ro]`
     to record the ten static/dynamic partition capacities used by the
@@ -91,6 +99,7 @@ Offline test recipes that must pass before any hardware session:
 `just pixel-9a-firmware-test`, `just pixel-9a-rootfs-test`,
 `just pixel-9a-enter-fastboot-test`,
 `just pixel-9a-boot-radio-test`, `just pixel-9a-radio-split-test`,
+`just pixel-9a-static-boot-test`,
 `just pixel-9a-artifacts-test`, `just pixel-9a-flash-test`,
 `just pixel-9a-flash-radio-test`,
 `just pixel-9a-partition-capacity-test`, and `just pixel-9a-radios-test`.

@@ -56,6 +56,7 @@ sha256_prefix() {
 
 mkdir -p "$out"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
+handoff_observed_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 transcript="$out/partition-capacity-$stamp.txt"
 [ "$mode" != diagnose-fastboot ] || transcript="$out/partition-capacity-diagnostic-$stamp-$$.txt"
 handoff="$out/partition-capacities-$stamp.tsv"
@@ -408,6 +409,7 @@ if [ "$adb_count" -eq 0 ] && [ "$fastboot_count" -eq 1 ]; then
 
 	{
 		printf '# source=Fastboot getvar partition-size:<partition>_<slot>; values are bytes (hex or decimal)\n'
+		printf '# observed_utc=%s\n' "$handoff_observed_utc"
 		printf '# inventory_completeness=partial (Fastboot exposes no guest /proc inventory; this handoff never upgrades that gate)\n'
 		printf '# exact-target=%s product=%s revision=%s sku=%s current_slot=%s is_userspace=%s\n' "$expected_target_id" "$product" "$revision" "$expected_sku" "$slot" "$userspace"
 		printf '# observed_variant=%s sku_source=%s\n' "$sku" "$pixel9a_sku_source"

@@ -218,6 +218,20 @@ pixel-9a-radio-split-build:
 pixel-9a-radio-split-test:
     @sh "{{root}}/tools/pixel-9a/tests/radio-split-workflow.sh"
 
+# Independent, device-free eight-static-partition route. A fresh post-restore
+# exact-target capacity handoff and current native source manifests are required.
+pixel-9a-static-boot-check:
+    @"{{root}}/tools/pixel-9a/static-boot.py" preflight
+
+pixel-9a-static-boot-build:
+    @"{{root}}/tools/pixel-9a/static-boot.py" build
+
+pixel-9a-static-boot-verify:
+    @"{{root}}/tools/pixel-9a/static-boot.py" verify
+
+pixel-9a-static-boot-test:
+    @python3 "{{root}}/tools/pixel-9a/tests/static-boot-contract.py"
+
 # Native Linux/postmarketOS Pixel 9a rootfs substrate. These recipes are
 # device-free; build refuses missing kernel/product/firmware inputs and never
 # invokes a boot or flash route.

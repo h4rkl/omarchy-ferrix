@@ -1,5 +1,40 @@
 # Status
 
+## 2026-09-30 (fresh Pixel 9a static capacities; native static composer in progress)
+
+- **Physical target and transport:** One owner-approved run of
+  `just pixel-9a-enter-fastboot --confirm-enter` rechecked the exact Pixel 9a /
+  `tegu` / `GXQ96` / `MP1.0`, active slot A, and entered ordinary bootloader
+  Fastboot at about 01:44 UTC. It changed no partition, slot, bootloader
+  state, or user data. The phone remains in Fastboot; no Ferrix image has
+  been booted or flashed.
+- **Fresh static capacities:** `just pixel-9a-partition-capacity-static`
+  passed at `2026-09-30T01:44:54Z`, after the verified stock restore. Both
+  slots independently reported the same positive sizes for the eight static
+  partitions: boot 64 MiB, init_boot 8 MiB, vendor_boot 64 MiB,
+  vendor_kernel_boot 64 MiB, dtbo 16 MiB, and each vbmeta partition 64 KiB.
+  The schema-2 handoff is
+  `out/pixel-9a/partition-capacities-static-20260930T014454Z-48820.tsv`
+  (SHA-256 `9e7c7406b77b03c9cc0dbcc66d7f4682b9149a041a355c468a99454687b2d66d`).
+  Its read-only transcript is
+  `out/pixel-9a/partition-capacity-static-20260930T014454Z-48820.txt`
+  (SHA-256 `f99498bbdfd9fe8100b98b9d1430281c1232d33232293f4d8417dd85fa214aa3`).
+  The ignored handoff was copied to the authorized native builder. The
+  subsequent Fastboot inventory remains `partial` and does not establish a
+  rootfs mapping (`out/pixel-9a/partition-inventory-20260930T014504Z.txt`,
+  SHA-256 `08b9eda6bd5a789955d41c2723853f45fbf31135c7683211f4b223b2d0790634`).
+- **Build status:** A fresh source-pinned radio kernel rebuild is running on
+  native Linux x86_64 under a new ignored output directory. No new kernel
+  manifest, boot-input handoff, or static image bundle has been validated yet.
+  The separate static composer and capacity/manifest gate have offline tests;
+  actual native composition and AVB verification remain to be run. Its
+  output declares `composed-not-booted` and `bootable=false`.
+- **Recovery/storage decision:** The owner chose the tested pinned factory
+  restore as the stock recovery path if Ferrix later uses shared `userdata`.
+  This is a storage-plan choice, not authorization for a `userdata` wipe or
+  any physical write. Exact live mapping, capacity, image checks, and a
+  separate per-run confirmation remain required.
+
 ## 2026-09-30 (post-restore Pixel 9a admission and build gate refresh)
 
 - **Exact physical target:** Read-only `just device-discover`, `device-match`,

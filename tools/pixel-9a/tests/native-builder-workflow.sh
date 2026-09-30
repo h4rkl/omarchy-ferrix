@@ -273,6 +273,24 @@ if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
   exit 1
 fi
 
+: >"$log"
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" \
+  FERRIX_PIXEL9A_STATIC_PARTITION_SIZES="$root/out/pixel-9a/partition-capacities-static-latest.tsv" \
+  FERRIX_PIXEL9A_STATIC_BOOT_OUT="$root/out/pixel-9a/images/tegu-wwan-static-test" \
+  "$script" run static-boot preflight >/dev/null
+grep -F -- 'tools/pixel-9a/static-boot.py preflight' "$log" >/dev/null || {
+  echo 'builder did not dispatch the separate static composer' >&2
+  exit 1
+}
+grep -Fx -- 'FERRIX_PIXEL9A_STATIC_PARTITION_SIZES=/workspace/out/pixel-9a/partition-capacities-static-latest.tsv' "$env_log" >/dev/null || {
+  echo 'builder dropped the static capacity handoff' >&2
+  exit 1
+}
+grep -Fx -- 'FERRIX_PIXEL9A_STATIC_BOOT_OUT=/workspace/out/pixel-9a/images/tegu-wwan-static-test' "$env_log" >/dev/null || {
+  echo 'builder dropped the static output path' >&2
+  exit 1
+}
+
 if PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" "$script" run flash preflight >/dev/null 2>&1; then
   echo 'builder accepted a device-facing workflow' >&2
   exit 1
