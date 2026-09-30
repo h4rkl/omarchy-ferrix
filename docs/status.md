@@ -1,5 +1,32 @@
 # Status
 
+## 2026-09-30 (authorized stock restore completed; Android verification pending)
+
+- **Exact physical target:** `google-pixel-9a-tegu-gxq96-mp1-0`. After
+  explicit owner approval of the pinned stock restore and development-device
+  data policy, `just pixel-9a-factory-restore --confirm-first-test` completed
+  with exit 0 and `result=factory-restore-complete`. All three confirmation
+  phrases were entered individually at their prompts. Ignored evidence:
+  `out/pixel-9a/restore/20260930T002730Z.txt`.
+- **Observed writes:** stock bootloader and radio packs were installed;
+  post-reboot versions matched `tegu-17.0-15819938` and
+  `g5300t-260604-260807-B-16036236`. The pinned `CP3A.260905.009`
+  update wrote stock slot-A boot images and the shared `super` image,
+  erased userdata/metadata, selected the already-current slot A, and issued
+  the final reboot. These are stock vendor-update actions, not Ferrix's
+  firmware/active-slot-preserving write contract. No relock occurred.
+- **Verification remains pending:** read-only discovery at
+  `2026-09-30T00:35:32Z` returned exit 2 / `result=no-device`, with zero
+  ADB and Fastboot devices. Ignored evidence:
+  `out/pixel-9a/discovery-20260930T003532Z.txt`. Device operations stopped
+  pending owner setup/USB-debugging authorization. No Android boot or build
+  has yet been observed after the restore; `recovery_procedure` remains
+  `documented-not-tested`, not promoted from command success alone.
+- The workflow removed its temporary extracted images; the verified
+  recovery archives and redacted transcript remain available. No Ferrix
+  image was flashed and no capability was promoted. Previous partition
+  capacity evidence must be refreshed after this stock layout rewrite.
+
 ## 2026-09-30 (approved recovery bootstrap and static capacity handoff)
 
 - **Owner approval:** implement the separate static-only installation

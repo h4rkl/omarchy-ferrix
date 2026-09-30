@@ -196,7 +196,13 @@ build is required before promoting recovery evidence. The target's general
 Ferrix `image_compatibility=partial` is not evidence about the official stock
 archive. The explicit `--preflight-first-test` / `--confirm-first-test` modes
 are now implemented and stub-tested. The live read-only preflight passed on
-2026-09-30; no restore execution or gate promotion is implied. Normal restore
+2026-09-30. The subsequent owner-authorized execution completed with exit 0
+and `factory-restore-complete` (ignored transcript
+`out/pixel-9a/restore/20260930T002730Z.txt`). Fresh discovery returned
+`no-device`; Android setup/USB authorization and same-device stock-build
+verification are still pending, so the recovery gate is not promoted.
+The stock vendor update rewrote shared `super` and wiped userdata/metadata;
+all earlier live-capacity evidence must be refreshed. Normal restore
 still requires its existing tested-recovery gate. First-test mode always
 uses the full wipe sequence and adds a separate risk acknowledgement before
 any mutation.

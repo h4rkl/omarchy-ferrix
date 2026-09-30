@@ -5,7 +5,18 @@ identified device. It is not a claim that Ferrix Linux boots on this phone.
 Ferrix product code remains target-neutral; the capability matrix is
 conservatively `unsupported` until target-specific Linux evidence exists.
 
-Identity was established by the checked-in read-only workflow
+The owner-authorized first stock restore completed on 2026-09-30 with
+`result=factory-restore-complete` and exit 0; ignored transcript
+`out/pixel-9a/restore/20260930T002730Z.txt`. Post-stage checks observed
+bootloader `tegu-17.0-15819938` and baseband
+`g5300t-260604-260807-B-16036236`. The pinned stock update wrote slot-A
+boot images and shared `super`, selected the already-current slot A, wiped
+userdata/metadata, and requested reboot without relocking. Fresh discovery
+returned `no-device`; Android boot/build verification awaits owner setup and
+USB-debugging authorization. Recovery remains `documented-not-tested` until
+that verification succeeds. Earlier partition capacities are now historical.
+
+Initial identity was established by the checked-in read-only workflow
 `just pixel-9a-discover`:
 
 | Field | Observed value |
@@ -130,7 +141,8 @@ verified backup. Before any destructive or boot-state mutation, the owner
 must explicitly authorize the session policy with
 `FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data`
 and answer the workflow's exact per-run confirmation prompts. The checked-in
-stock recovery route remains untested until that recovery gate is exercised.
+stock recovery command has completed, but its post-restore Android evidence
+is still pending.
 
 ## Recovery files
 
@@ -197,7 +209,8 @@ fails.
 
 This gated workflow completed successfully on 2026-09-27 UTC. Post-unlock
 Fastboot discovery reported the exact device as `unlocked=yes`; no factory
-restore or slot change has been run.
+restore or slot change had been run at that point. The later 2026-09-30
+stock restore is recorded above.
 
 ## Development Fastboot entry
 
@@ -251,8 +264,10 @@ device was locked during initial discovery and is now unlocked; the OTA route
 remains preferred while stock recovery is intact.
 
 Both stock recovery routes now have checked-in, target-scoped workflows.
-Both are stub-tested offline (`just pixel-9a-tools-test`) and have **not**
-been run against the physical device.
+Both are stub-tested offline (`just pixel-9a-tools-test`). The first-test
+factory workflow completed on the physical device on 2026-09-30; its
+post-restore Android verification is pending. OTA sideload remains untested
+on hardware.
 
 For an OTA sideload, `just pixel-9a-sideload-ota --preflight` re-hashes the
 pinned full OTA and factory archives, accepts exactly one ADB device in
@@ -271,10 +286,12 @@ bootloader-mode Fastboot device (`--from-adb` adds a gated
 archive members, requires two typed confirmations naming the wipe
 (`--keep-data` omits `-w`), stops if the bootloader or baseband version does
 not match the archive requirement after each stage, and never issues lock,
-erase, format, slot, or oem commands. Only serial-redacted transcripts remain
+standalone erase, format, slot, or oem commands. The vendor update itself
+can select a slot, write shared `super`, and erase userdata/metadata, as
+observed in the approved first test. Only serial-redacted transcripts remain
 under `out/pixel-9a/{sideload,restore}/`. Do not run the vendor script
-directly; this repository has not yet run a factory restore and does not
-claim a tested restore path.
+directly. Command completion alone does not establish a tested restore path;
+the fresh same-device Android verification is still required.
 
 The read-only factory preflight passed on `2026-09-29T21:11:49Z`: both pinned
 official recovery archives, the offline factory inventory, the required

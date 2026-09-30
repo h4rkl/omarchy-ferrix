@@ -353,12 +353,16 @@ firmware untouched. Execution adds the typed phrase
 the two normal restore-stage phrases. Do not use `--keep-data`. Neither the
 preflight nor command completion promotes the gate: require the successful
 restore transcript and fresh same-device Android discovery of the accepted
-pinned build. The first-test implementation is stub-tested and its physical
-read-only preflight passed; no physical execution has been recorded yet.
+pinned build. The owner-authorized first test completed on hardware on
+2026-09-30 with exit 0 / `factory-restore-complete`; ignored transcript
+`out/pixel-9a/restore/20260930T002730Z.txt`. Subsequent discovery returned
+`no-device`, so device operations paused for owner setup/USB authorization.
+The recovery gate remains unpromoted pending fresh same-device Android
+discovery. Do not repeat the destructive test merely to obtain that discovery.
 
-**Status:** both workflows Implemented, Stub-tested only (`just
-pixel-9a-tools-test`: sideload 49 checks, factory restore 69 checks). Neither
-has run on hardware; `manifest.toml` records
+**Status:** both workflows Implemented and stub-tested. Factory restoration
+has completed on hardware; OTA sideload remains stub-tested only. Pending
+post-restore Android verification, `manifest.toml` still records
 `recovery_procedure = "documented-not-tested"`.
 
 Choose by device state:
@@ -390,7 +394,11 @@ Choose by device state:
   both end `(KEEP USER DATA)` and `-w` is omitted. After each bootloader/radio
   flash it re-reads `version-bootloader`/`version-baseband` and stops with
   `REFUSING:` on mismatch; the phone stays in Fastboot and re-running is safe.
-  Never issues lock, erase, format, slot, or oem. Transcript in
+  Never issues standalone lock, erase, format, slot, or oem commands.
+  The vendor `-w update` itself selects a slot, writes shared `super`, and
+  erases userdata/metadata; those effects were observed in the approved
+  first test and are not allowed by Ferrix's separate preserving contract.
+  Transcript in
   `out/pixel-9a/restore/`.
 - After either route, run `just pixel-9a-discover` and record the observed
   build, slot, and bootloader state (redacted) as recovery evidence. Only
