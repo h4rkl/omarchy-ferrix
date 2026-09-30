@@ -153,15 +153,17 @@ on 2026-09-30. This does not authorize a device write. The source-only
 `native-static-artifact-contract.toml` declares the independent eight
 partition, built-in-driver and AVB requirements. A separate device-free
 `static-boot.py` composer now validates those inputs and has offline gate
-tests. Native composition and an independent AVB payload verifier passed on
-deba on 2026-09-30; the ignored static bundle manifest has SHA-256
+tests. An earlier native composition and independent AVB payload verifier
+passed on deba on 2026-09-30; that historical bundle manifest has SHA-256
 `95b5bcf20f74b83eb00f4159f1a69b6b9e31f0ea143953f6b0f4640bb4ebd78a`.
 It remains `composed-not-booted` / `bootable=false`. A checked-in static
 candidate and `flash-static.py` adapter now perform strict read-only physical
 admission and a separately confirmed kernel-only `fastboot boot` probe.
-Read-only admission passed on the exact device in ordinary Fastboot on slot A.
-The owner approved one temporary probe; a separate persistent static install
-adapter is now offline-tested for inactive slot B boot images, separately
+Read-only admission passed on the exact device in ordinary Fastboot on slot A
+for the later fresh candidate. Its kernel-only temporary boot command was
+accepted, but post-probe Android reported a different kernel banner. That
+candidate is blocked as `probe-unobserved`. A separate persistent static
+install adapter is now offline-tested for inactive slot B boot images, separately
 confirmed shared `userdata`, and later activation. It refuses the current
 `image_compatibility=partial` target gate and requires matching observed
 temporary-boot evidence. No physical static write or slot selection was run;
@@ -184,14 +186,21 @@ write. A reported successful write is still not partition readback proof.
 An offline-tested `observe-temp` mode requires the exact temporary-boot
 transcript, same-device identity, image hash, and a reviewed tegu kernel
 capture containing the complete kernel banner from the pinned boot image.
-An offline-tested read-only `capture-temp` mode can collect `/proc/version`
-and the device-tree model if the probe reaches Android ADB on the same
-device. That procfs snapshot does not exclude earlier kernel errors; the
-operator must also attest to no observed hang or reboot loop. The record is
-limited to kernel progress;
-there is no physical observation yet, and the optional transfer-verification
-invocation that omitted the named output path stopped the approved probe
-before any device action.
+The read-only `capture-temp` mode compares live `/proc/version` with the
+pinned image after exact Android identity checks. It saves a hash-bound
+negative result on mismatch; Android denied the device-tree model on the
+2026-09-30 physical run. A matching version without a device-tree model is
+partial evidence and cannot pass `observe-temp`. A matching full procfs
+snapshot would still not exclude earlier kernel errors; the operator must
+also attest to no observed hang or reboot loop. No Ferrix kernel progress
+was observed in this probe. The earlier probe of another candidate had
+stopped before device action because its optional transfer check omitted the
+named output path; it is separate historical evidence.
+The later read-only `postprobe-diagnose` workflow found stock Android's
+bootloader reason `watchdog,apc,early` and system reason `watchdog` after the
+phone returned. ADB could not list console pstore. The boot reason supports
+investigating an early timeout; it cannot identify the failed component or
+establish that the candidate kernel ran.
 
 Read-only inspection of deba at source commit
 `26fc9f9beb1d1faf041a8d4df71fe6142353c133` found empty selected initfs/vendor/

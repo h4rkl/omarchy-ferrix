@@ -49,6 +49,11 @@ Its one temporary probe used stock `init_boot` and `vendor_boot`. The
 post-probe Android `/proc/version` differed from the candidate's kernel
 banner, so the candidate is now `probe-unobserved` and must not be loaded
 again without a new build and compatibility investigation.
+The read-only `just pixel-9a-postprobe-diagnose` workflow checks exact Android
+identity and records boot-reason properties and bounded console pstore summaries
+under ignored `out/pixel-9a/postprobe/`. After this probe, Android reported a
+watchdog reboot; ADB could not list console pstore. These values do not show
+which component failed or prove a Ferrix kernel boot.
 
 For each new physical loading attempt, rebuild the kernel, product, rootfs,
 boot inputs, and static image bundle on native deba from the reviewed commit

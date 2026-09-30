@@ -339,6 +339,10 @@ pixel-9a-flash-static-boot-temp:
 pixel-9a-flash-static-capture-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" capture-temp
 
+# Read-only stock Android boot reasons and bounded pstore summary after a probe.
+pixel-9a-postprobe-diagnose:
+    @python3 "{{root}}/tools/pixel-9a/postprobe-diagnose.py"
+
 # Bind a reviewed kernel capture to this exact static boot transcript.
 pixel-9a-flash-static-observe-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" observe-temp

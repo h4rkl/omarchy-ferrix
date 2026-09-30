@@ -26,6 +26,16 @@
   The one-time rootfs password file was deleted from the builder. A new
   source-bound build and compatibility investigation are required before
   another loading attempt; `image_compatibility=partial` remains unchanged.
+- A checked-in, read-only exact-target follow-up queried only boot-reason
+  properties and console pstore availability. After the phone returned to
+  stock Android, `ro.boot.bootreason=watchdog,apc,early` and
+  `sys.boot.reason=watchdog`; console pstore listing was unavailable to ADB.
+  The ignored, serial-redacted transcript has SHA-256
+  `8d2c8c793773c7696bb738308966af3127fce036568de43024ecd322f987a835`.
+  [AOSP's boot-reason specification](https://source.android.com/docs/core/architecture/bootloader/boot-reason)
+  explains the bootloader and system properties. The watchdog reason is
+  consistent with the return after this probe, but does not identify the
+  failed component or prove that the candidate kernel reached Linux.
 
 ## 2026-10-01 (fresh Pixel 9a static bundle and Fastbootd return)
 

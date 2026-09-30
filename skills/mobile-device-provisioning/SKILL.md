@@ -118,6 +118,10 @@ typed phrase, `[linux]` native Linux x86_64 host only, `[opt-in]` needs a
     observation. Stop on a failed gate, bootloader refusal, hang, or loop.
     A temporary boot command or observation alone is not persistent flash
     authorization or evidence of a Ferrix Linux userspace boot.
+    If the phone returns to stock Android after an unobserved probe,
+    `just pixel-9a-postprobe-diagnose` `[ro]` records exact-device boot-reason
+    properties and bounded console pstore summaries without raw log content.
+    Treat a watchdog reason as a diagnostic clue, not candidate boot proof.
     When a later review independently upgrades the exact static image
     compatibility gate, `just pixel-9a-install-static-check` `[ro]` must pass
     with `FERRIX_PIXEL9A_STATIC_TEMP_BOOT_EVIDENCE` and
