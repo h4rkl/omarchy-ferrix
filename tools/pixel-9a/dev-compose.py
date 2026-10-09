@@ -455,7 +455,7 @@ ANDROID_FORBIDDEN_PACKAGES = ("waydroid-nftrules",)
 DEFAULT_ANDROID_ROOTFS_MIB = 8192
 
 
-def install_firmware(image, work, firmware_dir, allowlist):
+def install_firmware(image, work, firmware_dir, allowlist, gate_allowlist):
     """Copy the verified firmware stage (tools/pixel-9a/firmware.sh output) into
     the rootfs, so allow-list additions reach an image without rebuilding the
     base rootfs. Every row is size- and hash-checked against the stage manifest
@@ -491,6 +491,9 @@ def install_firmware(image, work, firmware_dir, allowlist):
         editor.put_file(source, "/" + runtime, 0o644)
         rows.append(f"firmware\t{controller}\t{runtime}\t{digest}")
     editor.put_file(manifest, "/usr/share/ferrix/pixel-9a/firmware-manifest.tsv", 0o644)
+    # ferrix-radio-firmware rejects manifest rows whose runtime path is not in
+    # its reviewed allowlist, so the two files must ship together.
+    editor.put_file(gate_allowlist, "/usr/share/ferrix/pixel-9a/firmware-allowlist.tsv", 0o644)
     editor.commit()
     return rows
 
@@ -798,7 +801,8 @@ def main():
         firmware_rows = ["firmware\tbase-rootfs"]
         if args.firmware_dir is not None:
             firmware_rows = install_firmware(rootfs, work, args.firmware_dir,
-                                             args.target_dir / "firmware-stage-allowlist.tsv")
+                                             args.target_dir / "firmware-stage-allowlist.tsv",
+                                             package / "firmware-allowlist.tsv")
         if android_inputs is not None:
             android_rows = stage_android(rootfs, work, repo, args.target_dir, android_inputs,
                                          args.rootfs_size_mib)

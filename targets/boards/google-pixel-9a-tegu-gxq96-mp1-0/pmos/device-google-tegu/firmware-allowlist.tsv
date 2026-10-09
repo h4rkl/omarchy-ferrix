@@ -16,3 +16,8 @@ bcm4383	lib/firmware/bcmdhd_txcap.blob_4383_a3	1
 bluetooth-broadcom	lib/firmware/brcm/BCM.hcd	1
 modem-s5300	lib/firmware/carrierconfig	1
 modem-s5300	lib/firmware/uecapconfig	1
+# Mali CSF firmware (gpu-mali in firmware-stage-allowlist.tsv). Not a radio
+# input, so not required by this gate; listed so the verified manifest may
+# carry it.
+gpu-mali	lib/firmware/mali_csffw-r52p0.bin	0
+gpu-mali	lib/firmware/mali_csffw.bin	0
