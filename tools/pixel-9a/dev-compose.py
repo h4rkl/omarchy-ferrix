@@ -455,6 +455,44 @@ ANDROID_FORBIDDEN_PACKAGES = ("waydroid-nftrules",)
 DEFAULT_ANDROID_ROOTFS_MIB = 8192
 
 
+def install_firmware(image, work, firmware_dir, allowlist):
+    """Copy the verified firmware stage (tools/pixel-9a/firmware.sh output) into
+    the rootfs, so allow-list additions reach an image without rebuilding the
+    base rootfs. Every row is size- and hash-checked against the stage manifest
+    and must name a runtime path the target allowlist permits."""
+    manifest = firmware_dir / "firmware-manifest.tsv"
+    if manifest.is_symlink() or not manifest.is_file():
+        die(f"firmware stage manifest missing: {manifest}")
+    allowed = set()
+    for line in allowlist.read_text().splitlines():
+        fields = line.split("\t")
+        if line.strip() and not line.lstrip().startswith("#") and len(fields) >= 4:
+            allowed.add(fields[3])
+    editor = RootfsEditor(image, work)
+    rows = []
+    for line in manifest.read_text().splitlines():
+        fields = line.split("\t")
+        if fields[0] != "firmware":
+            continue
+        if len(fields) != 7:
+            die(f"malformed firmware manifest row: {line}")
+        _, controller, _, _, runtime, size, digest = fields
+        if runtime.startswith("/") or ".." in runtime.split("/") or not runtime.startswith("lib/firmware/"):
+            die(f"unsafe firmware runtime path: {runtime}")
+        if runtime not in allowed and not any(runtime.startswith(base + "/") for base in allowed):
+            die(f"firmware runtime path is not allow-listed: {runtime}")
+        source = firmware_dir / runtime
+        if source.is_symlink() or not source.is_file():
+            die(f"staged firmware file missing: {source}")
+        if str(source.stat().st_size) != size or sha256(source) != digest:
+            die(f"staged firmware does not match its manifest: {source}")
+        editor.put_file(source, "/" + runtime, 0o644)
+        rows.append(f"firmware\t{controller}\t{runtime}\t{digest}")
+    editor.put_file(manifest, "/usr/share/ferrix/pixel-9a/firmware-manifest.tsv", 0o644)
+    editor.commit()
+    return rows
+
+
 def read_pins(path):
     """KEY=value pins (never sourced as shell); the first value wins."""
     pins = {}
@@ -645,6 +683,9 @@ def main():
                                          repo / "out/android/fulguris" / fulguris["FULGURIS_VERSION"]
                                          / fulguris["FULGURIS_ASSET"])),
                         help="verified tools/android/fulguris-fetch.sh output")
+    parser.add_argument("--firmware-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_FIRMWARE_DIR"),
+                        help="verified firmware stage (firmware.sh stage output) to install "
+                             "over the base rootfs firmware")
     parser.add_argument("--rootfs-size-mib", type=int,
                         default=int(env("FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB", "0") or 0),
                         help=f"grow the rootfs image to this size (--android default "
@@ -752,6 +793,10 @@ def main():
         install_modules(rootfs, modules, release)
         integrated = integrate_rootfs(rootfs, work, package, args.target_dir / "dev/profile.toml",
                                       args.product_dir, reboot_helper)
+        firmware_rows = ["firmware\tbase-rootfs"]
+        if args.firmware_dir is not None:
+            firmware_rows = install_firmware(rootfs, work, args.firmware_dir,
+                                             args.target_dir / "firmware-stage-allowlist.tsv")
         if android_inputs is not None:
             android_rows = stage_android(rootfs, work, repo, args.target_dir, android_inputs,
                                          args.rootfs_size_mib)
@@ -785,7 +830,7 @@ def main():
             f"rootfs_integrated\t{len(integrated)}",
             f"input\tvendor_cmdline\t{cmdline}",
             f"input\tvendor_bootconfig\t{bootconfig}\t{sha256(bootconfig)}",
-        ] + android_rows
+        ] + firmware_rows + android_rows
         for partition, name in partitions.items():
             path = stage / name
             lines.append(f"artifact\t{partition}\t{name}\t{path.stat().st_size}\t{sha256(path)}")
