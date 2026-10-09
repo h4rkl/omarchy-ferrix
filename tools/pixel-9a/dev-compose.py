@@ -121,17 +121,31 @@ class Cpio:
         return bytes(self.data)
 
 
-def debugfs_dump(image, source, destination):
-    run("debugfs", "-R", f"dump -p {source} {destination}", image, capture=True)
-    if not destination.is_file() or destination.stat().st_size == 0:
-        die(f"could not read {source} from the base rootfs")
+def debugfs_type(image, path):
+    """Return the inode type of path ("regular", "symlink", ...) or None."""
+    info = subprocess.run(["debugfs", "-R", f"stat {path}", str(image)],
+                          capture_output=True, text=True).stdout
+    for word in info.split("Type:", 1)[1:]:
+        return word.split()[0]
+    return None
+
+
+def debugfs_dump(image, sources, destination):
+    """Dump the first candidate that is a regular file (debugfs does not follow
+    symlinks, and the postmarketOS rootfs uses merged /usr)."""
+    for source in sources:
+        if debugfs_type(image, source) == "regular":
+            run("debugfs", "-R", f"dump -p {source} {destination}", image, capture=True)
+            if destination.is_file() and destination.stat().st_size > 0:
+                return
+    die(f"could not read any of {sources} from the base rootfs")
 
 
 def make_initramfs(base_rootfs, init_script, work):
     busybox = work / "busybox"
     loader = work / "ld-musl-aarch64.so.1"
-    debugfs_dump(base_rootfs, "/bin/busybox", busybox)
-    debugfs_dump(base_rootfs, "/lib/ld-musl-aarch64.so.1", loader)
+    debugfs_dump(base_rootfs, ("/usr/bin/busybox", "/bin/busybox"), busybox)
+    debugfs_dump(base_rootfs, ("/usr/lib/ld-musl-aarch64.so.1", "/lib/ld-musl-aarch64.so.1"), loader)
     archive = Cpio()
     for directory in ("bin", "dev", "lib", "newroot", "proc", "sys"):
         archive.directory(directory)
@@ -175,8 +189,6 @@ def stage_modules(dist, verified, work):
         for module in load.read_text().split():
             if not (tree / module).is_file():
                 die(f"{partition}.modules.load names a module missing from its archive: {module}")
-    for stale in tree.glob("modules.*"):
-        stale.unlink()
     run("depmod", "-b", stage, release)
     if not (tree / "modules.dep").is_file():
         die("depmod produced no modules.dep")
@@ -186,11 +198,14 @@ def stage_modules(dist, verified, work):
 def install_modules(image, stage, release):
     """Write the staged module tree into the ext4 rootfs without mounting it."""
     root = stage / "lib/modules" / release
-    script = [f"mkdir /lib/modules/{release}"]
-    owners = [f"/lib/modules/{release}"]
+    # /lib is a symlink to usr/lib in the merged-/usr rootfs; write through the
+    # real directory so debugfs (which does not follow symlinks) can resolve it.
+    base = "/usr/lib/modules" if debugfs_type(image, "/lib") == "symlink" else "/lib/modules"
+    script = [] if debugfs_type(image, base) == "directory" else [f"mkdir {base}"]
+    script.append(f"mkdir {base}/{release}")
+    owners = [base, f"{base}/{release}"]
     for path in sorted(root.rglob("*")):
-        relative = path.relative_to(stage)
-        target = f"/{relative}"
+        target = f"{base}/{release}/{path.relative_to(root)}"
         if path.is_dir():
             script.append(f"mkdir {target}")
         else:
@@ -201,7 +216,7 @@ def install_modules(image, stage, release):
         script.append(f"sif {target} gid 0")
     commands = "\n".join(script) + "\n"
     run("debugfs", "-w", "-f", "-", image, capture=True, stdin=commands)
-    listing = run("debugfs", "-R", f"ls /lib/modules/{release}", image, capture=True)
+    listing = run("debugfs", "-R", f"ls {base}/{release}", image, capture=True)
     if "vendor_dlkm.modules.load" not in listing or "modules.dep" not in listing:
         die("module tree did not land in the rootfs image")
     run("e2fsck", "-fn", image, capture=True)
