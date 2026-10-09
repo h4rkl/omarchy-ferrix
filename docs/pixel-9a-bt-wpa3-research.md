@@ -342,6 +342,59 @@ Files a fix would touch:
   `pmos/device-google-tegu/kernel-cmdline-kleaf.conf`
   (`bcmdhd4383.dhd_use_idsup=0`).
 
+### B.4 Root cause (source analysis, 2026-10-10)
+
+Device observation: a single-AKM `key-mgmt=sae` profile, with PMF either
+default or required, fails. dmesg shows repeated `cache assoc_status:
+event:7 status:2` followed by `ASSOC_FAIL`. `include/bcmevent.h` decodes this
+as `WLC_E_ASSOC` (7) with `WLC_E_STATUS_TIMEOUT` (2): the firmware got past
+authentication, sent an association request, and never got a response. The
+multi-AKM hypothesis in B.2 does not explain this, because single-AKM SAE
+fails too.
+
+The cause is the WPA version that wpa_supplicant puts in the connect
+request:
+
+- Upstream wpa_supplicant 2.11 (`src/drivers/driver_nl80211.c`,
+  `nl80211_connect_common()`) sends `NL80211_ATTR_WPA_VERSIONS =
+  NL80211_WPA_VERSION_3` (0x4) for an SAE `key_mgmt_suite`. It does this
+  whenever the kernel's policy lists `NL80211_ATTR_SAE_PASSWORD`, which is
+  true on 6.1.
+- AOSP `wpa_supplicant_8` wraps that same block in
+  `#if !defined(CONFIG_DRIVER_NL80211_BRCM) && !defined(CONFIG_DRIVER_NL80211_SYNA)`,
+  so on Android this driver always gets `NL80211_WPA_VERSION_2`.
+- bcmdhd `wl_set_wpa_version()` (`wl_cfg80211.c:4670`) handles only
+  versions 1 and 2. For 0x4 it logs `unsupported wpa_versions (4)` and sets
+  `wpa_auth` to `WPA_AUTH_DISABLED`.
+- `wl_set_key_mgmt()` (`:5645`) then reads `wpa_auth` back as 0. That
+  matches neither the WPA nor the WPA2 branch, so `WPA3_AUTH_SAE_PSK` is never
+  chosen and `wpa_auth` 0 is written back with no error.
+- The join therefore runs with `auth=DOT11_SAE` (external SAE through
+  `WLC_E_AUTH_START`) on top of a legacy, non-RSN `wpa_auth`, and the
+  association request is not one the AP accepts.
+- The NM `wpa-psk` profile works because its multi-AKM connect goes through
+  `wl_set_multi_akm()` (join_pref plus auto-WPA), which overrides `wpa_auth`.
+
+The external-auth handshake code is not the difference.
+`sme_external_auth_*` and `sme_sae_auth()` are byte-identical in upstream
+2.11 and AOSP.
+
+Two other suspects were checked and ruled out:
+
+- **MLD address.** The driver passes an uninitialised `mld_addr` to
+  `cfg80211_external_auth_request()`, and GKI 6.1 sends
+  `NL80211_ATTR_MLD_ADDR` when that field is non-zero. The built kernel has
+  `CONFIG_INIT_STACK_ALL_ZERO=y`, so the field is zero.
+- **`WLC_E_AUTH_START`.** The driver never sets it in the event mask, but
+  Android works with the same driver and firmware.
+
+Fix: `kernel-patches/private/google-modules/wlan/bcm4383/0002-treat-nl80211-wpa-version-3-as-rsn.patch`
+makes `wl_set_wpa_version()` treat `NL80211_WPA_VERSION_3` as RSN, the same
+as version 2. `wl_set_key_mgmt()` then maps the SAE AKM to
+`WPA3_AUTH_SAE_PSK`. The patch is compile-tested only and needs device
+evidence. Do not set `connectivity.wifi_transition_key_mgmt` back to `sae`
+until a device run shows the patched kernel associating with single-AKM SAE.
+
 ---
 
 ## References
