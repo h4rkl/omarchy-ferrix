@@ -355,6 +355,9 @@ fn pairing_card(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &In
         let w = ty.width(style, &text);
         ty.text(c, style, &text, (c.width() - w) / 2, s(860));
     };
+    // Every pairing card leads with the filled Bluetooth glyph in rust: the
+    // region's one accent while a request waits for an answer.
+    ferrix_ui::icons::draw(c, Icon::Bluetooth, s(88), s(488), s(64), t.rust);
     match card {
         Card::Confirm { passkey } => {
             ty.text(

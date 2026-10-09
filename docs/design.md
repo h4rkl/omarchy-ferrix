@@ -322,7 +322,7 @@ Subset (Remix name): launcher `phone`, `message-2`, `contacts-book`,
 `settings-3`, `terminal-box`, `camera`, `folder` (Files), `global` (Browser),
 `home-5`; status `signal-wifi-off`,
 `signal-wifi-1`, `signal-wifi-2`, `signal-wifi`, `battery`, `battery-low`,
-`battery-charge`; quick settings and notifications `bluetooth`, `sun`,
+`battery-charge`; quick settings, notifications and Settings `bluetooth`, `sun`, `keyboard-box`,
 `notification-3`; navigation and actions `arrow-left-s` (back),
 `arrow-right-s` (forward chevron, breadcrumb separator), `more` (row
 details), `add`, `close`, `delete-back-2` (backspace), `grid` (Dialer tab),

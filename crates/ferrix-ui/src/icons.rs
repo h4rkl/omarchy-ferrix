@@ -61,6 +61,7 @@ pub enum Icon {
     Bluetooth,
     Notifications,
     Brightness,
+    Keyboard,
     // Navigation and actions.
     Home,
     Back,
@@ -85,7 +86,7 @@ pub enum Icon {
 }
 
 impl Icon {
-    pub const ALL: [Icon; 36] = [
+    pub const ALL: [Icon; 37] = [
         Icon::Phone,
         Icon::Messages,
         Icon::Contacts,
@@ -103,6 +104,7 @@ impl Icon {
         Icon::Bluetooth,
         Icon::Notifications,
         Icon::Brightness,
+        Icon::Keyboard,
         Icon::Home,
         Icon::Back,
         Icon::Forward,
@@ -144,6 +146,7 @@ impl Icon {
             Icon::Bluetooth => "bluetooth-fill",
             Icon::Notifications => "notification-3-fill",
             Icon::Brightness => "sun-fill",
+            Icon::Keyboard => "keyboard-box-fill",
             Icon::Home => "home-5-fill",
             Icon::Back => "arrow-left-s-fill",
             Icon::Forward => "arrow-right-s-fill",

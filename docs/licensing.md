@@ -23,7 +23,7 @@ change these licenses to Apache-2.0 merely by changing Ferrix metadata:
 | Material or software | Location or use | Upstream license boundary |
 | --- | --- | --- |
 | JetBrains Mono font files | `crates/ferrix-ui/assets/JetBrainsMono-*.ttf` | SIL Open Font License 1.1; the accompanying `OFL.txt` is retained and installed in the QEMU guests as `/usr/share/licenses/ferrix/jetbrains-mono/OFL.txt`. |
-| Remix Icon v4.7.0 SVG subset (36 glyphs) | `crates/ferrix-ui/assets/icons/remixicon/` | Apache-2.0, verified against the upstream `License` file at the exact tag (see below). The upstream `License` is vendored beside the SVGs, exposed to code as `ferrix_ui::icons::REMIX_LICENSE`, installed in the QEMU guests (initramfs and postmarketOS) as `/usr/share/licenses/ferrix/remixicon-4.7.0/License`, and named in Settings > About. |
+| Remix Icon v4.7.0 SVG subset (37 glyphs) | `crates/ferrix-ui/assets/icons/remixicon/` | Apache-2.0, verified against the upstream `License` file at the exact tag (see below). The upstream `License` is vendored beside the SVGs, exposed to code as `ferrix_ui::icons::REMIX_LICENSE`, installed in the QEMU guests (initramfs and postmarketOS) as `/usr/share/licenses/ferrix/remixicon-4.7.0/License`, and named in Settings > About. |
 | `usvg`, `sha2` and their dependencies | Build-time only (`crates/ferrix-ui/build.rs`); not linked into any binary | MIT and/or Apache-2.0 (`usvg`, `kurbo`, `roxmltree`, `svgtypes`, `simplecss`, `euclid`, `data-url`, `polycool`, `siphasher`), MIT (`float-cmp`, `imagesize`, `pico-args`), BSD-3-Clause (`tiny-skia-path`). |
 | Rust dependencies | Resolved by `Cargo.lock` and linked into the workspace | Each crate retains its upstream SPDX expression. The dependency set includes MIT, BSD, Zlib, and other compatible licenses in addition to Apache-2.0 options. |
 | Fulguris Web Browser | Downloaded only into ignored `out/android/` by `tools/android/fulguris-fetch.sh` | MPL-2.0; bundled third-party components retain their own licenses. The F-Droid APK is never committed or relabeled. |
@@ -52,7 +52,7 @@ v4.8.0's `License` is also still Apache-2.0, but it shipped days before the
 change; v4.7.0 is the conservative pin the issue asked for. The v4.7.0 README
 asks that the icons "are not for sale"; Ferrix does not sell them, and
 `docs/design.md` additionally forbids using any glyph as a logo or brand mark.
-Only the 36 SVGs Ferrix draws are vendored; the rest of the set (including
+Only the 37 SVGs Ferrix draws are vendored; the rest of the set (including
 the `Logos` category) is not.
 
 The Ferrix browser descriptor is first-party Apache-2.0 metadata; that does not

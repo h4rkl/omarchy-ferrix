@@ -5,7 +5,7 @@
 - **Licence:** Remix Icon is under the non-OSI Remix Icon License v1.0 from
   v4.9.0. The `License` file at tag `v4.7.0` (commit `4ef5087`) is the full
   Apache-2.0 text (SHA-256 `c71d239d…0ab4`) and its `package.json` says
-  `Apache-2.0`, so v4.7.0 is pinned. Only the 36 glyphs in use are vendored
+  `Apache-2.0`, so v4.7.0 is pinned. Only the 37 glyphs in use are vendored
   under `crates/ferrix-ui/assets/icons/remixicon/` with the upstream
   `License`, each hash-pinned in `SHA256SUMS`. Decision, hashes and source
   URLs: `docs/licensing.md`. The notice ships in both QEMU guest routes as
@@ -32,7 +32,9 @@
   (card and empty state), the back affordance in every page header
   (`arrow-left-s-fill` replaces the `<` text), Files type glyphs, the `More`
   glyph (was `···`) and forward-chevron breadcrumb separators (was `/`),
-  Settings root rows (forward chevron) and the Pair-new-device `Add` (was
+  Settings root rows including Keyboard (forward chevron), Keyboard layout
+  rows (`keyboard-box`, rust when active), the Bluetooth pairing cards
+  (confirm, passkey, PIN: a rust Bluetooth glyph) and the Pair-new-device `Add` (was
   `+`), Phone Dialer/Recent tabs and the backspace key (was U+232B).
 - **Evidence (QEMU, Alpine smoke guest rebuilt from this tree, TCG agent
   session, 1080x2340, `FERRIX_OUT_DIR=/tmp/f20`):** `just qemu-check` passed
