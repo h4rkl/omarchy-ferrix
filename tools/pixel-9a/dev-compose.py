@@ -351,7 +351,10 @@ def integrate_rootfs(image, work, package, profile, product):
             editor.put(descriptor.read_bytes(), f"/usr/share/ferrix/apps/{descriptor.name}", 0o644)
         written += ["/etc/ferrix/colors.toml", "/usr/share/ferrix/apps/*.json"]
     editor.put(profile.read_bytes(), "/etc/ferrix/profile.toml", 0o644)
+    # Device-package files, at the paths the APKBUILD installs them to.
     editor.put((package / "ferrix-openrc.sh").read_bytes(), "/usr/lib/ferrix/openrc.sh", 0o644)
+    editor.put((package / "networkmanager-ferrix.conf").read_bytes(),
+               "/etc/NetworkManager/conf.d/90-ferrix.conf", 0o644)
     for script in sorted(package.glob("ferrix-*.initd")):
         dest = f"/etc/init.d/{script.stem}"
         editor.put(script.read_bytes(), dest, 0o755)

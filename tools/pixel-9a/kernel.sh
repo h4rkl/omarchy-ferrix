@@ -272,6 +272,11 @@ write_manifest() {
     printf 'source\tsuperproject\t%s\n' "$(git -C "$source_root/.repo/ferrix-superproject" rev-parse HEAD)"
     printf 'config\ttegu_defconfig\t%s\n' "$(sha256_of "$config_fragment")"
     printf 'config\tferrix_gki_defconfig\t%s\n' "$(sha256_of "$gki_fragment")"
+    if [ -d "$kernel_patches" ]; then
+      find "$kernel_patches" -type f -name '*.patch' | LC_ALL=C sort | while IFS= read -r patch; do
+        printf 'patch\t%s\t%s\n' "${patch#"$kernel_patches"/}" "$(sha256_of "$patch")"
+      done
+    fi
     for name in $(component_names); do
       path=$(source_path "$name")
       printf 'source\t%s\t%s\n' "$name" "$(git -C "$source_root/$path" rev-parse HEAD)"
@@ -287,6 +292,27 @@ write_manifest() {
   trap - EXIT HUP INT TERM
 }
 
+# Checked-in source patches, laid out as kernel-patches/<component path>/*.patch
+# and applied with git in that component. Idempotent: an already-applied patch
+# is skipped, a patch that no longer applies stops the build.
+kernel_patches="$target/kernel-patches"
+
+apply_kernel_patches() {
+  [ -d "$kernel_patches" ] || return 0
+  find "$kernel_patches" -type f -name '*.patch' | LC_ALL=C sort | while IFS= read -r patch; do
+    component=$(dirname -- "${patch#"$kernel_patches"/}")
+    tree="$source_root/$component"
+    [ -d "$tree" ] || die "kernel patch targets a missing component: $component"
+    if git -C "$tree" apply --reverse --check "$patch" 2>/dev/null; then
+      printf '%s\n' "= kernel patch already applied: ${patch#"$kernel_patches"/}"
+    else
+      git -C "$tree" apply --check "$patch" || die "kernel patch does not apply: ${patch#"$kernel_patches"/}"
+      git -C "$tree" apply "$patch"
+      printf '%s\n' "+ kernel patch applied: ${patch#"$kernel_patches"/}"
+    fi
+  done
+}
+
 build_kernel() {
   preflight
   verify_sources
@@ -296,6 +322,7 @@ build_kernel() {
     die "dist path is not empty; choose a fresh FERRIX_PIXEL9A_KERNEL_OUT: $dist"
   fi
   mkdir -p "$dist" "$bazel_cache"
+  apply_kernel_patches
   # Ferrix-owned Bazel package for the GKI config fragment; Google's tree is
   # left untouched.
   mkdir -p "$source_root/ferrix"

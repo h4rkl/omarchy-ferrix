@@ -1,0 +1,25 @@
+diff --git a/dhd_linux.c b/dhd_linux.c
+index da158cf..e8081ee 100644
+--- a/dhd_linux.c
++++ b/dhd_linux.c
+@@ -5779,13 +5779,13 @@ dhd_add_monitor_if(dhd_info_t *dhd)
+ 		DHD_STOP_RPM_TIMER(&dhd->pub);
+ 		DHD_PRINT(("%s : disable runtime PM in monitor mode\n", __FUNCTION__));
+ #endif /* DHD_PCIE_RUNTIME_PM */
+-		scan_suppress = TRUE;
+-		/* Set the SCAN SUPPRESS Flag in the firmware to disable scan in Monitor mode */
+-		ret = dhd_iovar(&dhd->pub, 0, "scansuppress", (char *)&scan_suppress,
+-			sizeof(scan_suppress), NULL, 0, TRUE);
+-		if (ret < 0) {
+-			DHD_ERROR(("%s: scansuppress set failed, ret=%d\n", __FUNCTION__, ret));
+-		}
++		/* Ferrix: the monitor netdev is created on every primary open; do not
++		 * set the firmware SCAN SUPPRESS flag here, or station scans fail with
++		 * BCME_EPERM for the life of the interface (Android userspace never
++		 * relied on it).
++		 */
++		BCM_REFERENCE(scan_suppress);
++		BCM_REFERENCE(ret);
+ 	}
+ 
+ #ifdef HOST_RADIOTAP_CONV

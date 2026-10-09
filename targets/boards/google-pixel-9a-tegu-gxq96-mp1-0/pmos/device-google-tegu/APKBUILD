@@ -49,6 +49,7 @@ source="
 	s5300-userspace-sources.toml
 	ferrix-backends.env
 	ferrix-openrc.sh
+	networkmanager-ferrix.conf
 	ferrix-core.initd
 	ferrix-networkd.initd
 	ferrix-telephonyd.initd
@@ -87,6 +88,8 @@ package() {
 
 	install -Dm644 "$srcdir"/ferrix-openrc.sh \
 		"$pkgdir"/usr/lib/ferrix/openrc.sh
+	install -Dm644 "$srcdir"/networkmanager-ferrix.conf \
+		"$pkgdir"/etc/NetworkManager/conf.d/90-ferrix.conf
 	install -Dm755 "$srcdir"/ferrix-core.initd \
 		"$pkgdir"/etc/init.d/ferrix-core
 	install -Dm755 "$srcdir"/ferrix-networkd.initd \
@@ -131,6 +134,7 @@ cd5b12e611748eb07ccee10c1935c7da112876c9fcc8a88d199eb5f29b6ecbdf5b0c709f4ce27096
 e3ae71127500de5c6e745807ef49deb6aca1d1b1718270d1e9e31035c4b72611c2f9af7531676e82d1408c987d8e1af4fd9c2f5d4523818f0553a964288c7e3a  s5300-userspace-sources.toml
 64d8f0cfdfe042327b66a88007cc4ace5a7d39270e2d8bd6c02223b1dd2171f065a6aae4b3f82c5cbae16e39f67556a17e2bc38f8114d5ed8c0a5289c8eb417f  ferrix-backends.env
 f7581e9eaef5d4b8a201e04bb1e70a82f275532528ee04c0b9d667e5c30a04b7ec07f53cc11657146d8dd1eba57bcb87be12d1c2af9391581d7ab033128f64d5  ferrix-openrc.sh
+e7b3709d984b5a4bf0dda54ea67232ca46d1b7858576722b04f26e3cb687e743cf63344f94a24f0c3eb3783f9dee8c4c7e51029384b18a04d099dc3eb93d1ed2  networkmanager-ferrix.conf
 9fa83c4f6cad89e40baf27091a26704ad2879ac690cf640117be5196a79f8ea91e61d08d9b05e14d27a6e7e6af9e44bf48051542736a84265ad11c4e2a41dafd  ferrix-core.initd
 399be7eb464c4e9f6dc7450e887d00e9af790e5874843b0b134d831ffa4178dfa6e6032748edb295668ccb5ce0fd4f530948a5de8e6482f55bf6023969ca1fcc  ferrix-networkd.initd
 a26cd676321a658c719f9b53fcf6099031c22bbd874794f79d551966f6680683ce2f37674bbd284d769c603d335a34c65e17e30f2e9507140910008d6a11d90c  ferrix-telephonyd.initd
