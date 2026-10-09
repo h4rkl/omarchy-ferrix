@@ -7,11 +7,19 @@
 # ahead of this init_boot ramdisk, so load that list in Android's order first.
 # Then mount the Linux userdata filesystem, load the system_dlkm and vendor_dlkm
 # lists that tools/pixel-9a/dev-compose.py installed in the rootfs, and hand
-# control to the postmarketOS init. No
-# Android init, property service, framework, or HAL is used.
+# control to the postmarketOS init. No Android init, property service,
+# framework, or HAL is used.
+#
+# Bring-up visibility: once the first-stage modules are in, a USB CDC-ACM
+# gadget exposes two serial ports to the host. The first streams the previous
+# boot's pstore (ramoops) and the live kernel log; the second is a root shell.
+# Failure paths hold for $hold_seconds before rebooting, so the bootloader's
+# slot retry/fallback to the stock slot still applies.
 
 bb=/bin/busybox
 root_partlabel=userdata
+hold_seconds=600
+gadget=/sys/kernel/config/usb_gadget/ferrix
 
 log() {
 	$bb printf 'ferrix-init: %s\n' "$*" >/dev/kmsg 2>/dev/null ||
@@ -44,6 +52,60 @@ load_list() {
 	for module in $pending; do log "  not loaded: ${module##*/}"; done
 }
 
+start_usb_debug() {
+	$bb mount -t configfs configfs /sys/kernel/config 2>/dev/null || :
+	waited=0
+	while [ -z "$($bb ls /sys/class/udc 2>/dev/null)" ] && [ "$waited" -lt 15 ]; do
+		$bb sleep 1
+		waited=$((waited + 1))
+	done
+	udc=$($bb ls /sys/class/udc 2>/dev/null | $bb head -n 1)
+	[ -n "$udc" ] || {
+		log 'no USB device controller; debug gadget unavailable'
+		return 0
+	}
+	$bb mkdir -p "$gadget/strings/0x409" "$gadget/configs/c.1/strings/0x409" \
+		"$gadget/functions/acm.log" "$gadget/functions/acm.shell" || return 0
+	echo 0x1d6b >"$gadget/idVendor"
+	echo 0x0104 >"$gadget/idProduct"
+	echo Ferrix >"$gadget/strings/0x409/manufacturer"
+	echo 'Ferrix tegu bring-up' >"$gadget/strings/0x409/product"
+	echo ferrix-tegu >"$gadget/strings/0x409/serialnumber"
+	echo 'log+shell' >"$gadget/configs/c.1/strings/0x409/configuration"
+	$bb ln -s "$gadget/functions/acm.log" "$gadget/configs/c.1/"
+	$bb ln -s "$gadget/functions/acm.shell" "$gadget/configs/c.1/"
+	echo "$udc" >"$gadget/UDC" || {
+		log "cannot bind debug gadget to $udc"
+		return 0
+	}
+	log "debug gadget bound to $udc"
+	$bb sleep 1
+	# ttyGS0 = log, ttyGS1 = shell (function creation order).
+	(
+		while :; do
+			{
+				echo '=== ferrix: previous boot pstore ==='
+				$bb cat /sys/fs/pstore/* 2>/dev/null
+				echo '=== ferrix: live kernel log ==='
+				$bb cat /dev/kmsg
+			} >/dev/ttyGS0 2>/dev/null
+			$bb sleep 2
+		done
+	) &
+	(
+		while :; do
+			$bb setsid $bb sh -c "exec $bb sh -i </dev/ttyGS1 >/dev/ttyGS1 2>&1"
+			$bb sleep 1
+		done
+	) &
+}
+
+hold_then_reboot() {
+	log "$1; holding ${hold_seconds}s for USB debugging, then rebooting"
+	$bb sleep "$hold_seconds"
+	$bb reboot -f
+}
+
 find_root_device() {
 	for candidate in /dev/disk/by-partlabel/$root_partlabel /dev/block/by-name/$root_partlabel; do
 		[ -b "$candidate" ] && {
@@ -67,6 +129,7 @@ find_root_device() {
 $bb mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
 $bb mount -t proc proc /proc 2>/dev/null || :
 $bb mount -t sysfs sysfs /sys 2>/dev/null || :
+$bb mount -t pstore pstore /sys/fs/pstore 2>/dev/null || :
 release=$($bb uname -r)
 log "kernel $release"
 
@@ -82,6 +145,8 @@ for dog in /dev/watchdog0 /dev/watchdog; do
 	}
 done
 
+start_usb_debug
+
 $bb mkdir -p /newroot
 root_device=
 attempt=0
@@ -90,25 +155,28 @@ while [ "$attempt" -lt 60 ]; do
 	attempt=$((attempt + 1))
 	$bb sleep 1
 done
-[ -n "$root_device" ] || {
-	log "PARTLABEL=$root_partlabel not found; rebooting to the bootloader"
-	$bb sleep 5
-	$bb reboot -f
-}
+[ -n "$root_device" ] || hold_then_reboot "PARTLABEL=$root_partlabel not found"
 
 log "mounting $root_device"
-$bb mount -t ext4 -o rw "$root_device" /newroot || {
-	log "cannot mount $root_device; rebooting"
-	$bb sleep 5
-	$bb reboot -f
-}
+$bb mount -t ext4 -o rw "$root_device" /newroot || hold_then_reboot "cannot mount $root_device"
+
+# Keep the previous boot's pstore with the rootfs for later inspection.
+if [ -n "$($bb ls /sys/fs/pstore 2>/dev/null)" ]; then
+	saved="/newroot/var/log/ferrix-pstore/$($bb date +%s)"
+	$bb mkdir -p "$saved" && $bb cp /sys/fs/pstore/* "$saved/" 2>/dev/null && log "saved pstore to ${saved#/newroot}"
+fi
 
 modules="/newroot/lib/modules/$release"
 load_list "$modules/system_dlkm.modules.load" "$modules"
 load_list "$modules/vendor_dlkm.modules.load" "$modules"
 
+[ -e /newroot/sbin/init ] || [ -L /newroot/sbin/init ] || hold_then_reboot '/sbin/init missing from the rootfs'
+
 $bb mount -o move /dev /newroot/dev 2>/dev/null || :
 $bb mount -o move /proc /newroot/proc 2>/dev/null || :
 $bb mount -o move /sys /newroot/sys 2>/dev/null || :
 log 'switching to postmarketOS init'
-exec $bb switch_root /newroot /sbin/init
+$bb switch_root /newroot /sbin/init
+# Only reached if switch_root failed; returning from PID 1 would panic and
+# reboot immediately.
+hold_then_reboot 'switch_root failed'

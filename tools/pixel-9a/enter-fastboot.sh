@@ -83,11 +83,20 @@ read_transports() {
 validate_adb_identity() {
 	adb_serial=$(printf '%s\n' "$adb_rows" | awk '{ print $1; exit }')
 	adb_state=$(printf '%s\n' "$adb_rows" | awk '{ print $2; exit }')
-	[ "$adb_state" = device ] || die "ADB device state is '$adb_state'; unlock the screen and accept USB debugging"
+	# Stock recovery exposes the same read-only identity properties; rebooting
+	# from it to the bootloader is the same non-destructive transition.
+	case "$adb_state" in
+		device|recovery) ;;
+		*) die "ADB device state is '$adb_state'; unlock the screen and accept USB debugging" ;;
+	esac
 	[ "$(adb_prop ro.product.manufacturer)" = "$expected_manufacturer" ] || die 'ADB manufacturer is not Google'
 	[ "$(adb_prop ro.product.model)" = "$expected_model" ] || die 'ADB model is not Pixel 9a'
 	[ "$(adb_prop ro.product.device)" = "$expected_product" ] || die 'ADB codename is not tegu'
-	[ "$(adb_prop ro.boot.hardware.revision)" = "$expected_revision" ] || die 'ADB hardware revision is not MP1.0'
+	revision=$(adb_prop ro.boot.hardware.revision)
+	# Stock recovery omits ro.boot.hardware.revision; the bootloader-supplied
+	# ro.boot.revision carries the same value there.
+	[ -n "$revision" ] || revision=$(adb_prop ro.boot.revision)
+	[ "$revision" = "$expected_revision" ] || die 'ADB hardware revision is not MP1.0'
 	[ "$(adb_prop ro.boot.hardware.sku)" = "$expected_sku" ] || die 'ADB SKU is not GXQ96'
 	current_slot=$(adb_prop ro.boot.slot_suffix)
 	case "$current_slot" in
@@ -95,6 +104,7 @@ validate_adb_identity() {
 		*) die "ADB current slot is unexpected: $current_slot" ;;
 	esac
 	printf 'transport=adb\n'
+	printf 'adb_state=%s\n' "$adb_state"
 	printf 'serial=%s\n' "$adb_serial"
 	printf 'manufacturer=%s\n' "$expected_manufacturer"
 	printf 'model=%s\n' "$expected_model"
