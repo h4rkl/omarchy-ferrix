@@ -376,6 +376,15 @@ mod tests {
             LinkEvent::Notification(n) => assert_eq!(n, activate),
             other => panic!("unexpected {other:?}"),
         }
+        // The link thread queues the event before it calls `wake`, so the
+        // drain above can win that race; wait (bounded) for the second wake
+        // instead of reading the counter once.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while wake_count.load(Ordering::SeqCst) < wakes_before_activate + 2
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
         assert!(
             wake_count.load(Ordering::SeqCst) >= wakes_before_activate + 2,
             "the protocol reader wake and the forwarded-queue wake both fire"
