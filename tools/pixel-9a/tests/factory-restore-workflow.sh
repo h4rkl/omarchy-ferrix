@@ -532,6 +532,19 @@ check "privacy: execution transcript redacts the serial" env S="$serial" T="$tra
 check "privacy: execution transcript records the update mutation" grep -q '^mutation=fastboot -w update image-tegu-fake.zip$' "$transcript"
 check "privacy: execution transcript records confirmations without the phrase" grep -q '^confirmation=accepted$' "$transcript"
 
+# --- execution: stock restore is independent of Ferrix image evidence ------
+# A partial Ferrix image gate is exactly the state a failed attempt leaves;
+# tested stock recovery must still run from the verified pinned archive.
+cp -R "$work/target" "$work/target-ferrix-partial"
+sed -i.bak -e 's/image_compatibility = "passed"/image_compatibility = "partial"/' \
+  "$work/target-ferrix-partial/manifest.toml"
+reset_stub
+export STUB_FASTBOOT_DEVICES="$fastboot_one" FERRIX_PIXEL9A_TARGET_DIR="$work/target-ferrix-partial"
+feed ferrix_partial "CONFIRM PIXEL 9A FLASH BOOTLOADER AND RADIO (WIPES ALL USER DATA)" "CONFIRM PIXEL 9A FASTBOOT UPDATE (WIPES ALL USER DATA)"
+run_case ferrix_partial --confirm-restore
+check "execute: restore runs while Ferrix image compatibility is partial" [ "$status" -eq 0 ]
+check "execute: partial-gate restore uses the exact vendor sequence" [ "$(mutations)" = "$expected_wipe" ]
+
 # --- execution: --keep-data omits -w ---------------------------------------
 reset_stub
 export STUB_FASTBOOT_DEVICES="$fastboot_one"

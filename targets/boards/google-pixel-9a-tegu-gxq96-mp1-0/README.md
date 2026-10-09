@@ -7,7 +7,10 @@ conservatively `unsupported` until target-specific Linux evidence exists.
 The [fresh static build handoff](dev/README.md#one-fresh-static-build-attempt)
 is the selected WWAN/SIT route. The current candidate is blocked after an
 unobserved temporary probe. The checked-in `image_compatibility=partial` gate
-also refuses persistent installation.
+also refuses persistent installation. Those refusals apply to the static
+and split routes only: under the 2026-10-09 owner policy, the
+[development flash route](#development-flash-route) is gated solely on keeping
+the pinned stock factory restore possible, and agents may run it autonomously.
 
 The owner-authorized first stock restore completed on 2026-09-30 with
 `result=factory-restore-complete` and exit 0; ignored transcript
@@ -737,6 +740,50 @@ handoffs, not flashable partition artifacts.
 The radio boot preflight re-hashes every listed DTB/DTBO and installed-module
 file and requires at least one source-built `.dtbo` overlay, so a DTB-only or
 stale handoff cannot silently advance into boot composition.
+
+## Development flash route
+
+Owner policy (2026-10-09): the only hard requirement for this exact
+development device is that it can always be restored to the pinned stock
+factory image. `tools/pixel-9a/dev-flash.sh` (`just pixel-9a-dev-flash`)
+therefore ignores Ferrix image-compatibility, candidate, and observation
+evidence and enforces only:
+
+- exactly one bootloader-mode Fastboot device (no ADB, not fastbootd) with
+  product `tegu`, revision `MP1.0`, SKU `GXQ96`, and `unlocked=yes`;
+- `recovery_procedure = tested` and the pinned factory archive present with
+  its exact size and SHA-256;
+- writes only to partitions the factory image rewrites: `boot`, `init_boot`,
+  `vendor_boot`, `vendor_kernel_boot`, `dtbo`, `vbmeta`, `vbmeta_system`,
+  `vbmeta_vendor` (either slot), `userdata`, `metadata`;
+- no bootloader/radio writes except the pinned stock images, and no relock,
+  erase, format, `oem`, logical, or device-unique (`persist`, `efs`,
+  `devinfo`, modem calibration) partition writes;
+- `set-active` first writes the pinned stock bootloader and radio to the
+  target slot, because Pixel bootloaders are A/B and switching onto an older
+  bootloader below the anti-rollback index can hard-brick the phone.
+
+Every mutating mode without `--confirm` is a read-only plan that prints the
+exact serial, slot, partition targets, image hashes, recovery artifact, and a
+`confirm_token` bound to all of them. Agents may pass that token themselves.
+
+```sh
+just pixel-9a-dev-flash preflight
+just pixel-9a-dev-flash flash boot_b=out/.../boot.img vendor_boot_b=out/.../vendor_boot.img
+just pixel-9a-dev-flash flash --confirm DEVFLASH-<token> boot_b=... vendor_boot_b=...
+just pixel-9a-dev-flash boot out/.../boot.img            # temporary, no write
+just pixel-9a-dev-flash set-active b                     # plan, then --confirm
+just pixel-9a-dev-flash reboot
+```
+
+Recovery from any state that reaches bootloader Fastboot:
+`FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data just pixel-9a-factory-restore --confirm-restore`
+(stock restore no longer depends on the Ferrix `image_compatibility` gate),
+then `just pixel-9a-discover`. If the phone does not reach Fastboot by itself,
+a human must hold Volume Down + Power; the bootloader partitions are never
+touched by this route except with pinned stock images, so that entry remains
+available. The workflow is offline stub-tested only and has not been run on
+the phone.
 
 ## Gated Ferrix flash
 

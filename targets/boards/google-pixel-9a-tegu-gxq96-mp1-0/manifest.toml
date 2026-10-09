@@ -87,6 +87,10 @@ s5300_userspace_sources = "pmos/device-google-tegu/s5300-userspace-sources.toml"
 s5300_source_evidence = "s5300-source-evidence.md"
 inactive_slot_boot_workflow = "just pixel-9a-boot-inactive"
 inactive_slot_boot_status = "workflow-checked-in-not-run"
+# Owner policy 2026-10-09: development flashing is gated only on keeping the
+# pinned stock factory restore possible; see README "Development flash route".
+dev_flash_workflow = "just pixel-9a-dev-flash"
+dev_flash_policy = "recovery-invariant-only"
 
 [linux]
 substrate = "postmarketos"

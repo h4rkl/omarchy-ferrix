@@ -1,6 +1,6 @@
 ---
 name: mobile-device-provisioning
-description: Use when a human attaches an Android phone over ADB or Fastboot and wants to identify it, match it to a checked-in Omarchy Ferrix board target, download official stock recovery images, back up and unlock it, restore stock, build and flash Ferrix Linux images, or bring up Wi-Fi, Bluetooth, and the modem and record evidence. Hard rules - never run raw adb or fastboot mutation commands; mutation happens only through checked-in tools/<target>/ workflows; every destructive run needs the human's explicit go-ahead in this session after seeing the printed gate output.
+description: Use when a human attaches an Android phone over ADB or Fastboot and wants to identify it, match it to a checked-in Omarchy Ferrix board target, download official stock recovery images, back up and unlock it, restore stock, build and flash Ferrix Linux images, or bring up Wi-Fi, Bluetooth, and the modem and record evidence. Hard rules - never run raw adb or fastboot mutation commands; mutation happens only through checked-in tools/<target>/ workflows; every destructive run needs the human's explicit go-ahead in this session after seeing the printed gate output, except the owner-approved recovery-invariant route for the exact Pixel 9a target (just pixel-9a-dev-flash, enter-fastboot, factory-restore), which agents may run autonomously.
 ---
 
 # Mobile device provisioning
@@ -240,6 +240,26 @@ Offline test recipes that must pass before any hardware session:
 ## Phase 0 - Safety contract
 
 Apply these rules for the whole session. They have the force of `AGENTS.md`.
+
+**Recovery-invariant exception (owner policy 2026-10-09).** For the exact
+target `google-pixel-9a-tegu-gxq96-mp1-0` only, rules 3-5 below do not apply
+to `just pixel-9a-dev-flash`, `just pixel-9a-enter-fastboot`, or
+`just pixel-9a-factory-restore`. The owner's only requirement is that the
+phone can always be restored to the pinned stock factory image, and those
+workflows enforce that in code. Agents may run them without a per-run human
+go-ahead, supply `--confirm <confirm_token>` from the plan output, type the
+restore/enter phrases, and set
+`FERRIX_PIXEL9A_NO_USER_DATA=I-understand-this-is-a-new-development-device-with-no-personal-data`.
+Ferrix image-compatibility, candidate pinning, `probe-unobserved` status, and
+boot-observation evidence are advisory there: record them, do not stop on
+them. Loop: build images, `dev-flash` plan, `dev-flash --confirm`, observe,
+and on any doubt `just pixel-9a-factory-restore --confirm-restore` (from
+Fastboot) followed by `just pixel-9a-discover`. Still stop and ask the human
+when the phone does not reach Fastboot or Android (they must hold
+Volume Down + Power), when `dev-flash` or the restore refuses on its recovery
+invariant, or when a restore fails. Never edit the dev-flash allowlist or
+recovery checks to make a run pass. Other targets and other Pixel workflows
+keep rules 3-5.
 
 1. Never type a raw `adb` or `fastboot` command that reboots, unlocks, locks,
    erases, formats, flashes, sideloads, boots an image, or changes slots.
@@ -727,6 +747,27 @@ prebuilts, vendor blobs, Android HAL/RIL/Binder services, or SELinux policy
 into the native Linux guest.
 
 ## Phase 6 - Flash
+
+### Recovery-invariant development route (`dev-flash.sh`) - preferred
+
+**Stub-tested only** (`just pixel-9a-dev-flash-test`). Requires bootloader-mode
+Fastboot (`just pixel-9a-enter-fastboot --confirm-enter` from Android).
+
+1. `just pixel-9a-dev-flash preflight` - read-only identity, unlocked state,
+   tested restore, and pinned factory archive hash.
+2. `just pixel-9a-dev-flash flash boot_b=<img> vendor_boot_b=<img> ...` prints
+   the exact plan and `confirm_token`; rerun the identical command with
+   `--confirm <token>` after the first mode word to write. Allowed:
+   `boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta vbmeta_system
+   vbmeta_vendor` (`_a`/`_b`, unsuffixed = current slot), `userdata`,
+   `metadata`. Everything else is refused.
+3. `just pixel-9a-dev-flash boot <img>` - temporary boot, no storage write.
+4. `just pixel-9a-dev-flash set-active b` - first writes the pinned stock
+   bootloader and radio to slot b (prevents an anti-rollback brick from an
+   older bootloader on that slot), then selects it.
+5. `just pixel-9a-dev-flash reboot [bootloader]`.
+6. Recovery: `just pixel-9a-factory-restore --confirm-restore` restores stock
+   on the active slot (wipes data) regardless of Ferrix gate state.
 
 **Status:** Canonical Google route and the separately gated radio-first route
 are Implemented, Stub-tested only (`just pixel-9a-flash-test` and

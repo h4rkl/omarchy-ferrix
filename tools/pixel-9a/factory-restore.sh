@@ -270,10 +270,14 @@ require_mutation_gates() {
     emit recovery_test_gate 'explicit-first-test; not previously verified'
     return 0
   fi
+  # Stock restore must never depend on Ferrix image evidence: the pinned
+  # archive is independently verified above, and restoring stock is the
+  # recovery path for every partial or failed Ferrix attempt.
   case "$image_compatibility_gate" in
-    passed|verified) ;;
-    *) die "image compatibility gate is '$image_compatibility_gate'; exact target image inputs are not approved for this restore" ;;
+    partial|passed|verified) ;;
+    *) die "image compatibility gate is '$image_compatibility_gate'; unknown target gate state" ;;
   esac
+  [ "${stock_image_compatibility:-}" = verified-pinned-vendor-inputs ] || die 'restore lacks verified pinned stock inputs'
   case "$recovery_procedure_gate" in
     tested|passed|verified) ;;
     *) die "recovery procedure gate is '$recovery_procedure_gate'; exact-target recovery procedure is not tested" ;;

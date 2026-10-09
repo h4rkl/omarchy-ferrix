@@ -1,5 +1,21 @@
 # Status
 
+## 2026-10-09 (Pixel 9a recovery-invariant development flash route; device-free)
+
+- Owner policy: for `google-pixel-9a-tegu-gxq96-mp1-0` the only hard gate is
+  keeping the pinned stock factory restore possible; agents may flash
+  autonomously. Added `just pixel-9a-dev-flash` (`tools/pixel-9a/dev-flash.sh`)
+  for flash/temporary boot/slot switch, gated on exact identity, unlocked
+  bootloader-mode Fastboot, tested restore, the hash-verified pinned factory
+  archive, and a factory-restorable partition allowlist. Slot switches first
+  write the pinned stock bootloader/radio to the target slot.
+- `pixel-9a-factory-restore --confirm-restore` no longer requires the Ferrix
+  `image_compatibility` gate; it still requires the verified pinned archive
+  and tested recovery.
+- Evidence: `mock` only (`just pixel-9a-dev-flash-test`, updated
+  `factory-restore-workflow.sh`). Not run on the phone; no Ferrix boot is
+  claimed.
+
 ## 2026-10-01 (Pixel 9a device-tree compatibility probe; device-free)
 
 - The checked-in `pixel-9a-dt-symbol-probe` recompiled the prior native

@@ -42,6 +42,7 @@ pixel-9a-tools-test:
     @sh "{{root}}/tools/pixel-9a/tests/factory-restore-workflow.sh"
     @sh "{{root}}/tools/pixel-9a/tests/unlock-workflow.sh"
     @sh "{{root}}/tools/pixel-9a/tests/enter-fastboot-workflow.sh"
+    @sh "{{root}}/tools/pixel-9a/tests/dev-flash-workflow.sh"
 
 pixel-9a-enter-fastboot-test:
     @sh "{{root}}/tools/pixel-9a/tests/enter-fastboot-workflow.sh"
@@ -297,6 +298,18 @@ pixel-9a-sideload-ota *args:
 [positional-arguments]
 pixel-9a-factory-restore *args:
     @"{{root}}/tools/pixel-9a/factory-restore.sh" "$@"
+
+# Recovery-invariant development route (owner policy 2026-10-09): flash any
+# Ferrix image to factory-restorable partitions, temporary-boot, or switch
+# slots, gated only on exact identity, unlocked bootloader-mode Fastboot, and
+# a hash-verified pinned factory archive with tested restore. Without
+# --confirm it is a read-only plan printing the bound confirm_token.
+[positional-arguments]
+pixel-9a-dev-flash *args:
+    @"{{root}}/tools/pixel-9a/dev-flash.sh" "$@"
+
+pixel-9a-dev-flash-test:
+    @sh "{{root}}/tools/pixel-9a/tests/dev-flash-workflow.sh"
 
 # Gated temporary boot and persistent flash of the composed Ferrix split-boot
 # artifacts on the exact Pixel 9a. Preflight is read-only; boot-temp and flash
