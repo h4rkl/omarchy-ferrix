@@ -27,7 +27,7 @@
 #   FERRIX_ANDROID_XDG_RUNTIME_DIR session runtime dir ($XDG_RUNTIME_DIR, /run/user/0)
 #   FERRIX_ANDROID_WAYLAND_DISPLAY compositor socket name (wayland-0)
 #   FERRIX_ANDROID_SESSION_BUS     session D-Bus address (unix:path=<xdg>/ferrix-android-bus)
-#   FERRIX_ANDROID_PULSE           system | pipewire | none (system)
+#   FERRIX_ANDROID_PULSE           system | pipewire | null | none (system)
 #   FERRIX_ANDROID_PROPS, _IMAGES, _CONFIG, _BASE_PROPS, _FULGURIS_APK,
 #   _CONSOLE, _RUN_DIR, _LXC_PATH, _BOOT_TICKS, _WAYLAND_TICKS  paths/bounds
 set -u
@@ -53,6 +53,17 @@ wayland_ticks=${FERRIX_ANDROID_WAYLAND_TICKS:-3000}
 density_dpi=$(sed -n 's/^ro\.sf\.lcd_density=\([0-9][0-9]*\)$/\1/p' "$props" 2>/dev/null | head -n 1)
 [ -n "$density_dpi" ] || density_dpi=400
 
+# props_applied: every managed property appears in the config exactly once
+# with its value, ignoring Waydroid's `key = value` spacing.
+props_applied() {
+  grep -v '^\[' "$props" | grep '=' | while IFS= read -r line; do
+    key=${line%%=*}; value=${line#*=}
+    [ "$(grep -Ec "^${key}[[:space:]]*=" "$cfg")" = 1 ] &&
+      grep -Eq "^${key}[[:space:]]*=[[:space:]]*${value}[[:space:]]*$" "$cfg" ||
+      { echo missing; break; }
+  done | grep -q missing && return 1
+  return 0
+}
 rec() { printf '%s\n' "$1" >> "$console"; logger -t ferrix "$1" 2>/dev/null || true; }
 # ev EVENT [,"k":v...]  -> one record with the configured evidence label.
 ev() { rec "{\"evidence\":\"$evidence\",\"event\":\"$1\"${2:-}}"; }
@@ -102,11 +113,18 @@ prepare() {
   else
     ev waydroid-init ',"status":"failed","reason":"images-missing"'
   fi
-  # Software-rendering properties, added once; waydroid init rewrites the
-  # file without them.
-  if [ -f "$cfg" ] && [ -f "$props" ] && { ! grep -q '^ro.hardware.egl' "$cfg" \
-    || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$cfg"; }; then
-    { grep -q '^\[properties\]' "$cfg" || printf '\n[properties]\n'; grep -v '^\[' "$props"; } >> "$cfg"
+  # Software-rendering properties. waydroid init rewrites the file without
+  # them, and Waydroid itself rewrites it as `key = value`; merge by key so a
+  # rerun never leaves a duplicate option (configparser refuses those).
+  if [ -f "$cfg" ] && [ -f "$props" ] && ! props_applied; then
+    merged="$cfg.ferrix"
+    awk -v props="$props" '
+      BEGIN { while ((getline line < props) > 0) if (line ~ /=/ && line !~ /^\[/) {
+                key = line; sub(/[ \t]*=.*/, "", key); managed[key] = 1 } }
+      { key = $0; sub(/[ \t]*=.*/, "", key); if (!($0 ~ /=/ && key in managed)) print }
+    ' "$cfg" > "$merged"
+    { grep -q '^\[properties\]' "$merged" || printf '\n[properties]\n'; grep -v '^\[' "$props"; } >> "$merged"
+    mv "$merged" "$cfg"
     ev waydroid-properties ",\"status\":\"applied\",\"density_dpi\":${density_dpi},\"path\":\"$cfg\""
   fi
   # `waydroid init` creates waydroid_base.prop before the overrides above
@@ -160,6 +178,17 @@ start_pulse() {
         log=$(session_log android-pulse.log)
         as_session "pipewire-pulse >>$log 2>&1 &" || true
         for _ in $(seq 1 50); do [ -S "$xdg/pulse/native" ] && break; sleep 0.1; done
+      fi
+      ;;
+    null)
+      # Waydroid always bind-mounts <xdg>/pulse/native into the container and
+      # LXC refuses to start without it. Without a PipeWire bridge, serve a
+      # socket-only PulseAudio whose sink is null: Android plays silently.
+      # It loads no ALSA module, so PipeWire keeps the sound card.
+      if [ ! -S "$pulse_dir/native" ] && command -v pulseaudio >/dev/null 2>&1; then
+        log=$(session_log android-pulse.log)
+        as_session "pulseaudio -n --daemonize=yes --exit-idle-time=-1 --use-pid-file=no -L module-native-protocol-unix -L module-null-sink -L module-always-sink >>$log 2>&1" || true
+        for _ in $(seq 1 50); do [ -S "$pulse_dir/native" ] && break; sleep 0.1; done
       fi
       ;;
   esac

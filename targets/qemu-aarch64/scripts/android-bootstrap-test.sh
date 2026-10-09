@@ -51,6 +51,10 @@ cat > "$work/bin/dbus-daemon" <<'EOF'
 #!/bin/sh
 printf 'dbus-daemon user=%s\n' "${FAKE_USER:-root}" >> "$FAKE_STATE/calls"
 EOF
+cat > "$work/bin/pulseaudio" <<'EOF'
+#!/bin/sh
+printf 'pulseaudio user=%s args=%s\n' "${FAKE_USER:-root}" "$*" >> "$FAKE_STATE/calls"
+EOF
 cat > "$work/bin/pipewire-pulse" <<'EOF'
 #!/bin/sh
 printf 'pipewire-pulse user=%s xdg=%s\n' "${FAKE_USER:-root}" "$XDG_RUNTIME_DIR" >> "$FAKE_STATE/calls"
@@ -145,6 +149,21 @@ check '^app-install user=root$' "$work/state/calls"
 check "^session-start user=root bus=unix:path=$work/xdg/ferrix-android-bus wayland=wayland-0\$" "$work/state/calls"
 refute '^su ' "$work/state/calls"
 
+# Waydroid rewrites its config as `key = value`; a rerun with a stale value
+# must replace, not duplicate, the managed options.
+cfg="$work/var/lib/waydroid/waydroid.cfg"
+sed -i.bak -e 's/^ro.hardware.gralloc=default$/ro.hardware.gralloc = default/' \
+  -e 's/^ro.sf.lcd_density=.*/ro.sf.lcd_density = 320/' "$cfg"
+common_env sh "$helper" prepare
+[ "$(grep -c '^ro.hardware.gralloc' "$cfg")" = 1 ] || { echo 'FAIL android-bootstrap-test: duplicate gralloc option' >&2; exit 1; }
+[ "$(grep -c '^ro.sf.lcd_density' "$cfg")" = 1 ] || { echo 'FAIL android-bootstrap-test: duplicate density option' >&2; exit 1; }
+check '^ro.sf.lcd_density=400$' "$cfg"
+
+# A config already holding a duplicate (an older helper's rerun) is repaired.
+printf 'ro.hardware.gralloc=default\n' >> "$cfg"
+common_env sh "$helper" prepare
+[ "$(grep -c '^ro.hardware.gralloc' "$cfg")" = 1 ] || { echo 'FAIL android-bootstrap-test: duplicate not repaired' >&2; exit 1; }
+
 # Pixel-style provision: session owned by `user`, PipeWire pulse.
 rm -f "$work/state/installed" "$work/state/role"
 : > "$work/console"
@@ -170,6 +189,15 @@ check '^lxc-attach user=root ' "$work/state/calls"
 common_env FERRIX_ANDROID_SESSION_USER=user FERRIX_ANDROID_PULSE=none sh "$helper" provision
 check '"event":"android-app-provision".*"status":"present"' "$work/console"
 refute '^app-install' "$work/state/calls"
+
+# Null pulse: a socket-only PulseAudio for Waydroid's mandatory bind mount,
+# never an ALSA module (PipeWire keeps the card).
+: > "$work/console"
+: > "$work/state/calls"
+common_env FERRIX_ANDROID_SESSION_USER=user FERRIX_ANDROID_PULSE=null sh "$helper" provision
+check '^pulseaudio user=user args=-n .*module-native-protocol-unix.*module-null-sink' "$work/state/calls"
+refute '^pulseaudio .*alsa' "$work/state/calls"
+check '"event":"android-pulse","mode":"null"' "$work/console"
 
 # run without a compositor socket: typed failure, no session start.
 : > "$work/console"
