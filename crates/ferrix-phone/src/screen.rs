@@ -5,6 +5,7 @@
 
 use ferrix_telephony_api::{AudioRoute, CallState, Direction};
 use ferrix_ui::draw::{Canvas, Rect, Style, Type};
+use ferrix_ui::icons::Icon;
 use ferrix_ui::theme;
 use ferrix_ui::widgets::{
     self, ButtonKind, Tone, button, chip, clock_strip, gesture_pill, keypad, list_row, notice,
@@ -73,14 +74,15 @@ fn tabs(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         } else {
             Tone::Neutral
         };
-        let label = match page {
-            Page::Recent => "Recent",
-            _ => "Dialer",
+        let (icon, label) = match page {
+            Page::Recent => (Icon::History, "Recent"),
+            _ => (Icon::Dialpad, "Dialer"),
         };
-        chip(
+        widgets::chip_with_icon(
             c,
             ty,
             r,
+            Some(icon),
             label,
             tone,
             input.pressed == Some(Target::Tab(page)),
@@ -143,11 +145,12 @@ fn dialer(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         input.pressed == Some(Target::Call),
         model.dial_block().is_ok(),
     );
-    button(
+    // Backspace: the filled glyph replaces the font's U+232B; the hit target
+    // and `ui-state` keep the name `delete`.
+    widgets::icon_button(
         c,
-        ty,
         l.delete_rect(),
-        "\u{232b}",
+        Icon::Backspace,
         ButtonKind::Secondary,
         input.pressed == Some(Target::Delete),
         !model.typed.is_empty(),

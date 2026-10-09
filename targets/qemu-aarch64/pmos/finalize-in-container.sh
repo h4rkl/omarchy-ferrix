@@ -85,6 +85,14 @@ for descriptor in /product/apps/*.json; do
   install -Dm644 "$descriptor" "$mnt/usr/share/ferrix/apps/$(basename "$descriptor")"
 done
 [ -f "$mnt/usr/share/ferrix/apps/grants.json" ] || fail "missing-grants" "/product/apps/grants.json not staged"
+# Third-party notices staged by qemu-build.sh (Material Symbols licence, JetBrains
+# Mono OFL; docs/licensing.md).
+if [ -d /product/licenses ]; then
+  for notice in /product/licenses/*/*; do
+    rel=${notice#/product/licenses/}
+    install -Dm644 "$notice" "$mnt/usr/share/licenses/ferrix/$rel"
+  done
+fi
 contacts_fixtures_sha=""
 if [ -f /product/contacts/mock-contacts.json ]; then
   install -Dm644 /product/contacts/mock-contacts.json "$mnt/usr/share/ferrix/contacts/mock-contacts.json"

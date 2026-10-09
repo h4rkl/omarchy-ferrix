@@ -5,6 +5,7 @@
 //! framebuffer shows. Everything is pure drawing over [`Canvas`].
 
 use crate::draw::{Canvas, Rect, Style, Type};
+use crate::icons::{self, Icon};
 use crate::osk::{self, Key, OskState};
 use crate::theme;
 
@@ -125,7 +126,16 @@ pub fn page_header(
             t.surface_hi,
         );
     }
-    ty.text(c, Style::bold(s(48) as f32, t.rust), "<", s(64), s(178));
+    // The back affordance is the Material chevron_left glyph; the hit target is
+    // `back_rect`, and "back" stays the accessible name in `ui-state`.
+    icons::draw(
+        c,
+        Icon::Back,
+        s(40),
+        s(114),
+        s(88),
+        if back_pressed { t.rust_hi } else { t.rust },
+    );
     let title_style = Style::bold(s(54) as f32, t.fg);
     ty.text(c, title_style, title, s(150), s(178));
     if let Some(status) = status {
@@ -248,6 +258,20 @@ impl Tone {
 /// A small state chip: 6 px radius, hairline border in the tone color,
 /// tone-colored text. Pressed raises the fill.
 pub fn chip(c: &mut Canvas, ty: &Type, r: Rect, label: &str, tone: Tone, pressed: bool) {
+    chip_with_icon(c, ty, r, None, label, tone, pressed);
+}
+
+/// A [`chip`] with an optional leading glyph in the label's colour (tab and
+/// segment bars). The label stays; an empty label centres the glyph alone.
+pub fn chip_with_icon(
+    c: &mut Canvas,
+    ty: &Type,
+    r: Rect,
+    icon: Option<Icon>,
+    label: &str,
+    tone: Tone,
+    pressed: bool,
+) {
     let t = theme::get();
     let b = basis((c.width() as u32, c.height() as u32));
     let s = |v: i32| scale(v, b);
@@ -263,17 +287,35 @@ pub fn chip(c: &mut Canvas, ty: &Type, r: Rect, label: &str, tone: Tone, pressed
     } else {
         tone.color()
     };
+    // A glyph alone fills more of the chip than one beside a label.
+    let glyph = if label.is_empty() {
+        r.h * 3 / 4
+    } else {
+        r.h * 11 / 20
+    }
+    .max(8);
+    let glyph_w = icon.map_or(0, |_| {
+        if label.is_empty() {
+            glyph
+        } else {
+            glyph + s(14)
+        }
+    });
     let mut style = Style::bold((r.h as f32 * 0.42).max(12.0), color);
-    let text = ellipsize(ty, style, label, r.w - s(24));
-    if ty.width(style, &text) > r.w - s(16) {
+    let text = ellipsize(ty, style, label, r.w - s(24) - glyph_w);
+    if ty.width(style, &text) > r.w - s(16) - glyph_w {
         style.px = (style.px * 0.8).max(10.0);
     }
-    let w = ty.width(style, &text);
+    let w = ty.width(style, &text) + glyph_w;
+    let x = r.x + (r.w - w) / 2;
+    if let Some(icon) = icon {
+        icons::draw(c, icon, x, r.y + (r.h - glyph) / 2, glyph, color);
+    }
     ty.text(
         c,
         style,
         &text,
-        r.x + (r.w - w) / 2,
+        x + glyph_w,
         r.y + r.h / 2 + (style.px * 0.36) as i32,
     );
 }
@@ -298,6 +340,38 @@ pub fn button(
     pressed: bool,
     enabled: bool,
 ) {
+    let b = basis((c.width() as u32, c.height() as u32));
+    let s = |v: i32| scale(v, b);
+    let color = button_frame(c, r, kind, pressed, enabled);
+    let style = Style::bold((r.h as f32 * 0.36).max(14.0), color);
+    let text = ellipsize(ty, style, label, r.w - s(32));
+    let w = ty.width(style, &text);
+    ty.text(
+        c,
+        style,
+        &text,
+        r.x + (r.w - w) / 2,
+        r.y + r.h / 2 + (style.px * 0.36) as i32,
+    );
+}
+
+/// A [`button`] whose face is a glyph instead of text (backspace). The caller
+/// keeps the action's name in its hit target and `ui-state`.
+pub fn icon_button(
+    c: &mut Canvas,
+    r: Rect,
+    icon: Icon,
+    kind: ButtonKind,
+    pressed: bool,
+    enabled: bool,
+) {
+    let color = button_frame(c, r, kind, pressed, enabled);
+    let size = (r.h.min(r.w) / 2).max(8);
+    icons::draw_in(c, icon, r, size, color);
+}
+
+/// Draws a button's fill and outline; returns its content colour.
+fn button_frame(c: &mut Canvas, r: Rect, kind: ButtonKind, pressed: bool, enabled: bool) -> u32 {
     let t = theme::get();
     let b = basis((c.width() as u32, c.height() as u32));
     let s = |v: i32| scale(v, b);
@@ -311,16 +385,7 @@ pub fn button(
         (ButtonKind::Secondary, true, false) => (hairline(b), t.border, t.fg),
     };
     c.stroke_rounded(r, s(10), thickness, outline);
-    let style = Style::bold((r.h as f32 * 0.36).max(14.0), color);
-    let text = ellipsize(ty, style, label, r.w - s(32));
-    let w = ty.width(style, &text);
-    ty.text(
-        c,
-        style,
-        &text,
-        r.x + (r.w - w) / 2,
-        r.y + r.h / 2 + (style.px * 0.36) as i32,
-    );
+    color
 }
 
 /// Row rectangles for a vertical list starting at `top`: full width minus
@@ -352,6 +417,36 @@ pub fn list_row(
     trailing: Option<(&str, Tone)>,
     pressed: bool,
 ) {
+    let trailing = trailing.map_or(Trailing::None, |(label, tone)| Trailing::Chip(label, tone));
+    list_row_with(c, ty, r, None, title, subtitle, trailing, pressed);
+}
+
+/// The trailing affordance of a [`list_row_with`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trailing<'a> {
+    None,
+    /// A text state chip (`on`, `saved`, `unavailable`).
+    Chip(&'a str, Tone),
+    /// A glyph chip (`More`, `Add`): a separate action inside the row.
+    Icon(Icon, Tone),
+    /// A bare forward chevron: the whole row opens a page.
+    Chevron,
+}
+
+/// [`list_row`] with an optional leading glyph (`icon`, colour) and any
+/// [`Trailing`] affordance. The title and subtitle always stay: the glyph is
+/// additive.
+#[allow(clippy::too_many_arguments)]
+pub fn list_row_with(
+    c: &mut Canvas,
+    ty: &Type,
+    r: Rect,
+    leading: Option<(Icon, u32)>,
+    title: &str,
+    subtitle: &str,
+    trailing: Trailing<'_>,
+    pressed: bool,
+) {
     let t = theme::get();
     let b = basis((c.width() as u32, c.height() as u32));
     let s = |v: i32| scale(v, b);
@@ -362,21 +457,47 @@ pub fn list_row(
         if pressed { s(3) } else { hairline(b) },
         if pressed { t.rust } else { t.border },
     );
-    let mut trailing_w = 0;
-    if let Some((label, tone)) = trailing {
-        let style = Style::bold(s(24) as f32, tone.color());
-        let w = ty.width(style, label) + s(28);
-        let chip_r = Rect {
-            x: r.x + r.w - s(24) - w,
-            y: r.y + (r.h - s(48)) / 2,
-            w,
-            h: s(48),
-        };
-        chip(c, ty, chip_r, label, tone, false);
-        trailing_w = w + s(36);
+    let chip_h = s(48);
+    let chip_at = |w: i32| Rect {
+        x: r.x + r.w - s(24) - w,
+        y: r.y + (r.h - chip_h) / 2,
+        w,
+        h: chip_h,
+    };
+    let trailing_w = match trailing {
+        Trailing::None => 0,
+        Trailing::Chip(label, tone) => {
+            let style = Style::bold(s(24) as f32, tone.color());
+            let w = ty.width(style, label) + s(28);
+            chip(c, ty, chip_at(w), label, tone, false);
+            w + s(36)
+        }
+        Trailing::Icon(icon, tone) => {
+            let w = s(72);
+            chip_with_icon(c, ty, chip_at(w), Some(icon), "", tone, false);
+            w + s(36)
+        }
+        Trailing::Chevron => {
+            let size = s(56);
+            icons::draw(
+                c,
+                Icon::Forward,
+                r.x + r.w - s(16) - size,
+                r.y + (r.h - size) / 2,
+                size,
+                t.fg_dim,
+            );
+            size + s(24)
+        }
+    };
+    let mut text_x = r.x + s(32);
+    if let Some((icon, color)) = leading {
+        let size = s(56);
+        icons::draw(c, icon, text_x, r.y + (r.h - size) / 2, size, color);
+        text_x += size + s(24);
     }
     let title_style = Style::bold(s(34) as f32, t.fg);
-    let max = r.w - s(64) - trailing_w;
+    let max = r.x + r.w - s(32) - text_x - trailing_w;
     let has_sub = !subtitle.is_empty();
     let title_base = if has_sub {
         r.y + r.h / 2 - s(6)
@@ -387,7 +508,7 @@ pub fn list_row(
         c,
         title_style,
         &ellipsize(ty, title_style, title, max),
-        r.x + s(32),
+        text_x,
         title_base,
     );
     if has_sub {
@@ -396,7 +517,7 @@ pub fn list_row(
             c,
             sub_style,
             &ellipsize(ty, sub_style, subtitle, max),
-            r.x + s(32),
+            text_x,
             r.y + r.h / 2 + s(38),
         );
     }

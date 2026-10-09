@@ -7,10 +7,12 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_ui::draw::{Canvas, Rect, Type};
+use ferrix_ui::icons::Icon;
 use ferrix_ui::keyboard::{self as kbd, KeyboardConfig, LetterLayout};
 use ferrix_ui::osk::{self, Key, OskState};
 use ferrix_ui::widgets::{
-    Edit, Tone, contains, edit_text, list_rects, list_row, section_label, text_field, wrap_text,
+    Edit, Tone, Trailing, contains, edit_text, list_rects, list_row_with, section_label,
+    text_field, wrap_text,
 };
 
 use crate::interaction::{Layout, Target};
@@ -141,13 +143,20 @@ pub fn draw(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, pressed: Optio
         .enumerate()
     {
         let active = layout.id == model.kbd_layout;
-        list_row(
+        let t = ferrix_ui::theme::get();
+        // The filled keyboard glyph follows the row's state: rust when active.
+        list_row_with(
             c,
             ty,
             r,
+            Some((Icon::Keyboard, if active { t.rust } else { t.fg_dim })),
             &layout.name,
             &preview_row(layout),
-            active.then_some(("active", Tone::Accent)),
+            if active {
+                Trailing::Chip("active", Tone::Accent)
+            } else {
+                Trailing::None
+            },
             pressed == Some(Target::KbdLayout(i)),
         );
     }

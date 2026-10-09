@@ -4,10 +4,11 @@
 //! focused field, the pressed row); `err` only on Delete and on failures.
 
 use ferrix_ui::draw::{Canvas, Style, Type};
+use ferrix_ui::icons::{self, Icon};
 use ferrix_ui::theme;
 use ferrix_ui::widgets::{
-    ButtonKind, Tone, button, chip, clock_strip, ellipsize, gesture_pill, hairline, keyboard,
-    list_row, notice, page_header, section_label, text_field, wrap_text,
+    ButtonKind, Tone, Trailing, button, chip, clock_strip, ellipsize, gesture_pill, hairline,
+    keyboard, list_row_with, notice, page_header, section_label, text_field, wrap_text,
 };
 
 use crate::interaction::{Crumb, Input, Layout, Target, keyboard_visible, view_lines};
@@ -15,8 +16,18 @@ use crate::model::{Model, Notice, Page};
 use crate::scroll;
 use crate::store::{FsError, Kind, human_size};
 
-/// Trailing affordance of a row: the entry's details.
-const MORE: &str = "\u{b7}\u{b7}\u{b7}";
+/// The glyph for an entry: folders, the file type from the extension,
+/// links, and other special files. Folders read in `fg`, everything else in
+/// `fg_dim` so the names stay the lead signal.
+fn entry_icon(kind: Kind, name: &str) -> (Icon, u32) {
+    let t = theme::get();
+    match kind {
+        Kind::Folder => (Icon::Folder, t.fg),
+        Kind::File => (Icon::for_file_name(name), t.fg_dim),
+        Kind::Link => (Icon::Link, t.fg_dim),
+        Kind::Other => (Icon::FileUnknown, t.fg_dim),
+    }
+}
 
 pub fn compose(
     ty: &Type,
@@ -125,8 +136,10 @@ fn crumbs(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         let pressed = matches!(crumb, Crumb::Depth(d) if input.pressed == Some(Target::Crumb(*d)));
         chip(c, ty, *r, label, tone, pressed);
         if i < last {
-            let x = r.x + r.w + (l.crumb_gap() - ty.width(sep, "/")) / 2;
-            ty.text(c, sep, "/", x, r.y + r.h / 2 + l.s(10));
+            // A forward chevron separates path segments.
+            let size = l.crumb_gap().min(r.h * 3 / 4);
+            let x = r.x + r.w + (l.crumb_gap() - size) / 2;
+            icons::draw(c, Icon::Forward, x, r.y + (r.h - size) / 2, size, sep.color);
         }
     }
 }
@@ -165,13 +178,15 @@ fn browse(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         } else {
             entry.name.clone()
         };
-        list_row(
+        // The trailing `More` glyph opens the entry's details (`RowMore`).
+        list_row_with(
             c,
             ty,
             r,
+            Some(entry_icon(entry.kind, &entry.name)),
             &title,
             &model.subtitle(entry),
-            Some((MORE, tone)),
+            Trailing::Icon(Icon::More, tone),
             pressed,
         );
     }
@@ -454,9 +469,34 @@ mod tests {
     }
 
     #[test]
-    fn the_more_glyph_and_viewer_face_are_monospace_and_present() {
+    fn rows_draw_a_type_glyph_and_the_more_glyph_inside_its_hit_area() {
+        let t = theme::get();
         let ty = Type::load().unwrap();
-        assert!(ty.has_glyphs(ferrix_ui::draw::Weight::Bold, MORE));
+        let l = Layout::new(SIZE);
+        let (_d, m) = model(3);
+        let c = compose(&ty, SIZE, 600, &m, &Input::default());
+        let rows = l.row_rects(m.entries().len());
+        let count = |r: Rect, color: u32| {
+            (r.y..r.y + r.h)
+                .flat_map(|y| (r.x..r.x + r.w).map(move |x| (x, y)))
+                .filter(|(x, y)| c.get(*x, *y) == color)
+                .count()
+        };
+        let leading = |row: Rect| Rect {
+            x: row.x + l.s(32),
+            y: row.y,
+            w: l.s(56),
+            h: row.h,
+        };
+        // Documents/ first (folder glyph in fg), then the .txt files (fg_dim).
+        assert!(count(leading(rows[0]), t.fg) > 100, "folder glyph");
+        assert!(count(leading(rows[1]), t.fg_dim) > 100, "text-file glyph");
+        assert!(count(l.more_rect(rows[1]), t.fg) > 20, "More glyph");
+    }
+
+    #[test]
+    fn the_viewer_face_is_monospace_and_present() {
+        let ty = Type::load().unwrap();
         assert!(ty.has_glyphs(ferrix_ui::draw::Weight::Bold, "\u{2026}"));
         let l = Layout::new(SIZE);
         let style = Style::regular(l.view_px() as f32, 0);

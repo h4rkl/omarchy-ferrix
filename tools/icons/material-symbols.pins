@@ -1,0 +1,75 @@
+# Pinned Google Material Symbols subset for the Ferrix UI glyphs (issue #20).
+# Read by tools/icons/material-symbols-fetch.sh; never sourced as shell.
+#
+# Source of the pins (recorded 2026-10-10, UTC):
+#   Repository    https://github.com/google/material-design-icons
+#   Licence       Apache-2.0 (GitHub licence API and the LICENSE file at the
+#                 commit below; vendored next to the SVGs)
+#   Commit        master at 2026-10-09T02:25:39Z
+#   Style         Material Symbols Rounded, weight 400, grade 0, optical
+#                 size 24, FILL 1 (`symbols/web/<name>/materialsymbolsrounded/
+#                 <name>_fill1_24px.svg`)
+#
+# Every ICON below exists as a FILL 1 file at the pinned commit, so no glyph
+# falls back to the outlined (FILL 0) file; the fetch script refuses to fall
+# back silently. Per-file SHA-256 hashes live in
+# crates/ferrix-ui/assets/icons/material-symbols/SHA256SUMS, which
+# crates/ferrix-ui/build.rs enforces. Nothing here auto-updates: moving the pin
+# means editing the commit, running `just icons-fetch`, reviewing the diff, and
+# then `just icons-verify`.
+MATERIAL_SYMBOLS_COMMIT=49d4db35df873165d6bd6ba09b063c7dafbac2f4
+MATERIAL_SYMBOLS_FAMILY=materialsymbolsrounded
+MATERIAL_SYMBOLS_VARIANT=fill1_24px
+MATERIAL_SYMBOLS_PINNED_ON=2026-10-10
+# Launcher applications.
+ICON=call
+ICON=chat
+ICON=contacts
+ICON=settings
+ICON=terminal
+ICON=photo_camera
+ICON=language
+ICON=home
+# Status bar and quick settings.
+ICON=signal_wifi_off
+ICON=network_wifi_1_bar
+ICON=network_wifi_2_bar
+ICON=signal_wifi_4_bar
+ICON=signal_cellular_0_bar
+ICON=signal_cellular_1_bar
+ICON=signal_cellular_2_bar
+ICON=signal_cellular_3_bar
+ICON=signal_cellular_4_bar
+ICON=battery_android_0
+ICON=battery_android_1
+ICON=battery_android_2
+ICON=battery_android_3
+ICON=battery_android_4
+ICON=battery_android_5
+ICON=battery_android_6
+ICON=battery_android_full
+ICON=battery_android_bolt
+ICON=bluetooth
+ICON=notifications
+ICON=light_mode
+ICON=keyboard
+# Navigation and actions.
+ICON=chevron_left
+ICON=chevron_right
+ICON=more_horiz
+ICON=add
+ICON=close
+ICON=backspace
+ICON=dialpad
+ICON=history
+# Files entry types.
+ICON=folder
+ICON=draft
+ICON=description
+ICON=image
+ICON=audio_file
+ICON=video_file
+ICON=folder_zip
+ICON=code_blocks
+ICON=link
+ICON=unknown_document

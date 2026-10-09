@@ -282,6 +282,86 @@ shaping. IBM Plex and Noto are design selections, not shipped claims, until
 font packaging, shaping, fallback, and script-specific graphical evidence
 exist. Unsupported text must expose a missing-glyph state honestly.
 
+## Icons
+
+First-party glyphs come from one set: a pinned subset of Google
+[Material Symbols](https://github.com/google/material-design-icons)
+(Apache-2.0), **Rounded** family, weight 400, grade 0, optical size 24,
+**FILL 1** (owner decision 2026-10-10, replacing Remix Icon, whose 2026
+licence is not MIT/Apache-compatible; pin and licence evidence in
+`docs/licensing.md` and `crates/ferrix-ui/assets/icons/material-symbols/README.md`).
+`ferrix-ui` compiles the vendored SVGs into outline data at build time
+(`build.rs`, hash-pinned inputs, `usvg` as a build-dependency only). At run
+time `ferrix_ui::icons::draw` fills an outline once per (glyph, pixel size)
+through the same `tiny-skia` software path as every other shape, caches the
+anti-aliased coverage mask, and tints it with the requested theme colour on
+each draw. There is no run-time SVG parsing, icon font, file, network or GPU
+dependency. The API is `ferrix_ui::icons::{Icon, draw, draw_centered, draw_in}`.
+
+Fit reason: the build-time outline compiler already existed for the previous
+set and keeps `usvg`/`roxmltree` out of every binary; caching masks per size
+gives the startup and redraw cost of an atlas without a fixed atlas
+resolution, so glyphs stay sharp at the 830, 1080 and 1200 px panel widths.
+
+Rules:
+
+- **Filled always (owner rule, 2026-10-10).** Use the FILL 1 file for every
+  glyph, in every state, in one style family (Rounded). Fall back to the
+  outlined (FILL 0) file only where no FILL 1 file exists, and record it in
+  the notice; today none falls back. Active, pressed and inactive states are
+  shown with colour, never by switching fill.
+- **Colour by state, from the theme.** `fg_dim` for inactive or supporting
+  glyphs, `fg` for primary content (folders, the backspace key), `rust` for
+  the active or actionable state (an on toggle, the back affordance), `steel`
+  for network and connection state (cellular and Wi-Fi), the descriptor tone on
+  launcher tiles, and `ok`/`err` for charging and low battery. All come from
+  `ferrix_ui::theme` (`colors.toml`); the one-accent-per-region budget still
+  applies.
+- **Additive, never a substitute.** Every glyph sits beside the text label or
+  accessible name that already existed (tile names, toggle names, tab labels,
+  `back`/`delete` targets in `ui-state`). Glyphs never carry state on their
+  own (`docs/design.md` contrast rules); the battery percentage is always
+  printed.
+- **UI symbols only.** Never use a glyph as a logo, brand mark, or product
+  identity. Ferrix remains the only product identity.
+- **Sizes at the 1080 px basis:** 40 px in the 72 px status strip, 88 px back
+  affordance box, 56 px leading row glyphs, 72 px quick-settings glyphs, 96 px
+  launcher glyphs inside about 290x290 px tiles. Scale with
+  `value * basis / 1080` like every other metric.
+- **The home indicator stays a pill.** It is the one pill shape in the system
+  and is not an icon.
+
+Subset (Material Symbols name): launcher `call` (Phone), `chat` (Messages),
+`contacts`, `settings`, `terminal`, `photo_camera` (Camera), `folder`
+(Files), `language` (Browser), `home`; status strip `signal_cellular_0_bar`
+to `signal_cellular_4_bar` (lit bars solid, unlit outlined), `signal_wifi_off`,
+`network_wifi_1_bar`, `network_wifi_2_bar`, `signal_wifi_4_bar`,
+`battery_android_0` to `battery_android_6` and `battery_android_full` (charge
+in seven steps, full from 95 %), `battery_android_bolt` (charging); quick
+settings, notifications and Settings `bluetooth`, `light_mode` (brightness),
+`keyboard`, `notifications`; navigation and actions `chevron_left` (back),
+`chevron_right` (forward chevron, breadcrumb separator), `more_horiz` (row
+details), `add`, `close`, `backspace`, `dialpad` (Dialer tab), `history`
+(Recent tab); Files types `folder`, `draft`, `description`, `image`,
+`audio_file`, `video_file`, `folder_zip`, `code_blocks`, `link`,
+`unknown_document`.
+
+Exceptions and departures:
+
+- **No outlined fallbacks.** Every glyph has a FILL 1 file at the pin. For
+  stroke-like glyphs (chevrons, `add`, `close`, `link`, level meters) the
+  upstream FILL 1 file is identical to FILL 0; that is the set's design, not
+  a fallback.
+- **On-screen keyboard and Terminal:** key caps keep their text labels
+  (`⌫`, `←`, `→`, `SHIFT`); the keyboard is a text instrument and its labels
+  are shared with the terminal's key mapping. Only the Phone dialer's
+  backspace button uses the `backspace` glyph.
+- **Not drawn yet:** `home` and `close` are pinned for the home and dismiss
+  controls but no current surface draws a home button or a close control; the
+  home gesture stays a pill.
+- **Third-party apps** without a first-party glyph keep their descriptor glyph
+  or first letter on the launcher tile.
+
 ## Components and states
 
 ### Status strip
@@ -418,7 +498,11 @@ Implemented today:
 - software-rendered cards, rows, fields, keyboard, launcher, status surfaces,
   quick settings, notifications, and Terminal;
 - tight radii, hairlines, instrument rails, focused fullscreen flows, and
-  concise evidence-labelled copy.
+  concise evidence-labelled copy;
+- the pinned filled Material Symbols (Rounded) glyph set on the launcher,
+  status strip (cellular, Wi-Fi, battery), quick settings, notifications, page
+  headers (back), Files rows and breadcrumbs, Settings rows, and the Phone
+  tabs and backspace key.
 
 Selected but not yet shipped:
 

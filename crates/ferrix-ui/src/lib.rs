@@ -10,6 +10,9 @@
 //!   `keyboard.toml` (layout, repeat timing), and the key-repeat timer.
 //! - [`widgets`] and [`gesture`]: shared chips, rows, fields, keypad, and
 //!   keyboard drawing plus the touch tracker every app surface reuses.
+//! - [`icons`]: the pinned Google Material Symbols (Apache-2.0) glyph subset,
+//!   compiled to outlines at build time, rasterised once per pixel size and
+//!   tinted with theme colours.
 //! - [`evidence`]: single-line JSON evidence records on stdout and the
 //!   session evidence label.
 //! - [`clock`]: the local wall-clock minute every status bar shows and a
@@ -25,6 +28,7 @@ pub mod clock;
 pub mod draw;
 pub mod evidence;
 pub mod gesture;
+pub mod icons;
 pub mod keyboard;
 pub mod keymap;
 pub mod osk;

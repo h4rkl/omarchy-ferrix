@@ -13,6 +13,16 @@ local-init:
 license-check:
     @sh "{{root}}/tools/dev/license-check.sh"
 
+# Re-derive the vendored Material Symbols UI glyphs from the commit pinned in
+# tools/icons/material-symbols.pins (network). `icons-fetch` rewrites
+# crates/ferrix-ui/assets/icons/material-symbols/ for review; `icons-verify`
+# only compares. The build itself never downloads anything.
+icons-fetch:
+    @sh "{{root}}/tools/icons/material-symbols-fetch.sh"
+
+icons-verify:
+    @sh "{{root}}/tools/icons/material-symbols-fetch.sh" --verify
+
 # Explicit, opt-in host package installation. See AGENT_INSTALL.md.
 dev-setup:
     @"{{root}}/tools/dev/install.sh"
