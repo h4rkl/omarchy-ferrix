@@ -42,8 +42,8 @@ module_args() {
 }
 
 # Insert every module named in a Kleaf modules.load list (paths relative to
-# the release directory). Lists are dependency-ordered; a second and third pass
-# pick up anything that raced a dependency.
+# the release directory) through the modprobe shim, which loads modules.dep
+# dependencies first. A second and third pass catch probe-order stragglers.
 load_list() {
 	list=$1
 	directory=$2
@@ -75,8 +75,9 @@ load_list() {
 			# Already inserted (e.g. by the pKVM early loader): nothing to do.
 			loaded=$(printf '%s' "${module##*/}" | $bb sed 's/\.ko$//' | $bb tr - _)
 			$bb grep -q "^$loaded " /proc/modules && continue
-			# shellcheck disable=SC2046
-			$bb insmod "$directory/$module" $(module_args "$module") 2>/dev/null || retry="$retry $module"
+			# Like Android's first-stage init, resolve modules.dep so a module's
+			# dependencies (which may come later in the list) load first.
+			/system/bin/modprobe -q -d "$directory" -- "$loaded" || retry="$retry $module"
 		done
 		pending=$retry
 		pass=$((pass + 1))
@@ -299,6 +300,8 @@ start_flash_logger
 first_stage=/lib/modules/$release
 [ -f "$first_stage/modules.load" ] || first_stage=/lib/modules
 modules_skip=$($bb sed -n 's/.*ferrix\.modules_skip=\([A-Za-z0-9_,-]*\).*/\1/p' /proc/cmdline | $bb tr - _)
+# The modprobe shim refuses these too, so a dependency cannot pull them back in.
+export FERRIX_MODULES_SKIP="$modules_skip"
 modules_limit=$($bb sed -n 's/.*ferrix\.modules_limit=\([0-9]*\).*/\1/p' /proc/cmdline)
 load_list "$first_stage/modules.load" "$first_stage" "$modules_limit"
 $bb mdev -s 2>/dev/null || :

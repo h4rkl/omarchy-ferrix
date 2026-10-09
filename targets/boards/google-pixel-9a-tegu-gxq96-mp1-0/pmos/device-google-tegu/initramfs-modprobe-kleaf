@@ -68,7 +68,22 @@ resolve() {
 		*) printf '%s\n' "$base/$1" ;;
 	esac
 }
+loaded_already() {
+	$bb grep -q "^$(printf '%s' "${1##*/}" | $bb sed 's/\.ko$//' | $bb tr - _) " /proc/modules
+}
+skipped() {
+	case ",${FERRIX_MODULES_SKIP:-}," in
+		*",$(printf '%s' "${1##*/}" | $bb sed 's/\.ko$//' | $bb tr - _),"*) return 0 ;;
+	esac
+	return 1
+}
+loaded_already "$module" && exit 0
+skipped "$module" && exit 1
 for dependency in $reversed; do
+	skipped "$dependency" && exit 1
+done
+for dependency in $reversed; do
+	loaded_already "$dependency" && continue
 	# shellcheck disable=SC2046
 	$bb insmod "$(resolve "$dependency")" $(module_args "$dependency") 2>/dev/null || :
 done
