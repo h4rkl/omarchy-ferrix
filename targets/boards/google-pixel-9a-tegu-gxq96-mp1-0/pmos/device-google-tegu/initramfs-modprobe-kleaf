@@ -51,9 +51,17 @@ reversed=
 for dependency in $dependencies; do
 	reversed="$dependency $reversed"
 done
+# Kleaf writes paths relative to the release directory; older Pixel ramdisks
+# write absolute /lib/modules/NAME.ko paths.
+resolve() {
+	case "$1" in
+		/*) printf '%s\n' "$1" ;;
+		*) printf '%s\n' "$base/$1" ;;
+	esac
+}
 for dependency in $reversed; do
-	$bb insmod "$base/$dependency" 2>/dev/null || :
+	$bb insmod "$(resolve "$dependency")" 2>/dev/null || :
 done
-$bb insmod "$base/$module" 2>/dev/null && exit 0
+$bb insmod "$(resolve "$module")" 2>/dev/null && exit 0
 # Already loaded counts as success.
 $bb grep -q "^$name " /proc/modules
