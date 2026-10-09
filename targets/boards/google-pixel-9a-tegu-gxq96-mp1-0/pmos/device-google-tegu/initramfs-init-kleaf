@@ -88,6 +88,7 @@ load_list() {
 }
 
 gadget_bound=
+console_pids=
 
 start_usb_debug() {
 	[ -z "$gadget_bound" ] || return 0
@@ -146,12 +147,31 @@ start_usb_debug() {
 			$bb sleep 2
 		done
 	) &
+	console_pids="$console_pids $!"
 	(
 		while :; do
 			$bb setsid $bb sh -c "exec $bb sh -i </dev/ttyGS1 >/dev/ttyGS1 2>&1"
 			$bb sleep 1
 		done
 	) &
+	console_pids="$console_pids $!"
+}
+
+# After switch_root these initramfs processes keep the old, emptied root and
+# can no longer run anything; stop them and let the rootfs init own the ports.
+handoff_usb_console() {
+	[ -n "$gadget_bound" ] || return 0
+	# shellcheck disable=SC2086
+	[ -n "$console_pids" ] && $bb kill $console_pids 2>/dev/null
+	$bb fuser -k /dev/ttyGS0 /dev/ttyGS1 >/dev/null 2>&1 || :
+	inittab=/newroot/etc/inittab
+	[ -f "$inittab" ] || return 0
+	$bb grep -q '^ttyGS1::' "$inittab" || {
+		echo '# Ferrix bring-up USB console (added by initramfs-init-kleaf)'
+		echo 'ttyGS1::respawn:/sbin/getty -n -l /bin/sh 115200 ttyGS1'
+		echo "::respawn:/bin/sh -c 'cat /dev/kmsg >/dev/ttyGS0'"
+	} >>"$inittab"
+	log 'USB console handed to the rootfs init (inittab ttyGS0/ttyGS1)'
 }
 
 checkpoint() {
@@ -353,6 +373,7 @@ checkpoint dlkm
 
 [ -e /newroot/sbin/init ] || [ -L /newroot/sbin/init ] || hold_then_reboot '/sbin/init missing from the rootfs'
 
+handoff_usb_console
 $bb mount -o move /dev /newroot/dev 2>/dev/null || :
 $bb mount -o move /proc /newroot/proc 2>/dev/null || :
 $bb mount -o move /sys /newroot/sys 2>/dev/null || :
