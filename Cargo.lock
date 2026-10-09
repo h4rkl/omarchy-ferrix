@@ -864,6 +864,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "ferrix-hardware-api",
+ "serde_json",
  "zbus",
 ]
 
@@ -912,6 +913,8 @@ dependencies = [
 name = "ferrix-core"
 version = "0.1.0"
 dependencies = [
+ "ferrix-app-api",
+ "ferrix-app-protocol",
  "ferrix-hardware-api",
  "ferrix-protocol",
  "ferrix-scenario",

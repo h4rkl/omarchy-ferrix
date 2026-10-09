@@ -166,6 +166,12 @@ pub struct Model {
     pub bt_view: crate::bluetooth::BtView,
     /// The detail view's Forget awaits confirmation.
     pub bt_forget_confirm: bool,
+    /// The legacy PIN being typed (never recorded).
+    pub bt_pin: crate::bluetooth::PinDraft,
+    /// When the shown session arrived (anchors the scan countdown).
+    pub bt_session_at: Option<std::time::Instant>,
+    /// The UI clock the countdown is drawn against.
+    pub bt_now: Option<std::time::Instant>,
     /// Brightness preview while the rail is dragged.
     pub brightness_drag: Option<u8>,
     pub(crate) core_lost_once: bool,
@@ -230,6 +236,9 @@ impl Model {
             bt_stale: false,
             bt_view: crate::bluetooth::BtView::Main,
             bt_forget_confirm: false,
+            bt_pin: crate::bluetooth::PinDraft::default(),
+            bt_session_at: None,
+            bt_now: None,
             brightness_drag: None,
             core_lost_once: false,
             net_lost_once: false,

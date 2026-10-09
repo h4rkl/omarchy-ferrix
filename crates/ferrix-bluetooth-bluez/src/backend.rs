@@ -27,7 +27,9 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::{DBusError, MatchRule};
 
-use super::{AdapterRecord, AgentCallbacks, BluezBus, BusError, BusEvent, DeviceRecord, redact};
+use super::{
+    AdapterRecord, AgentCallbacks, BluezBus, BusError, BusEvent, DeviceRecord, PromptAnswer, redact,
+};
 
 const BLUEZ_SERVICE: &str = "org.bluez";
 const ADAPTER_INTERFACE: &str = "org.bluez.Adapter1";
@@ -106,19 +108,35 @@ struct Agent {
 impl Agent {
     /// Hands a prompt to the session and waits (asynchronously) for the
     /// user's answer, the adapter's prompt timeout, or a cancellation.
-    async fn ask(&self, device: &OwnedObjectPath, phase: PairingPhase) -> Result<(), AgentError> {
-        let (answer, answered) = async_channel::bounded::<bool>(1);
+    async fn ask(
+        &self,
+        device: &OwnedObjectPath,
+        phase: PairingPhase,
+    ) -> Result<PromptAnswer, AgentError> {
+        let (answer, answered) = async_channel::bounded::<PromptAnswer>(1);
         self.callbacks.prompt(
             device.as_str(),
             phase,
-            Box::new(move |accept| {
-                let _ = answer.try_send(accept);
+            Box::new(move |reply| {
+                let _ = answer.try_send(reply);
             }),
         );
         match answered.recv().await {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(AgentError::Rejected("declined".to_owned())),
+            Ok(PromptAnswer::Decline) => Err(AgentError::Rejected("declined".to_owned())),
+            Ok(reply) => Ok(reply),
             Err(_) => Err(AgentError::Canceled("no answer".to_owned())),
+        }
+    }
+
+    /// A yes/no prompt: only an explicit accept bonds.
+    async fn confirm(
+        &self,
+        device: &OwnedObjectPath,
+        phase: PairingPhase,
+    ) -> Result<(), AgentError> {
+        match self.ask(device, phase).await? {
+            PromptAnswer::Accept => Ok(()),
+            _ => Err(AgentError::Rejected("declined".to_owned())),
         }
     }
 }
@@ -127,14 +145,13 @@ impl Agent {
 impl Agent {
     fn release(&self) {}
 
-    /// Legacy PIN entry is not offered (documented choice): refuse, and
-    /// let the attempt fail as `pin-required`.
-    fn request_pin_code(&self, device: OwnedObjectPath) -> Result<String, AgentError> {
-        self.callbacks
-            .refuse(device.as_str(), PairingFailure::PinRequired);
-        Err(AgentError::Rejected(
-            "PIN entry is not supported".to_owned(),
-        ))
+    /// Legacy pairing: Settings asks for the remote's PIN. The typed PIN
+    /// is this method's return value and nothing else keeps it.
+    async fn request_pin_code(&self, device: OwnedObjectPath) -> Result<String, AgentError> {
+        match self.ask(&device, PairingPhase::RequestPin).await? {
+            PromptAnswer::Pin(pin) => Ok(pin.expose().to_owned()),
+            _ => Err(AgentError::Rejected("no PIN entered".to_owned())),
+        }
     }
 
     fn display_pin_code(&self, device: OwnedObjectPath, pincode: String) -> Result<(), AgentError> {
@@ -172,12 +189,12 @@ impl Agent {
         device: OwnedObjectPath,
         passkey: u32,
     ) -> Result<(), AgentError> {
-        self.ask(&device, PairingPhase::ConfirmPasskey { passkey })
+        self.confirm(&device, PairingPhase::ConfirmPasskey { passkey })
             .await
     }
 
     async fn request_authorization(&self, device: OwnedObjectPath) -> Result<(), AgentError> {
-        self.ask(&device, PairingPhase::Authorize).await
+        self.confirm(&device, PairingPhase::Authorize).await
     }
 
     /// Services are authorized for bonded devices only, without a prompt.

@@ -111,6 +111,8 @@ name = "Ferrix Mock Legacy Headset"
 kind = "audio"
 rssi = -81
 pairing = "pin"
+# Synthetic legacy PIN (BR/EDR pre-2.1): typed on the Settings PIN card.
+pin = "0000"
 
 [[bluetooth.discoverable]]
 name = "Ferrix Mock Car Kit"

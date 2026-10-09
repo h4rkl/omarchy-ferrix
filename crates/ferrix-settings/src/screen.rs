@@ -254,8 +254,9 @@ fn bluetooth_pair(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &
         found.push_str(&format!(" \u{b7} {unnamed} unnamed hidden"));
     }
     let (title, sub, trailing) = if discovery.active {
-        let sub = match discovery.remaining_ms {
-            Some(ms) => format!("{found} \u{b7} stops in {} s", ms.div_ceil(1000)),
+        // Ticks on the UI clock between session events.
+        let sub = match model.discovery_seconds_left() {
+            Some(secs) => format!("{found} \u{b7} stops in {secs} s"),
             None => found,
         };
         ("Scanning", sub, ("scanning", Tone::Steel))
@@ -280,7 +281,7 @@ fn bluetooth_pair(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &
         let rail = l.bt_progress_rect();
         c.fill_rounded(rail, s(4), t.surface_hi);
         let total = ferrix_hardware_api::BLUETOOTH_DISCOVERY_TIMEOUT_MS;
-        let left = discovery.remaining_ms.unwrap_or(total).min(total);
+        let left = model.discovery_remaining_ms().unwrap_or(total).min(total);
         let w = (i64::from(rail.w) * i64::from(left) / i64::from(total)) as i32;
         c.fill_rounded(
             Rect {
@@ -336,6 +337,7 @@ fn pairing_card(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &In
     let t = theme::get();
     let s = |v| l.s(v);
     let name = model.pairing_name();
+    let incoming = model.pairing().is_some_and(|p| p.incoming);
     let width = c.width() - s(192);
     let title = Style::bold(s(44) as f32, t.fg);
     let code = |c: &mut Canvas, passkey: u32| {
@@ -353,15 +355,12 @@ fn pairing_card(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &In
                 s(96),
                 s(620),
             );
-            wrap_text(
-                c,
-                ty,
-                &format!("Check that {name} shows the same code."),
-                s(96),
-                s(680),
-                width,
-                s(30),
-            );
+            let ask = if incoming {
+                format!("{name} wants to pair. Check that it shows the same code.")
+            } else {
+                format!("Check that {name} shows the same code.")
+            };
+            wrap_text(c, ty, &ask, s(96), s(680), width, s(30));
             code(c, passkey);
             caption(
                 c,
@@ -382,7 +381,11 @@ fn pairing_card(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &In
             wrap_text(
                 c,
                 ty,
-                &format!("{name} asks to pair without a code. Pair only if you started this."),
+                &if incoming {
+                    format!("{name} wants to pair with this phone. Pair only if you expect it.")
+                } else {
+                    format!("{name} asks to pair without a code. Pair only if you started this.")
+                },
                 s(96),
                 s(680),
                 width,
@@ -414,6 +417,44 @@ fn pairing_card(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &In
                 s(30),
             );
             code(c, passkey);
+        }
+        Card::Pin => {
+            ty.text(
+                c,
+                title,
+                &ellipsize(ty, title, &format!("PIN for {name}"), width),
+                s(96),
+                s(620),
+            );
+            wrap_text(
+                c,
+                ty,
+                &if incoming {
+                    format!("{name} wants to pair and needs its PIN, often 0000 or 1234.")
+                } else {
+                    format!("Type the PIN {name} expects, often 0000 or 1234.")
+                },
+                s(96),
+                s(680),
+                width,
+                s(30),
+            );
+            text_field(
+                c,
+                ty,
+                l.bt_pin_field_rect(),
+                model.bt_pin.as_str(),
+                "PIN",
+                true,
+            );
+            caption(
+                c,
+                ty,
+                l,
+                "Answer within 30 s; an unanswered request is declined.",
+                1190,
+            );
+            error_notice(c, ty, l, model, 1290);
         }
         Card::Pairing => {
             ty.text(
@@ -1336,6 +1377,19 @@ mod tests {
         let code_drawn =
             (l.s(780)..l.s(880)).any(|y| (l.s(300)..l.s(780)).any(|x| c.get(x, y) == t.fg));
         assert!(code_drawn, "the passkey is drawn large");
+        m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::RequestPin))));
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let field = l.bt_pin_field_rect();
+        assert_eq!(
+            c.get(field.x + field.w / 2, field.y + field.h / 2),
+            t.bg_dark,
+            "PIN field"
+        );
+        let (kb_top, _) = ferrix_ui::osk::extent(size);
+        assert!(
+            l.bt_card_left_rect().y + l.bt_card_left_rect().h < kb_top,
+            "Pair stays above the keyboard"
+        );
         m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::Failed {
             reason: PairingFailure::TimedOut,
         }))));

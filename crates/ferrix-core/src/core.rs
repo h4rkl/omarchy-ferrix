@@ -132,10 +132,16 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             ControlCommand::BluetoothTick { ms } => {
                 mock(services, MockCommand::BluetoothTick { ms }, &mut events)?
             }
+            ControlCommand::BluetoothIncoming { device } => mock(
+                services,
+                MockCommand::BluetoothIncomingPairing { device },
+                &mut events,
+            )?,
             // Routed above through `bluetooth_command`.
             ControlCommand::BluetoothDiscovery { .. }
             | ControlCommand::BluetoothPair { .. }
             | ControlCommand::BluetoothReply { .. }
+            | ControlCommand::BluetoothReplyPin { .. }
             | ControlCommand::BluetoothCancel
             | ControlCommand::BluetoothConnect { .. }
             | ControlCommand::BluetoothDisconnect { .. }
@@ -384,10 +390,17 @@ mod tests {
             for (index, step) in scenario.steps.iter().enumerate() {
                 let at = format!("{} step {index}", scenario.name);
                 assert_eq!(step.service, Service::Core, "{at}");
-                let command: ControlCommand = serde_json::from_value(step.command.clone()).unwrap();
-                let result = apply(&s, &command);
+                // A command the channel cannot parse (a malformed PIN) is an
+                // error ack there too.
+                let parsed = serde_json::from_value::<ControlCommand>(step.command.clone())
+                    .map_err(|e| e.to_string());
+                let result = parsed
+                    .clone()
+                    .and_then(|command| apply(&s, &command).map(|applied| (command, applied)));
                 let ack = match &result {
-                    Ok(applied) => serde_json::to_value(ack_for(&s, &command, applied)).unwrap(),
+                    Ok((command, applied)) => {
+                        serde_json::to_value(ack_for(&s, command, applied)).unwrap()
+                    }
                     Err(reason) => json!({"status": "error", "reason": reason}),
                 };
                 assert_eq!(result.is_err(), step.expect_ack_error, "{at}: {ack}");
@@ -402,8 +415,22 @@ mod tests {
                         record
                     })
                     .collect();
-                if let Err(missing) = match_in_order(&records, &step.expect) {
-                    panic!("{at}: missing {} in {records:?}", step.expect[missing]);
+                // Records of other processes (ferrix-appd's `app-intent`, the
+                // attention thread's `bluetooth-attention`) only exist in the
+                // guest; in-process only the hardware events are checked.
+                let expect: Vec<Value> = step
+                    .expect
+                    .iter()
+                    .filter(|e| {
+                        !matches!(
+                            e["event"].as_str(),
+                            Some("app-intent" | "bluetooth-attention")
+                        )
+                    })
+                    .cloned()
+                    .collect();
+                if let Err(missing) = match_in_order(&records, &expect) {
+                    panic!("{at}: missing {} in {records:?}", expect[missing]);
                 }
             }
         }

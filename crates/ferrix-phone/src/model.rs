@@ -724,7 +724,7 @@ impl Model {
                 self.refocus();
                 true
             }
-            AppIntent::Compose { .. } => false,
+            AppIntent::Compose { .. } | AppIntent::ShowBluetoothPairing => false,
         }
     }
 }

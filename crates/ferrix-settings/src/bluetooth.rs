@@ -5,15 +5,59 @@
 //! [`Action::Bluetooth`] and the core's session stays authoritative.
 //!
 //! Records name states only (`pair-scanning-3`, `confirm-passkey`,
-//! `pair-failed-rejected`); never device names, ids, or passkeys.
+//! `request-pin`, `pair-failed-rejected`); never device names, ids,
+//! passkeys, or PINs.
+//!
+//! A pairing request a remote starts reaches Settings as the system
+//! `show-bluetooth-pairing` intent (raised by `ferrix-core` through
+//! `ferrix-appd` over whatever app is in front);
+//! [`Model::show_pairing_request`] opens the Bluetooth page, where the card
+//! shows it.
+//!
+//! The scan's remaining time ticks on a UI timer: the session's
+//! `remaining_ms` is anchored when it arrives and counted down against the
+//! UI clock ([`Model::advance_ui_clock`]), so nothing polls the core.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+use std::time::Instant;
+
 use ferrix_hardware_api::{
-    BluetoothAction, BluetoothCommand, BluetoothDevice, BluetoothDeviceKind, BluetoothDiscovery,
-    BluetoothPairing, BluetoothSession, PairingFailure, PairingPhase,
+    BLUETOOTH_PIN_MAX, BluetoothAction, BluetoothCommand, BluetoothDevice, BluetoothDeviceKind,
+    BluetoothDiscovery, BluetoothPairing, BluetoothPin, BluetoothSession, PairingFailure,
+    PairingPhase,
 };
+use ferrix_ui::osk::{Key, Layout as OskLayout, OskState};
+use ferrix_ui::widgets::{Edit, edit_text};
 
 use crate::model::{Action, Model, Page};
+
+/// The legacy PIN being typed on the PIN card. `Debug` never shows it.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct PinDraft(String);
+
+impl PinDraft {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.chars().count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl std::fmt::Debug for PinDraft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PinDraft(<{} chars>)", self.len())
+    }
+}
 
 /// The Bluetooth session as last queried from the core.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -46,9 +90,15 @@ pub enum BtView {
 /// The focused pairing card that replaces the lists while it is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Card {
-    Confirm { passkey: u32 },
+    Confirm {
+        passkey: u32,
+    },
     Authorize,
-    Display { passkey: u32 },
+    Display {
+        passkey: u32,
+    },
+    /// Legacy pairing: type the remote's PIN.
+    Pin,
     Pairing,
     Paired,
     Failed(PairingFailure),
@@ -60,15 +110,17 @@ impl Card {
             PairingPhase::ConfirmPasskey { passkey } => Card::Confirm { passkey },
             PairingPhase::Authorize => Card::Authorize,
             PairingPhase::DisplayPasskey { passkey } => Card::Display { passkey },
+            PairingPhase::RequestPin => Card::Pin,
             PairingPhase::Pairing => Card::Pairing,
             PairingPhase::Paired => Card::Paired,
             PairingPhase::Failed { reason } => Card::Failed(reason),
         }
     }
 
-    /// Whether the card offers Pair/Cancel.
+    /// Whether the card asks the user (Pair/Cancel; the PIN card's Pair
+    /// sends the typed PIN).
     pub fn asks(self) -> bool {
-        matches!(self, Card::Confirm { .. } | Card::Authorize)
+        matches!(self, Card::Confirm { .. } | Card::Authorize | Card::Pin)
     }
 }
 
@@ -101,7 +153,7 @@ pub fn failure_text(reason: PairingFailure, name: &str) -> String {
         PairingFailure::TimedOut => "Pairing timed out".to_owned(),
         PairingFailure::Canceled => "Pairing was cancelled".to_owned(),
         PairingFailure::PinRequired => {
-            format!("{name} needs a PIN; PIN entry is not supported yet")
+            format!("{name} needs a PIN this Bluetooth service can't ask for")
         }
         PairingFailure::Unreachable => format!("{name} is out of range"),
         PairingFailure::Failed => format!("Couldn't pair with {name}"),
@@ -112,6 +164,19 @@ impl Model {
     // -- session feed --------------------------------------------------------
 
     pub fn set_bluetooth_session(&mut self, result: Result<BluetoothSession, String>) {
+        self.set_bluetooth_session_at(result, Instant::now());
+    }
+
+    /// [`Model::set_bluetooth_session`] with the moment it arrived, which
+    /// anchors the scan countdown.
+    pub fn set_bluetooth_session_at(
+        &mut self,
+        result: Result<BluetoothSession, String>,
+        at: Instant,
+    ) {
+        let was_pin = self.pin_requested();
+        self.bt_session_at = Some(at);
+        self.bt_now = Some(at);
         self.bt_stale = false;
         self.bt_devices = match result {
             Ok(session) => DeviceList::Loaded {
@@ -120,7 +185,59 @@ impl Model {
             },
             Err(reason) => DeviceList::Failed(reason),
         };
+        let is_pin = self.pin_requested();
+        if is_pin && !was_pin {
+            // A fresh PIN request: empty field, digits first (the symbol
+            // layer of the shared text keyboard; letters stay one key away
+            // for alphanumeric PINs).
+            self.bt_pin.clear();
+            self.osk = OskState {
+                symbols: true,
+                ..OskState::new(OskLayout::Text)
+            };
+        } else if !is_pin {
+            self.bt_pin.clear();
+        }
         self.reconcile_bt_view();
+    }
+
+    fn pin_requested(&self) -> bool {
+        self.pairing()
+            .is_some_and(|p| p.phase == PairingPhase::RequestPin)
+    }
+
+    // -- scan countdown ------------------------------------------------------
+
+    /// Moves the UI clock; returns whether the shown countdown second
+    /// changed (the only time the scan row needs a redraw).
+    pub fn advance_ui_clock(&mut self, now: Instant) -> bool {
+        let before = self.discovery_seconds_left();
+        self.bt_now = Some(now);
+        self.discovery_seconds_left() != before
+    }
+
+    /// Whether the countdown is on screen (the UI timer should tick).
+    pub fn countdown_running(&self) -> bool {
+        self.page == Page::Bluetooth
+            && self.bt_view == BtView::Pair
+            && self.discovery().active
+            && self.discovery().remaining_ms.is_some()
+            && self.bt_card().is_none()
+    }
+
+    /// The scan's remaining time as of the UI clock: the session's
+    /// `remaining_ms` minus the time since it arrived.
+    pub fn discovery_remaining_ms(&self) -> Option<u32> {
+        let remaining = self.discovery().remaining_ms?;
+        let elapsed = match (self.bt_session_at, self.bt_now) {
+            (Some(at), Some(now)) => now.saturating_duration_since(at).as_millis(),
+            _ => 0,
+        };
+        Some(remaining.saturating_sub(u32::try_from(elapsed).unwrap_or(u32::MAX)))
+    }
+
+    pub fn discovery_seconds_left(&self) -> Option<u32> {
+        self.discovery_remaining_ms().map(|ms| ms.div_ceil(1000))
     }
 
     /// Fallback for adapters without a session: the device list only.
@@ -314,9 +431,80 @@ impl Model {
     }
 
     pub fn reply_pairing(&mut self, accept: bool) {
-        if self.bt_card().is_some_and(Card::asks) {
-            self.bt_request(BluetoothCommand::ReplyPairing { accept });
+        match self.bt_card() {
+            Some(Card::Pin) if accept => self.submit_pin(),
+            Some(card) if card.asks() => {
+                self.bt_pin.clear();
+                self.bt_request(BluetoothCommand::ReplyPairing { accept });
+            }
+            _ => {}
         }
+    }
+
+    /// Sends the typed PIN; an empty one stays on the card with a reason.
+    pub fn submit_pin(&mut self) {
+        if self.bt_card() != Some(Card::Pin) {
+            return;
+        }
+        match BluetoothPin::new(self.bt_pin.as_str()) {
+            Ok(pin) => {
+                self.bt_pin.clear();
+                self.bt_request(BluetoothCommand::ReplyPin { pin });
+            }
+            Err(_) => {
+                self.last_error = Some(format!(
+                    "bluetooth \u{b7} enter the PIN (1-{BLUETOOTH_PIN_MAX} characters)"
+                ));
+            }
+        }
+    }
+
+    /// Whether the PIN card's field takes keys.
+    pub fn pin_entry(&self) -> bool {
+        self.bt_card() == Some(Card::Pin)
+    }
+
+    /// One key on the PIN card: printable characters (no spaces), up to
+    /// [`BLUETOOTH_PIN_MAX`]; Enter sends, Esc declines.
+    pub fn pin_key(&mut self, key: Key) {
+        if !self.pin_entry() {
+            return;
+        }
+        let mut text = self.bt_pin.0.clone();
+        let mut osk = self.osk;
+        let outcome = edit_text(&mut text, key, &mut osk);
+        self.osk = osk;
+        match outcome {
+            Edit::Submit => self.submit_pin(),
+            Edit::Dismiss => self.reply_pairing(false),
+            Edit::Changed => {
+                let valid =
+                    text.len() <= BLUETOOTH_PIN_MAX && text.bytes().all(|b| b.is_ascii_graphic());
+                if valid {
+                    self.bt_pin.0 = text;
+                    self.last_error = None;
+                }
+            }
+            Edit::Unchanged => {}
+        }
+    }
+
+    /// The system `show-bluetooth-pairing` intent: a remote asked to pair.
+    /// Open the Bluetooth page (its card shows the request) and drop any
+    /// half-finished Wi-Fi entry or confirmation in the way.
+    pub fn show_pairing_request(&mut self) -> bool {
+        if self.passphrase_for.is_some() {
+            self.cancel_passphrase();
+        }
+        self.bt_forget_confirm = false;
+        // The request is newer than whatever session is shown.
+        self.bt_stale = true;
+        if self.page != Page::Bluetooth {
+            self.show(Page::Bluetooth);
+        } else {
+            self.request_devices_if_shown();
+        }
+        true
     }
 
     /// Cancel a running attempt, or dismiss a finished one's outcome.
@@ -439,6 +627,7 @@ impl Model {
                 Card::Confirm { .. } => "confirm-passkey".to_owned(),
                 Card::Authorize => "authorize".to_owned(),
                 Card::Display { .. } => "display-passkey".to_owned(),
+                Card::Pin => "request-pin".to_owned(),
                 Card::Pairing => "pairing".to_owned(),
                 Card::Paired => "paired".to_owned(),
                 Card::Failed(reason) => format!("pair-failed-{}", reason.name()),
@@ -542,6 +731,7 @@ pub fn preview_session(phase: Option<PairingPhase>) -> BluetoothSession {
         pairing: phase.map(|phase| BluetoothPairing {
             device: "mock-bt-found-0".to_owned(),
             phase,
+            incoming: false,
         }),
         operation: None,
     }
@@ -676,6 +866,90 @@ mod tests {
         assert_eq!(m.bt_view, BtView::Main);
         m.back();
         assert_eq!(m.page, Page::Root);
+    }
+
+    #[test]
+    fn pin_card_types_on_the_digit_layer_and_sends_only_the_pin_command() {
+        use crate::interaction::{key_press, keyboard_visible};
+        let mut m = on_page();
+        m.open_pair_page();
+        with_phase(&mut m, PairingPhase::RequestPin);
+        assert_eq!(m.bt_card(), Some(Card::Pin));
+        assert_eq!(m.state_name(), "request-pin");
+        assert!(keyboard_visible(&m), "the shared keyboard is up");
+        assert!(m.osk.symbols, "digits first");
+        assert_eq!(m.osk.layout, OskLayout::Text);
+        // Empty: nothing is sent.
+        m.reply_pairing(true);
+        assert!(requests(&mut m).is_empty());
+        assert!(m.last_error.is_some());
+        for ch in "00 00".chars() {
+            key_press(&mut m, if ch == ' ' { Key::Space } else { Key::Char(ch) });
+        }
+        assert_eq!(m.bt_pin.as_str(), "0000", "spaces are not PIN characters");
+        assert!(!format!("{:?}", m.bt_pin).contains("0000"), "Debug redacts");
+        key_press(&mut m, Key::Backspace);
+        key_press(&mut m, Key::Char('0'));
+        key_press(&mut m, Key::Enter);
+        assert_eq!(
+            requests(&mut m),
+            [BluetoothCommand::ReplyPin {
+                pin: BluetoothPin::new("0000").unwrap()
+            }]
+        );
+        assert!(m.bt_pin.is_empty(), "the draft is dropped once sent");
+        // A fresh request starts empty; Back declines it.
+        with_phase(&mut m, PairingPhase::Pairing);
+        with_phase(&mut m, PairingPhase::RequestPin);
+        key_press(&mut m, Key::Char('1'));
+        m.back();
+        assert_eq!(
+            requests(&mut m),
+            [BluetoothCommand::ReplyPairing { accept: false }]
+        );
+        assert!(m.bt_pin.is_empty());
+    }
+
+    #[test]
+    fn pairing_intent_opens_the_bluetooth_page_over_other_pages() {
+        let mut m = on_page();
+        m.show(Page::Display);
+        m.pending.clear();
+        let mut session = preview_session(Some(PairingPhase::Authorize));
+        if let Some(p) = session.pairing.as_mut() {
+            p.incoming = true;
+        }
+        assert!(m.show_pairing_request());
+        assert_eq!(m.page, Page::Bluetooth);
+        assert_eq!(m.pending, [Action::RefreshBluetoothDevices]);
+        m.pending.clear();
+        m.set_bluetooth_session(Ok(session));
+        assert_eq!(m.bt_card(), Some(Card::Authorize), "shown on the main view");
+        assert_eq!(m.state_name(), "authorize");
+        // Already on the page: re-query.
+        assert!(m.show_pairing_request());
+        assert_eq!(m.pending, [Action::RefreshBluetoothDevices]);
+    }
+
+    #[test]
+    fn scan_countdown_ticks_on_the_ui_clock() {
+        let mut m = on_page();
+        m.open_pair_page();
+        let t0 = Instant::now();
+        m.set_bluetooth_session_at(Ok(preview_session(None)), t0);
+        assert_eq!(m.discovery_seconds_left(), Some(23));
+        assert!(m.countdown_running());
+        assert!(!m.advance_ui_clock(t0 + std::time::Duration::from_millis(400)));
+        assert!(m.advance_ui_clock(t0 + std::time::Duration::from_millis(1_100)));
+        assert_eq!(m.discovery_seconds_left(), Some(22));
+        assert!(m.advance_ui_clock(t0 + std::time::Duration::from_secs(60)));
+        assert_eq!(m.discovery_seconds_left(), Some(0), "never negative");
+        // A session event re-anchors it.
+        m.set_bluetooth_session_at(Ok(preview_session(None)), t0);
+        assert_eq!(m.discovery_seconds_left(), Some(23));
+        assert!(requests(&mut m).is_empty(), "nothing polls the core");
+        m.bt_view = BtView::Main;
+        assert!(!m.countdown_running());
     }
 
     #[test]

@@ -369,7 +369,8 @@ pub enum PairingFailure {
     TimedOut,
     /// Pairing was cancelled (Bluetooth turned off, cancel requested).
     Canceled,
-    /// The remote needs a legacy PIN typed in; PIN entry is not supported.
+    /// The remote needs a legacy PIN and this adapter cannot ask for one.
+    /// Adapters that support [`PairingPhase::RequestPin`] never report it.
     PinRequired,
     /// The remote left range or could not be reached.
     Unreachable,
@@ -408,6 +409,11 @@ pub enum PairingPhase {
     DisplayPasskey {
         passkey: u32,
     },
+    /// Legacy pairing: the user types the remote's PIN (often `0000`),
+    /// answered with [`Bluetooth::reply_bluetooth_pin`] or declined with
+    /// [`Bluetooth::reply_bluetooth_pairing`]. The phase never carries the
+    /// PIN.
+    RequestPin,
     /// Bonded.
     Paired,
     Failed {
@@ -416,12 +422,22 @@ pub enum PairingPhase {
 }
 
 impl PairingPhase {
-    /// Whether the phase waits for an accept/reject answer.
+    /// Whether the phase waits for the user's answer: accept/decline, or
+    /// (for [`PairingPhase::RequestPin`]) a PIN or decline.
     pub fn awaits_reply(self) -> bool {
         matches!(
             self,
-            PairingPhase::ConfirmPasskey { .. } | PairingPhase::Authorize
+            PairingPhase::ConfirmPasskey { .. }
+                | PairingPhase::Authorize
+                | PairingPhase::RequestPin
         )
+    }
+
+    /// Whether the user is shown something to act on (a question, a PIN
+    /// field, or a code to type on the remote): the phases an incoming
+    /// request raises a system prompt for.
+    pub fn is_prompt(self) -> bool {
+        self.awaits_reply() || matches!(self, PairingPhase::DisplayPasskey { .. })
     }
 
     /// Whether the attempt is over.
@@ -435,6 +451,7 @@ impl PairingPhase {
             PairingPhase::ConfirmPasskey { .. } => PairingStage::ConfirmPasskey,
             PairingPhase::Authorize => PairingStage::Authorize,
             PairingPhase::DisplayPasskey { .. } => PairingStage::DisplayPasskey,
+            PairingPhase::RequestPin => PairingStage::RequestPin,
             PairingPhase::Paired => PairingStage::Paired,
             PairingPhase::Failed { reason } => PairingStage::Failed { reason },
         }
@@ -449,6 +466,7 @@ pub enum PairingStage {
     ConfirmPasskey,
     Authorize,
     DisplayPasskey,
+    RequestPin,
     Paired,
     Failed { reason: PairingFailure },
 }
@@ -460,6 +478,7 @@ impl PairingStage {
             PairingStage::ConfirmPasskey => "confirm-passkey",
             PairingStage::Authorize => "authorize",
             PairingStage::DisplayPasskey => "display-passkey",
+            PairingStage::RequestPin => "request-pin",
             PairingStage::Paired => "paired",
             PairingStage::Failed { .. } => "failed",
         }
@@ -472,6 +491,77 @@ pub struct BluetoothPairing {
     /// Opaque id of the device being paired.
     pub device: String,
     pub phase: PairingPhase,
+    /// The remote started this attempt (it is pairing *to* this phone);
+    /// its prompts are raised system-wide, not only inside Settings.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub incoming: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Longest legacy PIN Bluetooth allows (BR/EDR PIN codes are 1–16 bytes).
+pub const BLUETOOTH_PIN_MAX: usize = 16;
+
+/// A legacy Bluetooth PIN typed by the user: 1 to [`BLUETOOTH_PIN_MAX`]
+/// printable ASCII characters (most remotes use four digits). It is a
+/// secret for the length of one pairing: `Debug` prints no digits, and no
+/// event, summary, or record carries it. It crosses the core socket only
+/// inside [`BluetoothCommand::ReplyPin`].
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct BluetoothPin(String);
+
+impl BluetoothPin {
+    pub fn new(pin: impl Into<String>) -> Result<Self, HardwareError> {
+        let pin = pin.into();
+        let valid = !pin.is_empty()
+            && pin.len() <= BLUETOOTH_PIN_MAX
+            && pin.bytes().all(|b| b.is_ascii_graphic());
+        if valid {
+            Ok(Self(pin))
+        } else {
+            Err(HardwareError::invalid(
+                Capability::Bluetooth,
+                format!("a PIN is 1-{BLUETOOTH_PIN_MAX} printable characters without spaces"),
+            ))
+        }
+    }
+
+    /// The PIN itself, for the adapter that hands it to the Bluetooth
+    /// service. Never log it.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Number of characters, for evidence-safe records.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for BluetoothPin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("BluetoothPin(<redacted>)")
+    }
+}
+
+impl TryFrom<String> for BluetoothPin {
+    type Error = String;
+    fn try_from(pin: String) -> Result<Self, Self::Error> {
+        Self::new(pin).map_err(|e| e.to_string())
+    }
+}
+
+impl From<BluetoothPin> for String {
+    fn from(pin: BluetoothPin) -> Self {
+        pin.0
+    }
 }
 
 /// A connect or disconnect request still running or recently failed.
@@ -543,6 +633,7 @@ impl BluetoothSession {
             paired: count(|d| d.paired),
             connected: count(|d| d.connected),
             pairing: self.pairing.as_ref().map(|p| p.phase.stage()),
+            incoming: self.pairing.as_ref().is_some_and(|p| p.incoming),
             operation: self.operation.as_ref().map(|o| OperationStage {
                 action: o.action,
                 failed: o.failed.is_some(),
@@ -568,8 +659,28 @@ pub struct BluetoothSessionSummary {
     pub connected: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing: Option<PairingStage>,
+    /// The pairing attempt was started by the remote.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub incoming: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<OperationStage>,
+}
+
+impl BluetoothSessionSummary {
+    /// Whether this summary shows an incoming request waiting on the user
+    /// (the moment a system-wide prompt is raised).
+    pub fn incoming_prompt(&self) -> bool {
+        self.incoming
+            && matches!(
+                self.pairing,
+                Some(
+                    PairingStage::ConfirmPasskey
+                        | PairingStage::Authorize
+                        | PairingStage::DisplayPasskey
+                        | PairingStage::RequestPin
+                )
+            )
+    }
 }
 
 /// Product Bluetooth requests over the core socket. Device ids are the
@@ -584,9 +695,14 @@ pub enum BluetoothCommand {
     },
     /// Abandon the running pairing attempt.
     CancelPairing,
-    /// Answer the pending [`PairingPhase::awaits_reply`] prompt.
+    /// Answer the pending [`PairingPhase::awaits_reply`] prompt
+    /// (`accept: false` also declines a PIN request).
     ReplyPairing {
         accept: bool,
+    },
+    /// Answer a [`PairingPhase::RequestPin`] prompt with the typed PIN.
+    ReplyPin {
+        pin: BluetoothPin,
     },
     Connect {
         device: String,
@@ -608,6 +724,7 @@ impl BluetoothCommand {
             BluetoothCommand::Pair { .. } => "pair",
             BluetoothCommand::CancelPairing => "cancel-pairing",
             BluetoothCommand::ReplyPairing { .. } => "reply-pairing",
+            BluetoothCommand::ReplyPin { .. } => "reply-pin",
             BluetoothCommand::Connect { .. } => "connect",
             BluetoothCommand::Disconnect { .. } => "disconnect",
             BluetoothCommand::Forget { .. } => "forget",
@@ -622,6 +739,7 @@ impl BluetoothCommand {
             BluetoothCommand::Pair { device } => bluetooth.pair_bluetooth_device(device),
             BluetoothCommand::CancelPairing => bluetooth.cancel_bluetooth_pairing(),
             BluetoothCommand::ReplyPairing { accept } => bluetooth.reply_bluetooth_pairing(*accept),
+            BluetoothCommand::ReplyPin { pin } => bluetooth.reply_bluetooth_pin(pin),
             BluetoothCommand::Connect { device } => bluetooth.connect_bluetooth_device(device),
             BluetoothCommand::Disconnect { device } => {
                 bluetooth.disconnect_bluetooth_device(device)
@@ -670,6 +788,11 @@ pub trait Bluetooth: Send + Sync {
         Err(HardwareError::unsupported(Capability::Bluetooth))
     }
     fn reply_bluetooth_pairing(&self, _accept: bool) -> Result<(), HardwareError> {
+        Err(HardwareError::unsupported(Capability::Bluetooth))
+    }
+    /// Answers a [`PairingPhase::RequestPin`] prompt. Implementations hand
+    /// the PIN to the Bluetooth service and never record it.
+    fn reply_bluetooth_pin(&self, _pin: &BluetoothPin) -> Result<(), HardwareError> {
         Err(HardwareError::unsupported(Capability::Bluetooth))
     }
     fn connect_bluetooth_device(&self, _device: &str) -> Result<(), HardwareError> {
@@ -956,7 +1079,7 @@ pub trait EventSource: Send + Sync {
 
 /// Deterministic state mutations a mocked target accepts for tests. A real
 /// target does not provide this capability.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mock", rename_all = "kebab-case")]
 pub enum MockCommand {
     SetCharging {
@@ -999,6 +1122,12 @@ pub enum MockCommand {
     BluetoothTick {
         ms: u32,
     },
+    /// A remote starts pairing with this phone: `device` (a mock id) asks
+    /// with its profile pairing method (Just Works becomes an
+    /// authorization prompt, as BlueZ asks for incoming requests).
+    BluetoothIncomingPairing {
+        device: String,
+    },
 }
 
 /// How a mock remote ends a pairing attempt once the local side agreed.
@@ -1027,7 +1156,8 @@ pub enum MockPairingMethod {
     Authorize,
     /// The user types the code on the remote: [`PairingPhase::DisplayPasskey`].
     DisplayPasskey,
-    /// A legacy PIN device: [`PairingFailure::PinRequired`].
+    /// A legacy PIN device: [`PairingPhase::RequestPin`]; the profile's
+    /// `pin` is what the remote expects (a wrong one is rejected).
     Pin,
 }
 
@@ -1208,6 +1338,7 @@ mod tests {
             pairing: Some(BluetoothPairing {
                 device: "bt-1".into(),
                 phase: PairingPhase::ConfirmPasskey { passkey: 123_456 },
+                incoming: false,
             }),
             operation: None,
         };
@@ -1233,6 +1364,55 @@ mod tests {
         assert!(full.contains(r#""phase":{"phase":"confirm-passkey","passkey":123456}"#));
         let back: BluetoothSession = serde_json::from_str(&full).unwrap();
         assert_eq!(back, session);
+    }
+
+    #[test]
+    fn pin_requests_and_incoming_attempts_stay_evidence_safe() {
+        let pin = BluetoothPin::new("0000").unwrap();
+        assert_eq!(format!("{pin:?}"), "BluetoothPin(<redacted>)");
+        assert_eq!(pin.len(), 4);
+        for bad in ["", "12 4", "12345678901234567", "12\n4"] {
+            assert!(BluetoothPin::new(bad).is_err(), "{bad:?}");
+        }
+        let command = BluetoothCommand::ReplyPin { pin };
+        let wire = serde_json::to_string(&command).unwrap();
+        assert_eq!(wire, r#"{"command":"reply-pin","pin":"0000"}"#);
+        assert_eq!(
+            serde_json::from_str::<BluetoothCommand>(&wire).unwrap(),
+            command
+        );
+        assert!(!format!("{command:?}").contains("0000"));
+        assert!(
+            serde_json::from_str::<BluetoothCommand>(r#"{"command":"reply-pin","pin":"1 2"}"#)
+                .is_err()
+        );
+        assert!(PairingPhase::RequestPin.awaits_reply());
+        assert!(PairingPhase::RequestPin.is_prompt());
+        assert!(PairingPhase::DisplayPasskey { passkey: 1 }.is_prompt());
+        assert!(!PairingPhase::Pairing.is_prompt());
+        let session = BluetoothSession {
+            pairing: Some(BluetoothPairing {
+                device: "bt-9".into(),
+                phase: PairingPhase::RequestPin,
+                incoming: true,
+            }),
+            ..BluetoothSession::default()
+        };
+        let summary = session.summary();
+        assert!(summary.incoming_prompt());
+        assert_eq!(
+            serde_json::to_string(&HardwareEvent::BluetoothSessionChanged(summary)).unwrap(),
+            r#"{"event":"bluetooth-session-changed","discovering":false,"available":0,"paired":0,"connected":0,"pairing":{"stage":"request-pin"},"incoming":true}"#
+        );
+        // Older peers without the field read as not incoming.
+        let old: BluetoothPairing =
+            serde_json::from_str(r#"{"device":"d","phase":{"phase":"pairing"}}"#).unwrap();
+        assert!(!old.incoming);
+        let ours = BluetoothSessionSummary {
+            pairing: Some(PairingStage::Authorize),
+            ..BluetoothSessionSummary::default()
+        };
+        assert!(!ours.incoming_prompt());
     }
 
     #[test]

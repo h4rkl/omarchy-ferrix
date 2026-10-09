@@ -274,7 +274,7 @@ fn start_pair(bus: &MockBus, adapter: &BluezBluetooth, id: &str) {
     assert!(eventually(|| pairs(bus) > before), "pair reached the bus");
 }
 
-fn responder() -> (Box<dyn FnOnce(bool) + Send>, Receiver<bool>) {
+fn responder() -> (Respond, Receiver<PromptAnswer>) {
     let (tx, rx) = mpsc::channel();
     (
         Box::new(move |accept| {
@@ -504,7 +504,10 @@ fn numeric_comparison_prompt_reaches_the_session_and_success_connects() {
         PairingPhase::ConfirmPasskey { passkey: 482_913 }
     );
     adapter.reply_bluetooth_pairing(true).unwrap();
-    assert!(answer.recv_timeout(Duration::from_secs(1)).unwrap());
+    assert_eq!(
+        answer.recv_timeout(Duration::from_secs(1)).unwrap(),
+        PromptAnswer::Accept
+    );
     assert_eq!(phase(&adapter), Some(PairingPhase::Pairing));
     assert!(adapter.reply_bluetooth_pairing(true).is_err(), "answered");
     gate.send(Ok(())).unwrap();
@@ -533,7 +536,10 @@ fn declined_and_unanswered_prompts_fail_with_local_reasons() {
     let (respond, answer) = responder();
     bus.agent().prompt(NEW, PairingPhase::Authorize, respond);
     adapter.reply_bluetooth_pairing(false).unwrap();
-    assert!(!answer.recv_timeout(Duration::from_secs(1)).unwrap());
+    assert_eq!(
+        answer.recv_timeout(Duration::from_secs(1)).unwrap(),
+        PromptAnswer::Decline
+    );
     gate.send(Err(BusError::named(
         "org.bluez.Error.AuthenticationRejected",
         "",
@@ -549,7 +555,10 @@ fn declined_and_unanswered_prompts_fail_with_local_reasons() {
     let (respond, answer) = responder();
     bus.agent()
         .prompt(NEW, PairingPhase::ConfirmPasskey { passkey: 1 }, respond);
-    assert!(!answer.recv_timeout(Duration::from_secs(1)).unwrap());
+    assert_eq!(
+        answer.recv_timeout(Duration::from_secs(1)).unwrap(),
+        PromptAnswer::Decline
+    );
     let timed_out = Some(PairingPhase::Failed {
         reason: PairingFailure::TimedOut,
     });
@@ -641,11 +650,72 @@ fn incoming_display_passkey_and_service_authorization() {
     let (respond, answer) = responder();
     agent.prompt(BUDS, PairingPhase::Authorize, respond);
     agent.cancel();
-    assert!(!answer.recv_timeout(Duration::from_secs(1)).unwrap());
+    assert_eq!(
+        answer.recv_timeout(Duration::from_secs(1)).unwrap(),
+        PromptAnswer::Decline
+    );
     assert_eq!(
         phase(&adapter),
         Some(PairingPhase::Failed {
             reason: PairingFailure::Canceled
+        })
+    );
+}
+
+#[test]
+fn legacy_pin_prompt_returns_the_typed_pin_to_the_agent_only() {
+    let (bus, adapter) = paired_setup();
+    let id = id_of(&adapter, "Headphones");
+    let events = subscribed(&adapter);
+    let gate = bus.gate();
+    start_pair(&bus, &adapter, &id);
+    let (respond, answer) = responder();
+    bus.agent().prompt(NEW, PairingPhase::RequestPin, respond);
+    let pairing = adapter.bluetooth_session().unwrap().pairing.unwrap();
+    assert_eq!(pairing.phase, PairingPhase::RequestPin);
+    assert!(!pairing.incoming, "we started it");
+    assert!(
+        adapter.reply_bluetooth_pairing(true).is_err(),
+        "a PIN request is not answered with a plain accept"
+    );
+    let pin = BluetoothPin::new("0000").unwrap();
+    adapter.reply_bluetooth_pin(&pin).unwrap();
+    assert_eq!(
+        answer.recv_timeout(Duration::from_secs(1)).unwrap(),
+        PromptAnswer::Pin(pin.clone())
+    );
+    assert_eq!(phase(&adapter), Some(PairingPhase::Pairing));
+    assert!(adapter.reply_bluetooth_pin(&pin).is_err(), "answered");
+    gate.send(Ok(())).unwrap();
+    assert!(eventually(|| phase(&adapter) == Some(PairingPhase::Paired)));
+    // Nothing published carries the PIN; Debug redacts it.
+    let published: Vec<String> = events
+        .try_iter()
+        .map(|e| serde_json::to_string(&e).unwrap())
+        .collect();
+    assert!(published.iter().any(|e| e.contains("request-pin")));
+    assert!(published.iter().all(|e| !e.contains("0000")));
+    assert!(!format!("{pin:?}").contains("0000"));
+}
+
+#[test]
+fn an_agent_request_without_our_pair_is_incoming_and_still_times_out() {
+    let (bus, adapter) = paired_setup();
+    let (respond, answer) = responder();
+    bus.agent().prompt(NEW, PairingPhase::Authorize, respond);
+    let session = adapter.bluetooth_session().unwrap();
+    let pairing = session.pairing.clone().unwrap();
+    assert!(pairing.incoming);
+    assert!(session.summary().incoming_prompt());
+    assert_eq!(
+        answer.recv_timeout(Duration::from_secs(1)).unwrap(),
+        PromptAnswer::Decline,
+        "the 30 s (here shortened) auto-decline holds for incoming requests"
+    );
+    assert_eq!(
+        phase(&adapter),
+        Some(PairingPhase::Failed {
+            reason: PairingFailure::TimedOut
         })
     );
 }

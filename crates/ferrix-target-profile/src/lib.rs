@@ -81,6 +81,10 @@ pub struct ProfileDiscoverableDevice {
     /// Six-digit code for confirm/display-passkey pairing (`0..=999999`).
     #[serde(default)]
     pub passkey: u32,
+    /// The legacy PIN a `pairing = "pin"` remote expects (1-16 printable
+    /// characters; synthetic, e.g. `0000`). Absent means `0000`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<String>,
 }
 
 fn default_rssi() -> i16 {
@@ -139,6 +143,14 @@ impl BluetoothSection {
             if device.passkey > 999_999 {
                 return Err(ProfileError::Invalid(format!(
                     "bluetooth.discoverable[] {:?} passkey must be six digits",
+                    device.name
+                )));
+            }
+            if let Some(pin) = &device.pin
+                && ferrix_hardware_api::BluetoothPin::new(pin.clone()).is_err()
+            {
+                return Err(ProfileError::Invalid(format!(
+                    "bluetooth.discoverable[] {:?} pin must be 1-16 printable characters",
                     device.name
                 )));
             }

@@ -44,6 +44,8 @@ pub const REQUIRED_SCENARIOS: &[&str] = &[
     "bluetooth-discovery-bounded",
     "bluetooth-pair-confirm-success",
     "bluetooth-pair-failures",
+    "bluetooth-pair-pin",
+    "bluetooth-incoming-request",
 ];
 
 #[cfg(test)]

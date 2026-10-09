@@ -1,13 +1,16 @@
 //! Guest-side Settings client: follows `ferrix-networkd`,
 //! `ferrix-telephonyd`, and `ferrix-core` through their reconnectors, sends
-//! control requests, and reports Back to `ferrix-appd`.
+//! control requests, reports Back to `ferrix-appd`, and handles the system
+//! `show-bluetooth-pairing` intent (launch or push).
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use ferrix_app_protocol::{Client as AppdClient, ClientRole, Report};
+use ferrix_app_api::AppIntent;
+use ferrix_app_protocol::{Client as AppdClient, ClientRole, IntentInbox, Report};
 use ferrix_hardware_api::HardwareCommand;
 use ferrix_network_protocol::{
     Client as NetClient, ClientError, ClientKind as NetKind, Feed, Reconnector as NetReconnector,
@@ -27,6 +30,24 @@ use crate::model::{Action, Link, Model, data_profile_from_env};
 use crate::{APP_ID, EVIDENCE, screen};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
+/// How often the scan countdown is re-checked while it is on screen; a
+/// redraw happens only when the shown second changes.
+const COUNTDOWN_TICK: Duration = Duration::from_millis(250);
+
+/// Wakes the client on [`COUNTDOWN_TICK`] while `running` is set: the scan
+/// countdown is a UI timer, never a core poll.
+fn spawn_countdown_ticker(running: Arc<AtomicBool>, wake: Wake) {
+    let _ = std::thread::Builder::new()
+        .name("settings-countdown".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(COUNTDOWN_TICK);
+                if running.load(Ordering::Relaxed) {
+                    wake();
+                }
+            }
+        });
+}
 
 struct Settings {
     ty: Type,
@@ -44,6 +65,10 @@ struct Settings {
     appd_socket: Option<PathBuf>,
     appd: Option<AppdClient>,
     appd_unavailable_reported: bool,
+    /// The system `show-bluetooth-pairing` intent (launch or pushed).
+    intents: IntentInbox,
+    /// Set while the scan countdown is on screen; the ticker wakes on it.
+    countdown: Arc<AtomicBool>,
     last_ui_state: (String, String),
     last_links: (Link, Link),
     last_core_link: Link,
@@ -80,10 +105,21 @@ pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
             Duration::from_secs(1),
             Arc::clone(&wake),
         );
+        let countdown = Arc::new(AtomicBool::new(false));
+        spawn_countdown_ticker(Arc::clone(&countdown), Arc::clone(&wake));
+        let appd_socket = std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
         let mut model = Model::new();
         let apn = std::env::var(ferrix_app_api::TELEPHONY_APN_ENV).ok();
         model.set_data_profile(data_profile_from_env(apn.as_deref()));
         model.target = target;
+        // An incoming pairing request: the launch intent now, pushed ones on
+        // wake. The intent carries nothing; the core session has the request.
+        let mut intents = IntentInbox::start(appd_socket.as_deref(), TIMEOUT, Arc::clone(&wake));
+        intents.dispatch(&EVIDENCE.to_string(), APP_ID, emit, |i| {
+            apply_intent(&mut model, i)
+        });
         Ok(Settings {
             ty: Type::load()?,
             clock: MinuteClock::now(),
@@ -97,16 +133,23 @@ pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
             telephony_client: None,
             core,
             core_socket,
-            appd_socket: std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from),
+            appd_socket,
             appd: None,
             appd_unavailable_reported: false,
+            intents,
+            countdown,
             last_ui_state: (String::new(), String::new()),
             last_links: (Link::Connecting, Link::Connecting),
             last_core_link: Link::Connecting,
         })
     })
+}
+
+fn apply_intent(model: &mut Model, intent: &AppIntent) -> bool {
+    match intent {
+        AppIntent::ShowBluetoothPairing => model.show_pairing_request(),
+        _ => false,
+    }
 }
 
 impl Settings {
@@ -320,6 +363,8 @@ impl Settings {
             self.send(action);
         }
         self.report_ui_state();
+        self.countdown
+            .store(self.model.countdown_running(), Ordering::Relaxed);
     }
 
     fn report_ui_state(&mut self) {
@@ -480,11 +525,21 @@ impl ClientHandler for Settings {
         while let Ok(feed) = self.core.try_recv() {
             changed |= self.model.apply_core(feed);
         }
+        let model = &mut self.model;
+        changed |= self
+            .intents
+            .dispatch(&EVIDENCE.to_string(), APP_ID, emit, |i| {
+                apply_intent(model, i)
+            });
         if changed {
-            // A core change can queue a device re-query.
+            // A core change or an intent can queue a device re-query.
             self.after_input();
         }
-        self.clock.refresh() || changed
+        // The scan countdown: redraw only when the shown second moved.
+        let ticked = self.model.advance_ui_clock(Instant::now());
+        self.countdown
+            .store(self.model.countdown_running(), Ordering::Relaxed);
+        self.clock.refresh() || changed || ticked
     }
 
     fn page_name(&self) -> String {

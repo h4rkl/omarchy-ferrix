@@ -14,11 +14,11 @@ mod bluetooth;
 pub use bluetooth::{MOCK_PAIR_STEP_MS, MOCK_REMOTE_TIMEOUT_MS, MOCK_REMOTE_TYPING_MS};
 
 use ferrix_hardware_api::{
-    Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothSession, BluetoothState, Capability,
-    CapabilityMatrix, CapabilityStatus, Display, DisplayState, EventSource, HardwareError,
-    HardwareEvent, HardwareState, Input, InputState, Lifecycle, LifecycleState, MockCommand,
-    MockControl, MockPairingOutcome, ModemRegistration, Network, NetworkState, Orientation, Power,
-    PowerState, SimState, SuspendOutcome, Telephony, TelephonyState, WifiState,
+    Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothPin, BluetoothSession, BluetoothState,
+    Capability, CapabilityMatrix, CapabilityStatus, Display, DisplayState, EventSource,
+    HardwareError, HardwareEvent, HardwareState, Input, InputState, Lifecycle, LifecycleState,
+    MockCommand, MockControl, MockPairingOutcome, ModemRegistration, Network, NetworkState,
+    Orientation, Power, PowerState, SimState, SuspendOutcome, Telephony, TelephonyState, WifiState,
 };
 use ferrix_target_profile::Profile;
 
@@ -378,6 +378,10 @@ impl Bluetooth for Emulator {
         self.bt_operation(|bt| bt.reply(accept))
     }
 
+    fn reply_bluetooth_pin(&self, pin: &BluetoothPin) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| bt.reply_pin(pin))
+    }
+
     fn connect_bluetooth_device(&self, device: &str) -> Result<(), HardwareError> {
         self.bt_operation(|bt| bt.connect(device, true))
     }
@@ -473,6 +477,14 @@ impl MockControl for Emulator {
                 None
             }
             MockCommand::BluetoothTick { ms } => self.bluetooth_tick(ms),
+            MockCommand::BluetoothIncomingPairing { device } => {
+                self.bt_operation(|bt| bt.incoming(&device))?;
+                let inner = self.lock();
+                let enabled = inner.state.bluetooth.enabled;
+                Some(HardwareEvent::BluetoothSessionChanged(
+                    inner.bt.session(enabled).summary(),
+                ))
+            }
         })
     }
 }
@@ -759,6 +771,40 @@ passkey = 205718
     }
 
     #[test]
+    fn incoming_requests_are_marked_and_ask_even_for_just_works() {
+        use ferrix_hardware_api::PairingFailure as F;
+        let (e, _rx) = discoverable();
+        // No discovery ran: the remote shows up because it is calling us.
+        let car = "mock-bt-found-2";
+        e.apply(MockCommand::BluetoothIncomingPairing { device: car.into() })
+            .unwrap();
+        let session = e.bluetooth_session().unwrap();
+        let pairing = session.pairing.clone().unwrap();
+        assert!(pairing.incoming);
+        assert_eq!(pairing.phase, PairingPhase::Authorize);
+        assert!(session.device(car).is_some());
+        assert!(session.summary().incoming_prompt());
+        assert!(
+            e.apply(MockCommand::BluetoothIncomingPairing { device: car.into() })
+                .is_err(),
+            "one at a time"
+        );
+        e.bluetooth_tick(ferrix_hardware_api::BLUETOOTH_PROMPT_TIMEOUT_MS);
+        assert_eq!(
+            phase(&e),
+            Some(PairingPhase::Failed {
+                reason: F::TimedOut
+            }),
+            "the 30 s auto-decline holds"
+        );
+        // Our own attempt is not incoming.
+        e.start_bluetooth_discovery().unwrap();
+        e.pair_bluetooth_device(&found_id(&e, "Headphones"))
+            .unwrap();
+        assert!(!e.bluetooth_session().unwrap().pairing.unwrap().incoming);
+    }
+
+    #[test]
     fn pairing_failures_are_typed() {
         use ferrix_hardware_api::PairingFailure as F;
         let failed = |reason| Some(PairingPhase::Failed { reason });
@@ -787,9 +833,26 @@ passkey = 205718
         assert_eq!(phase(&e), Some(PairingPhase::Pairing));
         e.bluetooth_tick(MOCK_REMOTE_TIMEOUT_MS as u32);
         assert_eq!(phase(&e), failed(F::TimedOut));
-        // Legacy PIN is refused with its own reason.
+        // Legacy PIN: a plain accept is refused, a wrong PIN is rejected by
+        // the remote, the default mock PIN bonds.
         e.pair_bluetooth_device(&found_id(&e, "Legacy")).unwrap();
-        assert_eq!(phase(&e), failed(F::PinRequired));
+        assert_eq!(phase(&e), Some(PairingPhase::RequestPin));
+        assert!(e.reply_bluetooth_pairing(true).is_err(), "needs a PIN");
+        let pin = |p: &str| ferrix_hardware_api::BluetoothPin::new(p).unwrap();
+        e.reply_bluetooth_pin(&pin("1234")).unwrap();
+        assert_eq!(phase(&e), Some(PairingPhase::Pairing));
+        assert!(e.reply_bluetooth_pin(&pin("0000")).is_err(), "answered");
+        e.bluetooth_tick(1_000);
+        assert_eq!(phase(&e), failed(F::Rejected));
+        e.pair_bluetooth_device(&found_id(&e, "Legacy")).unwrap();
+        e.reply_bluetooth_pin(&pin("0000")).unwrap();
+        e.bluetooth_tick(1_000);
+        assert_eq!(phase(&e), Some(PairingPhase::Paired));
+        // An unanswered PIN request times out like any prompt.
+        e.forget_bluetooth_device(&found_id(&e, "Legacy")).unwrap();
+        e.pair_bluetooth_device(&found_id(&e, "Legacy")).unwrap();
+        e.bluetooth_tick(ferrix_hardware_api::BLUETOOTH_PROMPT_TIMEOUT_MS);
+        assert_eq!(phase(&e), failed(F::TimedOut));
         // Display passkey: the remote types it, then the bond completes.
         e.pair_bluetooth_device(&found_id(&e, "Keyboard")).unwrap();
         assert_eq!(

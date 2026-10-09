@@ -17,11 +17,13 @@
 //!
 //! Pairing prompts: the agent hands numeric-comparison and Just Works
 //! authorization requests to the session as [`PairingPhase`] prompts that
-//! Settings answers through [`Bluetooth::reply_bluetooth_pairing`]; an
-//! unanswered prompt is declined after [`BLUETOOTH_PROMPT_TIMEOUT_MS`].
-//! Legacy PIN entry is not offered: `RequestPinCode` is refused and the
-//! attempt fails with [`PairingFailure::PinRequired`] (documented choice; a
-//! typed PIN prompt can be added without changing the contract).
+//! Settings answers through [`Bluetooth::reply_bluetooth_pairing`]; legacy
+//! `RequestPinCode` becomes [`PairingPhase::RequestPin`], answered through
+//! [`Bluetooth::reply_bluetooth_pin`] (the PIN goes back to BlueZ as the
+//! method's return value and is never stored or logged). An unanswered
+//! prompt is declined after [`BLUETOOTH_PROMPT_TIMEOUT_MS`]. A request the
+//! agent receives for an attempt this adapter did not start is marked
+//! `incoming`, so the core can raise it system-wide.
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
@@ -33,8 +35,8 @@ use std::time::{Duration, Instant};
 use ferrix_hardware_api::{
     BLUETOOTH_DISCOVERY_TIMEOUT_MS, BLUETOOTH_PROMPT_TIMEOUT_MS, Bluetooth, BluetoothAction,
     BluetoothDevice, BluetoothDeviceKind, BluetoothDiscovery, BluetoothOperation, BluetoothPairing,
-    BluetoothSession, BluetoothState, Capability, EventSource, HardwareError, HardwareEvent,
-    PairingFailure, PairingPhase, signal_bars_from_rssi,
+    BluetoothPin, BluetoothSession, BluetoothState, Capability, EventSource, HardwareError,
+    HardwareEvent, PairingFailure, PairingPhase, signal_bars_from_rssi,
 };
 
 #[cfg(feature = "production")]
@@ -120,6 +122,17 @@ enum BusEvent {
     ServiceLost,
 }
 
+/// The user's answer to an agent prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PromptAnswer {
+    Accept,
+    Decline,
+    /// The PIN for a [`PairingPhase::RequestPin`] prompt.
+    Pin(BluetoothPin),
+}
+
+type Respond = Box<dyn FnOnce(PromptAnswer) + Send>;
+
 /// What the exported `org.bluez.Agent1` object asks of the adapter. Every
 /// method is called on the D-Bus connection's executor and therefore only
 /// touches in-memory state: no D-Bus call, no blocking wait.
@@ -127,7 +140,7 @@ enum BusEvent {
 trait AgentCallbacks: Send + Sync {
     /// A prompt the user answers; `respond` is called exactly once, by the
     /// user's reply, the prompt timeout, a cancellation, or a newer prompt.
-    fn prompt(&self, device_path: &str, phase: PairingPhase, respond: Box<dyn FnOnce(bool) + Send>);
+    fn prompt(&self, device_path: &str, phase: PairingPhase, respond: Respond);
     /// The remote types `passkey` (keyboards).
     fn display(&self, device_path: &str, passkey: u32);
     /// The agent refused a request it does not support.
@@ -187,11 +200,13 @@ struct Attempt {
     /// A reason decided locally (declined, prompt timeout, PIN refused)
     /// that wins over whatever error BlueZ reports afterwards.
     local_failure: Option<PairingFailure>,
+    /// The remote started it: the agent was asked without a Pair() of ours.
+    incoming: bool,
 }
 
 struct Prompt {
     ticket: u64,
-    respond: Box<dyn FnOnce(bool) + Send>,
+    respond: Respond,
 }
 
 struct State {
@@ -361,7 +376,7 @@ impl BluezBluetooth {
         state.managed = None;
         state.devices.clear();
         if let Some(prompt) = state.prompt.take() {
-            (prompt.respond)(false);
+            (prompt.respond)(PromptAnswer::Decline);
         }
         if let Some(attempt) = state.attempt.as_mut()
             && !attempt.phase.is_finished()
@@ -399,6 +414,7 @@ impl BluezBluetooth {
             pairing: state.attempt.as_ref().map(|attempt| BluetoothPairing {
                 device: attempt.device.clone(),
                 phase: attempt.phase,
+                incoming: attempt.incoming,
             }),
             operation: state.operation.clone(),
         }
@@ -477,7 +493,7 @@ impl BluezBluetooth {
         if !state.attempt.as_ref().is_some_and(|a| a.serial == serial) {
             return;
         }
-        Self::answer_prompt(&mut state, false);
+        Self::answer_prompt(&mut state, PromptAnswer::Decline);
         if let Some(attempt) = state.attempt.as_mut() {
             attempt.phase = match (&result, attempt.local_failure) {
                 (_, Some(reason)) => PairingPhase::Failed { reason },
@@ -533,10 +549,10 @@ impl BluezBluetooth {
     }
 
     /// Answers and forgets the pending prompt, if any.
-    fn answer_prompt(state: &mut State, accept: bool) -> bool {
+    fn answer_prompt(state: &mut State, answer: PromptAnswer) -> bool {
         match state.prompt.take() {
             Some(prompt) => {
-                (prompt.respond)(accept);
+                (prompt.respond)(answer);
                 true
             }
             None => false,
@@ -559,6 +575,7 @@ impl BluezBluetooth {
                 path: path.to_owned(),
                 phase: PairingPhase::Pairing,
                 local_failure: None,
+                incoming: true,
             });
         }
         state.attempt.as_mut().expect("attempt was just set")
@@ -672,6 +689,7 @@ impl Bluetooth for BluezBluetooth {
                 path: record.path.clone(),
                 phase: PairingPhase::Pairing,
                 local_failure: None,
+                incoming: false,
             });
             // Discovery competes with paging the remote; stop ours first.
             state.discovery_deadline = None;
@@ -727,7 +745,7 @@ impl Bluetooth for BluezBluetooth {
                 }
                 return Ok(());
             }
-            Self::answer_prompt(&mut state, false);
+            Self::answer_prompt(&mut state, PromptAnswer::Decline);
             let attempt = state.attempt.as_mut().expect("running attempt");
             attempt.local_failure = Some(PairingFailure::Canceled);
             attempt.phase = PairingPhase::Failed {
@@ -743,7 +761,22 @@ impl Bluetooth for BluezBluetooth {
 
     fn reply_bluetooth_pairing(&self, accept: bool) -> Result<(), HardwareError> {
         let mut state = lock(&self.state);
-        if !Self::answer_prompt(&mut state, accept) {
+        let needs_pin = state
+            .attempt
+            .as_ref()
+            .is_some_and(|a| a.phase == PairingPhase::RequestPin);
+        if accept && needs_pin && state.prompt.is_some() {
+            return Err(HardwareError::invalid(
+                Capability::Bluetooth,
+                "this pairing needs a PIN",
+            ));
+        }
+        let answer = if accept {
+            PromptAnswer::Accept
+        } else {
+            PromptAnswer::Decline
+        };
+        if !Self::answer_prompt(&mut state, answer) {
             return Err(HardwareError::invalid(
                 Capability::Bluetooth,
                 "no pairing prompt is waiting for an answer",
@@ -758,6 +791,28 @@ impl Bluetooth for BluezBluetooth {
                     reason: PairingFailure::Declined,
                 };
             }
+        }
+        self.publish_session(&mut state);
+        Ok(())
+    }
+
+    fn reply_bluetooth_pin(&self, pin: &BluetoothPin) -> Result<(), HardwareError> {
+        let mut state = lock(&self.state);
+        let waiting = state.prompt.is_some()
+            && state
+                .attempt
+                .as_ref()
+                .is_some_and(|a| a.phase == PairingPhase::RequestPin);
+        if !waiting {
+            return Err(HardwareError::invalid(
+                Capability::Bluetooth,
+                "no PIN request is waiting for an answer",
+            ));
+        }
+        // The PIN travels to the agent's pending reply only; it is not kept.
+        Self::answer_prompt(&mut state, PromptAnswer::Pin(pin.clone()));
+        if let Some(attempt) = state.attempt.as_mut() {
+            attempt.phase = PairingPhase::Pairing;
         }
         self.publish_session(&mut state);
         Ok(())
@@ -839,20 +894,15 @@ impl EventSource for BluezBluetooth {
 struct AgentBridge(Weak<BluezBluetooth>);
 
 impl AgentCallbacks for AgentBridge {
-    fn prompt(
-        &self,
-        device_path: &str,
-        phase: PairingPhase,
-        respond: Box<dyn FnOnce(bool) + Send>,
-    ) {
+    fn prompt(&self, device_path: &str, phase: PairingPhase, respond: Respond) {
         let Some(adapter) = self.0.upgrade() else {
-            respond(false);
+            respond(PromptAnswer::Decline);
             return;
         };
         let ticket = {
             let mut state = lock(&adapter.state);
             // A newer request supersedes an unanswered one.
-            BluezBluetooth::answer_prompt(&mut state, false);
+            BluezBluetooth::answer_prompt(&mut state, PromptAnswer::Decline);
             state.next_ticket += 1;
             let ticket = state.next_ticket;
             adapter.attempt_for(&mut state, device_path).phase = phase;
@@ -871,7 +921,7 @@ impl AgentCallbacks for AgentBridge {
             if state.prompt.as_ref().is_none_or(|p| p.ticket != ticket) {
                 return;
             }
-            BluezBluetooth::answer_prompt(&mut state, false);
+            BluezBluetooth::answer_prompt(&mut state, PromptAnswer::Decline);
             if let Some(attempt) = state.attempt.as_mut() {
                 attempt.local_failure = Some(PairingFailure::TimedOut);
                 attempt.phase = PairingPhase::Failed {
@@ -908,7 +958,7 @@ impl AgentCallbacks for AgentBridge {
             return;
         };
         let mut state = lock(&adapter.state);
-        BluezBluetooth::answer_prompt(&mut state, false);
+        BluezBluetooth::answer_prompt(&mut state, PromptAnswer::Decline);
         if let Some(attempt) = state.attempt.as_mut()
             && !attempt.phase.is_finished()
             && attempt.local_failure.is_none()

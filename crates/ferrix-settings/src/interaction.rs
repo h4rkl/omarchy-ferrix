@@ -48,6 +48,8 @@ pub enum Target {
     BtScan,
     /// An available device row: pair it.
     BtAvailable(usize),
+    /// The PIN card's field (focus only; keys go to it while shown).
+    BtPinField,
     /// Pairing card: Pair (accept), Cancel (decline/cancel), Done, Try again.
     BtAccept,
     BtDecline,
@@ -136,6 +138,17 @@ impl Layout {
     /// Available-device rows (at most eight).
     pub fn available_rects(&self, count: usize) -> Vec<Rect> {
         list_rects(self.size, self.s(590), count.min(8), 120)
+    }
+
+    /// The PIN field of the legacy PIN card.
+    pub fn bt_pin_field_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(96),
+            y: s(820),
+            w: self.w() - s(192),
+            h: s(110),
+        }
     }
 
     /// The left (primary) and right buttons of a pairing card.
@@ -361,7 +374,7 @@ impl Layout {
 }
 
 pub fn keyboard_visible(model: &Model) -> bool {
-    model.page == Page::Network && model.passphrase_for.is_some()
+    (model.page == Page::Network && model.passphrase_for.is_some()) || model.pin_entry()
 }
 
 pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option<Target> {
@@ -449,7 +462,9 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
 /// The buttons a pairing card shows, left to right.
 pub fn card_buttons(card: Card) -> (Option<Target>, Option<Target>) {
     match card {
-        Card::Confirm { .. } | Card::Authorize => (Some(Target::BtAccept), Some(Target::BtDecline)),
+        Card::Confirm { .. } | Card::Authorize | Card::Pin => {
+            (Some(Target::BtAccept), Some(Target::BtDecline))
+        }
         Card::Display { .. } | Card::Pairing => (None, Some(Target::BtDecline)),
         Card::Paired => (Some(Target::BtDone), None),
         Card::Failed(_) => (Some(Target::BtRetry), Some(Target::BtDone)),
@@ -460,6 +475,9 @@ fn bluetooth_hit(model: &Model, l: &Layout, position: (f64, f64)) -> Option<Targ
     if let Some(card) = model.bt_card() {
         // The card replaces the lists; only its buttons (and, on the saved
         // screen, the power row) answer.
+        if card == Card::Pin && contains(l.bt_pin_field_rect(), position) {
+            return Some(Target::BtPinField);
+        }
         let (left, right) = card_buttons(card);
         if left.is_some() && contains(l.bt_card_left_rect(), position) {
             return left;
@@ -554,6 +572,7 @@ pub fn activate(model: &mut Model, target: Target) {
             }
         }
         Target::BtAvailable(i) => model.pair_available(i),
+        Target::BtPinField => {}
         Target::BtAccept => model.reply_pairing(true),
         Target::BtDecline => match model.bt_card() {
             Some(card) if card.asks() => model.reply_pairing(false),
@@ -572,6 +591,10 @@ pub fn activate(model: &mut Model, target: Target) {
 }
 
 pub fn key_press(model: &mut Model, key: Key) {
+    if model.pin_entry() {
+        model.pin_key(key);
+        return;
+    }
     if model.passphrase_for.is_none() {
         return;
     }

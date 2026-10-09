@@ -1,0 +1,66 @@
+schema_version = 1
+name = "bluetooth-incoming-request"
+description = "A remote starts pairing with the phone: the session marks the request incoming, ferrix-core raises the system show-bluetooth-pairing handler (Settings) through ferrix-appd over whatever app is in front, the accepted request bonds, and an unanswered incoming PIN request is declined after 30 s on the mock clock."
+
+[[step]]
+service = "core"
+command = { cmd = "set-bluetooth", present = true }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "core"
+command = { cmd = "set-bluetooth-pairing-outcome" }
+note = "setup"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-cancel" }
+note = "setup"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-incoming", device = "mock-bt-found-2" }
+expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "authorize" } }, { event = "app-intent", kind = "show-bluetooth-pairing", handler = "org.ferrix.settings" }, { event = "bluetooth-attention", status = "sent" } ]
+timeout_ms = 20000
+note = "the synthetic phone pairs to us (Just Works, asked explicitly); Settings is launched or raised"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-incoming", device = "mock-bt-found-0" }
+expect_ack_error = true
+note = "one request at a time"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-reply", accept = true }
+expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "pairing" } } ]
+note = "the user answered Pair on the raised prompt"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-tick", ms = 1000 }
+expect = [ { event = "bluetooth-session-changed", paired = 3, pairing = { stage = "paired" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-forget", device = "mock-bt-found-2" }
+expect = [ { event = "bluetooth-session-changed", paired = 2 } ]
+note = "restore the saved list"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-incoming", device = "mock-bt-found-4" }
+expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "request-pin" } }, { event = "app-intent", kind = "show-bluetooth-pairing", handler = "org.ferrix.settings" }, { event = "bluetooth-attention", status = "sent" } ]
+timeout_ms = 20000
+note = "a legacy remote pairs to us: the PIN card is raised"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-tick", ms = 30000 }
+expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "failed", reason = "timed-out" } } ]
+note = "nobody answered within 30 s: declined"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-cancel" }
+note = "teardown: dismiss the outcome"
