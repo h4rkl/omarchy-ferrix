@@ -245,10 +245,14 @@ fn bluetooth_pair(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &
     let s = |v| l.s(v);
     let discovery = model.discovery();
     let available = model.available_devices();
-    let found = match available.len() {
+    let mut found = match available.len() {
         1 => "1 available".to_owned(),
         n => format!("{n} available"),
     };
+    let unnamed = model.unnamed_count();
+    if unnamed > 0 {
+        found.push_str(&format!(" \u{b7} {unnamed} unnamed hidden"));
+    }
     let (title, sub, trailing) = if discovery.active {
         let sub = match discovery.remaining_ms {
             Some(ms) => format!("{found} \u{b7} stops in {} s", ms.div_ceil(1000)),
@@ -1316,7 +1320,7 @@ mod tests {
         let c = compose(&ty, size, 600, &m, &Input::default());
         let rail = l.bt_progress_rect();
         assert_eq!(c.get(rail.x + 4, rail.y + rail.h / 2), t.rust, "scan rail");
-        for r in l.available_rects(4) {
+        for r in l.available_rects(3) {
             assert_eq!(c.get(r.x + 8, r.y + 8), t.surface, "available row");
         }
         m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::ConfirmPasskey {

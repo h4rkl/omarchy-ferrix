@@ -169,10 +169,15 @@ impl Model {
         self.devices().iter().filter(|d| d.paired).collect()
     }
 
-    /// Unpaired devices in range: named first, strongest signal first.
+    /// Unpaired, named devices in range, strongest signal first. Devices
+    /// that advertise no name (mostly BLE beacons and trackers) are not
+    /// offered for pairing; [`Model::unnamed_count`] reports how many.
     pub fn available_devices(&self) -> Vec<&BluetoothDevice> {
-        let mut devices: Vec<&BluetoothDevice> =
-            self.devices().iter().filter(|d| !d.paired).collect();
+        let mut devices: Vec<&BluetoothDevice> = self
+            .devices()
+            .iter()
+            .filter(|d| !d.paired && d.name.is_some())
+            .collect();
         devices.sort_by(|a, b| {
             a.name
                 .is_none()
@@ -186,6 +191,15 @@ impl Model {
                 .then_with(|| a.id.cmp(&b.id))
         });
         devices
+    }
+
+    /// Unpaired devices left out of [`Model::available_devices`] for
+    /// advertising no name.
+    pub fn unnamed_count(&self) -> usize {
+        self.devices()
+            .iter()
+            .filter(|d| !d.paired && d.name.is_none())
+            .count()
     }
 
     pub fn discovery(&self) -> BluetoothDiscovery {
@@ -582,10 +596,14 @@ mod tests {
             [
                 "Ferrix Mock Headphones",
                 "Ferrix Mock Keyboard",
-                "Ferrix Mock Watch",
-                "Unnamed device"
+                "Ferrix Mock Watch"
             ],
-            "named first, strongest first"
+            "named only, strongest first"
+        );
+        assert_eq!(
+            m.unnamed_count(),
+            1,
+            "unnamed devices are counted, not offered"
         );
         assert_eq!(format_passkey(482_913), "482 913");
         assert_eq!(format_passkey(7), "000 007");
@@ -602,7 +620,7 @@ mod tests {
         assert_eq!(m.bt_view, BtView::Pair);
         assert_eq!(requests(&mut m), [BluetoothCommand::StartDiscovery]);
         m.set_bluetooth_session(Ok(preview_session(None)));
-        assert_eq!(m.state_name(), "pair-scanning-4");
+        assert_eq!(m.state_name(), "pair-scanning-3");
         m.pair_available(0);
         assert_eq!(
             requests(&mut m),
