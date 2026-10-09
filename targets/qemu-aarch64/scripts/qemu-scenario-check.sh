@@ -14,8 +14,7 @@
 # label: QEMU. Never a physical device.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
-runtime="$out/agent"
+. "$root/targets/qemu-aarch64/scripts/paths.sh"
 scenarios="$root/targets/qemu-aarch64/scenarios"
 timeout=${FERRIX_QEMU_SCENARIO_TIMEOUT:-600}
 case "$timeout" in
@@ -65,7 +64,7 @@ failed_names=
 for file in $files; do
   name=$(basename "$file" .toml)
   [ "$(elapsed)" -lt "$timeout" ] || fail "timeout-before-$name"
-  if "$runner" --guest --out "$out" --sockets "$runtime" --serial "$runtime/serial.log" \
+  if "$runner" --guest --out "$out" --sockets "$sock_agent" --serial "$runtime/serial.log" \
        --qmp-helper "$root/targets/qemu-aarch64/scripts/qmp.py" $frame "$file"; then
     passed=$((passed + 1))
   else

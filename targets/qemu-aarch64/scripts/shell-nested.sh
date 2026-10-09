@@ -5,10 +5,13 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
+. "$root/targets/qemu-aarch64/scripts/paths.sh"
 profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
-socket=${FERRIX_CORE_SOCKET:-"$out/core.sock"}
-appd_socket=${FERRIX_APPD_SOCKET:-"$out/ferrix-appd.sock"}
+# Unix sockets go to the short per-out-dir socket dir (scripts/paths.sh).
+mkdir -p "$sock_base/nested"
+chmod 700 "$sock_base" "$sock_base/nested"
+socket=${FERRIX_CORE_SOCKET:-"$sock_base/nested/core.sock"}
+appd_socket=${FERRIX_APPD_SOCKET:-"$sock_base/nested/ferrix-appd.sock"}
 # Nested compositor socket name; apps launched by ferrix-appd inherit it.
 wayland_display=${FERRIX_NESTED_WAYLAND_DISPLAY:-ferrix-nested-0}
 mkdir -p "$out"

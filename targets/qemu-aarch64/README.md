@@ -83,8 +83,9 @@ check mode, powers off.
 
 Every QEMU session also attaches a `virtio-serial` port named
 `ferrix.control`, exposed on the host as a Unix socket
-(`out/qemu-aarch64/control.sock`, or `agent/control.sock` for agent sessions;
-`FERRIX_QEMU_CONTROL_SOCKET` overrides). `ferrix-core` reads line-delimited
+(`$SOCK/run/control.sock`, or `$SOCK/agent/control.sock` for agent sessions,
+where `$SOCK` is the short socket directory described under *Host socket
+directory* below; `FERRIX_QEMU_CONTROL_SOCKET` overrides). `ferrix-core` reads line-delimited
 JSON commands from the guest side (`/dev/vport1p1`, auto-detected via sysfs),
 applies them through the emulator adapter, publishes the resulting
 `HardwareEvent` to serial and to subscribed UI clients, and replies with an
@@ -214,15 +215,29 @@ Each mocked daemon owns one host-only channel (ADR-006); there is no
 cross-daemon forwarding and no application API for mutations. `qemu-run.sh`
 attaches all three virtio-serial ports to every session:
 
-| Daemon | QEMU virtio-serial port | Host socket (`out/qemu-aarch64/[agent/]`) | Nested host path |
+| Daemon | QEMU virtio-serial port | Host socket (`$SOCK/run/` or `$SOCK/agent/`) | Nested host path |
 | --- | --- | --- | --- |
 | `ferrix-core` | `ferrix.control` | `control.sock` | `--control none` (or `--control PATH`) |
 | `ferrix-telephonyd` | `ferrix.telephony` | `telephony-control.sock` | `--mock-control out/qemu-aarch64/telephony-control.sock` |
 | `ferrix-networkd` | `ferrix.network` | `network-control.sock` | `--mock-control out/qemu-aarch64/network-control.sock` |
 
 `FERRIX_QEMU_TELEPHONY_SOCKET` / `FERRIX_QEMU_NETWORK_SOCKET` override the
-host paths (Unix socket paths must stay short: macOS limits them to about
-100 bytes). The wire form is the same everywhere: one JSON command per line
+host paths.
+
+**Host socket directory.** Unix socket paths are limited to 104 bytes on
+macOS (108 on Linux), and a deep checkout such as a
+`.claude/worktrees/agent-…` worktree pushes
+`out/qemu-aarch64/agent/telephony-control.sock` past that. Every QEMU script
+therefore resolves its sockets through `scripts/paths.sh`: they live in
+`$SOCK = ${TMPDIR:-/tmp}/ferrix-<uid>-<cksum of the resolved out dir>` (or
+`/tmp/ferrix-<uid>-<key>` when `TMPDIR` itself is long), with `run/` for
+`qemu-run`/`qemu-check` and `agent/` for the agent session (`nested/` for
+`shell-nested`). Logs, serial captures, frames, and scenario evidence stay in
+the out dir; `out/qemu-aarch64/agent/socket-dir` names the agent session's
+socket directory and `just qemu-agent-status` prints it. Two out dirs never
+share a socket directory, so `FERRIX_OUT_DIR` is no longer needed for the path
+limit (it still isolates parallel sessions). `FERRIX_QEMU_SOCKET_DIR`
+overrides `$SOCK`. The wire form is the same everywhere: one JSON command per line
 in, one `{"status":"ok"|"error",...}` ack per line out; unknown commands and
 unknown fields are rejected. Drive them from the host:
 
@@ -296,9 +311,16 @@ just qemu-scenario wifi-captive --frame                     # plus a framebuffer
 just qemu-scenario-check                                    # all of them, fresh headless TCG session
 ```
 
-Guest mode (default when `out/qemu-aarch64/agent/serial.log` exists, else
-the plain session directory) sends to `control.sock`, `telephony-control.sock`
-and `network-control.sock` and matches the serial log; evidence is `QEMU`.
+Guest mode (the agent session when `out/qemu-aarch64/agent/serial.log`
+exists, else the plain session) sends to `control.sock`,
+`telephony-control.sock` and `network-control.sock` in that session's socket
+directory and matches the serial log; evidence is `QEMU`. The runner's record
+parser tolerates console noise before a record and recovers a record that
+another writer's line was injected into (the head and the next line's tail
+are rejoined only if they form one complete JSON object; records are
+anchored at `{"evidence":`, so a nested object is never taken for a record).
+Every guest writer emits one `write(2)` per record and the init relays logs
+line by line (`relay_log`), so such splits are not expected any more.
 Nested mode (`ferrix-scenario --nested --log PATH --sockets DIR FILE...`)
 sends to the daemons' Unix sockets and matches their combined stdout log;
 evidence is `mock`. The runner prints one record per scenario,
@@ -348,16 +370,19 @@ protocol client can reach `/run/ferrix/*.sock` from the host; until a mock
 accepts that command the scenario stops with an honest `ack-error: unknown
 variant` at that step.
 
-**Limitation (daemon process restart):** `service-crash-restart-reconcile`
-exercises backend loss and reconciliation *inside* each daemon
-(`crash-backend` → `telephony-backend-lost` / `network-backend-lost`, tick-driven
-recovery, `service-restarted` snapshot). It does not kill a daemon process.
-Process restart is handled by init's `supervise` loop in the guest
-(`daemon-restarted` record), but there is no host-to-guest path to kill a
-guest process from CI (typing a shell command over the virtual keyboard into
-the Terminal app is not acceptable evidence), so process restart is
-demonstrated only nested on a Linux host and is not asserted by any QEMU
-scenario.
+**Daemon process restart:** `service-crash-restart-reconcile` exercises
+backend loss and reconciliation *inside* each daemon (`crash-backend` →
+`telephony-backend-lost` / `network-backend-lost`, tick-driven recovery,
+`service-restarted` snapshot). Real process restart is covered by
+`supervision-daemon-kill-restart`: `ferrix-core`'s mock-only
+`kill-daemon` command (`just qemu-mock kill-daemon name=ferrix-networkd`)
+SIGKILLs one of the daemons init supervises (`ferrix-telephonyd`,
+`ferrix-networkd`, `ferrix-contactsd`; anything else is refused), records
+`daemon-kill` (`status` `sending`, `pids`) before the signal, and init's
+`supervise` loop then records `daemon-restarted` (`exit` 137) and the new
+process reports `*-ready` and answers on its mock-control channel. The
+command needs the mock-control capability, so it does not exist on a
+physical target. The restarted daemon starts from the profile boot state.
 
 ### Alpine smoke guest stays offline (decision)
 
@@ -549,9 +574,17 @@ just qemu-frame
 
 `qemu-agent-start` returns only after four serial records: `wayland-ready`
 (compositor and home surface committed), `input-ready` for the pointer
-(seat announced), `cursor-ready` (a neutral QMP pointer motion reached the
-compositor), and `home-ready {tiles, catalog, width, height}` (the launcher's
-catalog is loaded and hit-testable). This prevents the first `just qemu-tap`
+(the home surface bound its `wl_pointer`), `cursor-ready` (a neutral QMP
+pointer motion produced `wl_pointer.enter` and the cursor was installed),
+and `home-ready {tiles, catalog, width, height}` (the launcher's catalog is
+loaded and hit-testable). The pointer probe starts only after `input-ready`:
+the compositor sends `enter` only when pointer focus changes, so a probe
+motion that arrived before the client bound its pointer used to set the focus
+with nobody to tell, and `cursor-ready` never came (the 2026-10-09/10 start
+flake). The wait is bounded by `FERRIX_QEMU_AGENT_TIMEOUT` (seconds, default
+150); a failure prints one
+`{"evidence":"QEMU","event":"agent-start-failed","reason":...,"missing":[...],"probes":N,...}`
+record naming the readiness records that never arrived. This prevents the first `just qemu-tap`
 from being consumed while the pointer is initialized. The pmOS graphical start
 waits for `home-ready` as well and prints `product-home-not-ready` when it never
 arrives.
@@ -690,10 +723,11 @@ Inspect session state with `just qemu-agent-status`, and end it cleanly with
 `just qemu-agent-stop`. Agent artifacts are:
 
 ```text
-out/qemu-aarch64/agent/qmp.sock      # local QMP control socket
-out/qemu-aarch64/agent/control.sock            # ferrix-core mock-control (just qemu-mock)
-out/qemu-aarch64/agent/telephony-control.sock  # ferrix-telephonyd mock-control (--service telephony)
-out/qemu-aarch64/agent/network-control.sock    # ferrix-networkd mock-control (--service network)
+$SOCK/agent/qmp.sock                 # local QMP control socket ($SOCK: see Host socket directory)
+$SOCK/agent/control.sock             # ferrix-core mock-control (just qemu-mock)
+$SOCK/agent/telephony-control.sock   # ferrix-telephonyd mock-control (--service telephony)
+$SOCK/agent/network-control.sock     # ferrix-networkd mock-control (--service network)
+out/qemu-aarch64/agent/socket-dir    # the resolved $SOCK/agent path
 out/qemu-aarch64/scenarios/<name>/             # ferrix-scenario evidence (result.json, log excerpt, frame)
 out/qemu-aarch64/agent/serial.log    # mandatory serial evidence
 out/qemu-aarch64/agent/frame.png     # latest rendered framebuffer
@@ -703,7 +737,8 @@ out/qemu-aarch64/agent/launch.log    # resolved QEMU command and host errors
 Run only one session per output directory: `qemu-build`, the check, and the
 agent session all share `out/qemu-aarch64/`, so a concurrent rebuild
 truncates the initramfs under a booting guest and two guests would fight over
-the same control socket. Set `FERRIX_OUT_DIR` to isolate parallel work.
+the same control socket. Set `FERRIX_OUT_DIR` to isolate parallel work; the
+sockets follow the out dir automatically.
 
 `python3` is the only additional host prerequisite for this mode. Its standard
 library is used by the checked-in QMP helper; no Python packages are installed.

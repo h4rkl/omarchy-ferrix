@@ -2,10 +2,10 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-runtime=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64/agent
+. "$root/targets/qemu-aarch64/scripts/paths.sh"
 pid_file="$runtime/qemu.pid"
-if [ -S "$runtime/qmp.sock" ]; then
-  python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" quit || true
+if [ -S "$sock_agent/qmp.sock" ]; then
+  python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$sock_agent/qmp.sock" quit || true
 fi
 if [ -f "$pid_file" ]; then
   pid=$(cat "$pid_file")
@@ -15,5 +15,5 @@ if [ -f "$pid_file" ]; then
   done
   kill -0 "$pid" 2>/dev/null && kill "$pid" 2>/dev/null || true
 fi
-rm -f "$pid_file" "$runtime/qmp.sock"
+rm -f "$pid_file" "$sock_agent/qmp.sock"
 echo "QEMU agent session stopped"

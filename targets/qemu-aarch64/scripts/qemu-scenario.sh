@@ -10,7 +10,7 @@
 # frame.png with --frame). Evidence label: QEMU. Never a physical device.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
+. "$root/targets/qemu-aarch64/scripts/paths.sh"
 scenarios="$root/targets/qemu-aarch64/scenarios"
 [ "$#" -ge 1 ] || { echo "usage: qemu-scenario.sh NAME|FILE [--frame] [-- extra ferrix-scenario args]" >&2; echo "scenarios:" >&2; ls "$scenarios" | sed 's/\.toml$//; s/^/  /' >&2; exit 2; }
 name=$1
@@ -24,11 +24,13 @@ target_dir=${CARGO_TARGET_DIR:-"$root/target"}
 cargo build -q --manifest-path "$root/Cargo.toml" -p ferrix-scenario
 runner="$target_dir/debug/ferrix-scenario"
 [ -x "$runner" ] || { echo "ferrix-scenario binary missing at $runner" >&2; exit 2; }
-if [ -f "$out/agent/serial.log" ]; then
-  sockets="$out/agent"
+if [ -f "$runtime/serial.log" ]; then
+  sockets=$sock_agent
+  serial="$runtime/serial.log"
 else
-  sockets="$out"
+  sockets=$sock_run
+  serial="$out/serial.log"
 fi
-[ -f "$sockets/serial.log" ] || { echo "no serial log at $sockets/serial.log; start a session first (just qemu-agent-start)" >&2; exit 2; }
-exec "$runner" --guest --out "$out" --sockets "$sockets" --serial "$sockets/serial.log" \
+[ -f "$serial" ] || { echo "no serial log at $serial; start a session first (just qemu-agent-start)" >&2; exit 2; }
+exec "$runner" --guest --out "$out" --sockets "$sockets" --serial "$serial" \
   --qmp-helper "$root/targets/qemu-aarch64/scripts/qmp.py" "$@" "$file"

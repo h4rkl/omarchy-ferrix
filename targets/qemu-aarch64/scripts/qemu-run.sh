@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
+# out (logs, artifacts), runtime ($out/agent) and the short socket dirs.
+. "$root/targets/qemu-aarch64/scripts/paths.sh"
 accel=${FERRIX_QEMU_ACCEL:-auto}
 graphics=${FERRIX_QEMU_GRAPHICS:-off}
 mode=${FERRIX_QEMU_MODE:-run}
@@ -47,12 +48,15 @@ display_for() {
 set -- qemu-system-aarch64 -machine virt -cpu "$cpu" -m "$memory" -smp 2 -accel "$accel" -kernel "$out/Image" -initrd "$out/initramfs.cpio.gz"
 # Mock-control channel: a virtio-serial port named ferrix.control, exposed on
 # the host as a local Unix socket. ferrix-core reads line-delimited JSON
-# commands from it (see scripts/mock_control.py / `just qemu-mock`). Agent
-# sessions keep it beside their other runtime files.
+# commands from it (see scripts/mock_control.py / `just qemu-mock`). Sockets
+# live in the short per-out-dir runtime dir (scripts/paths.sh) so a deep
+# checkout never exceeds the Unix socket path limit; agent sessions and plain
+# runs use separate subdirectories.
+ferrix_socket_dirs
 if [ "$agent" = 1 ]; then
-  control_socket=${FERRIX_QEMU_CONTROL_SOCKET:-"$out/agent/control.sock"}
+  control_socket=${FERRIX_QEMU_CONTROL_SOCKET:-"$sock_agent/control.sock"}
 else
-  control_socket=${FERRIX_QEMU_CONTROL_SOCKET:-"$out/control.sock"}
+  control_socket=${FERRIX_QEMU_CONTROL_SOCKET:-"$sock_run/control.sock"}
 fi
 # Per-daemon mock-control channels (ADR-006): ferrix-telephonyd reads
 # ferrix.telephony, ferrix-networkd reads ferrix.network. Same virtio-serial
@@ -125,8 +129,7 @@ if [ "$agent" = 1 ] || [ "$graphics" != off ]; then
   esac
 fi
 if [ "$agent" = 1 ]; then
-  runtime="$out/agent"
-  qmp_socket=${FERRIX_QEMU_QMP_SOCKET:-"$runtime/qmp.sock"}
+  qmp_socket=${FERRIX_QEMU_QMP_SOCKET:-"$sock_agent/qmp.sock"}
   serial_log=${FERRIX_QEMU_SERIAL_LOG:-"$runtime/serial.log"}
   [ "$graphics" = off ] && graphics=none
   mkdir -p "$runtime"

@@ -152,9 +152,10 @@ personal data; never commit raw ones.
 ## 7. Parallel work with subagents
 
 - Give code tasks to subagents in git worktrees (`isolation: worktree`).
-  Each one runs its own QEMU with a short `FERRIX_OUT_DIR` (e.g. `/tmp/fbt`),
-  because the agent-session Unix sockets hit the path-length limit under
-  `.claude/worktrees/…`. Two QEMU sessions must not share an out dir.
+  Each worktree has its own `out/`, and the QEMU sockets live in a short
+  directory derived from the out dir (`targets/qemu-aarch64/scripts/paths.sh`),
+  so deep `.claude/worktrees/…` paths work without `FERRIX_OUT_DIR`. Two
+  QEMU sessions must not share an out dir.
 - **Only the lead agent touches the phone and the builder's shared paths.**
   The serial port and Fastboot are single-user; collisions corrupt
   transfers or leave flashes half done.

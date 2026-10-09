@@ -16,9 +16,11 @@
 # Evidence is QEMU/mock; nothing here touches a physical device.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
+. "$root/targets/qemu-aarch64/scripts/paths.sh"
 log="$out/serial.log"
-control="$out/control.sock"
+# Short socket dir: deep checkouts exceed the Unix socket path limit.
+ferrix_socket_dirs
+control="$sock_run/control.sock"
 mock="$root/targets/qemu-aarch64/scripts/mock_control.py"
 # Bounded wait for the whole check, in seconds (0.1 s polling ticks). CI may
 # raise it because TCG on a hosted runner is slower than a local host.

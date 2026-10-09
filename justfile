@@ -583,6 +583,7 @@ shell-compositor-nested:
 #   just qemu-mock set-power charging=true                         # ferrix-core
 #   just qemu-mock --service telephony incoming-call number=+15550100042
 #   just qemu-mock --service network set-radio enabled=false
+#   just qemu-mock kill-daemon name=ferrix-networkd                # SIGKILL; init restarts it
 [positional-arguments]
 qemu-mock +args:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-mock.sh" "$@"

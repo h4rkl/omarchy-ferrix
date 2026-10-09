@@ -4,8 +4,8 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-out=${FERRIX_OUT_DIR:-"$root/out"}/qemu-aarch64
-runtime="$out/agent"
+# out, runtime ($out/agent: logs) and the short socket dirs.
+. "$root/targets/qemu-aarch64/scripts/paths.sh"
 serial="$runtime/serial.log"
 profile=${FERRIX_QEMU_PROFILE:-"$root/targets/qemu-aarch64/profile.toml"}
 evidence="$out/gesture-check"
