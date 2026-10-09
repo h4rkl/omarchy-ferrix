@@ -8,16 +8,20 @@
 //!
 //! Pages: `root` (default, the category list), `network`, `bluetooth`,
 //! `mobile`, `display`, `radios`, `about`; previews also accept
-//! `bluetooth-absent` and `mobile-no-sim` for the honest absent states.
+//! `bluetooth-absent` and `mobile-no-sim` for the honest absent states, and
+//! `bluetooth-pair`, `bluetooth-confirm`, `bluetooth-paired`,
+//! `bluetooth-failed`, `bluetooth-device`, `bluetooth-forget` for the
+//! pairing flows (canned mock session).
 //! `--target` (or `FERRIX_TARGET`) names the target on the About page.
 //! Records: `app-context`, `settings-frame`, `ui-state {page, state}`,
 //! `settings-action {action, service, status}`, `network-link`,
 //! `telephony-link`, `core-link`; never SSIDs, passphrases, APNs, device
-//! names, or addresses. The
+//! names, device ids, pairing codes, or addresses. The
 //! `FERRIX_TELEPHONY_APN` launch-environment contract is an optional
 //! non-secret runtime setting used when the selected modem plugin requires an
 //! explicit carrier APN.
 
+mod bluetooth;
 mod interaction;
 mod model;
 mod screen;
@@ -70,15 +74,40 @@ fn target_from_env() -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-/// Preview page names: every [`Page`] plus the two absent-state variants.
-const PREVIEW_PAGES: &str =
-    "root, network, bluetooth, bluetooth-absent, mobile, mobile-no-sim, display, radios, about";
+/// Preview page names: every [`Page`], the two absent-state variants, and
+/// the Bluetooth pairing flows.
+const PREVIEW_PAGES: &str = "root, network, bluetooth, bluetooth-absent, bluetooth-pair, \
+     bluetooth-confirm, bluetooth-paired, bluetooth-failed, bluetooth-device, bluetooth-forget, \
+     mobile, mobile-no-sim, display, radios, about";
 
 fn preview_model(name: &str, target: &str) -> Option<Model> {
+    use ferrix_hardware_api::{PairingFailure, PairingPhase};
     let (page, absent) = match name {
         "bluetooth-absent" => (Page::Bluetooth, true),
         "mobile-no-sim" => (Page::Mobile, true),
+        other if other.starts_with("bluetooth-") => (Page::Bluetooth, false),
         other => (Page::parse(other)?, false),
+    };
+    let (flow, phase) = match name {
+        "bluetooth-pair" => (Some(bluetooth::BtView::Pair), None),
+        "bluetooth-confirm" => (
+            Some(bluetooth::BtView::Pair),
+            Some(PairingPhase::ConfirmPasskey { passkey: 482_913 }),
+        ),
+        "bluetooth-paired" => (Some(bluetooth::BtView::Pair), Some(PairingPhase::Paired)),
+        "bluetooth-failed" => (
+            Some(bluetooth::BtView::Pair),
+            Some(PairingPhase::Failed {
+                reason: PairingFailure::Rejected,
+            }),
+        ),
+        "bluetooth-device" | "bluetooth-forget" => (
+            Some(bluetooth::BtView::Device("mock-bt-0".to_owned())),
+            None,
+        ),
+        "bluetooth" | "bluetooth-absent" => (None, None),
+        other if other.starts_with("bluetooth-") => return None,
+        _ => (None, None),
     };
     let mut model = Model::new();
     model.target = target.to_owned();
@@ -111,8 +140,12 @@ fn preview_model(name: &str, target: &str) -> Option<Model> {
     model.show(page);
     model.pending.clear();
     if model.bluetooth_block().is_ok() {
-        model.set_bluetooth_devices(Ok(system::preview_devices()));
+        model.set_bluetooth_session(Ok(bluetooth::preview_session(phase)));
     }
+    if let Some(view) = flow {
+        model.bt_view = view;
+    }
+    model.bt_forget_confirm = name == "bluetooth-forget";
     Some(model)
 }
 
@@ -191,7 +224,7 @@ mod tests {
     #[test]
     fn preview_pages_render_at_the_panel_size() {
         let ty = Type::load().unwrap();
-        for name in PREVIEW_PAGES.split(", ") {
+        for name in PREVIEW_PAGES.split(", ").map(str::trim) {
             let model = preview_model(name, "qemu-aarch64").unwrap();
             assert!(name.starts_with(model.page.name()), "{name}");
             assert!(model.pending.is_empty(), "previews send nothing");

@@ -862,6 +862,7 @@ dependencies = [
 name = "ferrix-bluetooth-bluez"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "ferrix-hardware-api",
  "zbus",
 ]
@@ -913,6 +914,7 @@ version = "0.1.0"
 dependencies = [
  "ferrix-hardware-api",
  "ferrix-protocol",
+ "ferrix-scenario",
  "ferrix-session",
  "serde",
  "serde_json",

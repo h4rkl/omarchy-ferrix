@@ -13,14 +13,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_hardware_api::{
-    BluetoothDevice, CapabilityMatrix, HardwareCommand, HardwareError, HardwareEvent,
-    HardwareState, SCHEMA_VERSION,
+    BluetoothCommand, BluetoothDevice, BluetoothSession, CapabilityMatrix, HardwareCommand,
+    HardwareError, HardwareEvent, HardwareState, SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "request", rename_all = "kebab-case")]
 pub enum Request {
     State,
@@ -31,6 +31,14 @@ pub enum Request {
     /// The Bluetooth controller's remembered devices (not part of the
     /// copyable snapshot; clients re-query on `bluetooth-changed`).
     BluetoothDevices,
+    /// Devices plus discovery, pairing, and operation state (re-query on
+    /// `bluetooth-session-changed` and `bluetooth-changed`).
+    BluetoothSession,
+    /// A product Bluetooth request (discovery, pairing, connections);
+    /// answered with the resulting session.
+    Bluetooth {
+        command: BluetoothCommand,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -50,6 +58,10 @@ pub enum Reply {
     BluetoothDevices {
         schema_version: u32,
         devices: Vec<BluetoothDevice>,
+    },
+    BluetoothSession {
+        schema_version: u32,
+        session: BluetoothSession,
     },
     Error {
         error: HardwareError,
@@ -287,6 +299,46 @@ pub fn bluetooth_devices(path: &Path, timeout: Duration) -> Result<Vec<Bluetooth
     }
 }
 
+fn bluetooth_session_request(
+    path: &Path,
+    request: &Request,
+    timeout: Duration,
+) -> Result<BluetoothSession, String> {
+    let mut stream = connect_stream(path, timeout)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| format!("set core timeout: {e}"))?;
+    write_request(&mut stream, request)?;
+    let mut reader = BufReader::new(stream);
+    match read_reply(&mut reader)? {
+        Reply::BluetoothSession {
+            schema_version,
+            session,
+        } if schema_version == SCHEMA_VERSION => Ok(session),
+        Reply::BluetoothSession { schema_version, .. } => Err(format!(
+            "ferrix-core schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
+        )),
+        Reply::Error { error } => Err(error.to_string()),
+        Reply::ProtocolError { reason } => Err(reason),
+        other => Err(format!("unexpected core bluetooth reply: {other:?}")),
+    }
+}
+
+/// Asks for the Bluetooth session (devices, discovery, pairing).
+pub fn bluetooth_session(path: &Path, timeout: Duration) -> Result<BluetoothSession, String> {
+    bluetooth_session_request(path, &Request::BluetoothSession, timeout)
+}
+
+/// Sends one product Bluetooth request; returns the session after it was
+/// accepted. Progress arrives later as `bluetooth-session-changed`.
+pub fn bluetooth_command(
+    path: &Path,
+    command: BluetoothCommand,
+    timeout: Duration,
+) -> Result<BluetoothSession, String> {
+    bluetooth_session_request(path, &Request::Bluetooth { command }, timeout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +355,13 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Request::BluetoothDevices).unwrap(),
             r#"{"request":"bluetooth-devices"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::Bluetooth {
+                command: BluetoothCommand::ReplyPairing { accept: false }
+            })
+            .unwrap(),
+            r#"{"request":"bluetooth","command":{"command":"reply-pairing","accept":false}}"#
         );
     }
 

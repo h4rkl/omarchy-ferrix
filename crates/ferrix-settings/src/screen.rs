@@ -7,11 +7,12 @@ use ferrix_hardware_api::Capability;
 use ferrix_ui::draw::{Canvas, Rect, Style, Type};
 use ferrix_ui::theme;
 use ferrix_ui::widgets::{
-    ButtonKind, Tone, button, chip, clock_strip, gesture_pill, keyboard, list_row, notice,
-    page_header, section_label, slider, text_field, wrap, wrap_text,
+    ButtonKind, Tone, button, chip, clock_strip, ellipsize, gesture_pill, keyboard, list_row,
+    notice, page_header, section_label, slider, text_field, wrap, wrap_text,
 };
 
-use crate::interaction::{Input, Layout, Target, keyboard_visible};
+use crate::bluetooth::{BtView, Card, device_name, failure_text, format_passkey, kind_label};
+use crate::interaction::{Input, Layout, Target, card_buttons, keyboard_visible};
 use crate::model::{Link, Model, Page};
 
 pub fn compose(
@@ -30,7 +31,11 @@ pub fn compose(
         model.telephony_label()
     );
     clock_strip(&mut c, ty, &clock, Some(&label));
-    let subtitle = (model.page != Page::Root).then(|| model.page.title());
+    let subtitle = match model.page {
+        Page::Root => None,
+        Page::Bluetooth => Some(model.bluetooth_subtitle()),
+        page => Some(page.title()),
+    };
     page_header(
         &mut c,
         ty,
@@ -97,81 +102,529 @@ fn caption(c: &mut Canvas, ty: &Type, l: &Layout, text: &str, y: i32) {
     wrap_text(c, ty, text, l.s(96), l.s(y), c.width() - l.s(192), l.s(27));
 }
 
-/// Bluetooth: controller power, then the remembered devices, or a plain
-/// statement of why there is no controller to control.
+/// Bluetooth: the saved-devices screen (power, Pair new device, saved
+/// devices), Pair new device (scan, available devices), or one device's
+/// detail; a pairing card replaces the lists while it applies. Without a
+/// controller, a plain statement of why there is nothing to control.
 fn bluetooth(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
-    let t = theme::get();
-    let s = |v| l.s(v);
-    let pressed = input.pressed == Some(Target::BluetoothPower);
-    match model.bluetooth_block() {
-        Ok(()) => toggle_row(
-            c,
-            ty,
-            l.bluetooth_power_rect(),
-            "Bluetooth",
-            &model.source_caption("controller present", Capability::Bluetooth),
-            model.bluetooth_on(),
-            pressed,
-        ),
-        Err(block) => list_row(
+    if let Err(block) = model.bluetooth_block() {
+        list_row(
             c,
             ty,
             l.bluetooth_power_rect(),
             "Bluetooth",
             block.reason(),
             Some(("unavailable", Tone::Warn)),
-            pressed,
-        ),
+            input.pressed == Some(Target::BluetoothPower),
+        );
+        let text = match block {
+            crate::system::BluetoothBlock::CoreUnavailable => model.core_label(),
+            _ => "No Bluetooth controller is attached, so there is nothing to turn on or pair. \
+                  Wi-Fi and calls are unaffected."
+                .to_owned(),
+        };
+        caption(c, ty, l, &text, 540);
+        error_notice(c, ty, l, model, 1580);
+        return;
     }
-    match model.bluetooth_block() {
-        Err(crate::system::BluetoothBlock::CoreUnavailable) => {
-            caption(c, ty, l, &model.core_label(), 540);
+    match model.bt_view {
+        BtView::Main => bluetooth_main(c, ty, l, model, input),
+        BtView::Pair => bluetooth_pair(c, ty, l, model, input),
+        BtView::Device(_) => bluetooth_device(c, ty, l, model, input),
+    }
+}
+
+fn bluetooth_main(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    toggle_row(
+        c,
+        ty,
+        l.bluetooth_power_rect(),
+        "Bluetooth",
+        &model.source_caption("controller present", Capability::Bluetooth),
+        model.bluetooth_on(),
+        input.pressed == Some(Target::BluetoothPower),
+    );
+    if let Some(card) = model.bt_card() {
+        pairing_card(c, ty, l, model, input, card);
+        return;
+    }
+    let pair_pressed = input.pressed == Some(Target::BtPairNew);
+    let (pair_sub, pair_trailing) = match (&model.bt_devices, model.bluetooth_on()) {
+        (_, false) => ("turn Bluetooth on to pair", None),
+        (
+            crate::bluetooth::DeviceList::Loaded {
+                controls: false, ..
+            },
+            true,
+        ) => (
+            "this target's Bluetooth service cannot pair",
+            Some(("unavailable", Tone::Warn)),
+        ),
+        _ => ("find nearby devices to pair", Some(("+", Tone::Accent))),
+    };
+    list_row(
+        c,
+        ty,
+        l.bt_pair_row_rect(),
+        "Pair new device",
+        pair_sub,
+        pair_trailing,
+        pair_pressed,
+    );
+    section_label(c, ty, "saved devices", s(96), s(680));
+    let dim = Style::regular(s(26) as f32, t.fg_dim);
+    match &model.bt_devices {
+        crate::bluetooth::DeviceList::Unknown => ty.text(c, dim, "loading", s(96), s(770)),
+        crate::bluetooth::DeviceList::Failed(reason) => {
+            ty.text(c, dim, &format!("devices \u{b7} {reason}"), s(96), s(770));
         }
-        Err(_) => caption(
+        crate::bluetooth::DeviceList::Loaded { .. } => {
+            let saved = model.saved_devices();
+            if saved.is_empty() {
+                ty.text(c, dim, "none saved", s(96), s(770));
+            }
+            for (i, (device, r)) in saved.iter().zip(l.saved_rects(saved.len())).enumerate() {
+                let sub = format!(
+                    "{} \u{b7} {}",
+                    kind_label(device.kind),
+                    if device.connected {
+                        "connected"
+                    } else {
+                        "paired"
+                    }
+                );
+                let trailing = device.connected.then_some(("connected", Tone::Ok));
+                list_row(
+                    c,
+                    ty,
+                    r,
+                    device_name(device),
+                    &sub,
+                    trailing,
+                    input.pressed == Some(Target::BtSaved(i)),
+                );
+            }
+        }
+    }
+    caption(
+        c,
+        ty,
+        l,
+        "Devices come from the system Bluetooth service. Tap a saved device to connect, \
+         disconnect, or forget it.",
+        1560,
+    );
+    error_notice(c, ty, l, model, 1700);
+}
+
+fn bluetooth_pair(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    // The card is the whole screen while it applies (the scan is paused
+    // for pairing anyway).
+    if let Some(card) = model.bt_card() {
+        if let Some(device) = model.pairing().and_then(|p| model.bt_device(&p.device)) {
+            let sub = match device.signal_bars {
+                Some(bars) => format!("{} \u{b7} signal {bars}/4", kind_label(device.kind)),
+                None => kind_label(device.kind).to_owned(),
+            };
+            list_row(
+                c,
+                ty,
+                l.bt_scan_rect(),
+                device_name(device),
+                &sub,
+                None,
+                false,
+            );
+        }
+        pairing_card(c, ty, l, model, input, card);
+        return;
+    }
+    let t = theme::get();
+    let s = |v| l.s(v);
+    let discovery = model.discovery();
+    let available = model.available_devices();
+    let found = match available.len() {
+        1 => "1 available".to_owned(),
+        n => format!("{n} available"),
+    };
+    let (title, sub, trailing) = if discovery.active {
+        let sub = match discovery.remaining_ms {
+            Some(ms) => format!("{found} \u{b7} stops in {} s", ms.div_ceil(1000)),
+            None => found,
+        };
+        ("Scanning", sub, ("scanning", Tone::Steel))
+    } else {
+        (
+            "Scan stopped",
+            format!("{found} \u{b7} tap to scan again"),
+            ("scan", Tone::Accent),
+        )
+    };
+    list_row(
+        c,
+        ty,
+        l.bt_scan_rect(),
+        title,
+        &sub,
+        Some(trailing),
+        input.pressed == Some(Target::BtScan),
+    );
+    if discovery.active {
+        // Remaining scan time: the rail empties as the bound approaches.
+        let rail = l.bt_progress_rect();
+        c.fill_rounded(rail, s(4), t.surface_hi);
+        let total = ferrix_hardware_api::BLUETOOTH_DISCOVERY_TIMEOUT_MS;
+        let left = discovery.remaining_ms.unwrap_or(total).min(total);
+        let w = (i64::from(rail.w) * i64::from(left) / i64::from(total)) as i32;
+        c.fill_rounded(
+            Rect {
+                w: w.max(s(8)),
+                ..rail
+            },
+            s(4),
+            t.rust,
+        );
+    }
+    section_label(c, ty, "available devices", s(96), s(560));
+    let dim = Style::regular(s(26) as f32, t.fg_dim);
+    if available.is_empty() {
+        let text = if discovery.active {
+            "Looking for devices\u{2026}"
+        } else {
+            "No devices found"
+        };
+        ty.text(c, dim, text, s(96), s(650));
+    }
+    for (i, (device, r)) in available
+        .iter()
+        .zip(l.available_rects(available.len()))
+        .enumerate()
+    {
+        let sub = match device.signal_bars {
+            Some(bars) => format!("{} \u{b7} signal {bars}/4", kind_label(device.kind)),
+            None => format!("{} \u{b7} not in range", kind_label(device.kind)),
+        };
+        list_row(
             c,
             ty,
-            l,
-            "No Bluetooth controller is attached, so there is nothing to turn on or pair. \
-             Wi-Fi and calls are unaffected.",
-            540,
-        ),
-        Ok(()) => {
-            section_label(c, ty, "devices", s(96), s(570));
-            let dim = Style::regular(s(26) as f32, t.fg_dim);
-            match &model.bt_devices {
-                crate::system::DeviceList::Unknown => {
-                    ty.text(c, dim, "loading", s(96), s(660));
-                }
-                crate::system::DeviceList::Failed(reason) => {
-                    ty.text(c, dim, &format!("devices \u{b7} {reason}"), s(96), s(660));
-                }
-                crate::system::DeviceList::Loaded(devices) if devices.is_empty() => {
-                    ty.text(c, dim, "none remembered", s(96), s(660));
-                }
-                crate::system::DeviceList::Loaded(devices) => {
-                    for (device, r) in devices.iter().zip(l.device_rects(devices.len())) {
-                        let sub = match (device.paired, device.connected) {
-                            (_, true) => "paired \u{b7} connected",
-                            (true, false) => "paired",
-                            (false, false) => "seen \u{b7} not paired",
-                        };
-                        let trailing = device.connected.then_some(("connected", Tone::Ok));
-                        let name = device.name.as_deref().unwrap_or("Unnamed device");
-                        list_row(c, ty, r, name, sub, trailing, false);
-                    }
-                }
-            }
+            r,
+            device_name(device),
+            &sub,
+            Some(("pair", Tone::Neutral)),
+            input.pressed == Some(Target::BtAvailable(i)),
+        );
+    }
+    caption(
+        c,
+        ty,
+        l,
+        "Put the other device in pairing mode. Scanning stops by itself after 30 s; \
+         device names stay on this phone.",
+        1700,
+    );
+    error_notice(c, ty, l, model, 1840);
+}
+
+/// The focused pairing card: the question and code, or the outcome.
+fn pairing_card(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input, card: Card) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    let name = model.pairing_name();
+    let width = c.width() - s(192);
+    let title = Style::bold(s(44) as f32, t.fg);
+    let code = |c: &mut Canvas, passkey: u32| {
+        let style = Style::bold(s(96) as f32, t.fg);
+        let text = format_passkey(passkey);
+        let w = ty.width(style, &text);
+        ty.text(c, style, &text, (c.width() - w) / 2, s(860));
+    };
+    match card {
+        Card::Confirm { passkey } => {
+            ty.text(
+                c,
+                title,
+                &ellipsize(ty, title, &format!("Pair with {name}?"), width),
+                s(96),
+                s(620),
+            );
+            wrap_text(
+                c,
+                ty,
+                &format!("Check that {name} shows the same code."),
+                s(96),
+                s(680),
+                width,
+                s(30),
+            );
+            code(c, passkey);
             caption(
                 c,
                 ty,
                 l,
-                "Pairing and discovery are not available yet; this list comes from the \
-                 system Bluetooth service.",
-                1440,
+                "Answer within 30 s; an unanswered request is declined.",
+                940,
+            );
+        }
+        Card::Authorize => {
+            ty.text(
+                c,
+                title,
+                &ellipsize(ty, title, &format!("Pair with {name}?"), width),
+                s(96),
+                s(620),
+            );
+            wrap_text(
+                c,
+                ty,
+                &format!("{name} asks to pair without a code. Pair only if you started this."),
+                s(96),
+                s(680),
+                width,
+                s(30),
+            );
+            caption(
+                c,
+                ty,
+                l,
+                "Answer within 30 s; an unanswered request is declined.",
+                940,
+            );
+        }
+        Card::Display { passkey } => {
+            ty.text(
+                c,
+                title,
+                &ellipsize(ty, title, &format!("Type this code on {name}"), width),
+                s(96),
+                s(620),
+            );
+            wrap_text(
+                c,
+                ty,
+                "Then press Enter on that device.",
+                s(96),
+                s(680),
+                width,
+                s(30),
+            );
+            code(c, passkey);
+        }
+        Card::Pairing => {
+            ty.text(
+                c,
+                title,
+                &ellipsize(ty, title, &format!("Pairing with {name}\u{2026}"), width),
+                s(96),
+                s(620),
+            );
+            wrap_text(
+                c,
+                ty,
+                "Keep the device close and in pairing mode.",
+                s(96),
+                s(680),
+                width,
+                s(30),
+            );
+        }
+        Card::Paired => {
+            notice(
+                c,
+                ty,
+                Rect {
+                    x: s(48),
+                    y: s(600),
+                    w: c.width() - s(96),
+                    h: s(90),
+                },
+                &format!("Paired with {name}"),
+                Tone::Ok,
+            );
+            caption(c, ty, l, "It is saved and connects when in range.", 760);
+        }
+        Card::Failed(reason) => {
+            notice(
+                c,
+                ty,
+                Rect {
+                    x: s(48),
+                    y: s(600),
+                    w: c.width() - s(96),
+                    h: s(90),
+                },
+                &failure_text(reason, &name),
+                Tone::Err,
+            );
+            caption(
+                c,
+                ty,
+                l,
+                "Make sure the other device is in pairing mode, then try again.",
+                760,
             );
         }
     }
-    error_notice(c, ty, l, model, 1580);
+    let label = |target: Target| match target {
+        Target::BtAccept => "Pair",
+        Target::BtDecline => "Cancel",
+        Target::BtDone => "Done",
+        Target::BtRetry => "Try again",
+        _ => "",
+    };
+    let (left, right) = card_buttons(card);
+    if let Some(target) = left {
+        button(
+            c,
+            ty,
+            l.bt_card_left_rect(),
+            label(target),
+            ButtonKind::Primary,
+            input.pressed == Some(target),
+            true,
+        );
+    }
+    if let Some(target) = right {
+        button(
+            c,
+            ty,
+            l.bt_card_right_rect(),
+            label(target),
+            ButtonKind::Secondary,
+            input.pressed == Some(target),
+            true,
+        );
+    }
+}
+
+fn bluetooth_device(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    let Some(device) = model.detail_device() else {
+        return;
+    };
+    let name = device_name(device);
+    let sub = format!(
+        "{} \u{b7} paired \u{b7} {}",
+        kind_label(device.kind),
+        if device.connected {
+            "connected"
+        } else {
+            "not connected"
+        }
+    );
+    list_row(
+        c,
+        ty,
+        l.bt_device_rect(),
+        name,
+        &sub,
+        device.connected.then_some(("connected", Tone::Ok)),
+        false,
+    );
+    let status = Rect {
+        x: s(48),
+        y: s(480),
+        w: c.width() - s(96),
+        h: s(90),
+    };
+    match model.detail_operation() {
+        Some(op) => match &op.failed {
+            Some(reason) => notice(
+                c,
+                ty,
+                status,
+                &format!("Couldn't {} \u{b7} {reason}", op.action.name()),
+                Tone::Err,
+            ),
+            None => notice(
+                c,
+                ty,
+                status,
+                match op.action {
+                    ferrix_hardware_api::BluetoothAction::Connect => "Connecting\u{2026}",
+                    ferrix_hardware_api::BluetoothAction::Disconnect => "Disconnecting\u{2026}",
+                },
+                Tone::Steel,
+            ),
+        },
+        None => {
+            if let Some(error) = &model.last_error {
+                notice(c, ty, status, error, Tone::Err);
+            }
+        }
+    }
+    let busy = model
+        .detail_operation()
+        .is_some_and(|op| op.failed.is_none());
+    if model.bt_forget_confirm {
+        ty.text(
+            c,
+            Style::bold(s(44) as f32, t.fg),
+            "Forget device?",
+            s(96),
+            s(700),
+        );
+        wrap_text(
+            c,
+            ty,
+            &format!("{name} is unpaired and removed from this phone. Pair it again to use it."),
+            s(96),
+            s(760),
+            c.width() - s(192),
+            s(30),
+        );
+        button(
+            c,
+            ty,
+            l.bt_forget_confirm_rect(),
+            "Forget",
+            ButtonKind::Danger,
+            input.pressed == Some(Target::BtForgetConfirm),
+            true,
+        );
+        button(
+            c,
+            ty,
+            l.bt_forget_cancel_rect(),
+            "Cancel",
+            ButtonKind::Secondary,
+            input.pressed == Some(Target::BtForgetCancel),
+            true,
+        );
+        return;
+    }
+    button(
+        c,
+        ty,
+        l.bt_connect_rect(),
+        if device.connected {
+            "Disconnect"
+        } else {
+            "Connect"
+        },
+        ButtonKind::Primary,
+        input.pressed == Some(Target::BtConnect),
+        model.bluetooth_on() && !busy,
+    );
+    button(
+        c,
+        ty,
+        l.bt_forget_rect(),
+        "Forget",
+        ButtonKind::Danger,
+        input.pressed == Some(Target::BtForget),
+        true,
+    );
+    caption(
+        c,
+        ty,
+        l,
+        "Connections go through ferrix-core and the system Bluetooth service, which keeps \
+         the bond.",
+        860,
+    );
 }
 
 /// Mobile network: SIM, operator, signal (read-only rows), then the
@@ -846,5 +1299,53 @@ mod tests {
         for r in l.mobile_rects() {
             assert_eq!(c.get(r.x + 8, r.y + 8), t.surface);
         }
+    }
+
+    #[test]
+    fn bluetooth_pair_flow_renders_scan_rail_card_and_detail() {
+        use crate::bluetooth::{BtView, preview_session};
+        use ferrix_hardware_api::{PairingFailure, PairingPhase};
+        let t = theme::get();
+        let ty = Type::load().unwrap();
+        let size = (1080, 2340);
+        let l = Layout::new(size);
+        let mut m = system_model();
+        m.show(Page::Bluetooth);
+        m.set_bluetooth_session(Ok(preview_session(None)));
+        m.bt_view = BtView::Pair;
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let rail = l.bt_progress_rect();
+        assert_eq!(c.get(rail.x + 4, rail.y + rail.h / 2), t.rust, "scan rail");
+        for r in l.available_rects(4) {
+            assert_eq!(c.get(r.x + 8, r.y + 8), t.surface, "available row");
+        }
+        m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::ConfirmPasskey {
+            passkey: 482_913,
+        }))));
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let pair = l.bt_card_left_rect();
+        assert_eq!(
+            c.get(pair.x + pair.w / 2, pair.y),
+            t.rust,
+            "Pair is primary"
+        );
+        let code_drawn =
+            (l.s(780)..l.s(880)).any(|y| (l.s(300)..l.s(780)).any(|x| c.get(x, y) == t.fg));
+        assert!(code_drawn, "the passkey is drawn large");
+        m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::Failed {
+            reason: PairingFailure::TimedOut,
+        }))));
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let err = (l.s(600)..l.s(690)).any(|y| c.get(l.s(70), y) == t.err);
+        assert!(err, "failure notice is err");
+        m.set_bluetooth_session(Ok(preview_session(None)));
+        m.bt_view = BtView::Device("mock-bt-0".into());
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let forget = l.bt_forget_rect();
+        assert_eq!(
+            c.get(forget.x + forget.w / 2, forget.y),
+            t.err,
+            "Forget is danger"
+        );
     }
 }

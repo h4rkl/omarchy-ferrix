@@ -220,17 +220,57 @@ impl Settings {
         ));
     }
 
+    /// Re-queries the Bluetooth session; an adapter without one (no
+    /// discovery or pairing) falls back to its plain device list.
     fn refresh_devices(&mut self) {
-        let result = ferrix_protocol::bluetooth_devices(&self.core_socket, TIMEOUT);
-        let (status, count) = match &result {
-            Ok(devices) => ("ok", devices.len().to_string()),
-            Err(_) => ("error", "null".to_owned()),
+        let session = ferrix_protocol::bluetooth_session(&self.core_socket, TIMEOUT);
+        let unsupported = matches!(&session, Err(reason) if reason.contains("unsupported"));
+        let count = match session {
+            Ok(session) => {
+                let count = session.devices.len();
+                self.model.set_bluetooth_session(Ok(session));
+                Some(count)
+            }
+            Err(_) if unsupported => {
+                let devices = ferrix_protocol::bluetooth_devices(&self.core_socket, TIMEOUT);
+                let count = devices.as_ref().ok().map(Vec::len);
+                self.model.set_bluetooth_devices(devices);
+                count
+            }
+            Err(reason) => {
+                self.model.set_bluetooth_session(Err(reason));
+                None
+            }
         };
-        // Counts only: device names never reach evidence records.
+        let (status, count) = match count {
+            Some(count) => ("ok", count.to_string()),
+            None => ("error", "null".to_owned()),
+        };
+        // Counts only: device names and ids never reach evidence records.
         emit(format!(
             "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"settings-action\",\"action\":\"bluetooth-devices\",\"service\":\"core\",\"status\":\"{status}\",\"devices\":{count}}}"
         ));
-        self.model.set_bluetooth_devices(result);
+    }
+
+    /// A product Bluetooth request; the reply carries the new session and
+    /// later progress arrives as `bluetooth-session-changed`.
+    fn bluetooth_action(&mut self, command: ferrix_hardware_api::BluetoothCommand) {
+        let name = format!("bluetooth-{}", command.name());
+        let (status, error) =
+            match ferrix_protocol::bluetooth_command(&self.core_socket, command, TIMEOUT) {
+                Ok(session) => {
+                    self.model.set_bluetooth_session(Ok(session));
+                    ("ok", None)
+                }
+                Err(error) => {
+                    self.model.last_error = Some(format!("bluetooth \u{b7} {error}"));
+                    ("error", Some(error))
+                }
+            };
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"settings-action\",\"action\":\"{name}\",\"service\":\"core\",\"status\":\"{status}\",\"error\":{}}}",
+            json_opt_str(error.as_deref())
+        ));
     }
 
     fn send(&mut self, action: Action) {
@@ -240,6 +280,7 @@ impl Settings {
                 HardwareCommand::SetBluetoothEnabled { enabled },
             ),
             Action::RefreshBluetoothDevices => self.refresh_devices(),
+            Action::Bluetooth(command) => self.bluetooth_action(command),
             Action::SetBrightness(percent) => {
                 self.core_action("set-brightness", HardwareCommand::SetBrightness { percent })
             }

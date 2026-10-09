@@ -59,12 +59,62 @@ signal_percent = 41
 # them). Mock only: no real names or hardware addresses.
 [[bluetooth.devices]]
 name = "Ferrix Mock Earbuds"
+kind = "audio"
 paired = true
 connected = true
 
 [[bluetooth.devices]]
 name = "Ferrix Mock Speaker"
+kind = "audio"
 paired = true
 
 [[bluetooth.devices]]
 name = ""
+
+# Synthetic devices the mock controller finds once discovery starts. Each
+# fixes its pairing method and how the remote ends the attempt, so the
+# Pair-new-device flows are deterministic (ferrix-core control commands
+# bluetooth-* and bluetooth-tick drive them; see the scenarios).
+[[bluetooth.discoverable]]
+name = "Ferrix Mock Headphones"
+kind = "audio"
+rssi = -48
+pairing = "confirm"
+outcome = "success"
+passkey = 482913
+
+[[bluetooth.discoverable]]
+name = "Ferrix Mock Keyboard"
+kind = "input"
+rssi = -63
+pairing = "display-passkey"
+outcome = "success"
+passkey = 205718
+
+[[bluetooth.discoverable]]
+name = "Ferrix Mock Phone"
+kind = "phone"
+rssi = -70
+pairing = "authorize"
+outcome = "success"
+
+[[bluetooth.discoverable]]
+name = "Ferrix Mock Watch"
+kind = "wearable"
+rssi = -74
+pairing = "confirm"
+outcome = "rejected"
+passkey = 731064
+
+[[bluetooth.discoverable]]
+name = "Ferrix Mock Legacy Headset"
+kind = "audio"
+rssi = -81
+pairing = "pin"
+
+[[bluetooth.discoverable]]
+name = "Ferrix Mock Car Kit"
+kind = "audio"
+rssi = -88
+pairing = "just-works"
+outcome = "timeout"

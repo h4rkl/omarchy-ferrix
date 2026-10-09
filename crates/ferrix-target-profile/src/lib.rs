@@ -11,7 +11,10 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
-use ferrix_hardware_api::{AudioRoute, ModemRegistration, Orientation, SimState, WifiState};
+use ferrix_hardware_api::{
+    AudioRoute, BluetoothDeviceKind, MockPairingMethod, MockPairingOutcome, ModemRegistration,
+    Orientation, SimState, WifiState,
+};
 use serde::{Deserialize, Serialize};
 
 /// The only schema version this crate accepts.
@@ -53,13 +56,53 @@ pub struct ProfileBluetoothDevice {
     /// Connected while the mock controller is powered.
     #[serde(default)]
     pub connected: bool,
+    #[serde(default)]
+    pub kind: BluetoothDeviceKind,
 }
 
-/// Optional `[bluetooth]` section: the mock controller's remembered devices.
+/// One synthetic device the mock controller finds once discovery starts
+/// (`[[bluetooth.discoverable]]`). Its pairing method and outcome make the
+/// pairing flows deterministic.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileDiscoverableDevice {
+    /// Display name; `""` models a device that advertises none.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: BluetoothDeviceKind,
+    /// Received signal strength in dBm (`-127..=20`).
+    #[serde(default = "default_rssi")]
+    pub rssi: i16,
+    #[serde(default)]
+    pub pairing: MockPairingMethod,
+    #[serde(default)]
+    pub outcome: MockPairingOutcome,
+    /// Six-digit code for confirm/display-passkey pairing (`0..=999999`).
+    #[serde(default)]
+    pub passkey: u32,
+}
+
+fn default_rssi() -> i16 {
+    -60
+}
+
+/// Optional `[bluetooth]` section: the mock controller's remembered devices
+/// and the devices its discovery finds.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct BluetoothSection {
     pub devices: Vec<ProfileBluetoothDevice>,
+    pub discoverable: Vec<ProfileDiscoverableDevice>,
+}
+
+fn valid_device_name(name: &str) -> Result<(), ProfileError> {
+    if name.chars().count() > 64 || name.chars().any(char::is_control) {
+        return Err(ProfileError::Invalid(format!(
+            "bluetooth device name {name:?} must be at most 64 printable characters"
+        )));
+    }
+    Ok(())
 }
 
 impl BluetoothSection {
@@ -70,16 +113,32 @@ impl BluetoothSection {
                 self.devices.len()
             )));
         }
+        if self.discoverable.len() > 16 {
+            return Err(ProfileError::Invalid(format!(
+                "bluetooth.discoverable lists {} devices (at most 16)",
+                self.discoverable.len()
+            )));
+        }
         for device in &self.devices {
-            if device.name.chars().count() > 64 || device.name.chars().any(char::is_control) {
-                return Err(ProfileError::Invalid(format!(
-                    "bluetooth.devices[].name {:?} must be at most 64 printable characters",
-                    device.name
-                )));
-            }
+            valid_device_name(&device.name)?;
             if device.connected && !device.paired {
                 return Err(ProfileError::Invalid(format!(
                     "bluetooth.devices[] {:?} is connected but not paired",
+                    device.name
+                )));
+            }
+        }
+        for device in &self.discoverable {
+            valid_device_name(&device.name)?;
+            if !(-127..=20).contains(&device.rssi) {
+                return Err(ProfileError::Invalid(format!(
+                    "bluetooth.discoverable[] {:?} rssi {} is outside -127..=20 dBm",
+                    device.name, device.rssi
+                )));
+            }
+            if device.passkey > 999_999 {
+                return Err(ProfileError::Invalid(format!(
+                    "bluetooth.discoverable[] {:?} passkey must be six digits",
                     device.name
                 )));
             }
@@ -847,6 +906,41 @@ signal_percent = 41
         assert_eq!(network.access_points.len(), 2);
         let bluetooth = p.bluetooth.expect("[bluetooth] present");
         assert_eq!(bluetooth.devices.len(), 3);
+        assert!(bluetooth.discoverable.len() >= 3);
+        let methods: BTreeSet<String> = bluetooth
+            .discoverable
+            .iter()
+            .map(|d| format!("{:?}/{:?}", d.pairing, d.outcome))
+            .collect();
+        assert!(methods.contains("Confirm/Success"), "{methods:?}");
+        assert!(
+            bluetooth
+                .discoverable
+                .iter()
+                .any(|d| d.outcome != MockPairingOutcome::Success),
+            "a failing outcome is modelled"
+        );
+    }
+
+    #[test]
+    fn discoverable_devices_are_validated() {
+        let ok = format!(
+            "{FIXTURE}\n[[bluetooth.discoverable]]\nname = \"Mock Headphones\"\nkind = \"audio\"\nrssi = -48\npairing = \"confirm\"\noutcome = \"rejected\"\npasskey = 123456\n\n[[bluetooth.discoverable]]\n"
+        );
+        let found = Profile::parse(&ok).unwrap().bluetooth.unwrap().discoverable;
+        assert_eq!(found[0].pairing, MockPairingMethod::Confirm);
+        assert_eq!(found[0].kind, BluetoothDeviceKind::Audio);
+        assert_eq!(found[1].rssi, -60, "default rssi");
+        assert_eq!(found[1].outcome, MockPairingOutcome::Success);
+        for bad in [
+            "rssi = 40",
+            "passkey = 1000000",
+            "pairing = \"carrier-pigeon\"",
+            "address = \"00:11\"",
+        ] {
+            let text = format!("{FIXTURE}\n[[bluetooth.discoverable]]\n{bad}\n");
+            assert!(Profile::parse(&text).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -9,25 +9,15 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_hardware_api::{
-    BluetoothDevice, Capability, CapabilityMatrix, CapabilityStatus, HardwareEvent, HardwareState,
+    Capability, CapabilityMatrix, CapabilityStatus, HardwareEvent, HardwareState,
 };
 use ferrix_protocol::Feed as CoreFeed;
 use ferrix_telephony_api::{
     DataBearer, ModemState, RadioPower, Registration, SimState, TelephonyFeature,
 };
 
+use crate::bluetooth::DeviceList;
 use crate::model::{Action, Link, Model};
-
-/// The Bluetooth device list as last queried from the core.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum DeviceList {
-    /// Not queried yet (or invalidated by a state change).
-    #[default]
-    Unknown,
-    Loaded(Vec<BluetoothDevice>),
-    /// The query failed with this typed reason.
-    Failed(String),
-}
 
 /// Why the Bluetooth power toggle cannot act, in the order checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,9 +82,9 @@ fn status_word(status: CapabilityStatus) -> &'static str {
 impl Model {
     // -- core feed -----------------------------------------------------------
 
-    /// Folds one core reconnector update. A Bluetooth change (or a fresh
-    /// snapshot) invalidates the device list and, while the Bluetooth page
-    /// is shown, queues a re-query.
+    /// Folds one core reconnector update. A Bluetooth change marks the
+    /// session stale (a fresh snapshot drops it) and, while the Bluetooth
+    /// page is shown, queues a re-query.
     pub fn apply_core(&mut self, feed: CoreFeed) -> bool {
         match feed {
             CoreFeed::Snapshot {
@@ -112,13 +102,17 @@ impl Model {
                 self.hw = Some(state);
                 self.hw_capabilities = capabilities;
                 self.hw_target = Some(target);
+                self.bt_devices = DeviceList::Unknown;
                 self.invalidate_devices();
             }
             CoreFeed::Event(event) => {
                 if let Some(hw) = self.hw.as_mut() {
                     event.apply_to(hw);
                 }
-                if matches!(event, HardwareEvent::BluetoothChanged(_)) {
+                if matches!(
+                    event,
+                    HardwareEvent::BluetoothChanged(_) | HardwareEvent::BluetoothSessionChanged(_)
+                ) {
                     self.invalidate_devices();
                 }
             }
@@ -131,26 +125,19 @@ impl Model {
     }
 
     fn invalidate_devices(&mut self) {
-        self.bt_devices = DeviceList::Unknown;
+        self.bt_stale = true;
         self.request_devices_if_shown();
     }
 
-    /// Queues one device query when the Bluetooth page needs the list.
+    /// Queues one session query when the Bluetooth page needs it.
     pub fn request_devices_if_shown(&mut self) {
         if self.page == crate::model::Page::Bluetooth
-            && self.bt_devices == DeviceList::Unknown
+            && (self.bt_devices == DeviceList::Unknown || self.bt_stale)
             && self.bluetooth_block().is_ok()
             && !self.pending.contains(&Action::RefreshBluetoothDevices)
         {
             self.pending.push(Action::RefreshBluetoothDevices);
         }
-    }
-
-    pub fn set_bluetooth_devices(&mut self, result: Result<Vec<BluetoothDevice>, String>) {
-        self.bt_devices = match result {
-            Ok(devices) => DeviceList::Loaded(devices),
-            Err(reason) => DeviceList::Failed(reason),
-        };
     }
 
     pub fn core_label(&self) -> String {
@@ -298,13 +285,6 @@ impl Model {
         }
     }
 
-    pub fn devices(&self) -> &[BluetoothDevice] {
-        match &self.bt_devices {
-            DeviceList::Loaded(devices) => devices,
-            _ => &[],
-        }
-    }
-
     pub fn connected_devices(&self) -> usize {
         self.devices().iter().filter(|d| d.connected).count()
     }
@@ -315,7 +295,7 @@ impl Model {
             Err(block) => block.reason().to_owned(),
             Ok(()) if !self.bluetooth_on() => "off".to_owned(),
             Ok(()) => match &self.bt_devices {
-                DeviceList::Loaded(_) => {
+                DeviceList::Loaded { .. } => {
                     format!("on \u{b7} {} connected", self.connected_devices())
                 }
                 _ => "on".to_owned(),
@@ -329,7 +309,9 @@ impl Model {
             Ok(()) => {
                 let power = if self.bluetooth_on() { "on" } else { "off" };
                 match &self.bt_devices {
-                    DeviceList::Loaded(devices) => format!("{power}-{}-devices", devices.len()),
+                    DeviceList::Loaded { .. } => {
+                        format!("{power}-{}-saved", self.saved_devices().len())
+                    }
                     DeviceList::Failed(_) => format!("{power}-devices-failed"),
                     DeviceList::Unknown => power.to_owned(),
                 }
@@ -519,21 +501,6 @@ pub fn preview_hardware() -> HardwareState {
     }
 }
 
-/// Canned device list for the host preview.
-pub fn preview_devices() -> Vec<BluetoothDevice> {
-    let device = |id: &str, name: Option<&str>, paired, connected| BluetoothDevice {
-        id: id.to_owned(),
-        name: name.map(str::to_owned),
-        paired,
-        connected,
-    };
-    vec![
-        device("mock-bt-0", Some("Ferrix Mock Earbuds"), true, true),
-        device("mock-bt-1", Some("Ferrix Mock Speaker"), true, false),
-        device("mock-bt-2", None, false, false),
-    ]
-}
-
 /// A preview capability matrix: every capability mocked.
 pub fn preview_capabilities() -> CapabilityMatrix {
     CapabilityMatrix::uniform(CapabilityStatus::Mocked)
@@ -676,8 +643,8 @@ mod tests {
         m.show(Page::Bluetooth);
         assert_eq!(m.pending, vec![Action::RefreshBluetoothDevices]);
         m.pending.clear();
-        m.set_bluetooth_devices(Ok(preview_devices()));
-        assert_eq!(m.bluetooth_state_name(), "on-3-devices");
+        m.set_bluetooth_session(Ok(crate::bluetooth::preview_session(None)));
+        assert_eq!(m.bluetooth_state_name(), "on-2-saved");
         assert_eq!(m.bluetooth_summary(), "on \u{b7} 1 connected");
         m.toggle_bluetooth();
         assert_eq!(m.pending.pop(), Some(Action::SetBluetooth(false)));
@@ -687,12 +654,12 @@ mod tests {
                 enabled: false,
             },
         )));
-        assert_eq!(m.bt_devices, DeviceList::Unknown);
+        assert!(m.bt_stale, "the shown session is kept, marked stale");
         assert_eq!(m.pending, vec![Action::RefreshBluetoothDevices]);
         m.request_devices_if_shown();
         assert_eq!(m.pending.len(), 1, "one query in flight");
         m.pending.clear();
-        m.set_bluetooth_devices(Err("bluetooth is unsupported on this target".into()));
+        m.set_bluetooth_session(Err("bluetooth is unsupported on this target".into()));
         assert_eq!(m.bluetooth_state_name(), "off-devices-failed");
         m.show(Page::Root);
         m.apply_core(CoreFeed::Event(HardwareEvent::BluetoothChanged(

@@ -1,0 +1,121 @@
+schema_version = 1
+name = "bluetooth-pair-failures"
+description = "Typed pairing failures on the mock controller: the user declines the passkey prompt, the remote rejects, an unanswered prompt and a silent remote time out on the mock clock, a legacy PIN device is refused, and a busy controller refuses a second attempt."
+
+[[step]]
+service = "core"
+command = { cmd = "set-bluetooth", present = true }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "core"
+command = { cmd = "set-bluetooth-pairing-outcome" }
+note = "setup"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-cancel" }
+note = "setup"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-discovery", active = true }
+expect = [ { event = "bluetooth-session-changed", discovering = true } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-pair", device = "mock-bt-found-0" }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "confirm-passkey" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-pair", device = "mock-bt-found-1" }
+expect_ack_error = true
+note = "one attempt at a time"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-reply", accept = false }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", reason = "declined" } } ]
+note = "the user answered Cancel"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-pair", device = "mock-bt-found-3" }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "confirm-passkey" } } ]
+note = "the synthetic watch: its profile outcome is rejected"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-reply", accept = true }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "pairing" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-tick", ms = 1000 }
+expect = [ { event = "bluetooth-session-changed", paired = 2, pairing = { stage = "failed", reason = "rejected" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-pair", device = "mock-bt-found-0" }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "confirm-passkey" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-tick", ms = 30000 }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", reason = "timed-out" } } ]
+note = "nobody answered the prompt within 30 s"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-pair", device = "mock-bt-found-5" }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "pairing" } } ]
+note = "the synthetic car kit: just works, then silent"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-tick", ms = 31000 }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", reason = "timed-out" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-pair", device = "mock-bt-found-4" }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", reason = "pin-required" } } ]
+note = "legacy PIN entry is not offered"
+
+[[step]]
+service = "core"
+command = { cmd = "set-bluetooth-pairing-outcome", outcome = "rejected" }
+ack = { status = "ok" }
+note = "the control override wins over the profile outcome"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-pair", device = "mock-bt-found-2" }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "authorize" } } ]
+note = "the synthetic phone: Just Works with an authorization prompt"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-reply", accept = true }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "pairing" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-tick", ms = 1000 }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", reason = "rejected" } } ]
+
+[[step]]
+service = "core"
+command = { cmd = "set-bluetooth-pairing-outcome" }
+note = "teardown"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-cancel" }
+note = "teardown: dismiss the outcome"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-discovery", active = false }
+note = "teardown"
