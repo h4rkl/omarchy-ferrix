@@ -2,15 +2,18 @@
 //!
 //! BlueZ owns controller and protocol handling. This crate translates the
 //! system D-Bus `Adapter1.Powered` property into the deliberately coarse
-//! [`BluetoothState`] used by product controls. It does not implement the
-//! Bluetooth protocol, pairing, profiles, or audio routing.
+//! [`BluetoothState`] used by product controls, and lists the managed
+//! controller's `org.bluez.Device1` objects (name, paired, connected) for
+//! Settings. It does not implement the Bluetooth protocol, discovery,
+//! pairing, profiles, or audio routing.
 
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 
 use ferrix_hardware_api::{
-    Bluetooth, BluetoothState, Capability, EventSource, HardwareError, HardwareEvent,
+    Bluetooth, BluetoothDevice, BluetoothState, Capability, EventSource, HardwareError,
+    HardwareEvent,
 };
 
 #[cfg(feature = "production")]
@@ -20,6 +23,17 @@ mod backend;
 struct AdapterRecord {
     path: String,
     powered: bool,
+}
+
+/// One `org.bluez.Device1` object. `path` embeds the hardware address and
+/// never leaves this crate; product code sees only an opaque hash.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeviceRecord {
+    path: String,
+    adapter: String,
+    name: Option<String>,
+    paired: bool,
+    connected: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,6 +46,7 @@ enum BusEvent {
 #[allow(dead_code)] // `watch` is inactive in non-production library builds.
 trait BluezBus: Send + Sync {
     fn adapters(&self) -> Result<Vec<AdapterRecord>, String>;
+    fn devices(&self) -> Result<Vec<DeviceRecord>, String>;
     fn set_powered(&self, path: &str, powered: bool) -> Result<(), String>;
     fn watch(&self, sender: Sender<BusEvent>) -> Result<(), String>;
 }
@@ -120,6 +135,37 @@ impl Bluetooth for BluezBluetooth {
             .map_err(failed)?;
         self.refresh()
     }
+
+    fn bluetooth_devices(&self) -> Result<Vec<BluetoothDevice>, HardwareError> {
+        let adapters = self.bus.adapters().map_err(failed)?;
+        let Some(managed) = managed_adapter(&adapters) else {
+            return Ok(Vec::new());
+        };
+        let mut devices: Vec<BluetoothDevice> = self
+            .bus
+            .devices()
+            .map_err(failed)?
+            .into_iter()
+            .filter(|device| device.adapter == managed.path)
+            .map(|device| BluetoothDevice {
+                id: opaque_id(&device.path),
+                name: device.name.filter(|name| !name.trim().is_empty()),
+                paired: device.paired,
+                connected: device.connected,
+            })
+            .collect();
+        ferrix_hardware_api::sort_bluetooth_devices(&mut devices);
+        Ok(devices)
+    }
+}
+
+/// FNV-1a over the object path: stable for the session, opaque to product
+/// code, and never the hardware address the path embeds.
+fn opaque_id(path: &str) -> String {
+    let hash = path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("bt-{hash:016x}")
 }
 
 impl EventSource for BluezBluetooth {
@@ -185,6 +231,7 @@ mod tests {
 
     struct MockBus {
         adapters: Mutex<Result<Vec<AdapterRecord>, String>>,
+        devices: Mutex<Vec<DeviceRecord>>,
         watchers: Mutex<Vec<Sender<BusEvent>>>,
         writes: Mutex<Vec<(String, bool)>>,
     }
@@ -193,6 +240,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 adapters: Mutex::new(Ok(Vec::new())),
+                devices: Mutex::new(Vec::new()),
                 watchers: Mutex::new(Vec::new()),
                 writes: Mutex::new(Vec::new()),
             }
@@ -219,6 +267,10 @@ mod tests {
     impl BluezBus for MockBus {
         fn adapters(&self) -> Result<Vec<AdapterRecord>, String> {
             lock(&self.adapters).clone()
+        }
+
+        fn devices(&self) -> Result<Vec<DeviceRecord>, String> {
+            Ok(lock(&self.devices).clone())
         }
 
         fn set_powered(&self, path: &str, powered: bool) -> Result<(), String> {
@@ -327,6 +379,64 @@ mod tests {
                 present: false,
                 enabled: false
             })
+        );
+    }
+
+    #[test]
+    fn devices_of_the_managed_controller_are_listed_without_addresses() {
+        let bus = Arc::new(MockBus::with_adapters(vec![
+            record("/org/bluez/hci0", true),
+            record("/org/bluez/hci1", true),
+        ]));
+        let device =
+            |path: &str, adapter: &str, name: Option<&str>, paired, connected| DeviceRecord {
+                path: path.to_owned(),
+                adapter: adapter.to_owned(),
+                name: name.map(str::to_owned),
+                paired,
+                connected,
+            };
+        *lock(&bus.devices) = vec![
+            device(
+                "/org/bluez/hci0/dev_00_11_22_33_44_55",
+                "/org/bluez/hci0",
+                None,
+                false,
+                false,
+            ),
+            device(
+                "/org/bluez/hci0/dev_66_77_88_99_AA_BB",
+                "/org/bluez/hci0",
+                Some("Buds"),
+                true,
+                true,
+            ),
+            device(
+                "/org/bluez/hci1/dev_CC_DD_EE_FF_00_11",
+                "/org/bluez/hci1",
+                Some("Other"),
+                true,
+                false,
+            ),
+        ];
+        let adapter = BluezBluetooth::from_bus(bus.clone()).unwrap();
+        let devices = adapter.bluetooth_devices().unwrap();
+        assert_eq!(devices.len(), 2, "only hci0 devices");
+        assert_eq!(devices[0].name.as_deref(), Some("Buds"));
+        assert!(devices[0].paired && devices[0].connected);
+        assert_eq!(devices[1].name, None);
+        for d in &devices {
+            assert!(
+                d.id.starts_with("bt-") && !d.id.contains("dev_"),
+                "{}",
+                d.id
+            );
+        }
+        assert_eq!(devices, adapter.bluetooth_devices().unwrap(), "stable ids");
+        bus.replace(Vec::new());
+        assert!(
+            adapter.bluetooth_devices().unwrap().is_empty(),
+            "no controller"
         );
     }
 

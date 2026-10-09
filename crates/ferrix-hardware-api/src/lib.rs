@@ -210,11 +210,22 @@ pub struct DisplayState {
     pub scale: f32,
     pub orientation: Orientation,
     pub brightness_percent: u8,
+    /// Auto-rotation is off: the applied orientation stays at the natural
+    /// portrait orientation whatever the rotation sensor reports. Runtime UI
+    /// state, not a target fact; absent in older snapshots means unlocked.
+    #[serde(default)]
+    pub rotation_locked: bool,
 }
 
 pub trait Display: Send + Sync {
     fn display_state(&self) -> DisplayState;
     fn set_brightness(&self, percent: u8) -> Result<DisplayState, HardwareError>;
+    /// Turns auto-rotation off (`locked`, pinning portrait) or back on
+    /// (following the rotation sensor again). Targets without a rotation
+    /// source report [`HardwareError::Unsupported`]; nothing is imitated.
+    fn set_rotation_lock(&self, _locked: bool) -> Result<DisplayState, HardwareError> {
+        Err(HardwareError::unsupported(Capability::Display))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,9 +284,45 @@ pub struct BluetoothState {
     pub enabled: bool,
 }
 
+/// A device the managed controller knows (paired, or seen and remembered).
+/// Display data only: `id` is an adapter-assigned opaque token that is never
+/// a hardware address, and evidence records carry counts, never names.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BluetoothDevice {
+    pub id: String,
+    /// The remote's advertised name, if it reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub paired: bool,
+    pub connected: bool,
+}
+
 pub trait Bluetooth: Send + Sync {
     fn bluetooth_state(&self) -> BluetoothState;
     fn set_bluetooth_enabled(&self, enabled: bool) -> Result<BluetoothState, HardwareError>;
+    /// Devices of the managed controller in [`sort_bluetooth_devices`]
+    /// order. An absent controller has none. Adapters that cannot enumerate
+    /// devices report [`HardwareError::Unsupported`]; nothing is imitated.
+    fn bluetooth_devices(&self) -> Result<Vec<BluetoothDevice>, HardwareError> {
+        Err(HardwareError::unsupported(Capability::Bluetooth))
+    }
+}
+
+/// Stable display order for a device list: paired first, connected first,
+/// then by name (unnamed last), then id.
+pub fn sort_bluetooth_devices(devices: &mut [BluetoothDevice]) {
+    devices.sort_by(|a, b| {
+        b.paired
+            .cmp(&a.paired)
+            .then_with(|| b.connected.cmp(&a.connected))
+            .then_with(|| match (&a.name, &b.name) {
+                (Some(x), Some(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -570,10 +617,22 @@ pub trait MockControl: Send + Sync {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
 pub enum HardwareCommand {
-    SetWifiEnabled { enabled: bool },
-    SetBluetoothEnabled { enabled: bool },
-    SetBrightness { percent: u8 },
-    SetAudioRoute { route: AudioRoute },
+    SetWifiEnabled {
+        enabled: bool,
+    },
+    SetBluetoothEnabled {
+        enabled: bool,
+    },
+    SetBrightness {
+        percent: u8,
+    },
+    /// Auto-rotation off (`locked`, portrait) or on.
+    SetRotationLock {
+        locked: bool,
+    },
+    SetAudioRoute {
+        route: AudioRoute,
+    },
     Suspend,
 }
 
@@ -630,6 +689,7 @@ mod tests {
                 scale: 1.0,
                 orientation: Orientation::Portrait,
                 brightness_percent: 50,
+                rotation_locked: false,
             },
             input: InputState {
                 touch: true,
@@ -657,5 +717,38 @@ mod tests {
         })
         .apply_to(&mut state);
         assert_eq!(state.network.wifi, WifiState::Connected);
+    }
+
+    #[test]
+    fn rotation_lock_defaults_off_in_older_snapshots_and_has_a_command() {
+        let old =
+            r#"{"width":1,"height":2,"scale":1.0,"orientation":"portrait","brightness_percent":5}"#;
+        let display: DisplayState = serde_json::from_str(old).unwrap();
+        assert!(!display.rotation_locked);
+        assert_eq!(
+            serde_json::to_string(&HardwareCommand::SetRotationLock { locked: true }).unwrap(),
+            r#"{"command":"set-rotation-lock","locked":true}"#
+        );
+    }
+
+    #[test]
+    fn device_lists_sort_paired_connected_then_name() {
+        let device = |id: &str, name: Option<&str>, paired, connected| BluetoothDevice {
+            id: id.to_owned(),
+            name: name.map(str::to_owned),
+            paired,
+            connected,
+        };
+        let mut devices = vec![
+            device("d", None, false, false),
+            device("c", Some("zeta"), false, false),
+            device("b", Some("Beta"), true, false),
+            device("a", Some("alpha"), true, true),
+        ];
+        sort_bluetooth_devices(&mut devices);
+        let ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c", "d"]);
+        let json = serde_json::to_string(&devices[3]).unwrap();
+        assert_eq!(json, r#"{"id":"d","paired":false,"connected":false}"#);
     }
 }

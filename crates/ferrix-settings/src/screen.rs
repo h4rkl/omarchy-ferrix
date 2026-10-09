@@ -1,12 +1,14 @@
-//! Composition of the Settings pages. Network glyph state is steel, the
-//! active toggle is rust, typed failures are `err`; everything else is
-//! slate and steel type.
+//! Composition of the Settings pages: a root category list and one focused
+//! page per category. Network glyph state is steel, the active toggle is
+//! rust, typed failures are `err`, honest absences (`no SIM`, `no
+//! controller`) are `warn`; everything else is slate and steel type.
 
+use ferrix_hardware_api::Capability;
 use ferrix_ui::draw::{Canvas, Rect, Style, Type};
 use ferrix_ui::theme;
 use ferrix_ui::widgets::{
     ButtonKind, Tone, button, chip, clock_strip, gesture_pill, keyboard, list_row, notice,
-    page_header, section_label, text_field, wrap, wrap_text,
+    page_header, section_label, slider, text_field, wrap, wrap_text,
 };
 
 use crate::interaction::{Input, Layout, Target, keyboard_visible};
@@ -28,31 +30,21 @@ pub fn compose(
         model.telephony_label()
     );
     clock_strip(&mut c, ty, &clock, Some(&label));
+    let subtitle = (model.page != Page::Root).then(|| model.page.title());
     page_header(
         &mut c,
         ty,
         "Settings",
-        Some(model.page.title()),
+        subtitle,
         input.pressed == Some(Target::Back),
     );
     let l = Layout::new(size);
-    for (r, page) in l.tab_rects() {
-        let tone = if model.page == page {
-            Tone::Accent
-        } else {
-            Tone::Neutral
-        };
-        chip(
-            &mut c,
-            ty,
-            r,
-            page.title(),
-            tone,
-            input.pressed == Some(Target::Tab(page)),
-        );
-    }
     match model.page {
+        Page::Root => root(&mut c, ty, &l, model, input),
         Page::Network => network(&mut c, ty, &l, model, input),
+        Page::Bluetooth => bluetooth(&mut c, ty, &l, model, input),
+        Page::Mobile => mobile(&mut c, ty, &l, model, input),
+        Page::Display => display(&mut c, ty, &l, model, input),
         Page::Radios => radios(&mut c, ty, &l, model, input),
         Page::About => about(&mut c, ty, &l, model),
     }
@@ -65,6 +57,245 @@ pub fn compose(
     }
     gesture_pill(&mut c, input.pressed == Some(Target::Home));
     c
+}
+
+/// The category list: one row per page with its current state.
+fn root(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    for (r, page) in l.section_rects() {
+        list_row(
+            c,
+            ty,
+            r,
+            page.title(),
+            &model.section_summary(page),
+            None,
+            input.pressed == Some(Target::Section(page)),
+        );
+    }
+}
+
+/// A notice for the last refused action, at design `y`.
+fn error_notice(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, y: i32) {
+    if let Some(error) = &model.last_error {
+        notice(
+            c,
+            ty,
+            Rect {
+                x: l.s(48),
+                y: l.s(y),
+                w: c.width() - l.s(96),
+                h: l.s(90),
+            },
+            error,
+            Tone::Err,
+        );
+    }
+}
+
+/// A dim wrapped caption at design `y`.
+fn caption(c: &mut Canvas, ty: &Type, l: &Layout, text: &str, y: i32) {
+    wrap_text(c, ty, text, l.s(96), l.s(y), c.width() - l.s(192), l.s(27));
+}
+
+/// Bluetooth: controller power, then the remembered devices, or a plain
+/// statement of why there is no controller to control.
+fn bluetooth(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    let pressed = input.pressed == Some(Target::BluetoothPower);
+    match model.bluetooth_block() {
+        Ok(()) => toggle_row(
+            c,
+            ty,
+            l.bluetooth_power_rect(),
+            "Bluetooth",
+            &model.source_caption("controller present", Capability::Bluetooth),
+            model.bluetooth_on(),
+            pressed,
+        ),
+        Err(block) => list_row(
+            c,
+            ty,
+            l.bluetooth_power_rect(),
+            "Bluetooth",
+            block.reason(),
+            Some(("unavailable", Tone::Warn)),
+            pressed,
+        ),
+    }
+    match model.bluetooth_block() {
+        Err(crate::system::BluetoothBlock::CoreUnavailable) => {
+            caption(c, ty, l, &model.core_label(), 540);
+        }
+        Err(_) => caption(
+            c,
+            ty,
+            l,
+            "No Bluetooth controller is attached, so there is nothing to turn on or pair. \
+             Wi-Fi and calls are unaffected.",
+            540,
+        ),
+        Ok(()) => {
+            section_label(c, ty, "devices", s(96), s(570));
+            let dim = Style::regular(s(26) as f32, t.fg_dim);
+            match &model.bt_devices {
+                crate::system::DeviceList::Unknown => {
+                    ty.text(c, dim, "loading", s(96), s(660));
+                }
+                crate::system::DeviceList::Failed(reason) => {
+                    ty.text(c, dim, &format!("devices \u{b7} {reason}"), s(96), s(660));
+                }
+                crate::system::DeviceList::Loaded(devices) if devices.is_empty() => {
+                    ty.text(c, dim, "none remembered", s(96), s(660));
+                }
+                crate::system::DeviceList::Loaded(devices) => {
+                    for (device, r) in devices.iter().zip(l.device_rects(devices.len())) {
+                        let sub = match (device.paired, device.connected) {
+                            (_, true) => "paired \u{b7} connected",
+                            (true, false) => "paired",
+                            (false, false) => "seen \u{b7} not paired",
+                        };
+                        let trailing = device.connected.then_some(("connected", Tone::Ok));
+                        let name = device.name.as_deref().unwrap_or("Unnamed device");
+                        list_row(c, ty, r, name, sub, trailing, false);
+                    }
+                }
+            }
+            caption(
+                c,
+                ty,
+                l,
+                "Pairing and discovery are not available yet; this list comes from the \
+                 system Bluetooth service.",
+                1440,
+            );
+        }
+    }
+    error_notice(c, ty, l, model, 1580);
+}
+
+/// Mobile network: SIM, operator, signal (read-only rows), then the
+/// mobile-data toggle. An absent SIM reads plainly, never as an error.
+fn mobile(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    let [sim_r, operator_r, signal_r] = l.mobile_rects();
+    let (sim_word, sim_line) = model.sim_label();
+    let sim_tone = match sim_word {
+        "ready" => Tone::Ok,
+        "absent" | "unknown" => Tone::Warn,
+        _ => Tone::Err,
+    };
+    list_row(
+        c,
+        ty,
+        sim_r,
+        "SIM",
+        sim_line,
+        Some((sim_word, sim_tone)),
+        false,
+    );
+    list_row(
+        c,
+        ty,
+        operator_r,
+        "Operator",
+        &model.operator_label(),
+        None,
+        false,
+    );
+    let bars = model.signal_bars().map(|b| format!("{b}/4"));
+    list_row(
+        c,
+        ty,
+        signal_r,
+        "Signal",
+        &model.signal_label(),
+        bars.as_deref().map(|b| (b, Tone::Steel)),
+        false,
+    );
+    let data_sub = match model.data_block() {
+        Ok(()) => format!(
+            "{} \u{b7} {}",
+            model.cellular_data_label(),
+            model.telephony_label()
+        ),
+        Err(_) if model.cellular_data_on() => model.cellular_data_label(),
+        Err(block) => block.reason().to_owned(),
+    };
+    toggle_row(
+        c,
+        ty,
+        l.mobile_data_rect(),
+        "Mobile data",
+        &data_sub,
+        model.cellular_data_on(),
+        input.pressed == Some(Target::CellularData),
+    );
+    error_notice(c, ty, l, model, 1060);
+    caption(
+        c,
+        ty,
+        l,
+        "State comes from ferrix-telephonyd; mobile data needs telephony-data. \
+         Calls and SMS are in Phone and Messages.",
+        1220,
+    );
+}
+
+/// Display: the brightness rail and auto-rotate.
+fn display(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    section_label(c, ty, "brightness", s(96), s(360));
+    let enabled = model.display_block().is_ok();
+    let value = model.brightness();
+    slider(c, l.brightness_rect(), value.unwrap_or(0), enabled);
+    let label = value.map_or_else(|| "unknown".to_owned(), |v| format!("{v}%"));
+    ty.text(
+        c,
+        Style::bold(s(34) as f32, if enabled { t.fg } else { t.fg_dim }),
+        &label,
+        s(96),
+        s(590),
+    );
+    let sub = model.source_caption("display brightness", Capability::Display);
+    ty.text(
+        c,
+        Style::regular(s(26) as f32, t.fg_dim),
+        &sub,
+        s(260),
+        s(590),
+    );
+    let pressed = input.pressed == Some(Target::AutoRotate);
+    if enabled && model.rotation_sensor() {
+        toggle_row(
+            c,
+            ty,
+            l.auto_rotate_rect(),
+            "Auto-rotate",
+            &model.rotation_label(),
+            model.auto_rotate(),
+            pressed,
+        );
+    } else {
+        list_row(
+            c,
+            ty,
+            l.auto_rotate_rect(),
+            "Auto-rotate",
+            &model.rotation_label(),
+            Some(("unavailable", Tone::Warn)),
+            pressed,
+        );
+    }
+    error_notice(c, ty, l, model, 900);
+    caption(
+        c,
+        ty,
+        l,
+        "Brightness and rotation go through ferrix-core; off pins portrait, on follows \
+         the rotation sensor.",
+        1060,
+    );
 }
 
 fn connection_tone(model: &Model) -> Tone {
@@ -220,6 +451,14 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
         return;
     }
     section_label(c, ty, "access points", s(96), s(870));
+    let hidden = model.hidden_count();
+    if hidden > 0 {
+        // Hidden networks cannot be joined by name yet; say so instead of
+        // drawing blank rows.
+        let text = format!("{hidden} hidden \u{b7} join by name not supported");
+        let w = ty.width(dim, &text);
+        ty.text(c, dim, &text, c.width() - s(96) - w, s(870));
+    }
     let aps = model.access_points();
     if aps.is_empty() {
         ty.text(c, dim, "none \u{b7} scan to refresh", s(96), s(960));
@@ -364,39 +603,13 @@ fn radios(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         model.cellular_on(),
         input.pressed == Some(Target::Cellular),
     );
-    toggle_row(
-        c,
-        ty,
-        l.cellular_data_rect(),
-        "Cellular data",
-        &format!(
-            "{} · {}",
-            model.cellular_data_label(),
-            model.telephony_label()
-        ),
-        model.cellular_data_on(),
-        input.pressed == Some(Target::CellularData),
-    );
-    if let Some(error) = &model.last_error {
-        notice(
-            c,
-            ty,
-            Rect {
-                x: l.s(48),
-                y: l.s(1200),
-                w: c.width() - l.s(96),
-                h: l.s(90),
-            },
-            error,
-            Tone::Err,
-        );
-    }
+    error_notice(c, ty, l, model, 1000);
     ty.text(
         c,
         Style::regular(l.s(26) as f32, t.fg_dim),
-        "radio needs telephony-radio; data needs telephony-data",
+        "cellular radio needs telephony-radio; mobile data is on Mobile network",
         l.s(96),
-        l.s(1400),
+        l.s(1200),
     );
 }
 
@@ -462,6 +675,7 @@ mod tests {
 
     fn model(connected: bool) -> Model {
         let mut m = Model::new();
+        m.show(Page::Network);
         m.apply_network(Feed::Snapshot {
             state: preview_network(connected),
             evidence: "mock".into(),
@@ -487,8 +701,6 @@ mod tests {
         assert_eq!(c.get(cn.x + cn.w / 2, cn.y), t.ok, "connected chip is ok");
         let ap = l.ap_rects(3)[0];
         assert_eq!(c.get(ap.x + 8, ap.y + 8), t.surface);
-        let (tab, _) = l.tab_rects()[0];
-        assert_eq!(c.get(tab.x + tab.w / 2, tab.y), t.rust, "active tab");
 
         let mut m = model(false);
         m.select_ap(&ApId::new("ap-2"));
@@ -578,5 +790,61 @@ mod tests {
         let c = compose(&ty, (1080, 2340), 600, &m, &Input::default());
         let r = l.retry_rect();
         assert_eq!(c.get(r.x + r.w / 2, r.y), t.rust, "Retry is primary");
+    }
+
+    fn system_model() -> Model {
+        let mut m = model(true);
+        m.apply_core(ferrix_protocol::Feed::Snapshot {
+            target: "qemu-aarch64".into(),
+            profile: "emulator-dev".into(),
+            capabilities: crate::system::preview_capabilities(),
+            state: crate::system::preview_hardware(),
+        });
+        m
+    }
+
+    /// Whether any pixel of `r`'s outline row is `color`.
+    fn outlined(c: &Canvas, r: Rect, color: u32) -> bool {
+        (r.x..r.x + r.w).any(|x| c.get(x, r.y) == color)
+    }
+
+    #[test]
+    fn root_display_bluetooth_and_mobile_pages_render() {
+        let t = theme::get();
+        let ty = Type::load().unwrap();
+        let size = (1080, 2340);
+        let l = Layout::new(size);
+        let mut m = system_model();
+        m.show(Page::Root);
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        for (r, _) in l.section_rects() {
+            assert_eq!(c.get(r.x + 8, r.y + 8), t.surface, "category row");
+        }
+        m.show(Page::Display);
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let rail = l.brightness_rect();
+        assert_eq!(c.get(rail.x + 4, rail.y + rail.h / 2), t.rust, "rail fill");
+        assert!(outlined(&c, l.auto_rotate_rect(), t.border));
+        // Bluetooth without a controller: a warn chip, no device list.
+        let mut hw = crate::system::preview_hardware();
+        hw.bluetooth.present = false;
+        m.apply_core(ferrix_protocol::Feed::Snapshot {
+            target: "qemu-aarch64".into(),
+            profile: "emulator-dev".into(),
+            capabilities: crate::system::preview_capabilities(),
+            state: hw,
+        });
+        m.show(Page::Bluetooth);
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let row = l.bluetooth_power_rect();
+        let warn =
+            (row.x..row.x + row.w).any(|x| (row.y..row.y + row.h).any(|y| c.get(x, y) == t.warn));
+        assert!(warn, "unavailable chip is warn");
+        // Mobile with no telephony snapshot still renders every row.
+        m.show(Page::Mobile);
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        for r in l.mobile_rects() {
+            assert_eq!(c.get(r.x + 8, r.y + 8), t.surface);
+        }
     }
 }

@@ -1,6 +1,6 @@
-//! Guest-side Settings client: follows `ferrix-networkd` and
-//! `ferrix-telephonyd` through their reconnectors, sends control requests,
-//! and reports Back to `ferrix-appd`.
+//! Guest-side Settings client: follows `ferrix-networkd`,
+//! `ferrix-telephonyd`, and `ferrix-core` through their reconnectors, sends
+//! control requests, and reports Back to `ferrix-appd`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,6 +8,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use ferrix_app_protocol::{Client as AppdClient, ClientRole, Report};
+use ferrix_hardware_api::HardwareCommand;
 use ferrix_network_protocol::{
     Client as NetClient, ClientError, ClientKind as NetKind, Feed, Reconnector as NetReconnector,
 };
@@ -38,11 +39,14 @@ struct Settings {
     telephony: Receiver<Update>,
     telephony_socket: PathBuf,
     telephony_client: Option<TeleClient>,
+    core: Receiver<ferrix_protocol::Feed>,
+    core_socket: PathBuf,
     appd_socket: Option<PathBuf>,
     appd: Option<AppdClient>,
     appd_unavailable_reported: bool,
     last_ui_state: (String, String),
     last_links: (Link, Link),
+    last_core_link: Link,
 }
 
 pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
@@ -66,6 +70,16 @@ pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
         let telephony =
             TeleReconnector::new(telephony_socket.clone(), TeleKind::Application, TIMEOUT)
                 .spawn(Arc::clone(&wake));
+        let core_socket = std::env::var_os("FERRIX_CORE_SOCKET")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(ferrix_protocol::DEFAULT_SOCKET));
+        let core = ferrix_protocol::spawn_reconnecting(
+            core_socket.clone(),
+            TIMEOUT,
+            Duration::from_secs(1),
+            Arc::clone(&wake),
+        );
         let mut model = Model::new();
         let apn = std::env::var(ferrix_app_api::TELEPHONY_APN_ENV).ok();
         model.set_data_profile(data_profile_from_env(apn.as_deref()));
@@ -81,6 +95,8 @@ pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
             telephony,
             telephony_socket,
             telephony_client: None,
+            core,
+            core_socket,
             appd_socket: std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
@@ -88,6 +104,7 @@ pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
             appd_unavailable_reported: false,
             last_ui_state: (String::new(), String::new()),
             last_links: (Link::Connecting, Link::Connecting),
+            last_core_link: Link::Connecting,
         })
     })
 }
@@ -187,8 +204,49 @@ impl Settings {
         }
     }
 
+    /// A product command through `ferrix-core`; the core's events reconcile
+    /// the visible state, so nothing is applied locally.
+    fn core_action(&mut self, name: &str, command: HardwareCommand) {
+        let (status, error) = match ferrix_protocol::command(&self.core_socket, command, TIMEOUT) {
+            Ok(_) => ("ok", None),
+            Err(error) => {
+                self.model.last_error = Some(error.clone());
+                ("error", Some(error))
+            }
+        };
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"settings-action\",\"action\":\"{name}\",\"service\":\"core\",\"status\":\"{status}\",\"error\":{}}}",
+            json_opt_str(error.as_deref())
+        ));
+    }
+
+    fn refresh_devices(&mut self) {
+        let result = ferrix_protocol::bluetooth_devices(&self.core_socket, TIMEOUT);
+        let (status, count) = match &result {
+            Ok(devices) => ("ok", devices.len().to_string()),
+            Err(_) => ("error", "null".to_owned()),
+        };
+        // Counts only: device names never reach evidence records.
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"settings-action\",\"action\":\"bluetooth-devices\",\"service\":\"core\",\"status\":\"{status}\",\"devices\":{count}}}"
+        ));
+        self.model.set_bluetooth_devices(result);
+    }
+
     fn send(&mut self, action: Action) {
         match action {
+            Action::SetBluetooth(enabled) => self.core_action(
+                "set-bluetooth",
+                HardwareCommand::SetBluetoothEnabled { enabled },
+            ),
+            Action::RefreshBluetoothDevices => self.refresh_devices(),
+            Action::SetBrightness(percent) => {
+                self.core_action("set-brightness", HardwareCommand::SetBrightness { percent })
+            }
+            Action::SetRotationLock(locked) => self.core_action(
+                "set-rotation-lock",
+                HardwareCommand::SetRotationLock { locked },
+            ),
             Action::Back => self.yield_foreground(),
             Action::SetRadio(enabled) => self.network_action("set-radio", |c| c.set_radio(enabled)),
             Action::Scan => self.network_action("scan", |c| c.scan()),
@@ -247,6 +305,13 @@ impl Settings {
             ));
         }
         self.last_links = links;
+        if self.model.core_link != self.last_core_link {
+            self.last_core_link = self.model.core_link;
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"core-link\",\"app\":\"{APP_ID}\",\"status\":\"{}\"}}",
+                self.model.core_link.name()
+            ));
+        }
     }
 
     fn appd(&mut self) -> Option<&mut AppdClient> {
@@ -307,11 +372,11 @@ impl ClientHandler for Settings {
     }
 
     fn pointer_down(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
-        self.input.down(0, position, &self.model, size)
+        self.input.down(0, position, &mut self.model, size)
     }
 
     fn pointer_motion(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
-        self.input.motion(0, position, &self.model, size)
+        self.input.motion(0, position, &mut self.model, size)
     }
 
     fn pointer_up(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
@@ -327,11 +392,11 @@ impl ClientHandler for Settings {
     }
 
     fn touch_down(&mut self, id: i32, position: (f64, f64), size: (u32, u32)) -> bool {
-        self.input.down(id, position, &self.model, size)
+        self.input.down(id, position, &mut self.model, size)
     }
 
     fn touch_motion(&mut self, id: i32, position: (f64, f64), size: (u32, u32)) -> bool {
-        self.input.motion(id, position, &self.model, size)
+        self.input.motion(id, position, &mut self.model, size)
     }
 
     fn touch_up(&mut self, id: i32, size: (u32, u32)) -> bool {
@@ -371,8 +436,12 @@ impl ClientHandler for Settings {
                 self.refresh_tele_evidence();
             }
         }
+        while let Ok(feed) = self.core.try_recv() {
+            changed |= self.model.apply_core(feed);
+        }
         if changed {
-            self.report_ui_state();
+            // A core change can queue a device re-query.
+            self.after_input();
         }
         self.clock.refresh() || changed
     }

@@ -714,9 +714,57 @@ pub fn state_line(name: &str, state: &str) -> String {
     format!("{name} \u{b7} {state}")
 }
 
+/// A horizontal value rail (the brightness rail of quick settings): a
+/// `surface_hi` track `r`, the rust fill up to the knob, and an `fg` knob.
+/// A disabled rail keeps its shape without the accent.
+pub fn slider(c: &mut Canvas, r: Rect, percent: u8, enabled: bool) {
+    let t = theme::get();
+    let b = basis((c.width() as u32, c.height() as u32));
+    let s = |v: i32| scale(v, b);
+    c.fill_rounded(r, s(4), t.surface_hi);
+    let fill = r.w * i32::from(percent.min(100)) / 100;
+    if enabled {
+        c.fill_rounded(Rect { w: fill, ..r }, s(4), t.rust);
+    }
+    let knob = if enabled { t.fg } else { t.fg_dim };
+    c.fill_circle(r.x + fill, r.y + r.h / 2, s(34), knob);
+}
+
+/// The `0..=100` value a contact at `x` selects on rail `r`, clamped to the
+/// rail's ends.
+pub fn slider_value(r: Rect, x: f64) -> u8 {
+    if r.w <= 0 {
+        return 0;
+    }
+    let left = f64::from(r.x);
+    let width = f64::from(r.w);
+    ((x.clamp(left, left + width) - left) * 100.0 / width).round() as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slider_value_clamps_and_the_fill_is_rust() {
+        let r = Rect {
+            x: 100,
+            y: 500,
+            w: 800,
+            h: 28,
+        };
+        assert_eq!(slider_value(r, 0.0), 0);
+        assert_eq!(slider_value(r, 500.0), 50);
+        assert_eq!(slider_value(r, 2000.0), 100);
+        let t = theme::get();
+        let mut c = Canvas::new(1080, 2340, t.bg);
+        slider(&mut c, r, 50, true);
+        assert_eq!(c.get(200, 514), t.rust);
+        assert_eq!(c.get(850, 514), t.surface_hi);
+        let mut c = Canvas::new(1080, 2340, t.bg);
+        slider(&mut c, r, 50, false);
+        assert_eq!(c.get(200, 514), t.surface_hi, "disabled rail has no accent");
+    }
 
     const SIZE: (u32, u32) = (1080, 2340);
 

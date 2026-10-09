@@ -124,6 +124,13 @@ pub mod map {
         }
     }
 
+    /// Whether a `NMDeviceStateReason` describes a failed activation (the
+    /// reasons [`failure`] maps to a specific error), as opposed to a
+    /// requested or idle disconnect.
+    pub fn is_join_failure(reason: u32) -> bool {
+        matches!(reason, 5 | 6 | 7..=11 | 15..=17 | 53)
+    }
+
     /// Connection state of a device. `connected` names the access point (or
     /// link) id used for `connected { ap }`.
     pub fn connection_state(
@@ -139,6 +146,12 @@ pub mod map {
             }
             NM_DEVICE_STATE_ACTIVATED => ConnectionState::Connected { ap: connected() },
             NM_DEVICE_STATE_FAILED => ConnectionState::Failed {
+                error: failure(reason),
+            },
+            // NetworkManager passes through FAILED to DISCONNECTED at once
+            // and keeps the failure as the state reason; a user-requested
+            // or idle disconnect carries a different reason.
+            NM_DEVICE_STATE_DISCONNECTED if is_join_failure(reason) => ConnectionState::Failed {
                 error: failure(reason),
             },
             _ => ConnectionState::Disconnected,
@@ -339,6 +352,20 @@ mod tests {
                 error: NetworkError::AuthenticationFailed
             }
         );
+        // FAILED passes straight to DISCONNECTED; the kept reason (no
+        // secrets, supplicant failure) still surfaces as the failure, while
+        // a user-requested disconnect (39) stays a plain disconnect.
+        assert_eq!(
+            connection_state(NM_DEVICE_STATE_DISCONNECTED, 7, ap),
+            ConnectionState::Failed {
+                error: NetworkError::AuthenticationFailed
+            }
+        );
+        assert_eq!(
+            connection_state(NM_DEVICE_STATE_DISCONNECTED, 39, ap),
+            ConnectionState::Disconnected
+        );
+        assert!(!is_join_failure(0) && is_join_failure(8) && is_join_failure(53));
         assert_eq!(failure(17), NetworkError::DhcpFailed);
         assert_eq!(failure(11), NetworkError::TimedOut);
         assert_eq!(failure(53), NetworkError::NotFound { id: "ssid".into() });

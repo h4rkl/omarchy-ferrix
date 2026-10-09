@@ -10,11 +10,11 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ferrix_hardware_api::{
-    Audio, AudioState, Bluetooth, BluetoothState, Capability, CapabilityMatrix, CapabilityStatus,
-    Display, DisplayState, EventSource, HardwareError, HardwareEvent, HardwareState, Input,
-    InputState, Lifecycle, LifecycleState, MockCommand, MockControl, ModemRegistration, Network,
-    NetworkState, Orientation, Power, PowerState, SimState, SuspendOutcome, Telephony,
-    TelephonyState, WifiState,
+    Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothState, Capability, CapabilityMatrix,
+    CapabilityStatus, Display, DisplayState, EventSource, HardwareError, HardwareEvent,
+    HardwareState, Input, InputState, Lifecycle, LifecycleState, MockCommand, MockControl,
+    ModemRegistration, Network, NetworkState, Orientation, Power, PowerState, SimState,
+    SuspendOutcome, Telephony, TelephonyState, WifiState,
 };
 use ferrix_target_profile::Profile;
 
@@ -28,6 +28,11 @@ const DEFAULT_BRIGHTNESS: u8 = 72;
 #[derive(Debug)]
 struct Inner {
     state: HardwareState,
+    /// What the (mock) rotation sensor reports. The applied
+    /// `state.display.orientation` follows it unless rotation is locked.
+    sensor_orientation: Orientation,
+    /// Remembered devices from the profile's `[bluetooth]` section.
+    devices: Vec<BluetoothDevice>,
     next_suspend: SuspendOutcome,
     subscribers: Vec<Sender<HardwareEvent>>,
 }
@@ -52,6 +57,7 @@ impl Emulator {
                 scale: profile.display.scale,
                 orientation: profile.display.orientation,
                 brightness_percent: DEFAULT_BRIGHTNESS,
+                rotation_locked: false,
             },
             input: InputState {
                 touch: profile.input.touch,
@@ -74,9 +80,24 @@ impl Emulator {
             },
             lifecycle: LifecycleState::default(),
         };
+        let mut devices: Vec<BluetoothDevice> = profile
+            .bluetooth
+            .iter()
+            .flat_map(|section| section.devices.iter())
+            .enumerate()
+            .map(|(index, device)| BluetoothDevice {
+                id: format!("mock-bt-{index}"),
+                name: (!device.name.is_empty()).then(|| device.name.clone()),
+                paired: device.paired,
+                connected: device.connected,
+            })
+            .collect();
+        ferrix_hardware_api::sort_bluetooth_devices(&mut devices);
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 state,
+                sensor_orientation: profile.display.orientation,
+                devices,
                 next_suspend: SuspendOutcome::Resumed,
                 subscribers: Vec::new(),
             })),
@@ -164,10 +185,16 @@ impl Emulator {
         Self::publish(&mut inner, HardwareEvent::TelephonyChanged(telephony))
     }
 
+    /// The mock rotation sensor reports `orientation`. The applied
+    /// orientation follows it unless auto-rotation is locked; the event is
+    /// emitted either way so every mutation still produces exactly one.
     pub fn set_orientation(&self, orientation: Orientation) -> HardwareEvent {
         let mut inner = self.lock();
+        inner.sensor_orientation = orientation;
         let mut display = inner.state.display;
-        display.orientation = orientation;
+        if !display.rotation_locked {
+            display.orientation = orientation;
+        }
         Self::publish(&mut inner, HardwareEvent::DisplayChanged(display))
     }
 
@@ -199,6 +226,24 @@ impl Display for Emulator {
         let mut inner = self.lock();
         let mut display = inner.state.display;
         display.brightness_percent = percent;
+        Self::publish(&mut inner, HardwareEvent::DisplayChanged(display));
+        Ok(display)
+    }
+
+    /// Locking pins the natural portrait orientation; unlocking applies
+    /// whatever the sensor reports now. Needs the profile's rotation input.
+    fn set_rotation_lock(&self, locked: bool) -> Result<DisplayState, HardwareError> {
+        let mut inner = self.lock();
+        if !inner.state.input.rotation {
+            return Err(HardwareError::unsupported(Capability::Display));
+        }
+        let mut display = inner.state.display;
+        display.rotation_locked = locked;
+        display.orientation = if locked {
+            Orientation::Portrait
+        } else {
+            inner.sensor_orientation
+        };
         Self::publish(&mut inner, HardwareEvent::DisplayChanged(display));
         Ok(display)
     }
@@ -244,6 +289,22 @@ impl Bluetooth for Emulator {
         };
         Self::publish(&mut inner, HardwareEvent::BluetoothChanged(bluetooth));
         Ok(bluetooth)
+    }
+
+    /// The profile's remembered devices; nothing is connected while the
+    /// controller is off, and an absent controller lists none.
+    fn bluetooth_devices(&self) -> Result<Vec<BluetoothDevice>, HardwareError> {
+        let inner = self.lock();
+        let bluetooth = inner.state.bluetooth;
+        if !bluetooth.present {
+            return Ok(Vec::new());
+        }
+        let mut devices = inner.devices.clone();
+        for device in &mut devices {
+            device.connected &= bluetooth.enabled;
+        }
+        ferrix_hardware_api::sort_bluetooth_devices(&mut devices);
+        Ok(devices)
     }
 }
 
@@ -397,6 +458,44 @@ route = "speaker"
         ));
         assert_eq!(e.set_brightness(30).unwrap().brightness_percent, 30);
         assert!(e.set_brightness(101).is_err());
+    }
+
+    #[test]
+    fn rotation_lock_pins_portrait_and_unlock_follows_the_sensor() {
+        let (e, rx) = emulator();
+        e.set_rotation_lock(true).unwrap();
+        e.set_orientation(Orientation::Landscape);
+        let display = e.display_state();
+        assert!(display.rotation_locked);
+        assert_eq!(display.orientation, Orientation::Portrait, "locked");
+        let display = e.set_rotation_lock(false).unwrap();
+        assert_eq!(display.orientation, Orientation::Landscape, "sensor");
+        e.set_rotation_lock(true).unwrap();
+        assert_eq!(e.display_state().orientation, Orientation::Portrait);
+        assert_eq!(rx.try_iter().count(), 4, "one event per mutation");
+        let fixed = FIXTURE.replace("rotation = true", "rotation = false");
+        let e = Emulator::from_profile(&Profile::parse(&fixed).unwrap());
+        assert_eq!(
+            e.set_rotation_lock(true),
+            Err(HardwareError::unsupported(Capability::Display))
+        );
+    }
+
+    #[test]
+    fn bluetooth_devices_come_from_the_profile() {
+        let (e, _rx) = emulator();
+        assert_eq!(e.bluetooth_devices().unwrap(), Vec::new());
+        let with_devices = format!(
+            "{FIXTURE}\n[[bluetooth.devices]]\nname = \"Spk\"\npaired = true\n\n[[bluetooth.devices]]\nname = \"Buds\"\npaired = true\nconnected = true\n"
+        );
+        let e = Emulator::from_profile(&Profile::parse(&with_devices).unwrap());
+        let devices = e.bluetooth_devices().unwrap();
+        assert_eq!(devices[0].name.as_deref(), Some("Buds"));
+        assert!(devices[0].connected && devices[0].id.starts_with("mock-bt-"));
+        e.set_bluetooth_enabled(false).unwrap();
+        assert!(e.bluetooth_devices().unwrap().iter().all(|d| !d.connected));
+        e.set_bluetooth_present(false);
+        assert!(e.bluetooth_devices().unwrap().is_empty());
     }
 
     #[test]

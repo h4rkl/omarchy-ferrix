@@ -210,6 +210,7 @@ mod linux {
                 scale: 1.0,
                 orientation: Orientation::Portrait,
                 brightness_percent: 0,
+                rotation_locked: false,
             }
         }
 
@@ -507,6 +508,7 @@ mod linux {
                     scale: 1.0,
                     orientation,
                     brightness_percent,
+                    rotation_locked: false,
                 }),
                 backlight,
                 events,

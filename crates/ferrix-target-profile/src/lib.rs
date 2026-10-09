@@ -35,6 +35,57 @@ pub struct Profile {
     /// [`Profile::network_section`] derives one from `[connectivity]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<NetworkSection>,
+    /// Synthetic Bluetooth devices the mock controller remembers. Absent
+    /// means none; only meaningful with `connectivity.bluetooth_present`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bluetooth: Option<BluetoothSection>,
+}
+
+/// One synthetic remembered Bluetooth device (`[[bluetooth.devices]]`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileBluetoothDevice {
+    /// Display name; `""` models a device that reported none.
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub paired: bool,
+    /// Connected while the mock controller is powered.
+    #[serde(default)]
+    pub connected: bool,
+}
+
+/// Optional `[bluetooth]` section: the mock controller's remembered devices.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BluetoothSection {
+    pub devices: Vec<ProfileBluetoothDevice>,
+}
+
+impl BluetoothSection {
+    fn validate(&self) -> Result<(), ProfileError> {
+        if self.devices.len() > 16 {
+            return Err(ProfileError::Invalid(format!(
+                "bluetooth.devices lists {} devices (at most 16)",
+                self.devices.len()
+            )));
+        }
+        for device in &self.devices {
+            if device.name.chars().count() > 64 || device.name.chars().any(char::is_control) {
+                return Err(ProfileError::Invalid(format!(
+                    "bluetooth.devices[].name {:?} must be at most 64 printable characters",
+                    device.name
+                )));
+            }
+            if device.connected && !device.paired {
+                return Err(ProfileError::Invalid(format!(
+                    "bluetooth.devices[] {:?} is connected but not paired",
+                    device.name
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -460,6 +511,9 @@ impl Profile {
         if let Some(network) = &self.network {
             network.validate()?;
         }
+        if let Some(bluetooth) = &self.bluetooth {
+            bluetooth.validate()?;
+        }
         Ok(())
     }
 
@@ -775,5 +829,26 @@ signal_percent = 41
         let network = p.network.expect("[network] present");
         assert_eq!(network.connected, "ferrix-lab");
         assert_eq!(network.access_points.len(), 2);
+        let bluetooth = p.bluetooth.expect("[bluetooth] present");
+        assert_eq!(bluetooth.devices.len(), 3);
+    }
+
+    #[test]
+    fn bluetooth_devices_are_optional_and_validated() {
+        assert_eq!(Profile::parse(FIXTURE).unwrap().bluetooth, None);
+        let ok = format!(
+            "{FIXTURE}\n[[bluetooth.devices]]\nname = \"Mock Earbuds\"\npaired = true\nconnected = true\n\n[[bluetooth.devices]]\n"
+        );
+        let devices = Profile::parse(&ok).unwrap().bluetooth.unwrap().devices;
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[1], ProfileBluetoothDevice::default());
+        let unpaired =
+            format!("{FIXTURE}\n[[bluetooth.devices]]\nname = \"x\"\nconnected = true\n");
+        assert!(Profile::parse(&unpaired).is_err());
+        let unknown = format!("{FIXTURE}\n[[bluetooth.devices]]\naddress = \"00:11\"\n");
+        assert!(matches!(
+            Profile::parse(&unknown),
+            Err(ProfileError::Schema(_))
+        ));
     }
 }

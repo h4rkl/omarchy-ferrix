@@ -54,3 +54,17 @@ passphrase = "mock-passphrase"
 ssid = "ferrix-guest"
 security = "open"
 signal_percent = 41
+
+# Synthetic Bluetooth devices the mock controller remembers (Settings lists
+# them). Mock only: no real names or hardware addresses.
+[[bluetooth.devices]]
+name = "Ferrix Mock Earbuds"
+paired = true
+connected = true
+
+[[bluetooth.devices]]
+name = "Ferrix Mock Speaker"
+paired = true
+
+[[bluetooth.devices]]
+name = ""

@@ -105,6 +105,18 @@ impl Server {
                         subs.push(clone);
                     }
                 }
+                Ok(Request::BluetoothDevices) => {
+                    let reply = match self.session.services.bluetooth.bluetooth_devices() {
+                        Ok(devices) => Reply::BluetoothDevices {
+                            schema_version: SCHEMA_VERSION,
+                            devices,
+                        },
+                        Err(error) => Reply::Error { error },
+                    };
+                    if write_json(&mut writer, &reply).is_err() {
+                        return;
+                    }
+                }
                 Ok(Request::Command { command }) => {
                     let reply = match crate::core::apply_product(&self.session.services, command) {
                         Ok(()) => Reply::Command {
