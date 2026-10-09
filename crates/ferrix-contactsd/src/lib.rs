@@ -15,7 +15,7 @@ pub mod store;
 pub mod vcard;
 
 pub use auth::{AllowAll, AppdIdentity, DenyAll, Identified, Identity, StaticIdentity};
-pub use records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder};
+pub use records::{EVIDENCE_MOCK, EVIDENCE_QEMU, Recorder, runtime_evidence};
 pub use server::Server;
 pub use service::{Connection, Outcome, Service};
 pub use store::Store;

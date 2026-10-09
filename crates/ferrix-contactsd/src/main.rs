@@ -110,12 +110,8 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let evidence = if args.nested {
-        ferrix_contactsd::EVIDENCE_MOCK
-    } else {
-        ferrix_contactsd::EVIDENCE_QEMU
-    };
-    let recorder = Recorder::stdout(evidence);
+    let evidence = ferrix_contactsd::runtime_evidence(args.nested);
+    let recorder = Recorder::stdout(&evidence);
     let identity: Box<dyn Identity> = match (&args.appd, args.allow_unauthenticated) {
         (_, true) => {
             recorder.emit(
