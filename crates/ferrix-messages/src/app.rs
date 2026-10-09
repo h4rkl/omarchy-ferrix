@@ -257,7 +257,7 @@ impl ClientHandler for Messages {
     }
 
     fn key(&mut self, code: u32, mods: Modifiers) -> bool {
-        let Some(key) = keymap::key_for(code, mods.shift) else {
+        let Some(key) = keymap::text_key(code, mods) else {
             return false;
         };
         key_press(&mut self.model, key);
