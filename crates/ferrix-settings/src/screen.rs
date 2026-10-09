@@ -78,7 +78,7 @@ fn root(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
             None,
             page.title(),
             &model.section_summary(page),
-            Trailing::Icon(Icon::Forward, Tone::Neutral),
+            Trailing::Chevron,
             input.pressed == Some(Target::Section(page)),
         );
     }
@@ -1165,8 +1165,8 @@ fn about(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model) {
     for (i, line) in lines.iter().enumerate() {
         ty.text(c, footer, line, s(96), s(1330) + i as i32 * s(39));
     }
-    // Third-party notice for the UI glyphs (the licence text is embedded in
-    // the binary and installed under /usr/share/licenses/ferrix/).
+    // Third-party notice for the UI glyphs; the licence text is installed
+    // under /usr/share/licenses/ferrix/ (docs/licensing.md).
     let notice = ellipsize(ty, footer, ferrix_ui::icons::ATTRIBUTION, max);
     ty.text(
         c,

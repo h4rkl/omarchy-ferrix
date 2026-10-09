@@ -427,8 +427,10 @@ pub enum Trailing<'a> {
     None,
     /// A text state chip (`on`, `saved`, `unavailable`).
     Chip(&'a str, Tone),
-    /// A glyph chip (`More`, `Add`): a navigation or action affordance.
+    /// A glyph chip (`More`, `Add`): a separate action inside the row.
     Icon(Icon, Tone),
+    /// A bare forward chevron: the whole row opens a page.
+    Chevron,
 }
 
 /// [`list_row`] with an optional leading glyph (`icon`, colour) and any
@@ -474,6 +476,18 @@ pub fn list_row_with(
             let w = s(72);
             chip_with_icon(c, ty, chip_at(w), Some(icon), "", tone, false);
             w + s(36)
+        }
+        Trailing::Chevron => {
+            let size = s(56);
+            icons::draw(
+                c,
+                Icon::Forward,
+                r.x + r.w - s(16) - size,
+                r.y + (r.h - size) / 2,
+                size,
+                t.fg_dim,
+            );
+            size + s(24)
         }
     };
     let mut text_x = r.x + s(32);

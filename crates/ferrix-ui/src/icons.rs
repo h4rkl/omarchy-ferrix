@@ -19,8 +19,10 @@
 
 use crate::draw::{Canvas, Rect};
 
-/// Upstream licence text of the vendored subset, shipped inside every binary
-/// that draws an icon (Apache-2.0 section 4(a)).
+/// Upstream licence text of the vendored subset, for surfaces that display
+/// third-party notices. Images ship the same file as
+/// `/usr/share/licenses/ferrix/remixicon-4.7.0/License` (Apache-2.0 section
+/// 4(a)).
 pub const REMIX_LICENSE: &str = include_str!("../assets/icons/remixicon/License");
 
 /// One-line attribution for About pages and notices.
