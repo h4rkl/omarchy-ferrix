@@ -92,7 +92,8 @@ do_sync() {
   cd "$src"
   [ -d .repo ] || die "run init first"
   repo sync -q -c --no-tags build/make
-  vendor="$src/.ferrix/android_vendor_waydroid"
+  # Outside the source tree: the build scans every Android.mk under $src.
+  vendor="$cache/android/android_vendor_waydroid-pin"
   if [ ! -d "$vendor/.git" ]; then
     git clone -q -b "$(pin WAYDROID_VENDOR_BRANCH)" "$(pin WAYDROID_VENDOR_URL)" "$vendor"
   fi
@@ -169,8 +170,8 @@ do_build() {
   release=$(target_release)
   [ -n "$release" ] || die "cannot resolve the release config; set FERRIX_WAYDROID_LINEAGE_RELEASE"
   combo="$(pin LUNCH_PRODUCT)-$release-$(pin LUNCH_VARIANT)"
-  log="$src/.ferrix/build-$(date -u +%Y%m%dT%H%M%SZ).log"
-  mkdir -p "$src/.ferrix"
+  mkdir -p "$cache/android/logs"
+  log="$cache/android/logs/build-$(date -u +%Y%m%dT%H%M%SZ).log"
   bash -c ". build/envsetup.sh >/dev/null && lunch $combo && m -j$jobs systemimage vendorimage" >"$log" 2>&1 ||
     { tail -40 "$log" >&2; die "build failed; log $log"; }
   product=$(ls -d "$src"/out/target/product/waydroid_arm64_only 2>/dev/null) || die "no product output"
