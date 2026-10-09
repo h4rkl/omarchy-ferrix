@@ -14,6 +14,9 @@ ferrix-session = { path = "../ferrix-session" }
 ferrix-protocol = { path = "../ferrix-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# kill(2) for the mock-only `kill-daemon` fault injection (safe wrapper; the
+# workspace forbids unsafe code).
+rustix = { version = "1", features = ["process"] }
 
 [lints]
 workspace = true

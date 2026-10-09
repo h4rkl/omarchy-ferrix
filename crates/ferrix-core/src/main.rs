@@ -20,6 +20,7 @@
 mod attention;
 mod control;
 mod core;
+mod daemon_kill;
 mod protocol;
 mod server;
 
@@ -50,9 +51,14 @@ pub(crate) fn evidence_label() -> String {
 /// Prints one JSON record per line and flushes, so serial captures are exact.
 pub(crate) fn emit(value: Value) {
     use std::io::Write as _;
+    // One write(2) per record: several guest processes share the serial
+    // console, and a record written in pieces can be split by another
+    // writer's line. Serialize first, then hand over the whole line.
+    let mut line = serde_json::to_vec(&value).unwrap_or_default();
+    line.push(b'\n');
     let mut stdout = std::io::stdout().lock();
-    let _ = serde_json::to_writer(&mut stdout, &value);
-    let _ = stdout.write_all(b"\n");
+    let _ = stdout.flush();
+    let _ = stdout.write_all(&line);
     let _ = stdout.flush();
 }
 
@@ -128,6 +134,9 @@ impl control::Handler for Controller {
                 return Ack::Error { ack: None, reason };
             }
         };
+        if let ControlCommand::KillDaemon { name } = &command {
+            return self.kill_daemon(name);
+        }
         match core::apply(&self.session.services, &command) {
             Ok(applied) => {
                 emit(json!({
@@ -160,6 +169,51 @@ impl control::Handler for Controller {
 }
 
 impl Controller {
+    /// `kill-daemon`: SIGKILL a supervised daemon (mocked targets only). The
+    /// restart itself is init's job and shows up as its `daemon-restarted`
+    /// record followed by the daemon's own readiness record.
+    fn kill_daemon(&self, name: &str) -> Ack {
+        let resolved = if self.session.services.mock_control.is_none() {
+            Err("kill-daemon needs the mock-control capability (mocked targets only)".to_owned())
+        } else {
+            daemon_kill::resolve(std::path::Path::new("/proc"), name).map_err(|e| e.reason(name))
+        };
+        // Reported before the signal: the supervisor's `daemon-restarted`
+        // record can only follow it.
+        let result = resolved.and_then(|pids| {
+            emit(json!({
+                "evidence": evidence_label(),
+                "event": "daemon-kill",
+                "name": name,
+                "pids": pids,
+                "signal": "KILL",
+                "status": "sending",
+            }));
+            daemon_kill::kill(&pids).map_err(|e| e.reason(name))
+        });
+        match result {
+            Ok(()) => Ack::Ok {
+                ack: "kill-daemon".to_owned(),
+                events: Vec::new(),
+                outcome: None,
+                state: self.session.services.snapshot(),
+            },
+            Err(reason) => {
+                emit(json!({
+                    "evidence": evidence_label(),
+                    "event": "daemon-kill",
+                    "name": name,
+                    "status": "error",
+                    "reason": reason,
+                }));
+                Ack::Error {
+                    ack: Some("kill-daemon".to_owned()),
+                    reason,
+                }
+            }
+        }
+    }
+
     /// The core does not power the machine off itself; it leaves a marker the
     /// init script acts on so that a host-driven check ends deterministically.
     fn request_shutdown(&self) {

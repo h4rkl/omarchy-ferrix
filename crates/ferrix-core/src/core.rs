@@ -147,6 +147,9 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             | ControlCommand::BluetoothDisconnect { .. }
             | ControlCommand::BluetoothForget { .. } => {}
             ControlCommand::Shutdown => shutdown = true,
+            // A process action, not hardware state: the control handler in
+            // main.rs performs it (see daemon_kill.rs) and never calls here.
+            ControlCommand::KillDaemon { .. } => {}
         }
         Ok(())
     })();

@@ -1,6 +1,6 @@
 schema_version = 1
 name = "service-crash-restart-reconcile"
-description = "Backend crash and reconciliation inside each daemon: crash-backend drops the mock backend, tick-driven recovery restarts it and publishes service-restarted with a full snapshot. LIMITATION: this exercises backend loss and reconciliation, not a daemon process kill. In the QEMU guest a daemon process crash is recovered by init's supervise loop (daemon-restarted record), but no host-to-guest path exists to kill a guest process from CI, so process restart is only demonstrated nested on a Linux host and is not asserted here."
+description = "Backend crash and reconciliation inside each daemon: crash-backend drops the mock backend, tick-driven recovery restarts it and publishes service-restarted with a full snapshot. This exercises backend loss and reconciliation inside a live process; a real daemon process kill and init-supervised restart is asserted by supervision-daemon-kill-restart."
 
 [[step]]
 service = "telephony"

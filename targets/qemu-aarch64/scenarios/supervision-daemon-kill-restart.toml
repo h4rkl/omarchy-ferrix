@@ -1,0 +1,39 @@
+schema_version = 1
+name = "supervision-daemon-kill-restart"
+description = "Real process restart under init supervision: ferrix-core's mock-only kill-daemon command SIGKILLs ferrix-networkd and then ferrix-telephonyd inside the guest; init's supervise loop records daemon-restarted (exit 137 = SIGKILL) and each new process reports ready again and answers on its own mock-control channel. Complements service-crash-restart-reconcile, which only drops the backend inside a live daemon. The restarted daemons come back in the profile boot state; later scenarios set up their own state as usual."
+
+[[step]]
+service = "core"
+command = { cmd = "kill-daemon", name = "ferrix-networkd" }
+ack = { status = "ok", ack = "kill-daemon" }
+expect = [ { event = "daemon-kill", name = "ferrix-networkd", status = "sending", signal = "KILL" }, { event = "daemon-restarted", name = "ferrix-networkd", exit = 137 }, { event = "networkd-ready" } ]
+timeout_ms = 30000
+note = "the supervisor backs off 1 s on the first restart, then the new networkd binds its socket and reports ready"
+
+[[step]]
+service = "network"
+command = { cmd = "state" }
+ack = { status = "ok" }
+timeout_ms = 15000
+note = "the restarted process owns the network mock-control channel"
+
+[[step]]
+service = "core"
+command = { cmd = "kill-daemon", name = "ferrix-telephonyd" }
+ack = { status = "ok", ack = "kill-daemon" }
+expect = [ { event = "daemon-kill", name = "ferrix-telephonyd", status = "sending" }, { event = "daemon-restarted", name = "ferrix-telephonyd", exit = 137 }, { event = "telephonyd-ready" } ]
+timeout_ms = 30000
+
+[[step]]
+service = "telephony"
+command = { cmd = "state" }
+ack = { status = "ok" }
+timeout_ms = 15000
+note = "the restarted process owns the telephony mock-control channel"
+
+[[step]]
+service = "core"
+command = { cmd = "kill-daemon", name = "ferrix-core" }
+expect_ack_error = true
+expect = [ { event = "daemon-kill", name = "ferrix-core", status = "error" } ]
+note = "only supervised daemons can be killed; the core refuses itself"

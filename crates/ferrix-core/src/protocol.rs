@@ -94,6 +94,12 @@ pub enum ControlCommand {
     },
     /// Ask the guest to power off once the host has finished a check.
     Shutdown,
+    /// Fault injection (mocked targets only): SIGKILL the named supervised
+    /// daemon so a test can watch init restart it. Only the names in
+    /// `daemon_kill::KILLABLE` are accepted.
+    KillDaemon {
+        name: String,
+    },
 }
 
 impl ControlCommand {
@@ -121,6 +127,7 @@ impl ControlCommand {
             ControlCommand::BluetoothDisconnect { .. } => "bluetooth-disconnect",
             ControlCommand::BluetoothForget { .. } => "bluetooth-forget",
             ControlCommand::Shutdown => "shutdown",
+            ControlCommand::KillDaemon { .. } => "kill-daemon",
         }
     }
 
@@ -203,6 +210,15 @@ mod tests {
             }
         );
         assert!(serde_json::from_str::<ControlCommand>(r#"{"cmd":"explode"}"#).is_err());
+        let cmd: ControlCommand =
+            serde_json::from_str(r#"{"cmd":"kill-daemon","name":"ferrix-networkd"}"#).unwrap();
+        assert_eq!(
+            cmd,
+            ControlCommand::KillDaemon {
+                name: "ferrix-networkd".to_owned()
+            }
+        );
+        assert_eq!(cmd.name(), "kill-daemon");
         assert!(
             serde_json::from_str::<ControlCommand>(r#"{"cmd":"set-sim","state":"maybe"}"#).is_err()
         );
