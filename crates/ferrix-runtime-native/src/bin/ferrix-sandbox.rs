@@ -99,7 +99,10 @@ mod linux {
         Pid, Signal, WaitOptions, getegid, geteuid, kill_process, set_parent_process_death_signal,
         waitpid,
     };
-    use rustix::thread::{UnshareFlags, set_no_new_privs};
+    use rustix::thread::{
+        Capability, CapabilitySet, UnshareFlags, capabilities, clear_ambient_capability_set,
+        configure_capability_in_ambient_set, set_capabilities, set_no_new_privs,
+    };
     use serde_json::json;
     use signal_hook::consts::{SIGCHLD, SIGHUP, SIGINT, SIGTERM};
     use signal_hook::iterator::Signals;
@@ -391,6 +394,17 @@ mod linux {
                     json!({ "app": app, "feature": "uid_map", "error": error }),
                 ));
                 notes.push(format!("uid_map: {error}"));
+            }
+            if applied.mount
+                && unshared.identity.uid != 0
+                && let Err(e) = keep_mount_capability_across_exec()
+            {
+                emit(&record(
+                    evidence,
+                    "sandbox-degraded",
+                    json!({ "app": app, "feature": "mount_capability", "error": e.to_string() }),
+                ));
+                notes.push(format!("mount capability: {e}"));
             }
         }
         if applied.uts
@@ -791,6 +805,39 @@ mod linux {
         })
     }
 
+    /// An unprivileged launcher is a non-root uid inside its user namespace,
+    /// so its capabilities there would not survive the `execve` of stage 2.
+    /// Raising `CAP_SYS_ADMIN` into the ambient set carries the one capability
+    /// the mounts need across that exec; stage 2 drops it before the
+    /// application starts ([`drop_inherited_capabilities`]).
+    fn keep_mount_capability_across_exec() -> rustix::io::Result<()> {
+        let mut sets = capabilities(None)?;
+        sets.inheritable |= CapabilitySet::SYS_ADMIN;
+        set_capabilities(None, sets)?;
+        configure_capability_in_ambient_set(Capability::SystemAdmin, true)
+    }
+
+    /// Empties the ambient and inheritable sets so the application's `execve`
+    /// leaves it no capabilities (unless the launcher itself was root).
+    fn drop_inherited_capabilities(evidence: &str, app: &str, reasons: &mut Vec<String>) {
+        let result = clear_ambient_capability_set().and_then(|()| {
+            let mut sets = capabilities(None)?;
+            if sets.inheritable.is_empty() {
+                return Ok(());
+            }
+            sets.inheritable = CapabilitySet::empty();
+            set_capabilities(None, sets)
+        });
+        if let Err(e) = result {
+            emit(&record(
+                evidence,
+                "sandbox-degraded",
+                json!({ "app": app, "feature": "capability_drop", "error": e.to_string() }),
+            ));
+            reasons.push(format!("capability drop: {e}"));
+        }
+    }
+
     fn apply_no_new_privs(evidence: &str, app: &str, reasons: &mut Vec<String>) -> bool {
         match set_no_new_privs(true) {
             Ok(()) => true,
@@ -839,6 +886,7 @@ mod linux {
                     RunDirOutcome::default()
                 }
             };
+        drop_inherited_capabilities(evidence, app, &mut reasons);
         let no_new_privs =
             args.policy.no_new_privs && apply_no_new_privs(evidence, app, &mut reasons);
 
