@@ -4,8 +4,8 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_network_api::{
-    AccessPoint, AdapterPresence, ApId, ConnectionState, Connectivity, NetworkEvent, NetworkState,
-    ProfileId, RadioState, SavedProfile, ScanState, SecurityType,
+    AccessPoint, AdapterPresence, ApId, ConnectionState, Connectivity, NetworkError, NetworkEvent,
+    NetworkState, ProfileId, RadioState, SavedProfile, ScanState, SecurityType,
 };
 use ferrix_network_protocol::Feed;
 use ferrix_telephony_api::{DataBearer, DataProfile, RadioPower, RedactedTelephonyState};
@@ -103,9 +103,19 @@ pub struct Model {
     pub pending: Vec<Action>,
     pub last_error: Option<String>,
     pub target: String,
+    /// A saved profile awaiting the user's Forget confirmation.
+    pub forget_confirm: Option<ProfileId>,
+    /// The access point of the last connect request, for Retry.
+    pub last_connect: Option<ApId>,
+    /// A typed error the connect request itself returned (the daemon may
+    /// also report the failure through `ConnectionState::Failed`).
+    pub connect_error: Option<NetworkError>,
     net_lost_once: bool,
     tele_lost_once: bool,
 }
+
+/// Shown when the backend reports `authentication-failed`.
+pub const AUTH_FAILED_TEXT: &str = "Wrong password or unsupported security";
 
 /// Converts the optional target launch setting into the typed data profile.
 /// Invalid values are dropped at the UI boundary; `ferrix-telephonyd` still
@@ -145,6 +155,9 @@ impl Model {
             pending: Vec::new(),
             last_error: None,
             target: "unknown".to_owned(),
+            forget_confirm: None,
+            last_connect: None,
+            connect_error: None,
             net_lost_once: false,
             tele_lost_once: false,
         }
@@ -161,6 +174,10 @@ impl Model {
 
     pub fn state_name(&self) -> String {
         match self.page {
+            Page::Network if self.forget_confirm.is_some() => "confirm-forget".to_owned(),
+            Page::Network if self.auth_failed() && self.passphrase_for.is_none() => {
+                "auth-failed".to_owned()
+            }
             Page::Network => match (&self.passphrase_for, &self.net) {
                 (Some(_), _) => "passphrase".to_owned(),
                 (None, Some(net)) => net.connection.name().to_owned(),
@@ -177,6 +194,27 @@ impl Model {
 
     pub fn telephony_label(&self) -> String {
         format!("telephony \u{b7} {}", self.tele_link.name())
+    }
+
+    /// Records the evidence label `ferrix-telephonyd` reported in its hello.
+    pub fn set_tele_evidence(&mut self, evidence: &str) {
+        self.tele_evidence = (!evidence.is_empty()).then(|| evidence.to_owned());
+    }
+
+    /// The About row for telephony evidence: the daemon's label once known,
+    /// `connected` while a snapshot is held but no label arrived yet.
+    pub fn tele_evidence_label(&self) -> String {
+        match (&self.tele_evidence, &self.tele) {
+            (Some(evidence), _) => evidence.clone(),
+            (None, Some(_)) => "connected \u{b7} label not reported".to_owned(),
+            (None, None) => format!("no snapshot \u{b7} {}", self.tele_link.name()),
+        }
+    }
+
+    pub fn net_evidence_label(&self) -> String {
+        self.net_evidence
+            .clone()
+            .unwrap_or_else(|| format!("no snapshot \u{b7} {}", self.net_link.name()))
     }
 
     // -- feeds ---------------------------------------------------------------
@@ -214,6 +252,21 @@ impl Model {
     }
 
     fn validate_passphrase_target(&mut self) {
+        if let Some(id) = &self.forget_confirm
+            && !self
+                .net
+                .as_ref()
+                .is_some_and(|n| n.profiles.iter().any(|p| &p.id == id))
+        {
+            self.forget_confirm = None;
+        }
+        if self
+            .net
+            .as_ref()
+            .is_some_and(|n| matches!(n.connection, ConnectionState::Connected { .. }))
+        {
+            self.connect_error = None;
+        }
         if let Some(ap) = &self.passphrase_for
             && !self
                 .net
@@ -306,19 +359,52 @@ impl Model {
                     .unwrap_or_else(|| ap.to_string());
                 format!("connected \u{b7} {ssid}")
             }
+            // The notice below carries the full sentence; the chip stays short.
+            Some(ConnectionState::Failed {
+                error: NetworkError::AuthenticationFailed,
+            }) => "failed \u{b7} auth".to_owned(),
             Some(ConnectionState::Failed { error }) => format!("failed \u{b7} {}", error.name()),
             Some(state) => state.name().to_owned(),
         }
     }
 
-    /// The typed connection error, if the last attempt failed.
+    /// The failure of the last connect attempt: the request's own typed
+    /// error first, else the daemon's `Failed` connection state.
+    fn failure(&self) -> Option<&NetworkError> {
+        self.connect_error
+            .as_ref()
+            .or(match self.net.as_ref().map(|n| &n.connection) {
+                Some(ConnectionState::Failed { error }) => Some(error),
+                _ => None,
+            })
+    }
+
+    /// Whether the last attempt failed on secrets/authentication: the
+    /// backend's `authentication-failed` (NetworkManager maps its
+    /// supplicant and missing-secrets reasons to it).
+    pub fn auth_failed(&self) -> bool {
+        matches!(self.failure(), Some(NetworkError::AuthenticationFailed))
+    }
+
+    /// The connection failure as shown: a plain sentence for bad secrets,
+    /// otherwise the daemon's own error text.
     pub fn connection_error(&self) -> Option<String> {
-        match self.net.as_ref().map(|n| &n.connection) {
-            Some(ConnectionState::Failed { error }) => {
-                Some(format!("connect \u{b7} {}", error.name()))
-            }
-            _ => None,
+        self.failure().map(|error| match error {
+            NetworkError::AuthenticationFailed => AUTH_FAILED_TEXT.to_owned(),
+            other => format!("connect \u{b7} {other}"),
+        })
+    }
+
+    /// The access point Retry would reconnect to, while it is still listed.
+    pub fn retry_target(&self) -> Option<&ApId> {
+        if !self.auth_failed() {
+            return None;
         }
+        self.last_connect.as_ref().filter(|id| {
+            self.net
+                .as_ref()
+                .is_some_and(|n| n.access_point(id).is_some())
+        })
     }
 
     pub fn connectivity_label(&self) -> String {
@@ -434,6 +520,7 @@ impl Model {
     pub fn show(&mut self, page: Page) {
         self.page = page;
         self.last_error = None;
+        self.forget_confirm = None;
     }
 
     pub fn toggle_radio(&mut self) {
@@ -480,11 +567,40 @@ impl Model {
             self.passphrase_shown = false;
             self.last_error = None;
         } else {
-            self.pending.push(Action::Connect {
-                ap: id.clone(),
-                passphrase: None,
-            });
+            self.begin_connect(id.clone(), None);
         }
+    }
+
+    fn begin_connect(&mut self, ap: ApId, passphrase: Option<String>) {
+        self.last_connect = Some(ap.clone());
+        self.connect_error = None;
+        self.last_error = None;
+        self.pending.push(Action::Connect { ap, passphrase });
+    }
+
+    /// Retry after an authentication failure: ask for the passphrase again
+    /// (a saved one was evidently wrong), or reconnect an open network.
+    pub fn retry_connect(&mut self) {
+        let Some(id) = self.retry_target().cloned() else {
+            return;
+        };
+        let security = self
+            .net
+            .as_ref()
+            .and_then(|n| n.access_point(&id))
+            .map(|ap| ap.security);
+        if security.is_some_and(SecurityType::needs_passphrase) {
+            self.passphrase_for = Some(id);
+            self.passphrase.clear();
+            self.last_error = None;
+        } else {
+            self.begin_connect(id, None);
+        }
+    }
+
+    /// Records a typed error the connect request returned.
+    pub fn connect_failed(&mut self, error: NetworkError) {
+        self.connect_error = Some(error);
     }
 
     pub fn submit_passphrase(&mut self) -> Result<(), String> {
@@ -494,10 +610,8 @@ impl Model {
         if self.passphrase.chars().count() < 8 {
             return Err("passphrase \u{b7} shorter than 8 characters".to_owned());
         }
-        self.pending.push(Action::Connect {
-            ap,
-            passphrase: Some(std::mem::take(&mut self.passphrase)),
-        });
+        let passphrase = std::mem::take(&mut self.passphrase);
+        self.begin_connect(ap, Some(passphrase));
         self.passphrase_for = None;
         Ok(())
     }
@@ -507,11 +621,39 @@ impl Model {
         self.passphrase.clear();
     }
 
+    /// Tapping a saved profile asks for confirmation first, like
+    /// Contacts' delete; nothing is sent until [`Model::confirm_forget`].
     pub fn forget(&mut self, id: &ProfileId) {
         match self.controllable() {
-            Ok(()) => self.pending.push(Action::Forget(id.clone())),
+            Ok(()) => {
+                self.forget_confirm = Some(id.clone());
+                self.last_error = None;
+            }
             Err(reason) => self.last_error = Some(reason),
         }
+    }
+
+    pub fn confirm_forget(&mut self) {
+        let Some(id) = self.forget_confirm.take() else {
+            return;
+        };
+        match self.controllable() {
+            Ok(()) => self.pending.push(Action::Forget(id)),
+            Err(reason) => self.last_error = Some(reason),
+        }
+    }
+
+    pub fn cancel_forget(&mut self) {
+        self.forget_confirm = None;
+    }
+
+    /// The SSID of the profile awaiting Forget confirmation.
+    pub fn forget_ssid(&self) -> Option<String> {
+        let id = self.forget_confirm.as_ref()?;
+        self.profiles()
+            .into_iter()
+            .find(|p| &p.id == id)
+            .map(|p| p.ssid.to_string())
     }
 
     pub fn toggle_airplane(&mut self) {
@@ -545,7 +687,9 @@ impl Model {
     }
 
     pub fn back(&mut self) {
-        if self.passphrase_for.is_some() {
+        if self.forget_confirm.is_some() {
+            self.cancel_forget();
+        } else if self.passphrase_for.is_some() {
             self.cancel_passphrase();
         } else if self.page != Page::Network {
             self.show(Page::Network);
@@ -655,11 +799,18 @@ mod tests {
                     error: error.clone(),
                 },
             }));
-            assert_eq!(
-                m.connection_error(),
-                Some(format!("connect \u{b7} {}", error.name()))
-            );
-            assert_eq!(m.state_name(), "failed");
+            let expected = if error == NetworkError::AuthenticationFailed {
+                AUTH_FAILED_TEXT.to_owned()
+            } else {
+                format!("connect \u{b7} {error}")
+            };
+            assert_eq!(m.connection_error(), Some(expected));
+            let state = if error == NetworkError::AuthenticationFailed {
+                "auth-failed"
+            } else {
+                "failed"
+            };
+            assert_eq!(m.state_name(), state);
         }
         for state in [
             ConnectionState::Associating,
@@ -731,6 +882,8 @@ mod tests {
             })
         );
         m.forget(&ProfileId::new("profile-lab"));
+        assert!(m.pending.is_empty(), "forget waits for confirmation");
+        m.confirm_forget();
         assert_eq!(
             m.pending.pop(),
             Some(Action::Forget(ProfileId::new("profile-lab")))
@@ -857,5 +1010,111 @@ mod tests {
             data_profile_from_env(Some("has whitespace")),
             DataProfile::default()
         );
+    }
+
+    #[test]
+    fn forget_needs_confirmation_and_back_cancels() {
+        let mut m = connected();
+        let id = ProfileId::new("profile-lab");
+        m.forget(&id);
+        assert!(m.pending.is_empty());
+        assert_eq!(m.state_name(), "confirm-forget");
+        assert_eq!(m.forget_ssid().as_deref(), Some("ferrix-lab"));
+        m.back();
+        assert_eq!(m.forget_confirm, None);
+        assert!(m.pending.is_empty(), "back cancels, never forgets");
+        m.forget(&id);
+        m.cancel_forget();
+        assert!(m.pending.is_empty());
+        m.forget(&id);
+        m.confirm_forget();
+        assert_eq!(m.pending, vec![Action::Forget(id.clone())]);
+        assert_eq!(m.forget_confirm, None);
+        // A profile that disappears drops its pending confirmation.
+        m.forget(&id);
+        let mut gone = preview_network(true);
+        gone.profiles.clear();
+        m.apply_network(Feed::Snapshot {
+            state: gone,
+            evidence: "mock".into(),
+        });
+        assert_eq!(m.forget_confirm, None);
+    }
+
+    #[test]
+    fn authentication_failure_reads_plainly_and_retry_reprompts() {
+        let mut m = connected();
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Disconnected,
+        }));
+        // ferrix-lab is saved, so it connects without asking.
+        m.select_ap(&ApId::new("ap-0"));
+        m.pending.clear();
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Failed {
+                error: NetworkError::AuthenticationFailed,
+            },
+        }));
+        assert!(m.auth_failed());
+        assert_eq!(m.connection_error().as_deref(), Some(AUTH_FAILED_TEXT));
+        assert_eq!(m.state_name(), "auth-failed");
+        assert_eq!(m.retry_target(), Some(&ApId::new("ap-0")));
+        m.retry_connect();
+        assert_eq!(
+            m.passphrase_for,
+            Some(ApId::new("ap-0")),
+            "retry asks for the passphrase even for a saved profile"
+        );
+        m.passphrase = "another-pass".to_owned();
+        m.submit_passphrase().unwrap();
+        assert_eq!(
+            m.pending.pop(),
+            Some(Action::Connect {
+                ap: ApId::new("ap-0"),
+                passphrase: Some("another-pass".into())
+            })
+        );
+        // A typed error returned by the request itself reads the same way.
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Disconnected,
+        }));
+        m.connect_failed(NetworkError::AuthenticationFailed);
+        assert_eq!(m.connection_error().as_deref(), Some(AUTH_FAILED_TEXT));
+        // Other failures surface the daemon's error text, no Retry.
+        m.connect_failed(NetworkError::Unsupported {
+            feature: "wpa3-sae".into(),
+        });
+        assert!(!m.auth_failed());
+        assert_eq!(m.retry_target(), None);
+        assert_eq!(
+            m.connection_error().as_deref(),
+            Some("connect \u{b7} wpa3-sae is not supported by this backend")
+        );
+        // Connecting clears the request error.
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Connected {
+                ap: ApId::new("ap-0"),
+            },
+        }));
+        assert_eq!(m.connection_error(), None);
+    }
+
+    #[test]
+    fn telephony_evidence_comes_from_the_live_daemon() {
+        let mut m = Model::new();
+        assert_eq!(m.tele_evidence_label(), "no snapshot \u{b7} connecting");
+        let mut tele = ferrix_telephony_api::TelephonyState::new();
+        tele.radio = RadioPower::On;
+        m.apply_telephony(Update::Snapshot(
+            ferrix_telephony_protocol::StateView::Redacted(tele.redacted()),
+        ));
+        assert_eq!(
+            m.tele_evidence_label(),
+            "connected \u{b7} label not reported"
+        );
+        m.set_tele_evidence("QEMU");
+        assert_eq!(m.tele_evidence_label(), "QEMU");
+        m.apply_telephony(Update::Disconnected);
+        assert_eq!(m.tele_evidence_label(), "QEMU", "last daemon's label kept");
     }
 }

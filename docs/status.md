@@ -1,5 +1,30 @@
 # Status
 
+## 2026-10-09 (Phone, Settings, Contacts user-visible fixes; host previews only)
+
+- Phone: call duration counts from when the app saw the call become active
+  on a local monotonic clock (the daemon reports only `started_at_ms`, so
+  the old daemon-clock duration was always 0s). A ticker wakes the client
+  once per second only while a connected call runs; Ended and Recent show
+  the frozen final `m:ss`, and calls never seen connected show none. Route
+  chips are a 2x2 grid with full labels; the party block no longer repeats
+  a number as its redacted copy.
+- Settings: About telephony evidence comes from the label
+  `ferrix-telephonyd` reports in its hello (re-read on every reconnector
+  snapshot); the footer wraps. Saved-profile Forget needs a confirmation
+  (Contacts delete pattern). The protocol's typed `authentication-failed`
+  reads "Wrong password or unsupported security" with Retry (re-asks the
+  passphrase); other failures show the daemon's error text.
+- Contacts: vCard export goes to `$FERRIX_CONTACTS_EXPORT_DIR`, else
+  `$XDG_DOCUMENTS_DIR`, else `$HOME/Documents` (created), never the
+  sandbox's private `/tmp`; the notice names the path. The new-contact form
+  validates only after an edit or Save; detail hides empty/redundant name
+  parts and the internal id.
+- Evidence: unit/render tests and `mock` host previews (`--preview`) of the
+  in-call, About, Network auth-failure/forget-confirmation, and Contacts
+  detail/edit pages, inspected by the agent. Not verified in QEMU (the local
+  container runtime was not running, so `just qemu-build` could not run) or
+  on any physical device.
 ## 2026-10-09 (field-appropriate keyboards and hardware Shift/Caps Lock; QEMU/Pixel shared code)
 
 - `ferrix_ui::keymap::char_for(code, modifiers)` / `text_key` apply Shift

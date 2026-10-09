@@ -11,7 +11,7 @@ use ferrix_ui::widgets::{
 };
 
 use crate::interaction::{Input, Layout, Target, keyboard_state, keyboard_visible};
-use crate::model::{Focus, Link, Model, Page};
+use crate::model::{Focus, Link, Model, Page, name_parts_line};
 
 pub fn compose(
     ty: &Type,
@@ -172,15 +172,15 @@ fn detail(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         name_style.px -= 4.0;
     }
     ty.text(c, name_style, &contact.display_name, s(96), s(470));
-    let given = contact.given.as_deref().unwrap_or("\u{2014}");
-    let family = contact.family.as_deref().unwrap_or("\u{2014}");
-    ty.text(
-        c,
-        Style::regular(s(28) as f32, t.fg_dim),
-        &format!("given {given} \u{b7} family {family}"),
-        s(96),
-        s(540),
-    );
+    if let Some(parts) = name_parts_line(contact) {
+        ty.text(
+            c,
+            Style::regular(s(28) as f32, t.fg_dim),
+            &parts,
+            s(96),
+            s(540),
+        );
+    }
     section_label(c, ty, "numbers", s(96), s(660));
     if contact.numbers.is_empty() {
         ty.text(
@@ -238,13 +238,6 @@ fn detail(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         input.pressed == Some(Target::Delete),
         model.writable(),
     );
-    ty.text(
-        c,
-        Style::regular(s(26) as f32, t.fg_dim),
-        &format!("id {}", contact.id),
-        s(96),
-        s(1920),
-    );
 }
 
 fn edit(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
@@ -294,7 +287,7 @@ fn edit(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
     let can_save = model.can_save();
     if let Some(error) = &model.last_error {
         notice(c, ty, l.error_rect(), error, Tone::Err);
-    } else if let Err(reason) = &can_save {
+    } else if let Some(reason) = &model.form_hint() {
         let style = Style::regular(s(26) as f32, t.fg_dim);
         let e = l.error_rect();
         ty.text(c, style, reason, e.x + s(24), e.y + e.h / 2 + s(10));
@@ -406,5 +399,46 @@ mod tests {
         let c = compose(&ty, (1080, 2340), 600, &m, &input);
         let cf = l.confirm_rect();
         assert_eq!(c.get(cf.x + cf.w / 2, cf.y), t.err);
+    }
+
+    fn blank(c: &Canvas, r: Rect) -> bool {
+        let bg = theme::get().bg;
+        (r.y..r.y + r.h).all(|y| (r.x..r.x + r.w).all(|x| c.get(x, y) == bg))
+    }
+
+    #[test]
+    fn pristine_form_and_detail_show_no_internal_text() {
+        let ty = Type::load().unwrap();
+        let input = Input::default();
+        let l = Layout::new((1080, 2340));
+        let mut m = model();
+        m.new_contact();
+        let c = compose(&ty, (1080, 2340), 600, &m, &input);
+        assert!(blank(&c, l.error_rect()), "no validation before an edit");
+        m.form.name = "x".to_owned();
+        m.note_form_edit();
+        m.form.name.clear();
+        let c = compose(&ty, (1080, 2340), 600, &m, &input);
+        assert!(!blank(&c, l.error_rect()), "validation after an edit");
+
+        let mut m = model();
+        let id = m.contacts[0].id.clone();
+        m.open(&id);
+        let c = compose(&ty, (1080, 2340), 600, &m, &input);
+        let s = |v| l.s(v);
+        let parts = Rect {
+            x: s(96),
+            y: s(505),
+            w: s(800),
+            h: s(50),
+        };
+        assert!(blank(&c, parts), "redundant name parts hidden");
+        let id_line = Rect {
+            x: s(96),
+            y: s(1880),
+            w: s(800),
+            h: s(60),
+        };
+        assert!(blank(&c, id_line), "internal id hidden");
     }
 }

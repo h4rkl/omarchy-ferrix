@@ -1,7 +1,7 @@
 //! Guest-side Contacts client: follows `ferrix-contactsd` through the
 //! protocol reconnector, re-fetches the list on change events, sends
-//! writes over a request connection, exports vCard to a private path, and
-//! reports Back to `ferrix-appd`.
+//! writes over a request connection, exports vCard to the user's documents
+//! directory, and reports Back to `ferrix-appd`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,12 +18,9 @@ use ferrix_ui::keymap::{self, Modifiers};
 
 use crate::interaction::{Input, key_press};
 use crate::model::{Action, Link, Model};
-use crate::{APP_ID, EVIDENCE, screen};
+use crate::{APP_ID, EVIDENCE, model, screen};
 
 const TIMEOUT: Duration = Duration::from_secs(2);
-/// Export target when `FERRIX_CONTACTS_EXPORT_DIR` is unset: the sandbox's
-/// private `/tmp`.
-const DEFAULT_EXPORT: &str = "/tmp/ferrix-contacts-export.vcf";
 
 struct Contacts {
     ty: Type,
@@ -79,11 +76,17 @@ pub fn run(initial_size: (u32, u32)) -> Result<(), String> {
     })
 }
 
-fn export_path() -> PathBuf {
-    match std::env::var_os("FERRIX_CONTACTS_EXPORT_DIR").filter(|v| !v.is_empty()) {
-        Some(dir) => PathBuf::from(dir).join("contacts.vcf"),
-        None => PathBuf::from(DEFAULT_EXPORT),
+/// Writes `text` to the durable export location (see
+/// [`model::export_path`]), creating the directory, and returns the path.
+fn write_export(text: &str) -> Result<PathBuf, String> {
+    let path = model::export_path(|key| std::env::var(key).ok())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("export \u{b7} create {}: {e}", parent.display()))?;
     }
+    std::fs::write(&path, text.as_bytes())
+        .map_err(|e| format!("export \u{b7} write {}: {e}", path.display()))?;
+    Ok(path)
 }
 
 impl Contacts {
@@ -135,21 +138,34 @@ impl Contacts {
             ),
             Action::Export => {
                 let text = self.client().map_err(Err).and_then(|c| c.export_vcard());
-                let outcome = text.and_then(|text| {
-                    let path = export_path();
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    std::fs::write(&path, text.as_bytes())
-                        .map(|()| {
+                let outcome = match text {
+                    Ok(text) => match write_export(&text) {
+                        Ok(path) => {
+                            // The record keeps counts only; the path can
+                            // carry the user's name.
                             emit(format!(
                                 "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"contacts-export\",\"app\":\"{APP_ID}\",\"bytes\":{}}}",
                                 text.len()
                             ));
-                            self.model.export_status = Some(format!("exported \u{b7} {} bytes", text.len()));
-                        })
-                        .map_err(|e| Err(format!("write export: {e}")))
-                });
+                            let home = std::env::var("HOME").ok();
+                            self.model.export_status = Some(format!(
+                                "exported to {}",
+                                model::display_path(&path, home.as_deref())
+                            ));
+                            Ok(())
+                        }
+                        Err(reason) => {
+                            // A local file problem, not a daemon failure.
+                            self.model.export_status = None;
+                            self.model.last_error = Some(reason);
+                            emit(format!(
+                                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"contacts-action\",\"app\":\"{APP_ID}\",\"action\":\"export\",\"status\":\"error\",\"error\":\"write\"}}"
+                            ));
+                            return;
+                        }
+                    },
+                    Err(error) => Err(error),
+                };
                 ("export", outcome)
             }
         };
@@ -175,6 +191,7 @@ impl Contacts {
     }
 
     fn after_input(&mut self) {
+        self.model.note_form_edit();
         for action in std::mem::take(&mut self.model.pending) {
             self.send(action);
         }

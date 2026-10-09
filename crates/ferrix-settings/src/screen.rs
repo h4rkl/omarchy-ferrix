@@ -6,7 +6,7 @@ use ferrix_ui::draw::{Canvas, Rect, Style, Type};
 use ferrix_ui::theme;
 use ferrix_ui::widgets::{
     ButtonKind, Tone, button, chip, clock_strip, gesture_pill, keyboard, list_row, notice,
-    page_header, section_label, text_field,
+    page_header, section_label, text_field, wrap, wrap_text,
 };
 
 use crate::interaction::{Input, Layout, Target, keyboard_visible};
@@ -145,7 +145,22 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
         .map(str::to_owned)
         .or_else(|| model.connection_error())
     {
-        notice(c, ty, l.error_rect(), &error, Tone::Err);
+        let retry = model.last_error.is_none()
+            && model.retry_target().is_some()
+            && model.passphrase_for.is_none()
+            && model.forget_confirm.is_none();
+        notice(c, ty, l.notice_rect(retry), &error, Tone::Err);
+        if retry {
+            button(
+                c,
+                ty,
+                l.retry_rect(),
+                "Retry",
+                ButtonKind::Primary,
+                input.pressed == Some(Target::Retry),
+                true,
+            );
+        }
     } else if model.net_link != Link::Connected {
         let tone = if model.net_link == Link::Unavailable {
             Tone::Warn
@@ -153,6 +168,10 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
             Tone::Steel
         };
         notice(c, ty, l.error_rect(), &model.network_label(), tone);
+    }
+    if model.forget_confirm.is_some() {
+        forget_confirm(c, ty, l, model, input);
+        return;
     }
     if let Some(ap_id) = &model.passphrase_for {
         let ssid = model
@@ -257,6 +276,52 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
     }
 }
 
+/// Forget confirmation, in the Contacts delete-confirmation pattern: a
+/// plain question, what is lost, a danger button and Cancel.
+fn forget_confirm(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    let ssid = model
+        .forget_ssid()
+        .unwrap_or_else(|| "this network".to_owned());
+    ty.text(
+        c,
+        Style::bold(s(44) as f32, t.fg),
+        "Forget network?",
+        s(96),
+        s(890),
+    );
+    wrap_text(
+        c,
+        ty,
+        &format!(
+            "{ssid} and its saved passphrase are removed. You will need the passphrase to join again."
+        ),
+        s(96),
+        s(950),
+        c.width() - s(192),
+        s(30),
+    );
+    button(
+        c,
+        ty,
+        l.forget_confirm_rect(),
+        "Forget",
+        ButtonKind::Danger,
+        input.pressed == Some(Target::ForgetConfirm),
+        true,
+    );
+    button(
+        c,
+        ty,
+        l.forget_cancel_rect(),
+        "Cancel",
+        ButtonKind::Secondary,
+        input.pressed == Some(Target::ForgetCancel),
+        true,
+    );
+}
+
 fn toggle_row(c: &mut Canvas, ty: &Type, r: Rect, title: &str, sub: &str, on: bool, pressed: bool) {
     let state = if on {
         ("on", Tone::Accent)
@@ -335,25 +400,12 @@ fn radios(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
     );
 }
 
-fn about(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model) {
-    let t = theme::get();
-    let s = |v| l.s(v);
-    let rows: [(&str, String); 7] = [
+/// The About page's key/value rows.
+pub fn about_rows(model: &Model) -> [(&'static str, String); 7] {
+    [
         ("target", model.target.clone()),
-        (
-            "network evidence",
-            model
-                .net_evidence
-                .clone()
-                .unwrap_or_else(|| "no snapshot".to_owned()),
-        ),
-        (
-            "telephony evidence",
-            model
-                .tele_evidence
-                .clone()
-                .unwrap_or_else(|| "no snapshot".to_owned()),
-        ),
+        ("network evidence", model.net_evidence_label()),
+        ("telephony evidence", model.tele_evidence_label()),
         ("app schema", ferrix_app_api::SCHEMA_VERSION.to_string()),
         (
             "telephony schema",
@@ -367,19 +419,38 @@ fn about(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model) {
             "contacts schema",
             ferrix_contacts_api::SCHEMA_VERSION.to_string(),
         ),
-    ];
+    ]
+}
+
+pub const ABOUT_FOOTER: &str =
+    "State comes from the daemons named above; nothing here is a physical-device claim.";
+
+fn about(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    let max = c.width() - s(192);
+    let rows = about_rows(model);
     for (i, (key, value)) in rows.iter().enumerate() {
         let y = s(430) + i as i32 * s(120);
         section_label(c, ty, key, s(96), y);
-        ty.text(c, Style::bold(s(36) as f32, t.fg), value, s(96), y + s(52));
+        let mut style = Style::bold(s(36) as f32, t.fg);
+        while ty.width(style, value) > max && style.px > 16.0 {
+            style.px -= 2.0;
+        }
+        ty.text(c, style, value, s(96), y + s(52));
     }
-    ty.text(
-        c,
-        Style::regular(s(26) as f32, t.fg_dim),
-        "state comes from the daemons named above; nothing here is a physical-device claim",
-        s(96),
-        s(1330),
-    );
+    let footer = Style::regular(s(26) as f32, t.fg_dim);
+    let size = (c.width() as u32, c.height() as u32);
+    for (i, line) in about_footer_lines(ty, size).iter().enumerate() {
+        ty.text(c, footer, line, s(96), s(1330) + i as i32 * s(39));
+    }
+}
+
+/// Lines of the About footer at `size`, as drawn.
+pub fn about_footer_lines(ty: &Type, size: (u32, u32)) -> Vec<String> {
+    let l = Layout::new(size);
+    let style = Style::regular(l.s(26) as f32, theme::get().fg_dim);
+    wrap(ty, style, ABOUT_FOOTER, size.0 as i32 - l.s(192))
 }
 
 #[cfg(test)]
@@ -453,5 +524,59 @@ mod tests {
         let rendered =
             (l.s(400)..l.s(500)).any(|y| (l.s(96)..l.s(400)).any(|x| c.get(x, y) != t.bg));
         assert!(rendered, "about text rendered");
+    }
+
+    #[test]
+    fn about_reports_live_telephony_and_keeps_the_footer_on_screen() {
+        let ty = Type::load().unwrap();
+        let mut m = model(true);
+        let mut tele = ferrix_telephony_api::TelephonyState::new();
+        tele.radio = ferrix_telephony_api::RadioPower::On;
+        m.apply_telephony(ferrix_telephony_protocol::Update::Snapshot(
+            ferrix_telephony_protocol::StateView::Redacted(tele.redacted()),
+        ));
+        m.set_tele_evidence("QEMU");
+        let rows = about_rows(&m);
+        assert_eq!(rows[1], ("network evidence", "mock".to_owned()));
+        assert_eq!(rows[2], ("telephony evidence", "QEMU".to_owned()));
+        for size in [(1080, 2340), (720, 1600), (1080, 2424)] {
+            let l = Layout::new(size);
+            let style = Style::regular(l.s(26) as f32, theme::get().fg_dim);
+            let lines = about_footer_lines(&ty, size);
+            assert!(lines.len() > 1, "footer wraps at {size:?}");
+            for line in &lines {
+                assert!(
+                    l.s(96) + ty.width(style, line) <= size.0 as i32 - l.s(96),
+                    "{line:?} overflows at {size:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn forget_confirmation_and_auth_retry_render() {
+        use ferrix_network_api::{ConnectionState, NetworkError, NetworkEvent, ProfileId};
+        let t = theme::get();
+        let ty = Type::load().unwrap();
+        let l = Layout::new((1080, 2340));
+        let mut m = model(true);
+        m.forget(&ProfileId::new("profile-lab"));
+        let c = compose(&ty, (1080, 2340), 600, &m, &Input::default());
+        let f = l.forget_confirm_rect();
+        assert_eq!(
+            c.get(f.x + f.w / 2, f.y),
+            t.err,
+            "Forget is the danger button"
+        );
+        m.cancel_forget();
+        m.select_ap(&ApId::new("ap-1"));
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Failed {
+                error: NetworkError::AuthenticationFailed,
+            },
+        }));
+        let c = compose(&ty, (1080, 2340), 600, &m, &Input::default());
+        let r = l.retry_rect();
+        assert_eq!(c.get(r.x + r.w / 2, r.y), t.rust, "Retry is primary");
     }
 }

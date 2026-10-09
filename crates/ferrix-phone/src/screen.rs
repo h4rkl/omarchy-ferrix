@@ -3,7 +3,7 @@
 //! the active route chip, the pressed control), status colors only on the
 //! element they describe. Geometry comes from [`Layout`].
 
-use ferrix_telephony_api::{CallState, Direction};
+use ferrix_telephony_api::{AudioRoute, CallState, Direction};
 use ferrix_ui::draw::{Canvas, Rect, Style, Type};
 use ferrix_ui::theme;
 use ferrix_ui::widgets::{
@@ -12,7 +12,7 @@ use ferrix_ui::widgets::{
 };
 
 use crate::interaction::{Input, Layout, Target, hold_label};
-use crate::model::{Link, Model, Page};
+use crate::model::{CallView, Link, Model, Page, format_duration};
 
 pub fn compose(
     ty: &Type,
@@ -184,7 +184,10 @@ fn recent(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
             Direction::Outgoing => "outgoing",
         };
         let (state, tone) = call_state_chip(view.call.state, view.call.end_reason.as_ref());
-        let subtitle = format!("{dir} \u{b7} {}s", model.duration_secs(&view.call));
+        let subtitle = match model.duration_secs(&view.call.id) {
+            Some(secs) => format!("{dir} \u{b7} {}", format_duration(secs)),
+            None => dir.to_owned(),
+        };
         list_row(
             c,
             ty,
@@ -234,22 +237,15 @@ fn party_block(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, eyebrow: &s
         style.px -= 4.0;
     }
     ty.text(c, style, &name, s(96), s(560));
-    // The second line names the state, never repeats a resolved number.
-    let sub = if view.number.is_some() && name != view.number.as_ref().map_or("", |n| n.as_str()) {
-        view.number
-            .as_ref()
-            .map(|n| n.as_str().to_owned())
-            .unwrap_or_default()
-    } else {
-        view.call.party.party_redacted.clone()
-    };
-    ty.text(
-        c,
-        Style::regular(s(30) as f32, t.fg_dim),
-        &sub,
-        s(96),
-        s(640),
-    );
+    if let Some(sub) = party_subtitle(view, &name) {
+        ty.text(
+            c,
+            Style::regular(s(30) as f32, t.fg_dim),
+            &sub,
+            s(96),
+            s(640),
+        );
+    }
     let (label, tone) = call_state_chip(view.call.state, view.call.end_reason.as_ref());
     chip(
         c,
@@ -264,14 +260,41 @@ fn party_block(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, eyebrow: &s
         tone,
         false,
     );
-    let dur = format!("{}s \u{b7} daemon clock", model.duration_secs(&view.call));
-    ty.text(
-        c,
-        Style::regular(s(28) as f32, t.fg_dim),
-        &dur,
-        s(400),
-        s(745),
-    );
+    if let Some(secs) = model.duration_secs(&view.call.id) {
+        ty.text(
+            c,
+            Style::regular(s(36) as f32, t.fg_dim),
+            &format_duration(secs),
+            s(400),
+            s(746),
+        );
+    }
+}
+
+/// The line under the party name: the number when the name is a contact
+/// or network display name; nothing when the name already is the number
+/// (full or redacted), so a number never appears twice.
+pub fn party_subtitle(view: &CallView, name: &str) -> Option<String> {
+    let number = view
+        .number
+        .as_ref()
+        .map_or(view.call.party.party_redacted.as_str(), |n| n.as_str());
+    (name != number && name != view.call.party.party_redacted).then(|| number.to_owned())
+}
+
+/// Route chip copy: title-cased, `· n/a` when the backend lacks the route.
+pub fn route_label(route: AudioRoute, available: bool) -> String {
+    let name = match route {
+        AudioRoute::Earpiece => "Earpiece",
+        AudioRoute::Speaker => "Speaker",
+        AudioRoute::Wired => "Wired",
+        AudioRoute::Bluetooth => "Bluetooth",
+    };
+    if available {
+        name.to_owned()
+    } else {
+        format!("{name} \u{b7} n/a")
+    }
 }
 
 fn incoming(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
@@ -299,7 +322,7 @@ fn incoming(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input)
 fn in_call(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
     let s = |v| l.s(v);
     party_block(c, ty, l, model, "call");
-    section_label(c, ty, "audio route", s(96), s(870));
+    section_label(c, ty, "audio route", s(96), s(876));
     let available = model.routes_available();
     let active = model.active_route();
     for (r, route) in l.route_rects() {
@@ -308,11 +331,7 @@ fn in_call(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
         } else {
             Tone::Neutral
         };
-        let label = if available.contains(&route) {
-            route.name().to_owned()
-        } else {
-            format!("{} \u{b7} n/a", route.name())
-        };
+        let label = route_label(route, available.contains(&route));
         chip(
             c,
             ty,
@@ -495,5 +514,60 @@ mod tests {
         assert_eq!(c.get(e.x + 22, e.y + e.h / 2), t.warn);
         assert!(status_label(&m).contains("ready"));
         assert!(status_label(&m).ends_with("mock"));
+    }
+
+    #[test]
+    fn route_chips_fit_their_labels_without_ellipsis() {
+        let ty = Type::load().unwrap();
+        for size in [(1080, 2340), (720, 1600), (1080, 2424)] {
+            let l = Layout::new(size);
+            for (r, route) in l.route_rects() {
+                // Matches `widgets::chip`: bold at 42% of the chip height,
+                // ellipsized beyond the width less 24 scaled px.
+                let style = Style::bold((r.h as f32 * 0.42).max(12.0), theme::get().fg);
+                for available in [true, false] {
+                    let label = route_label(route, available);
+                    assert!(
+                        ty.width(style, &label) <= r.w - l.s(24),
+                        "{label:?} overflows {r:?} at {size:?}"
+                    );
+                    assert_eq!(widgets::ellipsize(&ty, style, &label, r.w - l.s(24)), label);
+                }
+            }
+            let rects = l.route_rects();
+            let hold = l.hold_rect();
+            assert!(
+                rects.iter().all(|(r, _)| r.y + r.h < hold.y),
+                "chips clear Hold"
+            );
+            let first_key = l.dtmf_keys()[0].0;
+            assert!(hold.y + hold.h < first_key.y);
+            let last_key = l.dtmf_keys()[11].0;
+            assert!(last_key.y + last_key.h < l.hangup_rect().y);
+        }
+    }
+
+    #[test]
+    fn the_number_appears_on_one_line_only() {
+        let m = model(Some((Direction::Incoming, CallState::Ringing, None)));
+        let view = m.focused().unwrap();
+        let name = view.party_label(&[], "US");
+        assert_eq!(name, "+15550100042");
+        assert_eq!(party_subtitle(view, &name), None, "no redacted copy");
+        assert_eq!(
+            party_subtitle(view, "Test Contact 42").as_deref(),
+            Some("+15550100042")
+        );
+        let mut r = Model::new();
+        r.apply(Update::Snapshot(StateView::Redacted(
+            preview_state(Some((Direction::Incoming, CallState::Ringing, None))).redacted(),
+        )));
+        let view = r.focused().unwrap();
+        let name = view.party_label(&[], "US");
+        assert_eq!(party_subtitle(view, &name), None);
+        assert_eq!(
+            party_subtitle(view, "Test Contact 42").as_deref(),
+            Some("+***0042")
+        );
     }
 }

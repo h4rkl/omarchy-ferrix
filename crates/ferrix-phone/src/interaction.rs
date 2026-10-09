@@ -156,19 +156,23 @@ impl Layout {
         }
     }
 
+    /// Route chips in a 2x2 grid, wide enough for full labels.
     pub fn route_rects(&self) -> Vec<(Rect, AudioRoute)> {
         let s = |v| self.s(v);
-        let w = (self.w() - 2 * s(96) - 3 * s(16)) / 4;
+        let gap = s(16);
+        let w = (self.w() - 2 * s(96) - gap) / 2;
+        let h = s(72);
         ROUTES
             .iter()
             .enumerate()
             .map(|(i, r)| {
+                let (col, row) = ((i % 2) as i32, (i / 2) as i32);
                 (
                     Rect {
-                        x: s(96) + i as i32 * (w + s(16)),
-                        y: s(900),
+                        x: s(96) + col * (w + gap),
+                        y: s(900) + row * (h + s(12)),
                         w,
-                        h: s(80),
+                        h,
                     },
                     *r,
                 )
@@ -180,9 +184,9 @@ impl Layout {
         let s = |v| self.s(v);
         Rect {
             x: s(96),
-            y: s(1060),
+            y: s(1084),
             w: s(420),
-            h: s(130),
+            h: s(120),
         }
     }
 
@@ -190,14 +194,14 @@ impl Layout {
         let s = |v| self.s(v);
         Rect {
             x: s(564),
-            y: s(1060),
+            y: s(1084),
             w: s(420),
-            h: s(130),
+            h: s(120),
         }
     }
 
     pub fn dtmf_keys(&self) -> Vec<(Rect, char)> {
-        keypad_rects(self.size, self.s(1260), 110)
+        keypad_rects(self.size, self.s(1236), 110)
     }
 
     pub fn hangup_rect(&self) -> Rect {

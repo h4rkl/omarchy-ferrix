@@ -10,6 +10,70 @@ use ferrix_contacts_api::{
 };
 use ferrix_contacts_protocol::Link as ProtoLink;
 use ferrix_ui::osk::OskState;
+use std::path::{Path, PathBuf};
+
+/// File name of a vCard export inside the export directory.
+pub const EXPORT_FILE: &str = "contacts.vcf";
+/// Overrides the export directory (tests, nested runs).
+pub const EXPORT_DIR_ENV: &str = "FERRIX_CONTACTS_EXPORT_DIR";
+
+/// Where an export is written. The sandbox gives every app a private tmpfs
+/// `/tmp` that vanishes with the process, so exports go to a durable
+/// per-user directory on the shared filesystem instead:
+/// `$FERRIX_CONTACTS_EXPORT_DIR`, else `$XDG_DOCUMENTS_DIR`, else
+/// `$HOME/Documents`. Relative values are ignored; with no usable value
+/// the export is refused rather than written somewhere it would be lost.
+pub fn export_path(env: impl Fn(&str) -> Option<String>) -> Result<PathBuf, String> {
+    let absolute = |key: &str| {
+        env(key)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let dir = absolute(EXPORT_DIR_ENV)
+        .or_else(|| absolute("XDG_DOCUMENTS_DIR"))
+        .or_else(|| absolute("HOME").map(|home| home.join("Documents")))
+        .ok_or_else(|| "export \u{b7} no documents directory (HOME is unset)".to_owned())?;
+    Ok(dir.join(EXPORT_FILE))
+}
+
+/// The export path as shown: `$HOME` abbreviated to `~`.
+pub fn display_path(path: &Path, home: Option<&str>) -> String {
+    if let Some(home) = home.filter(|h| !h.is_empty() && *h != "/")
+        && let Ok(rest) = path.strip_prefix(home)
+    {
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
+}
+
+/// The detail page's name-parts line: only the parts present, and nothing
+/// when they merely repeat the display name.
+pub fn name_parts_line(contact: &Contact) -> Option<String> {
+    let given = contact
+        .given
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let family = contact
+        .family
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let joined = [given, family]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if joined.is_empty() || joined == contact.display_name.trim() {
+        return None;
+    }
+    let parts: Vec<String> = [("given", given), ("family", family)]
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|v| format!("{key} {v}")))
+        .collect();
+    Some(parts.join(" \u{b7} "))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -126,6 +190,10 @@ pub struct Model {
     pub query: String,
     pub selected: Option<ContactId>,
     pub form: Form,
+    /// The form as opened, so validation waits for an edit.
+    pristine: Form,
+    /// Latched once the form differed from `pristine`.
+    form_edited: bool,
     pub focus: Option<Focus>,
     pub osk: OskState,
     pub pending: Vec<Action>,
@@ -152,6 +220,8 @@ impl Model {
             query: String::new(),
             selected: None,
             form: Form::default(),
+            pristine: Form::default(),
+            form_edited: false,
             focus: None,
             osk: OskState::default(),
             pending: Vec::new(),
@@ -259,6 +329,25 @@ impl Model {
         self.form.input().validate().map_err(|e| e.to_string())
     }
 
+    /// The hint under the form: unavailability always, validation only
+    /// once the form was edited (a failed Save reports through
+    /// `last_error`), never on a form nobody has typed into.
+    pub fn form_hint(&self) -> Option<String> {
+        if !self.writable() {
+            return Some("contacts \u{b7} unavailable".to_owned());
+        }
+        if !self.form_edited && self.form == self.pristine {
+            return None;
+        }
+        self.can_save().err()
+    }
+
+    /// Called after every input: remembers that the form was edited, so
+    /// emptying a field again still shows why Save is disabled.
+    pub fn note_form_edit(&mut self) {
+        self.form_edited |= self.form != self.pristine;
+    }
+
     // -- intents -------------------------------------------------------------
 
     pub fn open(&mut self, id: &ContactId) {
@@ -274,6 +363,8 @@ impl Model {
             name: String::new(),
             numbers: vec![(NumberLabel::Mobile, String::new())],
         };
+        self.pristine = self.form.clone();
+        self.form_edited = false;
         self.page = Page::Edit;
         self.focus = Some(Focus::Name);
         self.last_error = None;
@@ -285,6 +376,8 @@ impl Model {
             if self.form.numbers.is_empty() {
                 self.form.numbers.push((NumberLabel::Mobile, String::new()));
             }
+            self.pristine = self.form.clone();
+            self.form_edited = false;
             self.page = Page::Edit;
             self.focus = Some(Focus::Name);
             self.last_error = None;
@@ -502,5 +595,102 @@ mod tests {
         m.back();
         assert_eq!(m.pending, vec![Action::Back]);
         assert_eq!(Page::parse("confirm-delete"), Some(Page::ConfirmDelete));
+    }
+
+    #[test]
+    fn new_form_validates_only_after_an_edit() {
+        let mut m = connected();
+        m.new_contact();
+        assert_eq!(m.form_hint(), None, "nothing typed yet");
+        assert!(m.can_save().is_err(), "Save stays disabled");
+        m.form.name.push('T');
+        m.note_form_edit();
+        assert_eq!(m.form_hint(), None, "a valid edit has no hint");
+        m.form.name.clear();
+        m.note_form_edit();
+        assert!(m.form_hint().is_some(), "an edit that empties the name");
+        m.new_contact();
+        assert_eq!(m.form_hint(), None, "a fresh form is pristine again");
+        let id = m.contacts[0].id.clone();
+        m.open(&id);
+        m.edit_selected();
+        assert_eq!(m.form_hint(), None);
+        m.apply(ProtoLink::Lost {
+            reason: "gone".into(),
+        });
+        assert_eq!(
+            m.form_hint().as_deref(),
+            Some("contacts \u{b7} unavailable")
+        );
+    }
+
+    #[test]
+    fn export_goes_to_a_durable_documents_directory() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| (*v).to_owned())
+            }
+        };
+        assert_eq!(
+            export_path(env(&[("HOME", "/home/user")])),
+            Ok(PathBuf::from("/home/user/Documents/contacts.vcf"))
+        );
+        assert_eq!(
+            export_path(env(&[
+                ("HOME", "/home/user"),
+                ("XDG_DOCUMENTS_DIR", "/home/user/Docs")
+            ])),
+            Ok(PathBuf::from("/home/user/Docs/contacts.vcf"))
+        );
+        assert_eq!(
+            export_path(env(&[
+                ("HOME", "/home/user"),
+                (EXPORT_DIR_ENV, "/srv/exports")
+            ])),
+            Ok(PathBuf::from("/srv/exports/contacts.vcf"))
+        );
+        assert_eq!(
+            export_path(env(&[
+                ("HOME", "/home/user"),
+                ("XDG_DOCUMENTS_DIR", "docs")
+            ])),
+            Ok(PathBuf::from("/home/user/Documents/contacts.vcf")),
+            "relative values are ignored"
+        );
+        let none = export_path(env(&[]));
+        assert!(none.is_err(), "never falls back to the private /tmp");
+        assert_eq!(
+            export_path(env(&[("HOME", "/root")])),
+            Ok(PathBuf::from("/root/Documents/contacts.vcf"))
+        );
+        assert_eq!(
+            display_path(
+                Path::new("/home/user/Documents/contacts.vcf"),
+                Some("/home/user")
+            ),
+            "~/Documents/contacts.vcf"
+        );
+        assert_eq!(
+            display_path(Path::new("/srv/exports/contacts.vcf"), Some("/home/user")),
+            "/srv/exports/contacts.vcf"
+        );
+    }
+
+    #[test]
+    fn name_parts_hide_empty_and_redundant_values() {
+        let mut c = preview_contacts().remove(0);
+        assert_eq!(name_parts_line(&c), None, "repeats the display name");
+        c.display_name = "Testy".to_owned();
+        assert_eq!(
+            name_parts_line(&c).as_deref(),
+            Some("given Test \u{b7} family Contact 01")
+        );
+        c.family = None;
+        assert_eq!(name_parts_line(&c).as_deref(), Some("given Test"));
+        c.given = Some("  ".to_owned());
+        assert_eq!(name_parts_line(&c), None);
     }
 }

@@ -24,6 +24,11 @@ pub enum Target {
     PassReveal,
     PassConnect,
     PassCancel,
+    /// Retry after an authentication failure.
+    Retry,
+    /// Forget confirmation: confirm or keep the saved profile.
+    ForgetConfirm,
+    ForgetCancel,
     Key(Key),
     Airplane,
     Wifi,
@@ -120,6 +125,34 @@ impl Layout {
             w: self.w() - s(96),
             h: s(90),
         }
+    }
+
+    /// The failure notice, narrowed when a Retry button sits beside it.
+    pub fn notice_rect(&self, retry: bool) -> Rect {
+        let mut r = self.error_rect();
+        if retry {
+            r.w -= self.retry_rect().w + self.s(16);
+        }
+        r
+    }
+
+    pub fn retry_rect(&self) -> Rect {
+        let e = self.error_rect();
+        let w = self.s(220);
+        Rect {
+            x: e.x + e.w - w,
+            y: e.y,
+            w,
+            h: e.h,
+        }
+    }
+
+    pub fn forget_confirm_rect(&self) -> Rect {
+        self.pass_connect_rect()
+    }
+
+    pub fn forget_cancel_rect(&self) -> Rect {
+        self.pass_cancel_rect()
     }
 
     pub fn ap_rects(&self, count: usize) -> Vec<Rect> {
@@ -244,6 +277,12 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
             if contains(l.scan_rect(), position) {
                 return Some(Target::Scan);
             }
+            if model.forget_confirm.is_some() {
+                if contains(l.forget_confirm_rect(), position) {
+                    return Some(Target::ForgetConfirm);
+                }
+                return contains(l.forget_cancel_rect(), position).then_some(Target::ForgetCancel);
+            }
             if model.passphrase_for.is_some() {
                 if contains(l.pass_field_rect(), position) {
                     return Some(Target::PassField);
@@ -255,6 +294,9 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
                     return Some(Target::PassConnect);
                 }
                 return contains(l.pass_cancel_rect(), position).then_some(Target::PassCancel);
+            }
+            if model.retry_target().is_some() && contains(l.retry_rect(), position) {
+                return Some(Target::Retry);
             }
             if let Some(i) = l
                 .ap_rects(model.access_points().len())
@@ -311,6 +353,9 @@ pub fn activate(model: &mut Model, target: Target) {
             }
         }
         Target::PassCancel => model.cancel_passphrase(),
+        Target::Retry => model.retry_connect(),
+        Target::ForgetConfirm => model.confirm_forget(),
+        Target::ForgetCancel => model.cancel_forget(),
         Target::Key(key) => key_press(model, key),
         Target::Airplane => model.toggle_airplane(),
         Target::Cellular => model.toggle_cellular(),
@@ -489,6 +534,17 @@ mod tests {
         tap(&mut input, &mut m, center(l.pass_cancel_rect()));
         assert_eq!(m.passphrase_for, None);
         tap(&mut input, &mut m, center(l.profile_rects(1)[0]));
+        assert!(m.pending.is_empty(), "a single tap never forgets");
+        assert_eq!(
+            hit_test(&m, center(l.profile_rects(1)[0]), SIZE),
+            None,
+            "list hidden behind the confirmation"
+        );
+        tap(&mut input, &mut m, center(l.forget_cancel_rect()));
+        assert_eq!(m.forget_confirm, None);
+        assert!(m.pending.is_empty());
+        tap(&mut input, &mut m, center(l.profile_rects(1)[0]));
+        tap(&mut input, &mut m, center(l.forget_confirm_rect()));
         assert!(matches!(m.pending.pop(), Some(Action::Forget(_))));
         // Tabs switch pages; Back from Radios returns to Network, then yields.
         tap(&mut input, &mut m, center(l.tab_rects()[1].0));
@@ -508,5 +564,33 @@ mod tests {
         tap(&mut input, &mut m, (80.0, 160.0));
         assert_eq!(m.pending, vec![Action::Back]);
         assert_eq!(hit_test(&m, (540.0, 2290.0), SIZE), Some(Target::Home));
+    }
+
+    #[test]
+    fn retry_appears_only_after_an_authentication_failure() {
+        use ferrix_network_api::{ConnectionState, NetworkError, NetworkEvent};
+        let mut m = ready();
+        let mut input = Input::default();
+        let l = Layout::new(SIZE);
+        assert_eq!(hit_test(&m, center(l.retry_rect()), SIZE), None);
+        tap(&mut input, &mut m, center(l.ap_rects(3)[0]));
+        m.pending.clear();
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Failed {
+                error: NetworkError::AuthenticationFailed,
+            },
+        }));
+        assert_eq!(
+            hit_test(&m, center(l.retry_rect()), SIZE),
+            Some(Target::Retry)
+        );
+        tap(&mut input, &mut m, center(l.retry_rect()));
+        assert_eq!(m.passphrase_for, Some(ApId::new("ap-0")));
+        assert!(keyboard_visible(&m));
+        let notice = l.notice_rect(true);
+        assert!(
+            notice.x + notice.w < l.retry_rect().x,
+            "notice clears Retry"
+        );
     }
 }
