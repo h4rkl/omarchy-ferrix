@@ -1,0 +1,103 @@
+diff --git a/hwcomposer/gralloc_handler.cpp b/hwcomposer/gralloc_handler.cpp
+index 4fd087b..a370ec1 100644
+--- a/hwcomposer/gralloc_handler.cpp
++++ b/hwcomposer/gralloc_handler.cpp
+@@ -40,6 +40,7 @@
+ #include <log/log.h>
+ #include <ui/Rect.h>
+ #include <ui/GraphicBufferMapper.h>
++#include <ui/GraphicTypes.h>
+ #include <gralloc_handle.h>
+ #include <cros_gralloc/cros_gralloc_handle.h>
+ 
+@@ -314,6 +315,44 @@ std::unique_ptr<buffer> create_buffer_cros(wl_conn *conn, const buffer_metadata&
+ std::unique_ptr<buffer> create_buffer_android(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
+     return create_android_wl_buffer(conn, metadata, handle);
+ }
++/* Ferrix: vendor grallocs (e.g. the Pixel 9a's gchips mapper.pixel) without
++ * android_wlegl. A linear buffer's dma-buf goes to the compositor as-is
++ * (zwp_linux_dmabuf_v1, which software compositors can map); anything else
++ * (AFBC/AFRC, multi-plane) is copied into SHM by CPU lock each frame
++ * (update_shm_buffer_android). Plane geometry and the modifier come from the
++ * mapper's standard metadata, never from the private handle layout. */
++std::unique_ptr<buffer> create_buffer_android_dmabuf(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
++    if (conn->dmabuf && handle && handle->numFds >= 1) {
++        auto &mapper = android::GraphicBufferMapper::get();
++        buffer_handle_t imported = nullptr;
++        if (mapper.importBufferNoValidate(handle, &imported) == android::OK && imported) {
++            uint64_t modifier = DRM_FORMAT_MOD_INVALID;
++            uint32_t fourcc = 0;
++            std::vector<android::ui::PlaneLayout> planes;
++            bool ok = mapper.getPixelFormatModifier(imported, &modifier) == android::OK &&
++                      mapper.getPixelFormatFourCC(imported, &fourcc) == android::OK &&
++                      mapper.getPlaneLayouts(imported, &planes) == android::OK &&
++                      planes.size() == 1 && modifier == DRM_FORMAT_MOD_LINEAR &&
++                      isFormatSupported(conn, fourcc);
++            if (ok) {
++                const auto &plane = planes[0];
++                auto buf = create_dmabuf_wl_buffer(conn, metadata, handle->data[0], fourcc,
++                                                   static_cast<int>(plane.strideInBytes),
++                                                   static_cast<int>(plane.offsetInBytes), modifier, handle);
++                mapper.freeBuffer(imported);
++                ALOGI("android buffer %ux%u fourcc=%.4s stride=%lld exported as linear dma-buf",
++                      metadata.width, metadata.height, (const char *)&fourcc, (long long)plane.strideInBytes);
++                return buf;
++            }
++            ALOGI("android buffer %ux%u modifier=0x%llx planes=%zu fourcc=0x%x: not a linear single-plane "
++                  "dma-buf the compositor takes; using CPU-copied SHM",
++                  metadata.width, metadata.height, (unsigned long long)modifier, planes.size(), fourcc);
++            mapper.freeBuffer(imported);
++        }
++    }
++    return create_shm_wl_buffer(conn, metadata, handle);
++}
++
+ // SHM cannot present gralloc-android buffers, so fail loudly instead of
+ // falling back to it and rendering garbage.
+ std::unique_ptr<buffer> create_buffer_missing_android_wlegl(wl_conn *conn __unused, const buffer_metadata& metadata, buffer_handle_t handle) {
+@@ -398,6 +437,11 @@ bool cpu_render_to_pixels(buffer *buffer) {
+ }
+ 
+ namespace {
++/* The EGL readback aborts in mapper.pixel (see cpu_render_to_pixels). */
++void update_shm_buffer_android(display *, buffer *buffer) {
++    if (!cpu_render_to_pixels(buffer))
++        ALOGW("update_shm_buffer_android: CPU copy failed for %p", buffer->handle);
++}
+ void update_shm_buffer_generic(display *display, buffer *buffer) {
+     display->egl_work_queue.emplace_back(std::bind(egl_render_to_pixels, display, buffer));
+     sem_post(&display->egl_go);
+@@ -449,6 +493,10 @@ gralloc_handler::create_buffer_func gralloc_handler::select_create_buffer_impl(w
+     } else if (gralloc_type == GrallocType::GRALLOC_ANDROID) {
+         if (conn->android_wlegl)
+             return create_buffer_android;
++        if (conn->dmabuf || conn->shm) {
++            ALOGI("GRALLOC_ANDROID without android_wlegl: linear dma-buf export, CPU-copied SHM otherwise");
++            return create_buffer_android_dmabuf;
++        }
+         ALOGE("GRALLOC_ANDROID requested, but android_wlegl is unavailable on the Wayland compositor");
+         return create_buffer_missing_android_wlegl;
+     } else {
+@@ -459,6 +507,8 @@ gralloc_handler::create_buffer_func gralloc_handler::select_create_buffer_impl(w
+ gralloc_handler::update_shm_buffer_func gralloc_handler::select_update_shm_buffer_impl(GrallocType gralloc_type) {
+     if (gralloc_type == GrallocType::GRALLOC_DEFAULT) {
+         return update_shm_buffer_default;
++    } else if (gralloc_type == GrallocType::GRALLOC_ANDROID) {
++        return update_shm_buffer_android;
+     } else {
+         return update_shm_buffer_generic;
+     }
+diff --git a/hwcomposer/wayland-hwc.cpp b/hwcomposer/wayland-hwc.cpp
+index f055988..7f3d0b7 100644
+--- a/hwcomposer/wayland-hwc.cpp
++++ b/hwcomposer/wayland-hwc.cpp
+@@ -3369,7 +3369,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
+                (strcmp(interface, "android_wlegl") == 0)) {
+         conn->android_wlegl = (struct android_wlegl*)wl_registry_bind(registry, id,
+                 &android_wlegl_interface, 1);
+-    } else if ((conn->dpy->gtype == GrallocType::GRALLOC_GBM || conn->dpy->gtype == GrallocType::GRALLOC_CROS) &&
++    } else if ((conn->dpy->gtype == GrallocType::GRALLOC_GBM || conn->dpy->gtype == GrallocType::GRALLOC_CROS ||
++                conn->dpy->gtype == GrallocType::GRALLOC_ANDROID) &&
+                (strcmp(interface, "zwp_linux_dmabuf_v1") == 0)) {
+         if (version < 3)
+             return;
