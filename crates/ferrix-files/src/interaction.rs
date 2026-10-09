@@ -3,7 +3,10 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_ui::draw::Rect;
+use std::time::Instant;
+
 use ferrix_ui::gesture::{self, Gesture, Tracker};
+use ferrix_ui::keyboard::KeyRepeat;
 use ferrix_ui::osk::{self, Key};
 use ferrix_ui::widgets::{Edit, back_rect, basis, contains, edit_text, list_rects, scale};
 
@@ -556,6 +559,8 @@ enum Drag {
 #[derive(Default)]
 pub struct Input {
     tracker: Tracker<Target>,
+    /// Repeat timer for a held on-screen key.
+    repeat: KeyRepeat,
     drag: Option<Drag>,
     pub pressed: Option<Target>,
 }
@@ -565,6 +570,9 @@ impl Input {
         let target = hit_test(model, position, size);
         match self.tracker.down(id, position, target) {
             Some(pressed) => {
+                if let Some(Target::Key(key)) = pressed {
+                    self.repeat.arm(key, Instant::now());
+                }
                 self.drag = match target {
                     Some(Target::Row(_) | Target::RowMore(_) | Target::ListArea) => {
                         Some(Drag::List)
@@ -591,6 +599,9 @@ impl Input {
         let at = hit_test(model, position, size);
         let mut redraw = match self.tracker.motion(id, position, size, at, self.pressed) {
             Some(pressed) => {
+                if pressed.is_none() {
+                    self.repeat.cancel();
+                }
                 self.pressed =
                     pressed.filter(|t| !matches!(t, Target::ListArea | Target::ViewArea));
                 true
@@ -632,7 +643,10 @@ impl Input {
         };
         self.pressed = None;
         self.drag = None;
+        let repeated = self.repeat.release();
         match gesture {
+            // A key that already repeated does not fire again on release.
+            Gesture::Tap(Target::Key(_)) if repeated => {}
             Gesture::Tap(target) => activate(model, target),
             Gesture::BackSwipe => model.back(),
             Gesture::PullDown | Gesture::Release => {}
@@ -642,8 +656,25 @@ impl Input {
 
     pub fn cancel(&mut self) -> bool {
         self.drag = None;
+        self.repeat.cancel();
         let had = self.tracker.cancel();
         had || self.pressed.take().is_some()
+    }
+
+    /// When a held key next repeats.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.repeat.deadline()
+    }
+
+    /// Delivers due key repeats to the focused field.
+    pub fn timer(&mut self, model: &mut Model, now: Instant) -> bool {
+        let Some((key, count)) = self.repeat.poll(now) else {
+            return false;
+        };
+        for _ in 0..count {
+            key_press(model, key);
+        }
+        true
     }
 }
 

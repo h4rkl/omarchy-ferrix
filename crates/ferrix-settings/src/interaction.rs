@@ -3,7 +3,10 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_ui::draw::Rect;
+use std::time::Instant;
+
 use ferrix_ui::gesture::{self, Gesture, Tracker};
+use ferrix_ui::keyboard::KeyRepeat;
 use ferrix_ui::osk::{self, Key};
 use ferrix_ui::widgets::{
     Edit, back_rect, basis, contains, edit_text, list_rects, scale, slider_value,
@@ -63,6 +66,10 @@ pub enum Target {
     /// The brightness rail (dragged, committed on release).
     Brightness,
     AutoRotate,
+    /// A layout row on the Keyboard page, by index.
+    KbdLayout(usize),
+    /// The Keyboard page's scratch field.
+    KbdTry,
 }
 
 pub struct Layout {
@@ -374,7 +381,9 @@ impl Layout {
 }
 
 pub fn keyboard_visible(model: &Model) -> bool {
-    (model.page == Page::Network && model.passphrase_for.is_some()) || model.pin_entry()
+    (model.page == Page::Network && model.passphrase_for.is_some())
+        || model.pin_entry()
+        || (model.page == Page::Keyboard && model.kbd_try_focused)
 }
 
 pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option<Target> {
@@ -406,6 +415,7 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
             }
             contains(l.auto_rotate_rect(), position).then_some(Target::AutoRotate)
         }
+        Page::Keyboard => crate::keyboard::hit(&l, position),
         Page::Network => {
             if contains(l.radio_rect(), position) {
                 return Some(Target::Radio);
@@ -587,6 +597,8 @@ pub fn activate(model: &mut Model, target: Target) {
         // The rail acts on drag and release (see `Input`), a tap included.
         Target::Brightness => model.commit_brightness(),
         Target::AutoRotate => model.toggle_auto_rotate(),
+        Target::KbdLayout(i) => model.select_keyboard_layout(i),
+        Target::KbdTry => model.focus_keyboard_try(),
     }
 }
 
@@ -595,7 +607,7 @@ pub fn key_press(model: &mut Model, key: Key) {
         model.pin_key(key);
         return;
     }
-    if model.passphrase_for.is_none() {
+    if model.keyboard_key(key) || model.passphrase_for.is_none() {
         return;
     }
     let mut osk = model.osk;
@@ -616,6 +628,8 @@ pub fn key_press(model: &mut Model, key: Key) {
 #[derive(Default)]
 pub struct Input {
     tracker: Tracker<Target>,
+    /// Repeat timer for a held on-screen key.
+    repeat: KeyRepeat,
     pub pressed: Option<Target>,
 }
 
@@ -630,6 +644,9 @@ impl Input {
         let target = hit_test(model, position, size);
         match self.tracker.down(id, position, target) {
             Some(pressed) => {
+                if let Some(Target::Key(key)) = pressed {
+                    self.repeat.arm(key, Instant::now());
+                }
                 self.pressed = pressed;
                 if pressed == Some(Target::Brightness) {
                     let rail = Layout::new(size).brightness_rect();
@@ -659,6 +676,9 @@ impl Input {
         let at = hit_test(model, position, size);
         match self.tracker.motion(id, position, size, at, self.pressed) {
             Some(pressed) => {
+                if pressed.is_none() {
+                    self.repeat.cancel();
+                }
                 self.pressed = pressed;
                 true
             }
@@ -690,7 +710,10 @@ impl Input {
             return false;
         };
         self.pressed = None;
+        let repeated = self.repeat.release();
         match gesture {
+            // A key that already repeated does not fire again on release.
+            Gesture::Tap(Target::Key(_)) if repeated => {}
             Gesture::Tap(target) => activate(model, target),
             Gesture::BackSwipe => model.back(),
             Gesture::PullDown | Gesture::Release => {}
@@ -699,8 +722,25 @@ impl Input {
     }
 
     pub fn cancel(&mut self) -> bool {
+        self.repeat.cancel();
         let had = self.tracker.cancel();
         had || self.pressed.take().is_some()
+    }
+
+    /// When a held key next repeats.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.repeat.deadline()
+    }
+
+    /// Delivers due key repeats to the focused field.
+    pub fn timer(&mut self, model: &mut Model, now: Instant) -> bool {
+        let Some((key, count)) = self.repeat.poll(now) else {
+            return false;
+        };
+        for _ in 0..count {
+            key_press(model, key);
+        }
+        true
     }
 }
 

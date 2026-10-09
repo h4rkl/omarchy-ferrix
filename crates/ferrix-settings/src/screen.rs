@@ -50,6 +50,7 @@ pub fn compose(
         Page::Bluetooth => bluetooth(&mut c, ty, &l, model, input),
         Page::Mobile => mobile(&mut c, ty, &l, model, input),
         Page::Display => display(&mut c, ty, &l, model, input),
+        Page::Keyboard => crate::keyboard::draw(&mut c, ty, &l, model, input.pressed),
         Page::Radios => radios(&mut c, ty, &l, model, input),
         Page::About => about(&mut c, ty, &l, model),
     }

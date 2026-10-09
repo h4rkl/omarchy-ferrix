@@ -380,6 +380,18 @@ impl ClientHandler for Contacts {
         self.clock.refresh() || changed
     }
 
+    fn deadline(&self) -> Option<std::time::Instant> {
+        self.input.deadline()
+    }
+
+    fn timer(&mut self, now: std::time::Instant) -> bool {
+        let redraw = self.input.timer(&mut self.model, now);
+        if redraw {
+            self.after_input();
+        }
+        redraw
+    }
+
     fn page_name(&self) -> String {
         self.model.page.name().to_owned()
     }

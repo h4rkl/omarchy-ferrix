@@ -7,7 +7,7 @@
 //!   ferrix-settings --preview out.ppm [--page NAME] [--size WxH]
 //!
 //! Pages: `root` (default, the category list), `network`, `bluetooth`,
-//! `mobile`, `display`, `radios`, `about`; previews also accept
+//! `mobile`, `display`, `keyboard`, `radios`, `about`; previews also accept
 //! `bluetooth-absent` and `mobile-no-sim` for the honest absent states, and
 //! `bluetooth-pair`, `bluetooth-confirm`, `bluetooth-paired`,
 //! `bluetooth-failed`, `bluetooth-device`, `bluetooth-forget` for the
@@ -23,6 +23,7 @@
 
 mod bluetooth;
 mod interaction;
+mod keyboard;
 mod model;
 mod screen;
 mod system;
@@ -78,7 +79,7 @@ fn target_from_env() -> String {
 /// the Bluetooth pairing flows.
 const PREVIEW_PAGES: &str = "root, network, bluetooth, bluetooth-absent, bluetooth-pair, \
      bluetooth-confirm, bluetooth-paired, bluetooth-failed, bluetooth-device, bluetooth-forget, \
-     mobile, mobile-no-sim, display, radios, about";
+     mobile, mobile-no-sim, display, keyboard, radios, about";
 
 fn preview_model(name: &str, target: &str) -> Option<Model> {
     use ferrix_hardware_api::{PairingFailure, PairingPhase};

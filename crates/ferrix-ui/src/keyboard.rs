@@ -303,6 +303,19 @@ pub fn active_letters() -> &'static LetterLayout {
     id.ok().and_then(|id| layout(&id)).unwrap_or_else(us)
 }
 
+/// [`refresh`] now, without waiting out the check interval: the process
+/// that just wrote the file (Settings) applies it on its next frame.
+pub fn reload() -> bool {
+    if let Ok(mut active) = active_lock().write() {
+        active.checked = active
+            .checked
+            .and_then(|_| Instant::now().checked_sub(REFRESH_INTERVAL));
+        // A same-second rewrite can keep the mtime; force a re-read.
+        active.stamp = None;
+    }
+    refresh()
+}
+
 /// Re-reads `keyboard.toml` when its modification time changed, at most
 /// every [`REFRESH_INTERVAL`]. Returns whether the active configuration
 /// changed; a change emits a `keyboard-config` record.

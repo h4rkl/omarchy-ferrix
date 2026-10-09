@@ -24,27 +24,30 @@ pub enum Page {
     Bluetooth,
     Mobile,
     Display,
+    Keyboard,
     Radios,
     About,
 }
 
 impl Page {
-    pub const ALL: [Page; 7] = [
+    pub const ALL: [Page; 8] = [
         Page::Root,
         Page::Network,
         Page::Bluetooth,
         Page::Mobile,
         Page::Display,
+        Page::Keyboard,
         Page::Radios,
         Page::About,
     ];
 
     /// The categories listed on the root page, in order.
-    pub const SECTIONS: [Page; 6] = [
+    pub const SECTIONS: [Page; 7] = [
         Page::Network,
         Page::Bluetooth,
         Page::Mobile,
         Page::Display,
+        Page::Keyboard,
         Page::Radios,
         Page::About,
     ];
@@ -56,6 +59,7 @@ impl Page {
             Page::Bluetooth => "bluetooth",
             Page::Mobile => "mobile",
             Page::Display => "display",
+            Page::Keyboard => "keyboard",
             Page::Radios => "radios",
             Page::About => "about",
         }
@@ -68,6 +72,7 @@ impl Page {
             Page::Bluetooth => "Bluetooth",
             Page::Mobile => "Mobile network",
             Page::Display => "Display",
+            Page::Keyboard => "Keyboard",
             Page::Radios => "Airplane mode",
             Page::About => "About",
         }
@@ -121,6 +126,8 @@ pub enum Action {
     SetBrightness(u8),
     /// Auto-rotate off (`true`, pinned portrait) or on.
     SetRotationLock(bool),
+    /// Persist the on-screen keyboard layout (a `ferrix_ui::keyboard` id).
+    SetKeyboardLayout(String),
     Back,
 }
 
@@ -174,6 +181,11 @@ pub struct Model {
     pub bt_now: Option<std::time::Instant>,
     /// Brightness preview while the rail is dragged.
     pub brightness_drag: Option<u8>,
+    /// The on-screen keyboard layout id shown as active (Keyboard page).
+    pub kbd_layout: String,
+    /// The Keyboard page's scratch field and whether it has focus.
+    pub kbd_try: String,
+    pub kbd_try_focused: bool,
     pub(crate) core_lost_once: bool,
     net_lost_once: bool,
     tele_lost_once: bool,
@@ -240,6 +252,9 @@ impl Model {
             bt_session_at: None,
             bt_now: None,
             brightness_drag: None,
+            kbd_layout: ferrix_ui::keyboard::DEFAULT_LAYOUT.to_owned(),
+            kbd_try: String::new(),
+            kbd_try_focused: false,
             core_lost_once: false,
             net_lost_once: false,
             tele_lost_once: false,
@@ -263,6 +278,7 @@ impl Model {
                 .unwrap_or_else(|| self.bluetooth_state_name()),
             Page::Mobile => self.mobile_state_name(),
             Page::Display => self.display_state_name(),
+            Page::Keyboard => self.keyboard_state_name(),
             Page::Network if self.forget_confirm.is_some() => "confirm-forget".to_owned(),
             Page::Network if self.auth_failed() && self.passphrase_for.is_none() => {
                 "auth-failed".to_owned()
@@ -657,6 +673,7 @@ impl Model {
         self.last_error = None;
         self.forget_confirm = None;
         self.brightness_drag = None;
+        self.kbd_try_focused = false;
         self.request_devices_if_shown();
     }
 
@@ -672,6 +689,7 @@ impl Model {
             Page::Bluetooth => self.bluetooth_summary(),
             Page::Mobile => self.mobile_summary(),
             Page::Display => self.display_summary(),
+            Page::Keyboard => self.keyboard_summary(),
             Page::Radios => format!(
                 "airplane mode {}",
                 if self.airplane() { "on" } else { "off" }
@@ -847,6 +865,8 @@ impl Model {
             self.cancel_passphrase();
         } else if self.page == Page::Bluetooth && self.bluetooth_back() {
             // Handled inside the Bluetooth flows (prompt, Pair, Device).
+        } else if self.keyboard_back() {
+            // Closed the Keyboard page's scratch field.
         } else if self.page != Page::Root {
             self.show(Page::Root);
         } else {

@@ -198,8 +198,11 @@ fn assert_no_target_conditionals(crate_name: &str) {
 }
 
 /// Modules allowed to parse a TOML schema other than the target profile, as
-/// `(crate, source file)`. `ferrix-ui`'s theme loader reads `colors.toml`.
-const OTHER_TOML_SCHEMA_PARSERS: &[(&str, &str)] = &[("ferrix-ui", "theme.rs")];
+/// `(crate, source file)`. `ferrix-ui`'s theme loader reads `colors.toml`;
+/// its keyboard module reads the user's `keyboard.toml` and the embedded
+/// letter-layout files (user preferences and UI data, never target facts).
+const OTHER_TOML_SCHEMA_PARSERS: &[(&str, &str)] =
+    &[("ferrix-ui", "theme.rs"), ("ferrix-ui", "keyboard.rs")];
 
 #[test]
 fn target_profile_is_the_only_toml_schema_parser() {

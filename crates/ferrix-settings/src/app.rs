@@ -331,6 +331,7 @@ impl Settings {
                 "set-rotation-lock",
                 HardwareCommand::SetRotationLock { locked },
             ),
+            Action::SetKeyboardLayout(id) => self.save_keyboard_layout(&id),
             Action::Back => self.yield_foreground(),
             Action::SetRadio(enabled) => self.network_action("set-radio", |c| c.set_radio(enabled)),
             Action::Scan => self.network_action("scan", |c| c.scan()),
@@ -356,6 +357,39 @@ impl Settings {
                 self.telephony_action(name, request);
             }
         }
+    }
+
+    /// Writes the chosen layout into `keyboard.toml`, keeping the repeat
+    /// timings already there, and applies it to this process at once.
+    fn save_keyboard_layout(&mut self, id: &str) {
+        let result = match ferrix_ui::keyboard::config_path() {
+            None => Err("no config directory (HOME is unset)".to_owned()),
+            Some(path) => {
+                let (mut config, _) = ferrix_ui::keyboard::read_config(&path);
+                config.layout = id.to_owned();
+                ferrix_ui::keyboard::write_config(&path, &config)
+            }
+        };
+        let status = match &result {
+            Ok(()) => {
+                ferrix_ui::keyboard::reload();
+                "saved"
+            }
+            Err(_) => {
+                self.model.last_error =
+                    Some("keyboard \u{b7} could not save the layout".to_owned());
+                self.model.kbd_layout = ferrix_ui::keyboard::active().layout;
+                "failed"
+            }
+        };
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"keyboard-layout-set\",\"app\":\"{APP_ID}\",\"layout\":\"{}\",\"status\":\"{status}\"{}}}",
+            json_escape(id),
+            result
+                .err()
+                .map(|e| format!(",\"error\":\"{}\"", json_escape(&e)))
+                .unwrap_or_default()
+        ));
     }
 
     fn after_input(&mut self) {
@@ -448,6 +482,8 @@ impl Settings {
 
 impl ClientHandler for Settings {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
+        // The runner refreshed `keyboard.toml` before this frame.
+        self.model.kbd_layout = ferrix_ui::keyboard::active().layout;
         screen::compose(
             &self.ty,
             size,
@@ -540,6 +576,18 @@ impl ClientHandler for Settings {
         self.countdown
             .store(self.model.countdown_running(), Ordering::Relaxed);
         self.clock.refresh() || changed || ticked
+    }
+
+    fn deadline(&self) -> Option<std::time::Instant> {
+        self.input.deadline()
+    }
+
+    fn timer(&mut self, now: std::time::Instant) -> bool {
+        let redraw = self.input.timer(&mut self.model, now);
+        if redraw {
+            self.after_input();
+        }
+        redraw
     }
 
     fn page_name(&self) -> String {
