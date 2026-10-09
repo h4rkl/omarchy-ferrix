@@ -11,7 +11,8 @@ manifest:
   dtbo.img                Kleaf tegu overlays (includes MP), unchanged
   init_boot.img           Ferrix /init (initramfs-init-kleaf) + busybox/musl
   vendor_boot.img         Ferrix vendor cmdline + bootconfig, no DTB
-  vbmeta.img              unsigned AVB metadata (bootloader is unlocked)
+  vbmeta.img              unsigned AVB metadata with verification disabled
+                          (flag 2; the bootloader is unlocked)
   userdata.img            base rootfs + Kleaf vendor_dlkm/system_dlkm modules, as
                           an Android sparse image (fastboot cannot stream the raw
                           2 GiB ext4 image past max-download-size)
@@ -332,8 +333,12 @@ def main():
             "--vendor_cmdline", cmdline, "--vendor_ramdisk", empty,
             "--vendor_bootconfig", bootconfig, "--vendor_boot", stage / "vendor_boot.img")
 
-        run(avbtool, "make_vbmeta_image", "--algorithm", "NONE",
-            "--output", stage / "vbmeta.img")
+        # Without descriptors libavb loads the requested boot partitions only
+        # when the top-level vbmeta carries VERIFICATION_DISABLED (flag 2), the
+        # standard unlocked-device GSI recipe. A flag-0 descriptor-less vbmeta
+        # leaves the bootloader with no boot images and the slot never starts.
+        run(avbtool, "make_vbmeta_image", "--algorithm", "NONE", "--flags", "2",
+            "--padding_size", "4096", "--output", stage / "vbmeta.img")
 
         modules, release = stage_modules(args.kernel_dist, verified, work)
         rootfs = work / "rootfs.img"
@@ -354,7 +359,7 @@ def main():
             "kernel_backend\tgoogle-kleaf-cpif",
             f"kernel_release\t{release}",
             "status\tcomposed-not-booted",
-            "avb_mode\tNONE",
+            "avb_mode\tNONE-verification-disabled",
             f"input\tkernel_manifest\t{args.kernel_manifest}\t{sha256(args.kernel_manifest)}",
             f"input\tbase_rootfs\t{args.base_rootfs}\t{sha256(args.base_rootfs)}",
             f"input\tinitramfs_init\t{init_script}\t{sha256(init_script)}",

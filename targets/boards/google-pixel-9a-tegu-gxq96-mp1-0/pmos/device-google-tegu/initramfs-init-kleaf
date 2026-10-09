@@ -110,14 +110,15 @@ start_usb_debug() {
 checkpoint() {
 	[ -n "$checkpoint_target" ] && [ "$1" = "$checkpoint_target" ] || return 0
 	# ferrix.checkpoint_action=delay is a driver-free timing signal: each slot
-	# attempt lasts ~30s longer when /init reaches STAGE. Fastboot reboots need
-	# pixel-reboot (a first-stage module), so they only work after "modules".
+	# attempt lasts ~30s longer when /init reaches STAGE. A Fastboot reboot needs
+	# the pixel-reboot module to record the reboot mode, so load it first.
 	if [ "$checkpoint_action" = delay ]; then
 		log "checkpoint $1 reached; delaying 30s, then rebooting"
 		$bb sleep 30
 		$bb reboot -f
 	fi
 	log "checkpoint $1 reached; rebooting to bootloader Fastboot"
+	/system/bin/modprobe -q -- pixel-reboot || log 'pixel-reboot did not load'
 	$bb sleep 1
 	/bin/reboot-bootloader
 	log 'reboot-bootloader returned; falling back to a plain reboot'
