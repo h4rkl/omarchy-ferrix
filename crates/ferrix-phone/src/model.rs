@@ -179,6 +179,19 @@ pub struct Model {
     pub last_error: Option<String>,
     /// Whether a link loss happened since the last snapshot.
     lost_once: bool,
+    /// The app's monotonic clock in milliseconds, set by the session owner
+    /// ([`Model::set_clock`]). Call durations are measured on it: the
+    /// daemon reports only a call's start, never when it connected.
+    clock_ms: u64,
+    /// Local connect/end times of calls observed by this app.
+    timers: BTreeMap<CallId, CallTimer>,
+}
+
+/// When this app saw a call become active and end, on [`Model::clock_ms`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CallTimer {
+    active_at_ms: Option<u64>,
+    ended_at_ms: Option<u64>,
 }
 
 impl Default for Model {
@@ -202,6 +215,8 @@ impl Model {
             pending: Vec::new(),
             last_error: None,
             lost_once: false,
+            clock_ms: 0,
+            timers: BTreeMap::new(),
         }
     }
 
@@ -259,7 +274,36 @@ impl Model {
                 }
             }
         }
+        self.timers.retain(|id, _| self.calls.contains_key(id));
+        let observed: Vec<(CallId, CallState)> = self
+            .calls
+            .values()
+            .map(|c| (c.call.id.clone(), c.call.state))
+            .collect();
+        for (id, state) in observed {
+            self.observe(&id, state);
+        }
         self.refocus();
+    }
+
+    /// Records the local connect/end time of a call state change. Calls
+    /// first seen already ended keep no timer: their duration is unknown.
+    fn observe(&mut self, id: &CallId, state: CallState) {
+        let now = self.clock_ms;
+        match state {
+            CallState::Active | CallState::Held => {
+                let timer = self.timers.entry(id.clone()).or_default();
+                timer.active_at_ms.get_or_insert(now);
+            }
+            CallState::Ended => {
+                if let Some(timer) = self.timers.get_mut(id)
+                    && timer.active_at_ms.is_some()
+                {
+                    timer.ended_at_ms.get_or_insert(now);
+                }
+            }
+            CallState::Dialing | CallState::Ringing => {}
+        }
     }
 
     fn apply_call(&mut self, call: RedactedCall, number: Option<E164>) {
@@ -268,6 +312,7 @@ impl Model {
         let incoming_ringing =
             call.direction == Direction::Incoming && call.state == CallState::Ringing;
         let was_live = self.calls.get(&id).is_some_and(|c| c.call.state.is_live());
+        self.observe(&id, call.state);
         self.calls.insert(id.clone(), CallView { call, number });
         if ended_now {
             if self.focused_call.as_ref() == Some(&id) || (was_live && self.focused_call.is_none())
@@ -406,20 +451,32 @@ impl Model {
         calls
     }
 
-    /// The daemon's clock: the latest timestamp it reported. Durations are
-    /// measured against this, never against the host wall clock.
-    pub fn daemon_now_ms(&self) -> u64 {
-        let calls = self.calls.values().map(|c| c.call.started_at_ms);
-        let sms = self
-            .state
-            .as_ref()
-            .map(|s| s.sms.values().map(|m| m.timestamp_ms).max().unwrap_or(0));
-        calls.chain(sms).max().unwrap_or(0)
+    /// Advances the local monotonic clock (milliseconds since the app
+    /// started). Never goes backwards.
+    pub fn set_clock(&mut self, now_ms: u64) {
+        self.clock_ms = self.clock_ms.max(now_ms);
     }
 
-    /// Seconds a call has been running by the daemon's clock.
-    pub fn duration_secs(&self, call: &RedactedCall) -> u64 {
-        self.daemon_now_ms().saturating_sub(call.started_at_ms) / 1000
+    /// Seconds a call has been connected by the local clock: running while
+    /// active or held, frozen once it ended. `None` when it never connected
+    /// while this app watched (still dialing/ringing, or ended before).
+    pub fn duration_secs(&self, id: &CallId) -> Option<u64> {
+        let timer = self.timers.get(id)?;
+        let start = timer.active_at_ms?;
+        let end = timer.ended_at_ms.unwrap_or(self.clock_ms);
+        Some(end.saturating_sub(start) / 1000)
+    }
+
+    /// Whether a connected call's timer is running, so the owner should
+    /// redraw once per second.
+    pub fn timer_running(&self) -> bool {
+        self.calls.values().any(|c| {
+            c.call.state.is_live()
+                && self
+                    .timers
+                    .get(&c.call.id)
+                    .is_some_and(|t| t.active_at_ms.is_some() && t.ended_at_ms.is_none())
+        })
     }
 
     /// Whether the typed number could be dialed now, or why not.
@@ -609,6 +666,16 @@ impl Model {
         if self.live_call().is_none() {
             self.page = Page::Dialer;
         }
+    }
+}
+
+/// `m:ss`, or `h:mm:ss` from an hour.
+pub fn format_duration(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }
 
@@ -922,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_is_bounded_and_newest_first_with_daemon_clock_durations() {
+    fn recent_is_bounded_and_newest_first() {
         let mut m = connected(Some((Direction::Outgoing, CallState::Active, None)));
         let recent = m.recent();
         assert_eq!(recent[0].call.id.as_str(), "call-live");
@@ -940,10 +1007,8 @@ mod tests {
             ));
         }
         assert_eq!(m.recent().len(), RECENT_LIMIT);
-        // The daemon clock is the newest timestamp seen, not the wall clock.
-        assert_eq!(m.daemon_now_ms(), 1_700_000_000_500);
-        let live = m.calls.get(&CallId("call-live".into())).unwrap();
-        assert_eq!(m.duration_secs(&live.call), 0);
+        // Calls that ended before the app saw them have no known duration.
+        assert_eq!(m.duration_secs(&CallId("x0".into())), None);
         m.redial(&CallId("call-0".into()));
         assert_eq!(m.typed, "+15550100001");
         assert_eq!(m.page, Page::Dialer);
@@ -969,5 +1034,60 @@ mod tests {
         assert_eq!((m.link, m.page), (Link::Reconnected, Page::Incoming));
         assert_eq!(Page::parse("in-call"), Some(Page::InCall));
         assert_eq!(Page::parse("nope"), None);
+    }
+
+    #[test]
+    fn call_timer_counts_from_active_on_the_local_clock_and_freezes_at_end() {
+        let mut m = connected(None);
+        let id = CallId("c1".into());
+        m.set_clock(10_000);
+        m.apply(call_event(
+            "c1",
+            Direction::Outgoing,
+            CallState::Dialing,
+            None,
+        ));
+        assert_eq!(m.duration_secs(&id), None, "dialing is not connected");
+        assert!(!m.timer_running());
+        m.set_clock(14_000);
+        m.apply(call_event(
+            "c1",
+            Direction::Outgoing,
+            CallState::Active,
+            None,
+        ));
+        assert!(m.timer_running());
+        assert_eq!(m.duration_secs(&id), Some(0));
+        // Every event carries the same daemon start time; only the local
+        // clock moves the timer.
+        m.set_clock(56_900);
+        assert_eq!(m.duration_secs(&id), Some(42));
+        m.apply(call_event("c1", Direction::Outgoing, CallState::Held, None));
+        m.set_clock(74_000);
+        assert_eq!(m.duration_secs(&id), Some(60), "hold keeps counting");
+        m.set_clock(5_000);
+        assert_eq!(m.duration_secs(&id), Some(60), "clock never goes back");
+        m.apply(call_event(
+            "c1",
+            Direction::Outgoing,
+            CallState::Ended,
+            Some(CallEndReason::RemoteHangup),
+        ));
+        assert_eq!(m.page, Page::Ended);
+        assert!(!m.timer_running());
+        m.set_clock(500_000);
+        assert_eq!(m.duration_secs(&id), Some(60), "final duration is frozen");
+        // A reconnect snapshot keeps the timer of a call it still lists.
+        let mut live = connected(Some((Direction::Outgoing, CallState::Active, None)));
+        live.set_clock(3_000);
+        live.apply(Update::Snapshot(StateView::Full(preview_state(Some((
+            Direction::Outgoing,
+            CallState::Active,
+            None,
+        ))))));
+        assert_eq!(live.duration_secs(&CallId("call-live".into())), Some(3));
+        assert_eq!(format_duration(0), "0:00");
+        assert_eq!(format_duration(62), "1:02");
+        assert_eq!(format_duration(3_725), "1:02:05");
     }
 }

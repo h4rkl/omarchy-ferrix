@@ -5,8 +5,9 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrix_app_protocol::{Client as AppdClient, ClientRole, Report};
 use ferrix_contacts_protocol::{
@@ -26,6 +27,8 @@ use crate::{APP_ID, EVIDENCE, screen};
 
 const TITLE: &str = "Phone";
 const TIMEOUT: Duration = Duration::from_secs(2);
+/// Redraw cadence of the in-call timer.
+const TICK: Duration = Duration::from_secs(1);
 
 struct Phone {
     ty: Type,
@@ -42,6 +45,31 @@ struct Phone {
     appd_unavailable_reported: bool,
     last_ui_state: (String, String),
     last_link: Link,
+    /// Origin of the monotonic clock fed to [`Model::set_clock`].
+    started: Instant,
+    /// Set while a connected call's timer runs; the ticker thread wakes the
+    /// loop once per second only then.
+    ticking: Arc<AtomicBool>,
+}
+
+/// Wakes the client once per [`TICK`] while `ticking` is set.
+fn spawn_ticker(wake: Wake, ticking: Arc<AtomicBool>) {
+    let spawned = std::thread::Builder::new()
+        .name("phone-call-timer".to_owned())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(TICK);
+                if ticking.load(Ordering::Relaxed) {
+                    wake();
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"phone-timer-unavailable\",\"reason\":\"{}\"}}",
+            json_escape(&error.to_string())
+        ));
+    }
 }
 
 pub fn run(initial_size: (u32, u32), minute: u32) -> Result<(), String> {
@@ -64,6 +92,8 @@ pub fn run(initial_size: (u32, u32), minute: u32) -> Result<(), String> {
             Duration::from_secs(1),
             Arc::clone(&wake),
         );
+        let ticking = Arc::new(AtomicBool::new(false));
+        spawn_ticker(Arc::clone(&wake), Arc::clone(&ticking));
         let mut model = Model::new();
         model.region = std::env::var(ferrix_contacts_api::DEFAULT_REGION_ENV)
             .ok()
@@ -86,11 +116,26 @@ pub fn run(initial_size: (u32, u32), minute: u32) -> Result<(), String> {
             appd_unavailable_reported: false,
             last_ui_state: (String::new(), String::new()),
             last_link: Link::Connecting,
+            started: Instant::now(),
+            ticking,
         })
     })
 }
 
 impl Phone {
+    /// Moves the model's monotonic clock to now.
+    fn tick_clock(&mut self) {
+        let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.model.set_clock(now);
+    }
+
+    /// Starts or stops the once-per-second redraw with the call timer.
+    fn sync_ticker(&mut self) -> bool {
+        let running = self.model.timer_running();
+        self.ticking.store(running, Ordering::Relaxed);
+        running
+    }
+
     fn telephony_client(&mut self) -> Result<&mut TeleClient, String> {
         if self.telephony_client.is_none() {
             let client =
@@ -234,6 +279,7 @@ impl Phone {
 impl ClientHandler for Phone {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
         self.size = size;
+        self.tick_clock();
         screen::compose(&self.ty, size, self.minute, &self.model, &self.input)
     }
 
@@ -299,6 +345,7 @@ impl ClientHandler for Phone {
     }
 
     fn wake(&mut self) -> bool {
+        self.tick_clock();
         let mut changed = false;
         loop {
             match self.telephony.try_recv() {
@@ -331,7 +378,9 @@ impl ClientHandler for Phone {
         if changed {
             self.report_ui_state();
         }
-        changed
+        // While a call is connected every wake redraws the timer.
+        let ticking = self.sync_ticker();
+        changed || ticking
     }
 
     fn page_name(&self) -> String {
