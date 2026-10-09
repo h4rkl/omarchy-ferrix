@@ -255,11 +255,14 @@ pub fn run(
         .map_err(|e| ("drm", format!("planes: {e}")))?;
     planes.overlay.clear();
     planes.cursor.clear();
+    // Dumb buffers are linear. Drivers without IN_FORMATS (e.g. the Pixel 9a
+    // exynos DPU) advertise plane formats with the implicit modifier, so offer
+    // both or the format negotiation finds no common plane format.
     let renderer_formats: FormatSet = [Fourcc::Xrgb8888, Fourcc::Argb8888]
         .into_iter()
-        .map(|code| smithay::backend::allocator::Format {
-            code,
-            modifier: Modifier::Linear,
+        .flat_map(|code| {
+            [Modifier::Linear, Modifier::Invalid]
+                .map(|modifier| smithay::backend::allocator::Format { code, modifier })
         })
         .collect();
     let mut compositor: ShellCompositor = DrmCompositor::new(
