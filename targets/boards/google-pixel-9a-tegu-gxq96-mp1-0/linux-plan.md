@@ -11,7 +11,10 @@ filesystem is built from the repository's postmarketOS substrate and, once the
 host-side inputs and physical gates are complete, will start the Rust Ferrix
 services, compositor, and applications. It does not use the Android framework,
 Android system applications, Android HALs, Google RIL, or Waydroid as the
-operating environment.
+operating environment. Owner request, 2026-10-09: the development route may
+optionally run Waydroid as a contained *application runtime* for the Browser
+tile (Fulguris; `pmos/README.md`, ADR-007). It is opt-in, has no physical
+evidence yet, and does not change this boundary for the OS itself.
 
 The existing boot ROM and unlocked Google bootloader still define the image
 container and partition interfaces. Device firmware remains necessary for

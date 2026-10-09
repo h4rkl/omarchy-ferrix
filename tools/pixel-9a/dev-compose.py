@@ -17,6 +17,12 @@ manifest:
                           an Android sparse image (fastboot cannot stream the raw
                           2 GiB ext4 image past max-download-size)
 
+With --android (FERRIX_PIXEL9A_DEV_ANDROID=1; owner request 2026-10-09) the
+rootfs is grown (default 8 GiB) and carries the OPT-IN Waydroid runtime: the
+pinned LineageOS system/vendor images and Fulguris APK verified against
+tools/android/*.pins, the shared guest bootstrap, and the ferrix-android
+service. The base rootfs must come from rootfs.sh with FERRIX_PIXEL9A_ANDROID=1.
+
 Only partitions the stock factory image rewrites are produced. vendor_dlkm and
 system_dlkm live inside super, which dev-flash never writes, so their modules
 are installed into the rootfs and loaded by /init. Runs on the Linux build host
@@ -25,6 +31,7 @@ are installed into the rootfs and loaded by /init. Runs on the Linux build host
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -266,15 +273,18 @@ class RootfsEditor:
                 self.script.append(f"mkdir {path}")
 
     def put(self, data, dest, mode):
+        self.put_file(self._stage(data), dest, mode)
+
+    def put_file(self, source, dest, mode):
+        """Write a host file without reading it into memory (large images)."""
         self.mkdir_p(dest.rsplit("/", 1)[0])
-        source = self._stage(data)
         self.script += [f"rm {dest}", f"write {source} {dest}",
                         f"sif {dest} mode 0{0o100000 | mode:o}",
                         f"sif {dest} uid 0", f"sif {dest} gid 0"]
 
     def symlink(self, dest, target):
-        if debugfs_type(self.image, dest) is None:
-            self.script.append(f"symlink {dest} {target}")
+        self.mkdir_p(dest.rsplit("/", 1)[0])
+        self.script += [f"rm {dest}", f"symlink {dest} {target}"]
 
     def remove(self, path):
         if debugfs_type(self.image, path) is not None:
@@ -425,6 +435,167 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
     return written
 
 
+# --- OPT-IN Android compatibility runtime (owner request 2026-10-09) --------
+# Waydroid + Fulguris per ADR-005/ADR-007. The base rootfs must have been built
+# with FERRIX_PIXEL9A_ANDROID=1 (tools/pixel-9a/rootfs.sh installs the package
+# set in pmos/android/packages). This composer only stages the pinned images
+# and APK the QEMU route already pins (tools/android/*.pins), the shared guest
+# bootstrap (tools/android/guest/ferrix-waydroid.sh), the target's renderer
+# properties, and the ferrix-android runlevel link.
+ANDROID_SERVICE = "ferrix-android"
+# nftables itself comes with postmarketos-base and is harmless: without
+# CONFIG_NF_TABLES waydroid-net.sh falls back to iptables. Its Waydroid
+# ruleset package is refused.
+ANDROID_FORBIDDEN_PACKAGES = ("waydroid-nftrules",)
+DEFAULT_ANDROID_ROOTFS_MIB = 8192
+
+
+def read_pins(path):
+    """KEY=value pins (never sourced as shell); the first value wins."""
+    pins = {}
+    for line in path.read_text().splitlines():
+        if line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        pins.setdefault(key.strip(), value.strip())
+    return pins
+
+
+def verify_pinned_file(path, size, digest, label):
+    if path.is_symlink() or not path.is_file():
+        die(f"{label} missing or symlinked: {path}")
+    if path.stat().st_size != int(size):
+        die(f"{label} size differs from its pin: {path}")
+    if sha256(path) != digest.lower():
+        die(f"{label} SHA-256 differs from its pin: {path}")
+
+
+def android_package_set(target_dir):
+    lines = (target_dir / "pmos/android/packages").read_text().splitlines()
+    return [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+
+
+def verify_android_inputs(repo, images_dir, apk):
+    """Check the staged inputs against the shared pins; returns manifest facts."""
+    wpins = read_pins(repo / "tools/android/waydroid.pins")
+    fpins = read_pins(repo / "tools/android/fulguris.pins")
+    images_dir = images_dir.resolve()
+    if images_dir.name != wpins["WAYDROID_BUILD"]:
+        die(f"Waydroid images dir is not the pinned build {wpins['WAYDROID_BUILD']}: {images_dir}")
+    meta_path = images_dir / "images.json"
+    if meta_path.is_symlink() or not meta_path.is_file():
+        die(f"Waydroid images.json missing (run just waydroid-images-fetch): {meta_path}")
+    meta = json.loads(meta_path.read_text())
+    if meta.get("build") != wpins["WAYDROID_BUILD"] or meta.get("channel") != wpins["WAYDROID_CHANNEL"]:
+        die("Waydroid images.json does not describe the pinned channel/build")
+    images = {}
+    for kind in ("system", "vendor"):
+        prefix = f"WAYDROID_{kind.upper()}"
+        archive = images_dir / wpins[f"{prefix}_FILE"]
+        verify_pinned_file(archive, wpins[f"{prefix}_SIZE"], wpins[f"{prefix}_SHA256"],
+                           f"Waydroid {kind} zip")
+        entry = meta.get(kind) or {}
+        if entry.get("zip") != archive.name or entry.get("zip_sha256") != wpins[f"{prefix}_SHA256"].lower():
+            die(f"Waydroid images.json {kind} entry does not name the pinned zip")
+        image = images_dir / f"{kind}.img"
+        if image.is_symlink() or not image.is_file() or sha256(image) != entry.get("img_sha256"):
+            die(f"Waydroid {kind}.img differs from the image unpacked from the pinned zip: {image}")
+        images[kind] = image
+    verify_pinned_file(apk, fpins["FULGURIS_SIZE"], fpins["FULGURIS_SHA256"], "Fulguris APK")
+    if apk.name != fpins["FULGURIS_ASSET"]:
+        die(f"Fulguris APK is not the pinned asset {fpins['FULGURIS_ASSET']}: {apk}")
+    return {"build": wpins["WAYDROID_BUILD"], "channel": wpins["WAYDROID_CHANNEL"],
+            "images": images, "meta": meta_path, "apk": apk,
+            "fulguris_version": fpins["FULGURIS_VERSION"]}
+
+
+def installed_packages(image, work):
+    """Package names and apk provides from the rootfs database (merged /usr aware)."""
+    dest = work / "apk-installed"
+    debugfs_dump(image, ("/usr/lib/apk/db/installed", "/lib/apk/db/installed"), dest)
+    names = set()
+    for line in dest.read_text().splitlines():
+        if line.startswith("P:"):
+            names.add(line[2:])
+        elif line.startswith("p:"):
+            names.update(token.split("=", 1)[0] for token in line[2:].split())
+    return names
+
+
+def check_android_rootfs(packages, required):
+    missing = sorted(set(required) - packages)
+    if missing:
+        die("base rootfs lacks the Android package set (rebuild it with "
+            f"FERRIX_PIXEL9A_ANDROID=1): missing {', '.join(missing)}")
+    forbidden = sorted(packages & set(ANDROID_FORBIDDEN_PACKAGES))
+    if forbidden:
+        die(f"base rootfs contains {', '.join(forbidden)}; the GKI cannot load its nft ruleset")
+
+
+def free_bytes(image):
+    header = run("dumpe2fs", "-h", image, capture=True)
+    fields = dict(line.split(":", 1) for line in header.splitlines() if ":" in line)
+    return int(fields["Free blocks"]) * int(fields["Block size"])
+
+
+def grow_rootfs(image, size_mib):
+    """Grow the ext4 image file and filesystem to size_mib (never shrinks)."""
+    target = size_mib << 20
+    if target < image.stat().st_size:
+        die(f"rootfs size {size_mib} MiB is smaller than the base image")
+    # resize2fs requires a forced check since the last mount; -p repairs only
+    # what is safe automatically (exit 1 means it fixed something).
+    result = subprocess.run(["e2fsck", "-fp", str(image)], capture_output=True, text=True)
+    if result.returncode not in (0, 1):
+        die(f"e2fsck before resize failed ({result.returncode}): {result.stderr.strip()}")
+    if target > image.stat().st_size:
+        os.truncate(image, target)
+        run("resize2fs", image, f"{size_mib}M", capture=True)
+    run("e2fsck", "-fn", image, capture=True)
+
+
+def stage_android(image, work, repo, target_dir, inputs, size_mib):
+    """Grow the rootfs and stage the Waydroid runtime; returns manifest rows."""
+    check_android_rootfs(installed_packages(image, work), android_package_set(target_dir))
+    grow_rootfs(image, size_mib)
+    helper = repo / "tools/android/guest/ferrix-waydroid.sh"
+    props = target_dir / "pmos/android/waydroid-properties.ini"
+    staged = [
+        (inputs["images"]["system"], "/etc/waydroid-extra/images/system.img", 0o644),
+        (inputs["images"]["vendor"], "/etc/waydroid-extra/images/vendor.img", 0o644),
+        (inputs["meta"], "/etc/waydroid-extra/images.json", 0o644),
+        (inputs["apk"], "/usr/share/ferrix/android/fulguris.apk", 0o644),
+        (props, "/etc/ferrix/waydroid-properties.ini", 0o644),
+        (helper, "/usr/lib/ferrix/ferrix-waydroid.sh", 0o755),
+    ]
+    needed = sum(source.stat().st_size for source, _, _ in staged)
+    # Keep at least 1 GiB for Android /data, logs, and the dalvik cache.
+    if free_bytes(image) < needed + (1 << 30):
+        die(f"rootfs of {size_mib} MiB leaves too little space for the Android runtime")
+    (work / "android").mkdir()
+    editor = RootfsEditor(image, work / "android")
+    for source, dest, mode in staged:
+        editor.put_file(source, dest, mode)
+    editor.mkdir_p("/var/lib/waydroid")
+    if debugfs_type(image, f"/etc/init.d/{ANDROID_SERVICE}") != "regular":
+        die(f"/etc/init.d/{ANDROID_SERVICE} is missing from the integrated rootfs")
+    editor.symlink(f"/etc/runlevels/default/{ANDROID_SERVICE}", f"/etc/init.d/{ANDROID_SERVICE}")
+    editor.commit()
+    for source, dest, _ in staged:
+        info = run("debugfs", "-R", f"stat {dest}", image, capture=True)
+        if not re.search(rf"\bSize: {source.stat().st_size}\b", info):
+            die(f"{dest} did not land in the rootfs with its full size")
+    if debugfs_type(image, f"/etc/runlevels/default/{ANDROID_SERVICE}") != "symlink":
+        die("ferrix-android runlevel link did not land in the rootfs")
+    run("e2fsck", "-fn", image, capture=True)
+    rows = [f"android\twaydroid\t{inputs['channel']}\t{inputs['build']}",
+            f"rootfs_size_mib\t{size_mib}"]
+    for source, dest, _ in staged:
+        rows.append(f"android_file\t{dest}\t{source.stat().st_size}\t{sha256(source)}")
+    rows.append(f"android_service\t/etc/runlevels/default/{ANDROID_SERVICE}")
+    return rows
+
+
 def main():
     env = os.environ.get
     repo = Path(__file__).resolve().parents[2]
@@ -455,7 +626,29 @@ def main():
                         help="comma-separated module names /init must not load (bisection)")
     parser.add_argument("--product-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_PRODUCT_DIR"),
                         help="pixel-9a product build to install over the base rootfs")
+    fulguris = read_pins(repo / "tools/android/fulguris.pins")
+    parser.add_argument("--android", action="store_true",
+                        default=env("FERRIX_PIXEL9A_DEV_ANDROID", "") == "1",
+                        help="stage the opt-in Waydroid runtime and Fulguris (base rootfs built "
+                             "with FERRIX_PIXEL9A_ANDROID=1)")
+    parser.add_argument("--waydroid-images", type=Path,
+                        default=Path(env("FERRIX_PIXEL9A_DEV_WAYDROID_IMAGES",
+                                         repo / "out/android/waydroid/current")),
+                        help="verified tools/android/waydroid-images-fetch.sh output")
+    parser.add_argument("--fulguris-apk", type=Path,
+                        default=Path(env("FERRIX_PIXEL9A_DEV_FULGURIS_APK",
+                                         repo / "out/android/fulguris" / fulguris["FULGURIS_VERSION"]
+                                         / fulguris["FULGURIS_ASSET"])),
+                        help="verified tools/android/fulguris-fetch.sh output")
+    parser.add_argument("--rootfs-size-mib", type=int,
+                        default=int(env("FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB", "0") or 0),
+                        help=f"grow the rootfs image to this size (--android default "
+                             f"{DEFAULT_ANDROID_ROOTFS_MIB})")
     args = parser.parse_args()
+    if args.android and not args.rootfs_size_mib:
+        args.rootfs_size_mib = DEFAULT_ANDROID_ROOTFS_MIB
+    if args.rootfs_size_mib < 0:
+        die("--rootfs-size-mib must be positive")
     if args.product_dir is not None and not (args.product_dir / "ferrix-shell").is_file():
         die(f"product dir has no ferrix-shell: {args.product_dir}")
     if args.modules_skip and not all(part.replace("-", "").replace("_", "").isalnum()
@@ -492,6 +685,12 @@ def main():
         die(f"refusing to overwrite existing output: {args.out}")
 
     verified = read_kernel_manifest(args.kernel_manifest, args.kernel_dist)
+    android_inputs = None
+    if args.android:
+        for tool in ("dumpe2fs", "resize2fs"):
+            if shutil.which(tool) is None:
+                die(f"host tool missing: {tool}")
+        android_inputs = verify_android_inputs(repo, args.waydroid_images, args.fulguris_apk)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".tegu-dev.", dir=args.out.parent))
     try:
@@ -548,6 +747,13 @@ def main():
         install_modules(rootfs, modules, release)
         integrated = integrate_rootfs(rootfs, work, package, args.target_dir / "dev/profile.toml",
                                       args.product_dir, reboot_helper)
+        if android_inputs is not None:
+            android_rows = stage_android(rootfs, work, repo, args.target_dir, android_inputs,
+                                         args.rootfs_size_mib)
+        else:
+            if args.rootfs_size_mib:
+                grow_rootfs(rootfs, args.rootfs_size_mib)
+            android_rows = ["android\tnone"]
         run(img2simg, rootfs, stage / "userdata.img")
         shutil.rmtree(work)
 
@@ -574,7 +780,7 @@ def main():
             f"rootfs_integrated\t{len(integrated)}",
             f"input\tvendor_cmdline\t{cmdline}",
             f"input\tvendor_bootconfig\t{bootconfig}\t{sha256(bootconfig)}",
-        ]
+        ] + android_rows
         for partition, name in partitions.items():
             path = stage / name
             lines.append(f"artifact\t{partition}\t{name}\t{path.stat().st_size}\t{sha256(path)}")

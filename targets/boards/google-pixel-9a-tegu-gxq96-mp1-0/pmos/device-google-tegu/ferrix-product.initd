@@ -77,11 +77,15 @@ start() {
 		--ferrix-appd "$appd_socket" /etc/ferrix/profile.toml
 	wait_for_socket "$wayland_socket" ferrix-shell || { eend 1; return 1; }
 
+	# The session bus is started by the opt-in ferrix-android bootstrap (dev
+	# route only); the Android runtime adapter's Waydroid CLI calls use it.
+	# Without that service the address is unused.
 	start-stop-daemon --start --background --make-pidfile --pidfile "$appd_pidfile" \
 		--chuid user:user --env HOME=/home/user --env USER=user \
 		--env XDG_RUNTIME_DIR=/run/user/1000 --env WAYLAND_DISPLAY=wayland-0 \
 		--env FERRIX_EVIDENCE="$FERRIX_EVIDENCE" --env FERRIX_TARGET="$FERRIX_TARGET" \
 		--env FERRIX_TELEPHONY_APN="${FERRIX_TELEPHONY_APN:-}" \
+		--env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
 		--stdout /var/log/ferrix-appd.log --stderr /var/log/ferrix-appd.log \
 		--exec /usr/bin/ferrix-appd -- --socket "$appd_socket" \
 		--app-dir /usr/share/ferrix/apps --grants /usr/share/ferrix/apps/grants.json \

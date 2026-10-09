@@ -2,8 +2,10 @@
 set -eu
 
 # Device-free native Linux/postmarketOS rootfs workflow for the exact Pixel 9a
-# target. It deliberately has no adb, fastboot, flashing, booting, firmware
-# extraction, or Android route.
+# target. It deliberately has no adb, fastboot, flashing, booting, or firmware
+# extraction. FERRIX_PIXEL9A_ANDROID=1 opts into the Waydroid package set in
+# pmos/android/packages (owner request 2026-10-09, dev route only); the
+# Android images and APK are staged later by tools/pixel-9a/dev-compose.py.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 target="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
@@ -33,6 +35,13 @@ build_token=I-understand-this-runs-pmbootstrap
 rootfs_image_size_mib=${FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB:-2048}
 rootfs_uuid=${FERRIX_PIXEL9A_ROOTFS_UUID:-9a9a9a9a-9a9a-49a9-9a9a-9a9a9a9a9a9a}
 rootfs_password=${FERRIX_PIXEL9A_ROOTFS_PASSWORD:-}
+android=${FERRIX_PIXEL9A_ANDROID:-0}
+android_packages="$pmos_dir/android/packages"
+# The kernel the rootfs will be composed with. radio-first (default) is the
+# selected WWAN/SIT route; kleaf-dev explicitly pairs the rootfs with the
+# Google Kleaf GKI dist that tools/pixel-9a/dev-compose.py composes (the
+# development flash route). Never an implicit fallback.
+kernel_route=${FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE:-radio-first}
 manifest_status=''
 tab=$(printf '\t')
 
@@ -69,8 +78,13 @@ manifest_begin() {
 		printf 'codename\ttegu\n'
 		printf 'hardware_revision\tMP1.0\n'
 		printf 'substrate\tpostmarketos\n'
-		printf 'route_id\texperimental-linux-google-tegu-s5300-wwan\n'
-		printf 'kernel_backend\tlinux-google-tegu-wwan\n'
+		if [ "$kernel_route" = kleaf-dev ]; then
+			printf 'route_id\tdevelopment-google-kleaf-gki\n'
+			printf 'kernel_backend\tgoogle-kleaf-cpif\n'
+		else
+			printf 'route_id\texperimental-linux-google-tegu-s5300-wwan\n'
+			printf 'kernel_backend\tlinux-google-tegu-wwan\n'
+		fi
 		printf 'pmaports_commit\t%s\n' "${FERRIX_PIXEL9A_PMAPORTS_COMMIT:-$(pinned_pmaports_commit)}"
 		printf 'pmaports_channel\t%s\n' "$(pinned_pmaports_channel)"
 		printf 'pmaports_branch\t%s\n' "$(pinned_pmaports_branch)"
@@ -135,7 +149,50 @@ pinned_pmaports_branch() {
 		"$pmaports_pins"
 }
 
+# android_package_list: the opt-in Waydroid package set as one comma list.
+# Refuses packages that need nftables, which the pinned GKI does not have.
+android_package_list() {
+	required_file "$android_packages"
+	list=$(awk '$0 !~ /^[[:space:]]*(#|$)/ { gsub(/[[:space:]]/, ""); printf "%s%s", (n++ ? "," : ""), $0 }' "$android_packages")
+	[ -n "$list" ] || die "Android package set is empty: $android_packages"
+	case ",$list," in
+		*,nftables,*|*,waydroid-nftrules,*) die 'Android package set must not contain nftables or waydroid-nftrules (the GKI has no nftables)' ;;
+		*[!a-z0-9,.+_-]*) die "Android package set has an invalid package name: $list" ;;
+	esac
+	case ",$list," in
+		*,waydroid,*) ;;
+		*) die 'Android package set must contain waydroid' ;;
+	esac
+	printf '%s\n' "$list"
+}
+
+# verify_android_rootfs DB: the installed rootfs carries the Android package
+# set (by name or apk provides, e.g. dnsmasq from dnsmasq-dnssec-dbus) and not
+# waydroid-nftrules, whose nft ruleset the GKI cannot load. nftables itself is
+# pulled in by postmarketos-base; without CONFIG_NF_TABLES `nft list ruleset`
+# fails and waydroid-net.sh falls back to iptables(-legacy).
+verify_android_rootfs() {
+	installed=$(cat "$1" 2>/dev/null || sudo -n cat "$1" 2>/dev/null) ||
+		die "built rootfs has no readable apk database: $1"
+	for package in $(android_package_list | tr ',' ' '); do
+		printf '%s\n' "$installed" | grep -qx "P:$package" && continue
+		printf '%s\n' "$installed" | grep -Eq "^p:(.* )?$package(=[^ ]*)?( |\$)" && continue
+		die "built rootfs is missing Android package: $package"
+	done
+	if printf '%s\n' "$installed" | grep -qx 'P:waydroid-nftrules'; then
+		die 'built rootfs contains waydroid-nftrules, which the GKI cannot use'
+	fi
+}
+
 check_static_inputs() {
+	case "$android" in
+		0|1) ;;
+		*) die "FERRIX_PIXEL9A_ANDROID must be 0 or 1: $android" ;;
+	esac
+	case "$kernel_route" in
+		radio-first|kleaf-dev) ;;
+		*) die "FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE must be radio-first or kleaf-dev: $kernel_route" ;;
+	esac
 	for file in pmbootstrap.cfg channels.cfg; do
 		required_file "$pmos_dir/$file"
 	done
@@ -233,6 +290,10 @@ preflight() {
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
 	manifest_artifact profile.toml "$profile_path"
 	manifest_finish
+	if [ "$android" = 1 ]; then
+		android_package_list >/dev/null
+		manifest_artifact android/packages "$android_packages"
+	fi
 	printf '%s\n' 'PASS pixel-9a-rootfs static package and manifest checks'
 }
 
@@ -321,8 +382,15 @@ required_kernel_modules() {
 		case "$module" in
 			''|'#'*) continue ;;
 		esac
-		find "$1" -type f -name "$module.ko" -print -quit | grep -q . ||
-			die "kernel dist is missing required tegu module: $module.ko"
+		find "$1" -type f -name "$module.ko" -print -quit | grep -q . && continue
+		# A GKI dist records built-in drivers in modules.builtin (kbuild names
+		# use '-' where module names use '_'); those need no .ko file.
+		if [ -f "$1/modules.builtin" ] && awk -v want="$(printf '%s' "$module" | tr '-' '_').ko" '
+			{ name = $0; sub(/.*\//, "", name); gsub(/-/, "_", name); if (name == want) { found = 1; exit } }
+			END { exit(found ? 0 : 1) }' "$1/modules.builtin"; then
+			continue
+		fi
+		die "kernel dist is missing required tegu module: $module.ko"
 	done < "$package_dir/modules-initfs"
 }
 
@@ -386,9 +454,12 @@ validate_radio_kernel_dist() {
 
 validate_kernel_dist() {
 	# The selected target package is paired with the radio-first WWAN/SIT
-	# backend. Keep the Google Kleaf/cpif validator available only for the
-	# independent legacy workflow, never as an implicit fallback here.
-	validate_radio_kernel_dist
+	# backend. The Google Kleaf/cpif validator is used only when the caller
+	# explicitly selects the development route's kernel, never as a fallback.
+	case "$kernel_route" in
+		radio-first) validate_radio_kernel_dist ;;
+		kleaf-dev) validate_google_kernel_dist ;;
+	esac
 }
 
 validate_product_dir() {
@@ -815,7 +886,17 @@ write_built_manifest() {
 	[ -f "$rootfs_out/radio-firmware-manifest.tsv" ] ||
 		die "rootfs radio firmware manifest is missing: $rootfs_out/radio-firmware-manifest.tsv"
 	manifest_begin built-substrate-only
+	if [ "$android" = 1 ]; then
+		printf 'android_runtime\twaydroid-packages\t%s\n' "$(android_package_list)" >>"$manifest_tmp"
+		manifest_artifact android/packages "$android_packages"
+	else
+		printf 'android_runtime\tnone\n' >>"$manifest_tmp"
+	fi
 	manifest_input product_manifest "$product/manifest.tsv"
+	if [ "$kernel_route" = kleaf-dev ]; then
+		manifest_input kleaf_kernel_manifest \
+			"$(kernel_manifest_path "${FERRIX_PIXEL9A_KERNEL_DIST:-"$out_root/pixel-9a/kernel/tegu/dist"}")"
+	fi
 	manifest_artifact deviceinfo "$package_dir/deviceinfo"
 	manifest_artifact kernel-cmdline.conf "$package_dir/kernel-cmdline.conf"
 	manifest_artifact modules-initfs "$package_dir/modules-initfs"
@@ -954,6 +1035,14 @@ build_rootfs() {
 	pmb_work="$build_dir/pmbootstrap"
 	config="$build_dir/pmbootstrap.cfg"
 	sed -e "s#^work = .*#work = $pmb_work#" -e "s#^aports = .*#aports = $aports#" "$pmos_dir/pmbootstrap.cfg" >"$config"
+	if [ "$android" = 1 ]; then
+		android_list=$(android_package_list)
+		config_tmp="$config.tmp.$$"
+		awk -v extra="$android_list" '/^extra_packages = / { $0 = $0 "," extra; found=1 } { print } END { exit(found ? 0 : 1) }' \
+			"$config" >"$config_tmp" || die 'target pmbootstrap.cfg has no extra_packages line for the Android package set'
+		mv "$config_tmp" "$config"
+		printf '%s\n' "opt-in Android runtime packages: $android_list"
+	fi
 	printf '%s\n' "running pmbootstrap rootfs build with config $config"
 	# The target package set includes two local, source-pinned aports. Keep
 	# local package installation enabled so pmbootstrap builds and installs
@@ -993,6 +1082,7 @@ build_rootfs() {
 		find "$pmb_work" -maxdepth 2 -print >&2 2>/dev/null || true
 		die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
 	fi
+	[ "$android" != 1 ] || verify_android_rootfs "$rootfs_dir/lib/apk/db/installed"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
 		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files; do

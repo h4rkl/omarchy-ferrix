@@ -245,6 +245,24 @@ if grep -Eq -- '(/dev/bus/usb|ADB_SERVER_SOCKET|--device)' "$log"; then
   echo 'builder run workflow exposed a physical transport' >&2
   exit 1
 fi
+# Opt-in Android runtime controls reach the builder; its input paths are
+# mapped into the read-only workspace like every other handoff.
+: >"$log"
+PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" FAKE_DOCKER_ENV_PATH_LOG="$env_path_log" \
+  FERRIX_PIXEL9A_BUILDER_IMAGE=ferrix-pixel9a-builder:test \
+  FERRIX_PIXEL9A_ANDROID=1 FERRIX_PIXEL9A_DEV_ANDROID=1 FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB=8192 \
+  FERRIX_PIXEL9A_DEV_WAYDROID_IMAGES="$root/out/android/waydroid/current" \
+  FERRIX_PIXEL9A_DEV_FULGURIS_APK="$root/out/android/fulguris/2.0.10/fulguris.apk" \
+  "$script" run dev-compose build >/dev/null
+for handoff in \
+  'FERRIX_PIXEL9A_ANDROID=1' 'FERRIX_PIXEL9A_DEV_ANDROID=1' 'FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB=8192' \
+  'FERRIX_PIXEL9A_DEV_WAYDROID_IMAGES=/workspace/out/android/waydroid/current' \
+  'FERRIX_PIXEL9A_DEV_FULGURIS_APK=/workspace/out/android/fulguris/2.0.10/fulguris.apk'; do
+  grep -Fx -- "$handoff" "$env_log" >/dev/null || {
+    echo "builder dropped Android handoff: $handoff" >&2
+    exit 1
+  }
+done
 failure_status=0
 PATH="$work/bin:$PATH" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_ENV_LOG="$env_log" FAKE_DOCKER_ENV_PATH_LOG="$env_path_log" \
   FAKE_DOCKER_RUN_STATUS=37 FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \

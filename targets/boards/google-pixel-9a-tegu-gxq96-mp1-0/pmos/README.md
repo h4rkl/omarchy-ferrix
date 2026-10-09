@@ -2,9 +2,28 @@
 
 This directory is the target-local postmarketOS device package for the exact
 Google Pixel 9a `GXQ96` / `tegu` / `MP1.0` admission. It is deliberately
-separate from `targets/qemu-aarch64/pmos`: it selects native Linux services,
-does not install Android or Waydroid, and does not make any QEMU evidence a
-physical-device claim.
+separate from `targets/qemu-aarch64/pmos`: it selects native Linux services
+and does not make any QEMU evidence a physical-device claim. By default it
+does not install Android or Waydroid.
+
+Boundary change (owner request, 2026-10-09): the **development route only**
+may optionally carry Waydroid as an *application runtime* for the Browser tile
+(Fulguris, ADR-005/ADR-007). It is never the operating environment. Opt in
+with `FERRIX_PIXEL9A_ANDROID=1` for `tools/pixel-9a/rootfs.sh`, which appends
+the package set in `android/packages` (Waydroid, LXC, dnsmasq, iptables plus iptables-legacy;
+deliberately no `nftables`/`waydroid-nftrules`, because the
+pinned GKI has no `CONFIG_NF_TABLES`) and refuses a result containing
+`waydroid-nftrules`. postmarketos-base still installs `nftables`; on the
+GKI `nft list ruleset` fails, so `waydroid-net.sh` uses `iptables-legacy`
+(Alpine's plain `iptables` is the nft backend and would fail too). `tools/pixel-9a/dev-compose.py --android` then grows the rootfs
+(default 8 GiB) and stages the QEMU route's pinned LineageOS Waydroid images
+and Fulguris APK (verified against `tools/android/*.pins`), the shared guest
+bootstrap `tools/android/guest/ferrix-waydroid.sh`, the renderer properties in
+`android/waydroid-properties.ini` (SwiftShader, `gralloc=default`, 400 dpi),
+and the `ferrix-android` runlevel link. The package installs
+`ferrix-android.initd` but never links it itself. Without the opt-in, images
+are unchanged apart from that unlinked script and ferrix-appd's
+session-bus address (unused when nothing listens there).
 
 The package is an input to `tools/pixel-9a/rootfs.sh`. It is not itself a
 bootable Pixel image. The selected route needs the matching radio-first
@@ -99,6 +118,48 @@ its manifest. QEMU product output is never used by the default path; the
 staged `/etc/ferrix/profile.toml` always comes from `../dev/profile.toml`.
 Synthetic QEMU radio state is therefore not copied into the physical target
 guest.
+
+## Opt-in Android runtime (dev route, owner request 2026-10-09)
+
+Build steps on the Linux build host. Each output directory must be new:
+
+1. Host inputs, the same pins as the QEMU route: run `just waydroid-images-fetch`
+   and `sh tools/android/fulguris-fetch.sh` (needs `apksigner`). Or copy an
+   already verified `out/android/` tree; `dev-compose` re-verifies size and
+   SHA-256 against `tools/android/*.pins`.
+2. Base rootfs with the package set:
+   `FERRIX_PIXEL9A_ANDROID=1 FERRIX_PIXEL9A_ROOTFS_BUILD=… tools/pixel-9a/native-builder.sh run rootfs build`,
+   with the usual product, firmware and pmaports inputs and a fresh
+   `FERRIX_PIXEL9A_ROOTFS_OUT`. The rootfs is composed with the Kleaf GKI,
+   so select that kernel explicitly: `FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE=kleaf-dev`
+   plus `FERRIX_PIXEL9A_KERNEL_DIST=<kleaf dist>`. Without it, the default
+   `radio-first` route needs a radio kernel built against the current split
+   contract, and that kernel currently refuses to build because there is no
+   MP1.0 overlay source. The manifest records `route_id
+   development-google-kleaf-gki`, the hashed Kleaf kernel manifest, and
+   `android_runtime waydroid-packages …`.
+3. Image: `FERRIX_PIXEL9A_DEV_ANDROID=1 FERRIX_PIXEL9A_DEV_BASE_ROOTFS=<that rootfs.img>
+   FERRIX_PIXEL9A_KERNEL_OUT=… FERRIX_PIXEL9A_DEV_PRODUCT_DIR=… FERRIX_PIXEL9A_DEV_OUT=<new dir>
+   tools/pixel-9a/native-builder.sh run dev-compose build`. The ext4
+   rootfs grows to `FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB` (default 8192). The
+   `userdata.img` sparse image therefore carries about 2 GiB more data, and
+   its `manifest.tsv` lists every staged Android file with size and SHA-256.
+
+On first boot, the background `ferrix-android` service does the following
+(log: `/var/log/ferrix-android.log`, working files under `/run/ferrix-android/`):
+
+- runs offline `waydroid init` from `/etc/waydroid-extra/images`;
+- applies the SwiftShader/400 dpi properties and runs `waydroid upgrade -o`;
+- starts `waydroid-container`;
+- waits for ferrix-shell's `/run/user/1000/wayland-0`;
+- as `user`, starts a session bus at `/run/user/1000/bus` and
+  `waydroid session start` (no pulse socket, so Android has no audio yet);
+- waits for Android `sys.boot_completed`;
+- installs Fulguris as `user`;
+- assigns the browser role.
+
+Later boots skip the init and the install. ferrix-appd then launches the
+Browser tile through the unchanged `ferrix-runtime-android` adapter.
 
 ## S5300 native-Linux package boundary
 

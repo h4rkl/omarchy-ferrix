@@ -34,5 +34,19 @@ the prior Brave framebuffer evidence must not be relabeled as Fulguris
 evidence, and this run is not a general APK compatibility claim. Interactive
 advancement beyond the onboarding surface remains partially unverified.
 
+## Amendment 2026-10-09: Pixel 9a development route
+
+At the owner's request (2026-10-09), the same runtime and APK pins extend to
+the exact Pixel 9a target's *development* route as an opt-in
+(`FERRIX_PIXEL9A_ANDROID=1` for the base rootfs, `dev-compose.py --android`
+for the image). No new pins are introduced: the board reuses
+`tools/android/waydroid.pins` and `tools/android/fulguris.pins`. The guest
+bootstrap is shared with QEMU (`tools/android/guest/ferrix-waydroid.sh`).
+The Pixel differs only in target staging: a session owned by `user`,
+no pulse socket yet (no Android audio), an iptables-only container network, and SwiftShader because
+there is no Mali/DRM render node. Product code, `ferrix-runtime-android` and
+the `org.ferrix.browser` descriptor are unchanged. Physical evidence does not
+exist yet. QEMU evidence must not be relabeled as Pixel evidence.
+
 Fulguris is MPL-2.0. Its third-party components retain their upstream licenses;
 Ferrix metadata and code remain Apache-2.0.

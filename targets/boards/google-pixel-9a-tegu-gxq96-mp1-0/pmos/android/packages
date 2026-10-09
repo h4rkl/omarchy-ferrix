@@ -1,0 +1,22 @@
+# OPT-IN Android compatibility runtime package set for the Pixel 9a dev
+# route (owner request 2026-10-09; ADR-005/ADR-007). tools/pixel-9a/rootfs.sh
+# appends these to pmbootstrap's extra_packages only when
+# FERRIX_PIXEL9A_ANDROID=1. One Alpine package name per line.
+#
+# Deliberately absent: nftables and waydroid-nftrules. The pinned GKI has no
+# CONFIG_NF_TABLES, so waydroid-net.sh must take its iptables(-legacy) path;
+# rootfs.sh refuses a built rootfs containing waydroid-nftrules. (nftables
+# itself arrives with postmarketos-base; `nft list ruleset` fails on the GKI,
+# so waydroid-net.sh still selects iptables.)
+# Also absent: pipewire-pulse. pmOS's console UI pulls
+# postmarketos-base-ui-audio-backend-pulseaudio, which apk declares as
+# conflicting with it; Waydroid 1.6 starts without a pulse socket (no
+# Android audio yet).
+waydroid
+waydroid-openrc
+lxc
+dnsmasq
+iptables
+# Alpine's iptables is nft-backed (xtables-nft-multi) and fails without
+# nf_tables; waydroid-net.sh prefers iptables-legacy when it exists.
+iptables-legacy
