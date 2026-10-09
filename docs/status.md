@@ -1,5 +1,55 @@
 # Status
 
+## 2026-10-09 (Pixel 9a: product reaches home unattended under required isolation; physical `google-pixel-9a-tegu-gxq96-mp1-0`)
+
+Evidence: exact target, slot b, Kleaf GKI `6.1.124-android14-11-ga4662a84a15f`
+with `USER_NS`/`PID_NS`/`DEVTMPFS`, images composed by
+`tools/pixel-9a/dev-compose.py`. Screens were read back from the scanned-out
+DRM framebuffer (GETFB2 + dumb-buffer map as root over the USB bring-up shell)
+and cross-checked on an external camera; taps came from a uinput test
+touchscreen through libinput. Identifiers are not recorded.
+
+- **Cold boot to home, no manual steps:** udev, seatd, NetworkManager,
+  ModemManager, BlueZ, PipeWire/WirePlumber, ferrix-networkd/telephonyd/core,
+  ferrix-shell, ferrix-appd and the home surface all start from OpenRC. Fixed
+  on the way: `/run/user` missing on the fresh `/run` tmpfs (checkpath does
+  not create parents), the radio-firmware gate reported as crashed, networkd
+  and telephonyd racing NetworkManager/ModemManager bus-name ownership
+  (bounded 30 s wait), and a stale `wayland-0` satisfying the shell readiness
+  wait on restart.
+- **Required isolation on GKI:** apps run in user+PID+mount+UTS namespaces
+  with private `/tmp` and `/run`, `no_new_privs`. GKI has no IPC namespace
+  (no SysV IPC/mqueue), so the sandbox drops `CLONE_NEWIPC` only when
+  `/proc/self/ns/ipc` is absent and reports the launch `degraded` with that
+  reason. An unprivileged launcher lost its namespace capabilities at the
+  stage-2 `execve`; `CAP_SYS_ADMIN` now rides the ambient set into stage 2 and
+  is cleared before the application execs. Apps launched from short-lived
+  appd threads were SIGKILLed by the sandbox's parent-death signal (Linux ties
+  it to the spawning thread); the native runtime now spawns from one
+  process-lifetime thread.
+- **Wi-Fi:** joined through Settings > Wi-Fi with the on-screen keyboard;
+  DHCP and ping succeed. The bcm4383 driver fails SAE association with the
+  host wpa_supplicant (also single-AKM SAE with PMF required), so the Pixel
+  profile sets `connectivity.wifi_transition_key_mgmt = "psk"` and transition
+  APs are joined as WPA2-PSK; SAE-only networks remain unsupported. A
+  networkd freeze at "associating" was a zbus deadlock (signal consumer
+  blocking on calls over the same connection); fixed.
+- **Bluetooth:** `ferrix-bluetooth-uart` lifts the `nitrous_bluetooth`
+  rfkill and runs `btattach -P bcm` on `/dev/ttySAC18`; hci0 loads
+  `brcm/BCM.hcd`, registers with BlueZ, powers on, and an LE/BR scan found
+  devices (~90 s after boot at 115200 baud). The controller keeps its chip
+  default address (no bootloader BT address is exposed). Capability stays
+  unsupported until the Settings path is verified.
+- **Display/UI:** portrait 1080x2424, correct colours (byte-reversed scanout
+  profile), safe area; the rule under the app clock strip is removed and the
+  home identity line fits the panel.
+- **Capabilities:** `capabilities.toml` now drives the adapter's matrix;
+  power, display, input and network are `supported` with the evidence above.
+  Bluetooth, audio, telephony and lifecycle stay unsupported.
+- **Not yet working on hardware:** Browser (Waydroid image composed, not yet
+  booted), WPA3-SAE, Bluetooth pairing UI, cellular (SIT modem route is off
+  on Kleaf), camera, Mali GPU (software rendering only), zram swap.
+
 ## 2026-10-09 (Files app: home-confined file browser; QEMU framebuffer, shared with Pixel 9a)
 
 - New crate `ferrix-files` (app id `org.ferrix.files`). It lists a folder
