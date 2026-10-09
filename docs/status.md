@@ -122,9 +122,30 @@ touchscreen through libinput. Identifiers are not recorded.
 - **Capabilities:** `capabilities.toml` now drives the adapter's matrix;
   power, display, input, network and Bluetooth are `supported` with the
   evidence above. Audio, telephony and lifecycle stay unsupported.
-- **Not yet working on hardware:** Browser (Waydroid image composed, not yet
-  booted), WPA3-SAE, Bluetooth pairing UI, cellular (SIT modem route is off
-  on Kleaf), camera, Mali GPU (software rendering only), zram swap.
+- **Browser (Waydroid + Fulguris) on hardware:** the GKI now also builds
+  `NETFILTER_XT_TARGET_CHECKSUM` (waydroid-net.sh aborts without it) and
+  `POSIX_MQUEUE`/`IPC_NS` (LXC clones `CLONE_NEWIPC`; ferrix-sandbox apps now
+  get a real IPC namespace and launch `degraded:false`). Waydroid's mandatory
+  pulse bind mount is served by a socket-only null-sink PulseAudio, and the
+  property merge is idempotent. A cold boot provisions unattended: Android
+  boots in the container, Fulguris installs as the default browser, the
+  Browser tile opens Fulguris through ferrix-shell (framebuffer capture), and
+  the container reaches the network and DNS. Fulguris's first-run terms are
+  left for the owner to accept. Android audio is silent (no PipeWire bridge).
+- **Bluetooth pairing UI on hardware:** Settings > Bluetooth > Pair new
+  device runs a bounded BlueZ discovery and lists nearby named devices with
+  signal bars (unnamed beacons are counted, not offered). Pairing with a
+  device was not exercised (no owned device in pairing mode).
+- **Other apps on hardware:** Files lists/creates folders in the user's home
+  (standard folders created on first start); Contacts creates and stores a
+  contact through the newly started ferrix-contactsd; Phone and Messages show
+  the modem absent; Terminal opens a shell; Camera states no camera
+  capability. Settings Wi-Fi lists each SSID once.
+- **Boot hygiene:** zram swap works (tegu's `zram_gs` aliased for
+  zramstart); `kill-plymouth` is unlinked; `rc-status` is clean.
+- **Not yet working on hardware:** WPA3-SAE-only networks, cellular (SIT
+  modem route is off on Kleaf), camera, Android audio, Mali GPU (software
+  rendering only).
 
 ## 2026-10-09 (Files app: home-confined file browser; QEMU framebuffer, shared with Pixel 9a)
 
