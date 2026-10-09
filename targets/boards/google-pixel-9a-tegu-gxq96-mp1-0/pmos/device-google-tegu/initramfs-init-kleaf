@@ -66,11 +66,15 @@ load_list() {
 		done
 		pending=$kept
 	fi
-	total=$(printf '%s\n' "$pending" | $bb wc -l)
+
+	total=$(printf '%s\n' $pending | $bb wc -l)
 	pass=0
 	while [ -n "$pending" ] && [ "$pass" -lt 3 ]; do
 		retry=
 		for module in $pending; do
+			# Already inserted (e.g. by the pKVM early loader): nothing to do.
+			loaded=$(printf '%s' "${module##*/}" | $bb sed 's/\.ko$//' | $bb tr - _)
+			$bb grep -q "^$loaded " /proc/modules && continue
 			# shellcheck disable=SC2046
 			$bb insmod "$directory/$module" $(module_args "$module") 2>/dev/null || retry="$retry $module"
 		done
@@ -290,9 +294,6 @@ log "kernel $release checkpoint=${checkpoint_target:-none}"
 checkpoint init
 start_flash_logger
 
-start_usb_debug
-checkpoint gadget
-
 # Kleaf ramdisks use lib/modules/<release>/; older Pixel ramdisks are flat.
 # Android's first-stage init accepts both, and so does this one.
 first_stage=/lib/modules/$release
@@ -301,8 +302,11 @@ modules_skip=$($bb sed -n 's/.*ferrix\.modules_skip=\([A-Za-z0-9_,-]*\).*/\1/p' 
 modules_limit=$($bb sed -n 's/.*ferrix\.modules_limit=\([0-9]*\).*/\1/p' /proc/cmdline)
 load_list "$first_stage/modules.load" "$first_stage" "$modules_limit"
 $bb mdev -s 2>/dev/null || :
-# Retry the console now that the clock/power/pinctrl providers are in.
+# The USB controller needs the clock/power-domain/PHY providers from the list
+# above; GKI's deferred-probe timeout gives up on devices whose suppliers come
+# late, so bring the console up only after the whole list is in.
 start_usb_debug
+checkpoint gadget
 checkpoint modules
 
 # The Exynos watchdog (s3c2410_wdt) arms during first-stage loading; Android's
