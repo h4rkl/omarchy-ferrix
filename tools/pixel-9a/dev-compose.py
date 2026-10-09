@@ -267,7 +267,12 @@ def main():
                              "or hold with the USB debug console up")
     parser.add_argument("--modules-limit", default=env("FERRIX_PIXEL9A_DEV_MODULES_LIMIT", ""),
                         help="load only the first N first-stage modules (bisection)")
+    parser.add_argument("--modules-skip", default=env("FERRIX_PIXEL9A_DEV_MODULES_SKIP", ""),
+                        help="comma-separated module names /init must not load (bisection)")
     args = parser.parse_args()
+    if args.modules_skip and not all(part.replace("-", "").replace("_", "").isalnum()
+                                     for part in args.modules_skip.split(",")):
+        die(f"modules skip must be comma-separated module names: {args.modules_skip}")
     if args.modules_limit and not args.modules_limit.isdigit():
         die(f"modules limit must be a number: {args.modules_limit}")
     if args.base_rootfs is None or args.out is None:
@@ -333,6 +338,8 @@ def main():
                 cmdline += f" ferrix.checkpoint_action={args.checkpoint_action}"
         if args.modules_limit:
             cmdline += f" ferrix.modules_limit={args.modules_limit}"
+        if args.modules_skip:
+            cmdline += f" ferrix.modules_skip={args.modules_skip}"
         empty = work / "vendor-ramdisk.cpio"
         empty.write_bytes(Cpio().finish())
         empty = lz4_legacy(empty)

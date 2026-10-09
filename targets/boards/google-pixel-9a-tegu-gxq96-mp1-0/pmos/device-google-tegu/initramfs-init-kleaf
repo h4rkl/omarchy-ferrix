@@ -45,6 +45,18 @@ load_list() {
 	pending=$($bb sed -e '/^#/d' -e '/^$/d' "$list")
 	# ferrix.modules_limit=N (bisection) loads only the first N entries.
 	[ -n "${3:-}" ] && pending=$(printf '%s\n' "$pending" | $bb head -n "$3")
+	# ferrix.modules_skip=a,b (bisection): drop these module names.
+	if [ -n "$modules_skip" ]; then
+		kept=
+		for module in $pending; do
+			base=$(printf '%s' "${module##*/}" | $bb sed 's/\.ko$//' | $bb tr - _)
+			case ",$modules_skip," in
+				*",$base,"*) log "skipping $base" ;;
+				*) kept="$kept $module" ;;
+			esac
+		done
+		pending=$kept
+	fi
 	total=$(printf '%s\n' "$pending" | $bb wc -l)
 	pass=0
 	while [ -n "$pending" ] && [ "$pass" -lt 3 ]; do
@@ -139,12 +151,7 @@ checkpoint() {
 	fi
 	# hold: stay at STAGE with the USB debug console up (end it from the shell).
 	# Without a bound gadget nobody can use the hold, so reboot promptly instead.
-	if [ "$checkpoint_action" = hold ]; then
-		[ -n "$gadget_bound" ] && hold_then_reboot "checkpoint $1 reached"
-		log "checkpoint $1 reached without a USB console; rebooting"
-		$bb sleep 2
-		$bb reboot -f
-	fi
+	[ "$checkpoint_action" = hold ] && hold_then_reboot "checkpoint $1 reached"
 	log "checkpoint $1 reached; rebooting to bootloader Fastboot"
 	/system/bin/modprobe -q -- pixel-reboot || log 'pixel-reboot did not load'
 	$bb sleep 1
@@ -153,9 +160,17 @@ checkpoint() {
 	$bb reboot -f
 }
 
+# Hold only when the USB console is up (someone can use it); otherwise reboot
+# within seconds so the bootloader's retry/fallback to the stock slot happens
+# quickly instead of leaving a black screen that looks like a dead phone.
 hold_then_reboot() {
-	log "$1; holding ${hold_seconds}s for USB debugging, then rebooting"
-	$bb sleep "$hold_seconds"
+	if [ -n "$gadget_bound" ]; then
+		log "$1; holding ${hold_seconds}s for USB debugging, then rebooting"
+		$bb sleep "$hold_seconds"
+	else
+		log "$1; no USB console, rebooting"
+		$bb sleep 3
+	fi
 	$bb reboot -f
 }
 
@@ -268,6 +283,7 @@ checkpoint gadget
 # Android's first-stage init accepts both, and so does this one.
 first_stage=/lib/modules/$release
 [ -f "$first_stage/modules.load" ] || first_stage=/lib/modules
+modules_skip=$($bb sed -n 's/.*ferrix\.modules_skip=\([A-Za-z0-9_,-]*\).*/\1/p' /proc/cmdline | $bb tr - _)
 modules_limit=$($bb sed -n 's/.*ferrix\.modules_limit=\([0-9]*\).*/\1/p' /proc/cmdline)
 load_list "$first_stage/modules.load" "$first_stage" "$modules_limit"
 $bb mdev -s 2>/dev/null || :
