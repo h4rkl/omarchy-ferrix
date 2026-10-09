@@ -9,9 +9,9 @@
 # itself arrives with postmarketos-base; `nft list ruleset` fails on the GKI,
 # so waydroid-net.sh still selects iptables.)
 # Audio: Ferrix runs PipeWire itself (ferrix-audio), and Waydroid needs a
-# pulse socket. Selecting pmOS's PipeWire audio backend replaces the default
-# PulseAudio one (they conflict), which lets pipewire-pulse serve Android.
-# ferrix-waydroid.sh falls back to a null-sink socket if it is missing.
+# pulse socket. rootfs.sh selects pmOS's PipeWire audio backend provider
+# (replacing the conflicting PulseAudio default), which lets pipewire-pulse
+# serve Android. ferrix-waydroid.sh falls back to a null-sink socket.
 waydroid
 waydroid-openrc
 lxc
@@ -20,5 +20,4 @@ iptables
 # Alpine's iptables is nft-backed (xtables-nft-multi) and fails without
 # nf_tables; waydroid-net.sh prefers iptables-legacy when it exists.
 iptables-legacy
-postmarketos-base-ui-audio-backend-pipewire
 pipewire-pulse

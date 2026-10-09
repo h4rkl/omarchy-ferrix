@@ -679,6 +679,7 @@ awk -F "$tab" '$1 == "android_runtime" && $2 == "waydroid-packages" && $3 ~ /(^|
 awk -F "$tab" '$1 == "artifact" && $2 == "android/packages" && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' \
 	"$android_manifest" || fail 'Android rootfs manifest does not hash the package set'
 grep -q 'opt-in Android runtime packages: waydroid,' "$work/android.out" || fail 'Android packages were not appended'
+grep -q '(audio backend: pipewire)' "$work/android.out" || fail 'Android build did not select the PipeWire audio backend'
 awk -F "$tab" '$1 == "route_id" && $2 == "development-google-kleaf-gki" { found=1 } END { exit(found ? 0 : 1) }' \
 	"$android_manifest" || fail 'kleaf-dev rootfs manifest does not record the development route'
 awk -F "$tab" '$1 == "input" && $2 == "kleaf_kernel_manifest" && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' \

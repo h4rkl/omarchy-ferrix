@@ -1041,7 +1041,12 @@ build_rootfs() {
 		awk -v extra="$android_list" '/^extra_packages = / { $0 = $0 "," extra; found=1 } { print } END { exit(found ? 0 : 1) }' \
 			"$config" >"$config_tmp" || die 'target pmbootstrap.cfg has no extra_packages line for the Android package set'
 		mv "$config_tmp" "$config"
-		printf '%s\n' "opt-in Android runtime packages: $android_list"
+		# pmaports selects the UI audio backend through pmbootstrap's
+		# providers (default PulseAudio, which conflicts with pipewire-pulse).
+		awk '{ print } /^\[providers\]$/ { print "postmarketos-base-ui-audio-backend = postmarketos-base-ui-audio-backend-pipewire"; found=1 } END { exit(found ? 0 : 1) }' \
+			"$config" >"$config_tmp" || die 'target pmbootstrap.cfg has no [providers] section for the Android audio backend'
+		mv "$config_tmp" "$config"
+		printf '%s\n' "opt-in Android runtime packages: $android_list (audio backend: pipewire)"
 	fi
 	printf '%s\n' "running pmbootstrap rootfs build with config $config"
 	# The target package set includes two local, source-pinned aports. Keep
