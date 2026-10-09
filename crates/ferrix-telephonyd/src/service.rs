@@ -26,6 +26,7 @@ use ferrix_telephony_api::{
 };
 use ferrix_telephony_protocol::{Event, Reply, SmsFilter, StateView};
 
+use crate::attention::Attention;
 use crate::identity::{CAP_STATE, Identity, IdentityInfo};
 use crate::records::Recorder;
 use crate::store::{SmsStore, StoreDocument};
@@ -89,6 +90,8 @@ pub struct Service {
     barrier_seq: AtomicU64,
     barriers: Mutex<BTreeSet<u64>>,
     barrier_reached: Condvar,
+    /// Alerted (outside every lock) when a new incoming call rings.
+    attention: Mutex<Option<Arc<dyn Attention>>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -177,6 +180,7 @@ impl Service {
             barrier_seq: AtomicU64::new(0),
             barriers: Mutex::new(BTreeSet::new()),
             barrier_reached: Condvar::new(),
+            attention: Mutex::new(None),
         });
         let snapshot = lock(&service.state).telephony.clone();
         service.publish(TelephonyEvent::ServiceRestarted { state: snapshot });
@@ -185,6 +189,11 @@ impl Service {
 
     pub fn recorder(&self) -> &Recorder {
         &self.recorder
+    }
+
+    /// Composes the incoming-call alert (the binary: `ferrix-appd`).
+    pub fn set_attention(&self, attention: Arc<dyn Attention>) {
+        *lock(&self.attention) = Some(attention);
     }
 
     pub fn backend_name(&self) -> &'static str {
@@ -378,6 +387,7 @@ impl Service {
 
     pub fn handle_backend_event(&self, event: BackendEvent) {
         let mut events = Vec::new();
+        let mut ringing = false;
         {
             let mut state = lock(&self.state);
             let mut persist = false;
@@ -462,6 +472,8 @@ impl Service {
                     state: call_state,
                 } => {
                     if !state.call_by_handle.contains_key(&handle) {
+                        ringing |=
+                            direction == Direction::Incoming && call_state == CallState::Ringing;
                         let call = new_call(&mut state, &handle, direction, number, call_state);
                         events.push(TelephonyEvent::CallChanged { call });
                     }
@@ -526,6 +538,12 @@ impl Service {
         }
         for event in events {
             self.publish(event);
+        }
+        if ringing {
+            let attention = lock(&self.attention).clone();
+            if let Some(attention) = attention {
+                attention.incoming_call();
+            }
         }
     }
 

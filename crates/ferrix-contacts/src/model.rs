@@ -1,10 +1,11 @@
 //! Contacts view model: list with search, detail, create/edit form, delete
 //! confirmation, and export. Radio-independent: only `ferrix-contactsd` is
-//! involved. Call/Message chips are deliberately absent this milestone: an
-//! application-role connection may not ask `ferrix-appd` to launch another
-//! app, so the detail page shows numbers only.
+//! involved. Call and Message on the detail page open typed `dial` /
+//! `compose` intents through `ferrix-appd`, which picks the handler (Phone,
+//! Messages) and prefills the number; nothing is dialed or sent here.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+use ferrix_app_api::AppIntent;
 use ferrix_contacts_api::{
     Contact, ContactEvent, ContactId, ContactInput, NumberInput, NumberLabel, search,
 };
@@ -179,6 +180,8 @@ pub enum Action {
     Update(ContactId, ContactInput),
     Delete(ContactId),
     Export,
+    /// Open the handler of a dial/compose intent through `ferrix-appd`.
+    Open(AppIntent),
     Back,
 }
 
@@ -413,6 +416,41 @@ impl Model {
         }
         self.focus = None;
         Ok(())
+    }
+
+    /// The number Call and Message use: the selected contact's first one,
+    /// normalized when the service could.
+    pub fn primary_number(&self) -> Option<String> {
+        self.selected()
+            .and_then(|c| c.numbers.first())
+            .map(|n| n.display().to_owned())
+    }
+
+    /// Call: open the dialer prefilled with the primary number. Never dials;
+    /// the user presses Call in Phone.
+    pub fn call_selected(&mut self) {
+        self.open_with(|number| AppIntent::Dial { number });
+    }
+
+    /// Message: open a composer addressed to the primary number. Never
+    /// sends.
+    pub fn message_selected(&mut self) {
+        self.open_with(|number| AppIntent::Compose { number });
+    }
+
+    fn open_with(&mut self, intent: impl FnOnce(String) -> AppIntent) {
+        let Some(number) = self.primary_number() else {
+            self.last_error = Some("number \u{b7} none".to_owned());
+            return;
+        };
+        let intent = intent(number);
+        match intent.validate() {
+            Ok(()) => {
+                self.last_error = None;
+                self.pending.push(Action::Open(intent));
+            }
+            Err(_) => self.last_error = Some("number \u{b7} cannot be opened".to_owned()),
+        }
     }
 
     pub fn ask_delete(&mut self) {

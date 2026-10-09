@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
-use ferrix_app_api::SCHEMA_VERSION;
+use ferrix_app_api::{IntentKind, SCHEMA_VERSION};
 use ferrix_app_protocol::{ClientRole, Inbound, Reply, Report, Request};
 
 use crate::service::Service;
@@ -60,6 +60,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
         Inbound::Request(Request::Terminate { .. }) => "terminate",
         Inbound::Request(Request::Home) => "home",
         Inbound::Request(Request::Subscribe) => "subscribe",
+        Inbound::Request(Request::Open { .. }) => "open",
         Inbound::Report(Report::SurfaceMapped { .. }) => "surface-mapped",
         Inbound::Report(Report::SurfaceUnmapped { .. }) => "surface-unmapped",
         Inbound::Report(Report::FocusChanged { .. }) => "focus-changed",
@@ -77,11 +78,13 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
 /// | `Home` | `compositor`, `home`, `application`, `tool` |
 /// | `Identify` | `service`, `tool` |
 /// | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
+/// | `Open` (`dial`, `compose`) | `application`, `home`, `tool` |
+/// | `Open` (`show-call`) | `service`, `tool` |
 /// | surface/focus/gesture reports | `compositor` |
 /// | `YieldForeground` | `application`, `home` |
 ///
-/// A `service` resolves identities and observes; it never steers the shell
-/// or launches anything.
+/// A `service` resolves identities and observes; the only thing it may
+/// raise is the handler of a system intent (`show-call`), never a named app.
 pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
     use ClientRole::*;
     match inbound {
@@ -102,6 +105,10 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
             | Report::CloseGesture,
         ) => role == Compositor,
         Inbound::Report(Report::YieldForeground) => matches!(role, Application | Home),
+        Inbound::Request(Request::Open { intent }) => match intent.kind() {
+            IntentKind::Dial | IntentKind::Compose => matches!(role, Application | Home | Tool),
+            IntentKind::ShowCall => matches!(role, Service | Tool),
+        },
     }
 }
 
@@ -213,6 +220,14 @@ fn handle_request(
             Err(error) => Reply::Error { error },
         },
         Request::Home => match service.home() {
+            Ok(outcome) => Reply::Instance {
+                schema_version: SCHEMA_VERSION,
+                instance: outcome.instance,
+                activated_existing: outcome.activated_existing,
+            },
+            Err(error) => Reply::Error { error },
+        },
+        Request::Open { intent } => match service.open(&intent) {
             Ok(outcome) => Reply::Instance {
                 schema_version: SCHEMA_VERSION,
                 instance: outcome.instance,
@@ -337,7 +352,11 @@ impl Server {
                     let Ok(sink) = writer.try_clone() else {
                         return;
                     };
-                    if self.service.subscribe(role, Box::new(sink)).is_err() {
+                    if self
+                        .service
+                        .subscribe_peer(role, connection.peer_pid, Box::new(sink))
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -397,6 +416,67 @@ mod tests {
 
     fn terminal() -> AppId {
         AppId::new("org.ferrix.terminal").unwrap()
+    }
+
+    #[test]
+    fn open_is_gated_by_intent_kind() {
+        use ferrix_app_api::AppIntent;
+        let dial = Inbound::Request(Request::Open {
+            intent: AppIntent::Dial {
+                number: "5550100".to_owned(),
+            },
+        });
+        let show = Inbound::Request(Request::Open {
+            intent: AppIntent::ShowCall,
+        });
+        for (role, dial_ok, show_ok) in [
+            (ClientRole::Application, true, false),
+            (ClientRole::Home, true, false),
+            (ClientRole::Tool, true, true),
+            (ClientRole::Service, false, true),
+            (ClientRole::Compositor, false, false),
+        ] {
+            assert_eq!(allowed(role, &dial), dial_ok, "{role:?} dial");
+            assert_eq!(allowed(role, &show), show_ok, "{role:?} show-call");
+        }
+        assert_eq!(message_name(&show), "open");
+    }
+
+    #[test]
+    fn service_show_call_launches_the_repository_phone() {
+        let (service, runtime, records) = service();
+        let mut conn = Connection::default();
+        dispatch(
+            &service,
+            &mut conn,
+            Inbound::Request(Request::Hello {
+                role: ClientRole::Service,
+            }),
+        );
+        let reply = dispatch(
+            &service,
+            &mut conn,
+            Inbound::Request(Request::Open {
+                intent: ferrix_app_api::AppIntent::ShowCall,
+            }),
+        );
+        let phone = AppId::new("org.ferrix.phone").unwrap();
+        match reply {
+            Outcome::Reply(Reply::Instance { instance, .. }) => assert_eq!(instance.app, phone),
+            other => panic!("{other:?}"),
+        }
+        assert!(runtime.last_pid(&phone).is_some());
+        assert!(captured_events(&records).contains(&"app-intent".to_owned()));
+        // A service still may not launch by name.
+        let refused = dispatch(
+            &service,
+            &mut conn,
+            Inbound::Request(Request::Launch { id: terminal() }),
+        );
+        assert!(matches!(
+            refused,
+            Outcome::Reply(Reply::ProtocolError { .. })
+        ));
     }
 
     #[test]

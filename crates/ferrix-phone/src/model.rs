@@ -694,6 +694,41 @@ impl Model {
     }
 }
 
+impl Model {
+    /// Applies an intent `ferrix-appd` delivered (at launch or while
+    /// running). `dial` fills the dialer buffer the way typing would and
+    /// never places the call; it waits while a call is live. `show-call`
+    /// brings the focused live or ringing call forward. Returns whether
+    /// anything visible changed.
+    pub fn apply_intent(&mut self, intent: &ferrix_app_api::AppIntent) -> bool {
+        use ferrix_app_api::AppIntent;
+        match intent {
+            AppIntent::Dial { number } => {
+                self.typed.clear();
+                for ch in number.chars() {
+                    if ch.is_ascii_digit() || matches!(ch, '*' | '#') {
+                        self.key(ch);
+                    } else if ch == '+' && self.typed.is_empty() {
+                        self.typed.push('+');
+                    }
+                }
+                if self.live_call().is_none() {
+                    if self.page == Page::Ended {
+                        self.dismiss_ended();
+                    }
+                    self.page = Page::Dialer;
+                }
+                true
+            }
+            AppIntent::ShowCall => {
+                self.refocus();
+                true
+            }
+            AppIntent::Compose { .. } => false,
+        }
+    }
+}
+
 /// `m:ss`, or `h:mm:ss` from an hour.
 pub fn format_duration(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
@@ -984,6 +1019,40 @@ mod tests {
             Some(CallEndReason::Rejected),
         ));
         assert_eq!((m.page, m.state_name().as_str()), (Page::Ended, "rejected"));
+    }
+
+    #[test]
+    fn dial_intent_prefills_without_dialing_and_show_call_refocuses() {
+        use ferrix_app_api::AppIntent;
+        let mut m = connected(None);
+        m.page = Page::Recent;
+        m.key('9');
+        assert!(m.apply_intent(&AppIntent::Dial {
+            number: "+1 (555) 010-0042".to_owned()
+        }));
+        assert_eq!(m.typed, "+15550100042");
+        assert_eq!(m.page, Page::Dialer);
+        assert!(m.pending.is_empty(), "an intent never places a call");
+        assert_eq!(m.dial_block(), Ok(()));
+        // While a call rings the buffer fills but the call stays in front.
+        m.apply(call_event(
+            "in1",
+            Direction::Incoming,
+            CallState::Ringing,
+            None,
+        ));
+        m.apply_intent(&AppIntent::Dial {
+            number: "5550100".to_owned(),
+        });
+        assert_eq!(m.page, Page::Incoming);
+        assert_eq!(m.typed, "5550100");
+        m.page = Page::Dialer;
+        assert!(m.apply_intent(&AppIntent::ShowCall));
+        assert_eq!(m.page, Page::Incoming);
+        assert!(m.pending.is_empty());
+        assert!(!m.apply_intent(&AppIntent::Compose {
+            number: "1".to_owned()
+        }));
     }
 
     #[test]

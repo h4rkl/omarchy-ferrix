@@ -46,6 +46,9 @@ pub const REPO_APP_DIR: &str = "apps";
 pub const GRANTS_FILE_NAME: &str = "grants.json";
 /// Environment variable overriding the grants policy path.
 pub const GRANTS_PATH_ENV: &str = "FERRIX_APP_GRANTS";
+/// Environment variable carrying the [`AppIntent`] (one JSON object) an
+/// application was launched to handle. Never recorded by the service.
+pub const APP_INTENT_ENV: &str = "FERRIX_APP_INTENT";
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -342,6 +345,10 @@ pub struct AppDescriptor {
     pub trust: TrustLevel,
     #[serde(default)]
     pub capabilities: BTreeSet<AppCapability>,
+    /// Intent kinds this application handles (`Request::Open` resolves the
+    /// handler from this set). Declaring a kind grants nothing.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub intents: BTreeSet<IntentKind>,
 }
 
 fn default_true() -> bool {
@@ -388,6 +395,121 @@ impl AppDescriptor {
             return Err(invalid("the home surface must be launchable".to_owned()));
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Intents
+// ---------------------------------------------------------------------------
+
+/// The kind of an [`AppIntent`]; what a descriptor declares it handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IntentKind {
+    Dial,
+    Compose,
+    ShowCall,
+}
+
+impl IntentKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            IntentKind::Dial => "dial",
+            IntentKind::Compose => "compose",
+            IntentKind::ShowCall => "show-call",
+        }
+    }
+}
+
+impl fmt::Display for IntentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// Longest phone number an intent may carry.
+pub const INTENT_NUMBER_MAX: usize = 32;
+
+/// A typed request to open whichever application handles it. Intents only
+/// prefill or reveal UI: a dial intent never places a call and a compose
+/// intent never sends; the user still confirms in the handler.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "intent", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum AppIntent {
+    /// Open the dialer with `number` in the buffer.
+    Dial { number: String },
+    /// Open a message composer addressed to `number`.
+    Compose { number: String },
+    /// Show the ringing or live call (system services only).
+    ShowCall,
+}
+
+impl AppIntent {
+    pub fn kind(&self) -> IntentKind {
+        match self {
+            AppIntent::Dial { .. } => IntentKind::Dial,
+            AppIntent::Compose { .. } => IntentKind::Compose,
+            AppIntent::ShowCall => IntentKind::ShowCall,
+        }
+    }
+
+    /// The phone number carried by the intent, if any.
+    pub fn number(&self) -> Option<&str> {
+        match self {
+            AppIntent::Dial { number } | AppIntent::Compose { number } => Some(number),
+            AppIntent::ShowCall => None,
+        }
+    }
+
+    /// A number is at most [`INTENT_NUMBER_MAX`] characters, has at least
+    /// one digit, and contains only digits, a leading `+`, and the
+    /// separators ` -()*#`.
+    pub fn validate(&self) -> Result<(), AppError> {
+        let Some(number) = self.number() else {
+            return Ok(());
+        };
+        let invalid = |reason: &str| AppError::InvalidIntent {
+            reason: reason.to_owned(),
+        };
+        if number.chars().count() > INTENT_NUMBER_MAX {
+            return Err(invalid("number is too long"));
+        }
+        if !number.chars().any(|c| c.is_ascii_digit()) {
+            return Err(invalid("number has no digits"));
+        }
+        let allowed = number.chars().enumerate().all(|(i, c)| {
+            c.is_ascii_digit()
+                || matches!(c, ' ' | '-' | '(' | ')' | '*' | '#')
+                || (c == '+' && i == 0)
+        });
+        if !allowed {
+            return Err(invalid(
+                "number may only contain digits, a leading + and separators",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Parses and validates one JSON intent.
+    pub fn from_json(text: &str) -> Result<Self, AppError> {
+        let intent: Self = serde_json::from_str(text).map_err(|e| AppError::InvalidIntent {
+            reason: e.to_string(),
+        })?;
+        intent.validate()?;
+        Ok(intent)
+    }
+
+    /// The intent this process was launched with ([`APP_INTENT_ENV`]);
+    /// absent or invalid values are `None`.
+    pub fn from_env() -> Option<Self> {
+        std::env::var(APP_INTENT_ENV)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .and_then(|v| Self::from_json(&v).ok())
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
     }
 }
 
@@ -765,6 +887,14 @@ pub enum AppError {
     InvalidGrants {
         reason: String,
     },
+    /// No launchable catalog entry handles this intent kind.
+    NoHandler {
+        intent: IntentKind,
+    },
+    /// An intent payload failed validation.
+    InvalidIntent {
+        reason: String,
+    },
     Io {
         reason: String,
     },
@@ -801,6 +931,8 @@ impl fmt::Display for AppError {
                 write!(f, "required isolation for {id} unavailable: {reason}")
             }
             AppError::InvalidGrants { reason } => write!(f, "invalid grants policy: {reason}"),
+            AppError::NoHandler { intent } => write!(f, "no application handles {intent}"),
+            AppError::InvalidIntent { reason } => write!(f, "invalid intent: {reason}"),
             AppError::Io { reason } => write!(f, "i/o error: {reason}"),
         }
     }
@@ -862,6 +994,7 @@ mod tests {
             role: AppRole::Application,
             trust: TrustLevel::Untrusted,
             capabilities: [AppCapability::Shell].into_iter().collect(),
+            intents: Default::default(),
         }
     }
 
@@ -1163,5 +1296,59 @@ mod repo_descriptors {
         let policy = GrantsPolicy::from_json(&text).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(policy.schema_version, SCHEMA_VERSION);
         assert!(!policy.is_empty());
+    }
+
+    #[test]
+    fn intents_have_tagged_wire_forms_and_validate_numbers() {
+        let dial = AppIntent::Dial {
+            number: "+1 (555) 010-0042".to_owned(),
+        };
+        let text = dial.to_json();
+        assert_eq!(text, r#"{"intent":"dial","number":"+1 (555) 010-0042"}"#);
+        assert_eq!(AppIntent::from_json(&text).unwrap(), dial);
+        assert_eq!(dial.kind(), IntentKind::Dial);
+        assert_eq!(AppIntent::ShowCall.to_json(), r#"{"intent":"show-call"}"#);
+        assert_eq!(
+            AppIntent::from_json(r#"{"intent":"compose","number":"5550100"}"#)
+                .unwrap()
+                .kind(),
+            IntentKind::Compose
+        );
+        for bad in [
+            r#"{"intent":"dial","number":""}"#,
+            r#"{"intent":"dial","number":"call-me"}"#,
+            r#"{"intent":"dial","number":"55+5"}"#,
+            r#"{"intent":"dial","number":"1","extra":true}"#,
+            r#"{"intent":"teleport"}"#,
+        ] {
+            assert!(AppIntent::from_json(bad).is_err(), "{bad}");
+        }
+        let long = AppIntent::Compose {
+            number: "1".repeat(INTENT_NUMBER_MAX + 1),
+        };
+        assert!(matches!(
+            long.validate(),
+            Err(AppError::InvalidIntent { .. })
+        ));
+        assert_eq!(
+            serde_json::to_string(&AppError::NoHandler {
+                intent: IntentKind::ShowCall
+            })
+            .unwrap(),
+            r#"{"kind":"no-handler","intent":"show-call"}"#
+        );
+    }
+
+    #[test]
+    fn descriptor_intents_default_to_empty_and_round_trip() {
+        let mut d = AppDescriptor::from_json(
+            r#"{"schema_version":1,"id":"org.ferrix.test","runtime":"native","name":"Test"}"#,
+        )
+        .unwrap();
+        assert!(d.intents.is_empty());
+        assert!(!d.to_json().contains("intents"));
+        d.intents.insert(IntentKind::Dial);
+        let back = AppDescriptor::from_json(&d.to_json()).unwrap();
+        assert_eq!(back.intents, d.intents);
     }
 }

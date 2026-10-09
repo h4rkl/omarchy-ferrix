@@ -1351,3 +1351,60 @@ fn socket_server_serves_hello_state_subscribe_and_rejects_garbage() {
     assert_eq!(event.name(), "call-changed");
     let _ = std::fs::remove_dir_all(&h.dir);
 }
+
+// ---------------------------------------------------------------------------
+// Incoming-call attention
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct CountingAttention(std::sync::atomic::AtomicUsize);
+
+impl ferrix_telephonyd::Attention for CountingAttention {
+    fn incoming_call(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn only_a_new_ringing_incoming_call_raises_attention() {
+    let h = harness("attention");
+    let attention = Arc::new(CountingAttention::default());
+    h.service.set_attention(attention.clone());
+    let count = || attention.0.load(std::sync::atomic::Ordering::SeqCst);
+    // Outgoing calls never raise anything.
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("out"),
+        direction: Direction::Outgoing,
+        number: number(),
+        state: CallState::Dialing,
+    });
+    assert_eq!(count(), 0);
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("in"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Ringing,
+    });
+    assert_eq!(count(), 1);
+    // A duplicate add and later state changes of the same call do not.
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("in"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Ringing,
+    });
+    h.service.handle_backend_event(BackendEvent::CallChanged {
+        handle: CallHandle::from("in"),
+        state: CallState::Active,
+        end_reason: None,
+    });
+    assert_eq!(count(), 1);
+    // A second incoming call rings again.
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("in2"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Ringing,
+    });
+    assert_eq!(count(), 2);
+}

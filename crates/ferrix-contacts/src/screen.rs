@@ -211,14 +211,29 @@ fn detail(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
             false,
         );
     }
-    wrap_text(
+    if let Some(error) = &model.last_error {
+        notice(c, ty, l.detail_notice_rect(), error, Tone::Err);
+    }
+    // Call and Message only open the handler with the number filled in;
+    // the call is placed (or the message sent) there.
+    let has_number = model.primary_number().is_some();
+    button(
         c,
         ty,
-        "Calls and messages start from the Phone and Messages apps; this milestone keeps Contacts radio-independent.",
-        s(96),
-        s(1560),
-        c.width() - s(192),
-        s(26),
+        l.call_rect(),
+        "Call",
+        ButtonKind::Primary,
+        input.pressed == Some(Target::Call),
+        has_number,
+    );
+    button(
+        c,
+        ty,
+        l.message_rect(),
+        "Message",
+        ButtonKind::Secondary,
+        input.pressed == Some(Target::Message),
+        has_number,
     );
     button(
         c,
@@ -377,6 +392,35 @@ mod tests {
         assert_eq!(c.get(d.x + d.w / 2, d.y), t.err);
         let nr = l.detail_number_rects(1)[0];
         assert_eq!(c.get(nr.x + 8, nr.y + 8), t.surface);
+        let call = l.call_rect();
+        assert_eq!(
+            c.get(call.x + call.w / 2, call.y),
+            t.rust,
+            "Call is primary"
+        );
+        let msg = l.message_rect();
+        assert_eq!(
+            c.get(msg.x + msg.w / 2, msg.y),
+            t.border,
+            "Message is secondary"
+        );
+        assert!(
+            blank(&c, l.detail_notice_rect()),
+            "no notice without an error"
+        );
+        let mut empty = m.clone();
+        if let Some(contact) = empty.contacts.iter_mut().find(|c| c.id == id) {
+            contact.numbers.clear();
+        }
+        let c = compose(&ty, (1080, 2340), 600, &empty, &input);
+        assert_eq!(
+            c.get(call.x + call.w / 2, call.y),
+            t.border,
+            "Call disabled without a number"
+        );
+        empty.call_selected();
+        let c = compose(&ty, (1080, 2340), 600, &empty, &input);
+        assert!(!blank(&c, l.detail_notice_rect()), "the reason is shown");
 
         m.new_contact();
         let c = compose(&ty, (1080, 2340), 600, &m, &input);

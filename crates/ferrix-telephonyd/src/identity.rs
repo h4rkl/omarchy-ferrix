@@ -184,9 +184,28 @@ pub struct AppdIdentity {
     generation: AtomicU64,
 }
 
-struct Link {
+pub(crate) struct Link {
     writer: UnixStream,
     reader: BufReader<UnixStream>,
+}
+
+/// Opens a role-`service` link to the application service.
+pub(crate) fn connect_link(socket: &Path, timeout: Duration) -> Result<Link, String> {
+    let stream = UnixStream::connect(socket)
+        .map_err(|e| format!("appd socket {}: {e}", socket.display()))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| format!("appd timeout: {e}"))?;
+    let writer = stream.try_clone().map_err(|e| format!("appd clone: {e}"))?;
+    let mut link = Link {
+        writer,
+        reader: BufReader::new(stream),
+    };
+    let hello = link.exchange(&json!({"request": "hello", "role": "service"}))?;
+    if hello.get("reply").and_then(Value::as_str) != Some("hello") {
+        return Err(format!("unexpected appd hello reply: {hello}"));
+    }
+    Ok(link)
 }
 
 impl AppdIdentity {
@@ -204,21 +223,7 @@ impl AppdIdentity {
     }
 
     fn connect(&self) -> Result<Link, String> {
-        let stream = UnixStream::connect(&self.socket)
-            .map_err(|e| format!("appd socket {}: {e}", self.socket.display()))?;
-        stream
-            .set_read_timeout(Some(self.timeout))
-            .map_err(|e| format!("appd timeout: {e}"))?;
-        let writer = stream.try_clone().map_err(|e| format!("appd clone: {e}"))?;
-        let mut link = Link {
-            writer,
-            reader: BufReader::new(stream),
-        };
-        let hello = link.exchange(&json!({"request": "hello", "role": "service"}))?;
-        if hello.get("reply").and_then(Value::as_str) != Some("hello") {
-            return Err(format!("unexpected appd hello reply: {hello}"));
-        }
-        Ok(link)
+        connect_link(&self.socket, self.timeout)
     }
 
     fn with_link<T>(&self, f: impl Fn(&mut Link) -> Result<T, String>) -> Result<T, String> {
@@ -240,7 +245,7 @@ impl AppdIdentity {
 }
 
 impl Link {
-    fn exchange(&mut self, request: &Value) -> Result<Value, String> {
+    pub(crate) fn exchange(&mut self, request: &Value) -> Result<Value, String> {
         let mut text = request.to_string();
         text.push('\n');
         self.writer

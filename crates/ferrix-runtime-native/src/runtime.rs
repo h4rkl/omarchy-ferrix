@@ -499,6 +499,7 @@ mod tests {
             role: AppRole::Application,
             trust: TrustLevel::Untrusted,
             capabilities: Default::default(),
+            intents: Default::default(),
         }
     }
 

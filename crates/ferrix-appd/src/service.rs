@@ -15,9 +15,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{
-    APP_ID_ENV, APP_INSTANCE_ENV, APPD_SOCKET_ENV, AppCapability, AppError, AppEvent, AppId,
-    AppIdentity, AppInstance, DEFAULT_APPD_SOCKET, ExitReason, GrantsPolicy, LifecycleState,
-    RuntimeKind, SCHEMA_VERSION, TELEPHONY_APN_ENV,
+    APP_ID_ENV, APP_INSTANCE_ENV, APP_INTENT_ENV, APPD_SOCKET_ENV, AppCapability, AppError,
+    AppEvent, AppId, AppIdentity, AppInstance, AppIntent, DEFAULT_APPD_SOCKET, ExitReason,
+    GrantsPolicy, IntentKind, LifecycleState, RuntimeKind, SCHEMA_VERSION, TELEPHONY_APN_ENV,
 };
 use ferrix_app_protocol::{ClientRole, Notification, Reply};
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
@@ -80,10 +80,33 @@ pub struct PendingRestart {
 }
 
 /// A stream that asked for notifications. Compositor subscribers also
-/// receive `Notification::Activate`.
+/// receive `Notification::Activate`; a stream resolved to an application
+/// (`app`) also receives that application's `Notification::Intent`s.
 pub struct Subscriber {
     pub role: ClientRole,
+    pub app: Option<AppId>,
     pub sink: Box<dyn Write + Send>,
+}
+
+/// How an opened intent reached its handler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntentDelivery {
+    /// The handler was launched with the intent in its environment.
+    Launch,
+    /// The running handler was activated and the intent pushed to it.
+    Running,
+    /// The running handler was activated but holds no subscription.
+    ActivatedOnly,
+}
+
+impl IntentDelivery {
+    pub fn name(self) -> &'static str {
+        match self {
+            IntentDelivery::Launch => "launch",
+            IntentDelivery::Running => "running",
+            IntentDelivery::ActivatedOnly => "activated-only",
+        }
+    }
 }
 
 struct Tracked {
@@ -277,11 +300,61 @@ impl Service {
             state.home_restart.reset();
             state.pending_restart = None;
         }
-        let instance = self.launch_locked(&mut state, id)?;
+        let instance = self.launch_locked(&mut state, id, None)?;
         Ok(LaunchOutcome {
             instance,
             activated_existing: false,
         })
+    }
+
+    /// The handler of an intent kind: the first launchable catalog entry, in
+    /// id order, that declares it.
+    pub fn intent_handler(&self, kind: IntentKind) -> Option<AppId> {
+        self.catalog
+            .launchable()
+            .find(|d| d.intents.contains(&kind))
+            .map(|d| d.id.clone())
+    }
+
+    /// Opens the handler of `intent`: launches it with the intent in its
+    /// environment, or activates the running instance and pushes the intent
+    /// to that application's own subscriptions only. The number an intent
+    /// carries is never recorded.
+    pub fn open(self: &Arc<Self>, intent: &AppIntent) -> Result<LaunchOutcome, AppError> {
+        intent.validate()?;
+        let kind = intent.kind();
+        let handler = self
+            .intent_handler(kind)
+            .ok_or(AppError::NoHandler { intent: kind })?;
+        let mut state = self.lock_state();
+        let (outcome, delivery) = match self.activate_locked(&mut state, &handler) {
+            Some(instance) => {
+                let reached = self.publish_intent(&handler, intent);
+                (
+                    LaunchOutcome {
+                        instance,
+                        activated_existing: true,
+                    },
+                    if reached {
+                        IntentDelivery::Running
+                    } else {
+                        IntentDelivery::ActivatedOnly
+                    },
+                )
+            }
+            None => {
+                let instance = self.launch_locked(&mut state, &handler, Some(intent))?;
+                (
+                    LaunchOutcome {
+                        instance,
+                        activated_existing: false,
+                    },
+                    IntentDelivery::Launch,
+                )
+            }
+        };
+        self.recorder.app_intent(kind, &handler, delivery);
+        Ok(outcome)
     }
 
     /// Raises a running app; `NotRunning` otherwise.
@@ -465,11 +538,46 @@ impl Service {
 
     /// Registers a subscriber and acknowledges on its own stream while
     /// holding the fan-out lock, so no notification precedes the `Ok`.
-    pub fn subscribe(&self, role: ClientRole, mut sink: Box<dyn Write + Send>) -> io::Result<()> {
+    pub fn subscribe(&self, role: ClientRole, sink: Box<dyn Write + Send>) -> io::Result<()> {
+        self.subscribe_peer(role, None, sink)
+    }
+
+    /// [`Service::subscribe`] for a socket peer: the kernel pid is resolved
+    /// to the application it belongs to, so intents reach only that app.
+    pub fn subscribe_peer(
+        &self,
+        role: ClientRole,
+        peer_pid: Option<u32>,
+        mut sink: Box<dyn Write + Send>,
+    ) -> io::Result<()> {
+        let app = peer_pid.and_then(|pid| {
+            let mut state = self.lock_state();
+            self.resolve_pid(&mut state, pid)
+        });
         let mut subscribers = lock(&self.subscribers);
         write_line(&mut *sink, &Reply::Ok)?;
-        subscribers.push(Subscriber { role, sink });
+        subscribers.push(Subscriber { role, app, sink });
         Ok(())
+    }
+
+    /// Pushes `intent` to the subscriptions of `app` only. Returns whether
+    /// at least one stream took it.
+    fn publish_intent(&self, app: &AppId, intent: &AppIntent) -> bool {
+        let notification = Notification::Intent {
+            app_id: app.clone(),
+            intent: intent.clone(),
+        };
+        let mut reached = false;
+        let mut subscribers = lock(&self.subscribers);
+        subscribers.retain_mut(|subscriber| {
+            if subscriber.app.as_ref() != Some(app) {
+                return true;
+            }
+            let alive = write_line(&mut *subscriber.sink, &notification).is_ok();
+            reached |= alive;
+            alive
+        });
+        reached
     }
 
     pub fn subscriber_count(&self) -> usize {
@@ -486,8 +594,13 @@ impl Service {
     }
 
     /// Fans a notification out; `Activate` only reaches compositor
-    /// subscribers. Dead streams are dropped.
+    /// subscribers and `Intent` only its handler's streams. Dead streams are
+    /// dropped.
     pub fn publish(&self, notification: &Notification) {
+        if let Notification::Intent { app_id, intent } = notification {
+            self.publish_intent(app_id, intent);
+            return;
+        }
         let compositor_only = matches!(notification, Notification::Activate { .. });
         let mut subscribers = lock(&self.subscribers);
         subscribers.retain_mut(|subscriber| {
@@ -550,7 +663,7 @@ impl Service {
                 RestartDecision::Restart { attempt, delay } => {
                     self.recorder.home_restarting(attempt, delay);
                     if delay.is_zero() {
-                        let _ = self.launch_locked(&mut state, id);
+                        let _ = self.launch_locked(&mut state, id, None);
                     } else {
                         self.schedule_home_restart(&mut state, attempt, delay);
                     }
@@ -573,6 +686,7 @@ impl Service {
         self: &Arc<Self>,
         state: &mut State,
         id: &AppId,
+        intent: Option<&AppIntent>,
     ) -> Result<AppInstance, AppError> {
         let entry = self
             .catalog
@@ -617,6 +731,11 @@ impl Service {
             && !apn.is_empty()
         {
             env.push((TELEPHONY_APN_ENV.to_owned(), apn.to_owned()));
+        }
+        // An intent may carry a phone number: it is handed to the handler
+        // only and never appears in appd records.
+        if let Some(intent) = intent {
+            env.push((APP_INTENT_ENV.to_owned(), intent.to_json()));
         }
         let context = LaunchContext {
             instance: number,
@@ -842,7 +961,7 @@ impl Service {
         {
             return;
         }
-        let _ = self.launch_locked(&mut state, &home);
+        let _ = self.launch_locked(&mut state, &home, None);
     }
 }
 
@@ -897,6 +1016,7 @@ mod tests {
             role,
             trust: TrustLevel::Untrusted,
             capabilities: Default::default(),
+            intents: Default::default(),
         }
     }
 
@@ -1217,6 +1337,159 @@ mod tests {
         );
     }
 
+    fn intent_harness() -> Harness {
+        let home = descriptor("org.example.home", RuntimeKind::Native, AppRole::Home, true);
+        let mut phone = descriptor(
+            "org.example.phone",
+            RuntimeKind::Native,
+            AppRole::Application,
+            true,
+        );
+        phone.intents = [IntentKind::Dial, IntentKind::ShowCall]
+            .into_iter()
+            .collect();
+        // A later id that also declares dial: the first in id order wins.
+        let mut second = descriptor(
+            "org.example.zdialer",
+            RuntimeKind::Native,
+            AppRole::Application,
+            true,
+        );
+        second.intents = [IntentKind::Dial].into_iter().collect();
+        // A non-launchable entry never handles anything.
+        let mut parked = descriptor(
+            "org.example.amessages",
+            RuntimeKind::Native,
+            AppRole::Application,
+            false,
+        );
+        parked.intents = [IntentKind::Compose].into_iter().collect();
+        let catalog = Catalog::from_descriptors([home, phone, second, parked]).unwrap();
+        harness_with(catalog, GrantsPolicy::empty(), Arc::new(Instant::now))
+    }
+
+    fn dial() -> AppIntent {
+        AppIntent::Dial {
+            number: "+15550100042".to_owned(),
+        }
+    }
+
+    #[test]
+    fn open_launches_the_handler_with_the_intent_and_never_records_the_number() {
+        let h = intent_harness();
+        let phone = id("org.example.phone");
+        assert_eq!(
+            h.service.intent_handler(IntentKind::Dial),
+            Some(phone.clone())
+        );
+        assert_eq!(
+            h.service.open(&AppIntent::Compose {
+                number: "5550100".to_owned()
+            }),
+            Err(AppError::NoHandler {
+                intent: IntentKind::Compose
+            })
+        );
+        assert!(matches!(
+            h.service.open(&AppIntent::Dial {
+                number: "not a number".to_owned()
+            }),
+            Err(AppError::InvalidIntent { .. })
+        ));
+        let outcome = h.service.open(&dial()).unwrap();
+        assert!(!outcome.activated_existing);
+        assert_eq!(outcome.instance.app, phone);
+        let env = h.runtime.last_env(&phone).unwrap();
+        assert!(env.contains(&(APP_INTENT_ENV.to_owned(), dial().to_json())));
+        let records = h.records.lock().unwrap().clone();
+        let intent = records
+            .iter()
+            .find(|r| r["event"] == "app-intent")
+            .expect("app-intent record");
+        assert_eq!(intent["kind"], "dial");
+        assert_eq!(intent["handler"], "org.example.phone");
+        assert_eq!(intent["delivery"], "launch");
+        assert!(
+            records
+                .iter()
+                .all(|r| !r.to_string().contains("5550100042")),
+            "the number never reaches appd records"
+        );
+        // An ordinary launch carries no intent.
+        let home = id("org.example.home");
+        h.service.launch(&home).unwrap();
+        let env = h.runtime.last_env(&home).unwrap();
+        assert!(!env.iter().any(|(key, _)| key == APP_INTENT_ENV));
+    }
+
+    #[test]
+    fn open_on_a_running_handler_activates_it_and_pushes_only_to_its_streams() {
+        let h = intent_harness();
+        let compositor = subscribe(&h.service, ClientRole::Compositor);
+        let home = id("org.example.home");
+        let phone = id("org.example.phone");
+        let home_pid = h.service.launch(&home).unwrap().instance.pid.unwrap();
+        h.tree.set_parent(home_pid + 100, home_pid);
+        h.service.surface_mapped(home_pid + 100, None, None);
+        let phone_pid = h.service.launch(&phone).unwrap().instance.pid.unwrap();
+        let phone_client = phone_pid + 100;
+        h.tree.set_parent(phone_client, phone_pid);
+        h.service.surface_mapped(phone_client, None, None);
+        // Phone goes to the background behind Home.
+        h.service.focus_changed(Some(home_pid + 100));
+        assert_eq!(h.service.foreground(), Some(home.clone()));
+
+        // Without a subscription the handler is only activated.
+        let _ = notifications(&compositor);
+        let outcome = h.service.open(&AppIntent::ShowCall).unwrap();
+        assert!(outcome.activated_existing);
+        assert!(
+            notifications(&compositor).contains(&Notification::Activate {
+                pid: phone_client,
+                app_id: phone.clone()
+            })
+        );
+
+        let (phone_sink, phone_rx) = channel_sink();
+        h.service
+            .subscribe_peer(
+                ClientRole::Application,
+                Some(phone_client),
+                Box::new(phone_sink),
+            )
+            .unwrap();
+        assert_eq!(phone_rx.recv().unwrap(), r#"{"reply":"ok"}"#);
+        let (home_sink, home_rx) = channel_sink();
+        h.service
+            .subscribe_peer(ClientRole::Home, Some(home_pid + 100), Box::new(home_sink))
+            .unwrap();
+        assert_eq!(home_rx.recv().unwrap(), r#"{"reply":"ok"}"#);
+
+        h.service.open(&dial()).unwrap();
+        let pushed = Notification::Intent {
+            app_id: phone.clone(),
+            intent: dial(),
+        };
+        assert!(notifications(&phone_rx).contains(&pushed));
+        assert!(
+            !notifications(&home_rx).contains(&pushed),
+            "only the handler"
+        );
+        assert!(!notifications(&compositor).contains(&pushed));
+        // The compositor raises Phone over Home; focus makes it foreground.
+        h.service.focus_changed(Some(phone_client));
+        assert_eq!(h.service.foreground(), Some(phone));
+        let deliveries: Vec<String> = h
+            .records
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r["event"] == "app-intent")
+            .map(|r| r["delivery"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(deliveries, ["activated-only", "running"]);
+    }
+
     #[test]
     fn activation_uses_each_apps_own_mapped_client_pid() {
         let h = harness();
@@ -1252,7 +1525,7 @@ mod tests {
             Notification::Activate { pid, .. } => {
                 *pid != home_supervisor && *pid != terminal_supervisor
             }
-            Notification::App { .. } => true,
+            Notification::App { .. } | Notification::Intent { .. } => true,
         }));
     }
 

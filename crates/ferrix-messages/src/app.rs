@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use ferrix_app_protocol::{Client as AppdClient, ClientRole, Report};
+use ferrix_app_protocol::{Client as AppdClient, ClientRole, IntentInbox, Report};
 use ferrix_contacts_protocol::{
     ClientKind as ContactsKind, Link as ContactsLink, Reconnector as ContactsReconnector,
 };
@@ -38,6 +38,8 @@ struct Messages {
     appd_unavailable_reported: bool,
     last_ui_state: (String, String),
     last_link: Link,
+    /// Compose intents: the launch one and any pushed while running.
+    intents: IntentInbox,
 }
 
 pub fn run(initial_size: (u32, u32)) -> Result<(), String> {
@@ -68,6 +70,13 @@ pub fn run(initial_size: (u32, u32)) -> Result<(), String> {
             .ok()
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| ferrix_contacts_api::DEFAULT_REGION.to_owned());
+        let appd_socket = std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        let mut intents = IntentInbox::start(appd_socket.as_deref(), TIMEOUT, Arc::clone(&wake));
+        intents.dispatch(&EVIDENCE.to_string(), APP_ID, emit, |i| {
+            model.apply_intent(i)
+        });
         Ok(Messages {
             ty: Type::load()?,
             clock: MinuteClock::now(),
@@ -77,13 +86,12 @@ pub fn run(initial_size: (u32, u32)) -> Result<(), String> {
             telephony_socket,
             telephony_client: None,
             contacts,
-            appd_socket: std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from),
+            appd_socket,
             appd: None,
             appd_unavailable_reported: false,
             last_ui_state: (String::new(), String::new()),
             last_link: Link::Connecting,
+            intents,
         })
     })
 }
@@ -280,6 +288,12 @@ impl ClientHandler for Messages {
         while let Ok(update) = self.telephony.try_recv() {
             changed |= self.model.apply(update);
         }
+        let model = &mut self.model;
+        changed |= self
+            .intents
+            .dispatch(&EVIDENCE.to_string(), APP_ID, emit, |i| {
+                model.apply_intent(i)
+            });
         for link in self.contacts.drain() {
             match link {
                 ContactsLink::Connected { contacts } => {

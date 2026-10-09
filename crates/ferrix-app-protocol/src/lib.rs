@@ -22,7 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{
-    AppDescriptor, AppError, AppEvent, AppId, AppIdentity, AppInstance, SCHEMA_VERSION,
+    AppDescriptor, AppError, AppEvent, AppId, AppIdentity, AppInstance, AppIntent, SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -77,6 +77,12 @@ pub enum Request {
     Home,
     /// Receive [`Notification`]s on this stream from now on.
     Subscribe,
+    /// Open whichever application handles `intent`: launch it with the
+    /// intent, or activate the running instance and push
+    /// [`Notification::Intent`] to it. The caller never names the handler.
+    Open {
+        intent: AppIntent,
+    },
 }
 
 /// Fire-and-forget messages from the compositor (and from applications
@@ -165,6 +171,9 @@ pub enum Notification {
     App { event: AppEvent },
     /// Compositor directive: raise the toplevel(s) of the client with `pid`.
     Activate { pid: u32, app_id: AppId },
+    /// An intent for an already running handler. Sent only to the streams
+    /// of the handler application itself.
+    Intent { app_id: AppId, intent: AppIntent },
 }
 
 fn connect_stream(path: &Path, timeout: Duration) -> Result<UnixStream, String> {
@@ -294,6 +303,29 @@ impl Client {
         }
     }
 
+    /// Opens the handler of `intent` (see [`Request::Open`]); typed errors
+    /// (`no-handler`, `invalid-intent`) come back as `Err(Ok(AppError))`.
+    pub fn open(
+        &mut self,
+        intent: &AppIntent,
+    ) -> Result<(AppInstance, bool), Result<AppError, String>> {
+        match self
+            .request(&Request::Open {
+                intent: intent.clone(),
+            })
+            .map_err(Err)?
+        {
+            Reply::Instance {
+                instance,
+                activated_existing,
+                ..
+            } => Ok((instance, activated_existing)),
+            Reply::Error { error } => Err(Ok(error)),
+            Reply::ProtocolError { reason } => Err(Err(reason)),
+            other => Err(Err(format!("unexpected ferrix-appd open reply: {other:?}"))),
+        }
+    }
+
     /// Switches this connection into a subscription. The hello reply's
     /// `home` and the initial catalog/instances are fetched first so the
     /// subscriber starts from a consistent snapshot.
@@ -379,6 +411,130 @@ impl Subscription {
                 writer: Arc::new(std::sync::Mutex::new(self.writer)),
             },
         )
+    }
+}
+
+/// Follows the intents `ferrix_appd` pushes to this application while it
+/// runs: connects with role `application`, subscribes, and forwards only
+/// [`Notification::Intent`] payloads. The channel closes with the stream
+/// (an application does not outlive `ferrix_appd`).
+pub fn spawn_intent_listener(
+    socket: &Path,
+    timeout: Duration,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) -> Result<Receiver<AppIntent>, String> {
+    let subscription = Client::connect(socket, ClientRole::Application, timeout)?.subscribe()?;
+    let (notifications, _reporter) = subscription.spawn(Arc::new(|| {}));
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("ferrix-appd-intents".to_owned())
+        .spawn(move || {
+            for notification in notifications {
+                if let Some(intent) = intent_of(notification) {
+                    if tx.send(intent).is_err() {
+                        return;
+                    }
+                    wake();
+                }
+            }
+        })
+        .map_err(|e| format!("spawn intent listener: {e}"))?;
+    Ok(rx)
+}
+
+/// Where an application's intents arrive: the one it was launched with
+/// ([`AppIntent::from_env`]) and, while it runs, the ones `ferrix_appd`
+/// pushes ([`spawn_intent_listener`]). Shared by every intent handler.
+pub struct IntentInbox {
+    launch: Option<AppIntent>,
+    running: Option<Receiver<AppIntent>>,
+    /// Why the running listener could not start, when it could not.
+    pub unavailable: Option<String>,
+}
+
+impl IntentInbox {
+    /// Reads the launch intent and, when `socket` is known, subscribes for
+    /// running ones. A missing socket (a nested run without `ferrix_appd`)
+    /// is not an error: only the launch intent applies then.
+    pub fn start(
+        socket: Option<&Path>,
+        timeout: Duration,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        let (running, unavailable) = match socket {
+            Some(socket) => match spawn_intent_listener(socket, timeout, wake) {
+                Ok(rx) => (Some(rx), None),
+                Err(reason) => (None, Some(reason)),
+            },
+            None => (None, None),
+        };
+        Self {
+            launch: AppIntent::from_env(),
+            running,
+            unavailable,
+        }
+    }
+
+    /// The launch intent, once.
+    pub fn take_launch(&mut self) -> Option<AppIntent> {
+        self.launch.take()
+    }
+
+    /// Intents pushed since the last call.
+    pub fn drain(&self) -> Vec<AppIntent> {
+        self.running
+            .as_ref()
+            .map(|rx| rx.try_iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Feeds the launch intent (first call only) and every pushed intent to
+    /// `apply`, emitting one `app-intent-received` record line per intent
+    /// through `emit` (kind and delivery only, never the number) and, the
+    /// first time, `app-intents-unavailable` when the listener could not
+    /// start. Returns whether `apply` reported a change.
+    pub fn dispatch(
+        &mut self,
+        evidence: &str,
+        app: &str,
+        mut emit: impl FnMut(String),
+        mut apply: impl FnMut(&AppIntent) -> bool,
+    ) -> bool {
+        if let Some(reason) = self.unavailable.take() {
+            emit(format!(
+                "{{\"evidence\":{},\"event\":\"app-intents-unavailable\",\"app\":{},\"reason\":{}}}",
+                quoted(evidence),
+                quoted(app),
+                quoted(&reason)
+            ));
+        }
+        let launch = self.take_launch().map(|i| ("launch", i));
+        let running = self.drain().into_iter().map(|i| ("running", i));
+        let mut changed = false;
+        for (delivery, intent) in launch.into_iter().chain(running) {
+            emit(format!(
+                "{{\"evidence\":{},\"event\":\"app-intent-received\",\"app\":{},\"kind\":\"{}\",\"delivery\":\"{delivery}\"}}",
+                quoted(evidence),
+                quoted(app),
+                intent.kind().name()
+            ));
+            changed |= apply(&intent);
+        }
+        changed
+    }
+}
+
+/// A JSON string literal (records keep `evidence` first, so they are
+/// formatted rather than built from a map).
+fn quoted(text: &str) -> String {
+    serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_owned())
+}
+
+/// The validated intent carried by a notification, if any.
+pub fn intent_of(notification: Notification) -> Option<AppIntent> {
+    match notification {
+        Notification::Intent { intent, .. } if intent.validate().is_ok() => Some(intent),
+        _ => None,
     }
 }
 
@@ -487,6 +643,93 @@ mod tests {
             .unwrap(),
             r#"{"request":"hello","role":"service"}"#
         );
+    }
+
+    #[test]
+    fn open_and_intent_have_documented_wire_forms() {
+        let open = Request::Open {
+            intent: AppIntent::Dial {
+                number: "+15550100042".to_owned(),
+            },
+        };
+        let text = serde_json::to_string(&open).unwrap();
+        assert_eq!(
+            text,
+            r#"{"request":"open","intent":{"intent":"dial","number":"+15550100042"}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Inbound>(
+                r#"{"request":"open","intent":{"intent":"show-call"}}"#
+            )
+            .unwrap(),
+            Inbound::Request(Request::Open {
+                intent: AppIntent::ShowCall
+            })
+        );
+        let pushed = Notification::Intent {
+            app_id: AppId::new("org.ferrix.phone").unwrap(),
+            intent: AppIntent::ShowCall,
+        };
+        let text = serde_json::to_string(&pushed).unwrap();
+        assert_eq!(
+            text,
+            r#"{"notification":"intent","app_id":"org.ferrix.phone","intent":{"intent":"show-call"}}"#
+        );
+        assert_eq!(intent_of(pushed), Some(AppIntent::ShowCall));
+        let bad = Notification::Intent {
+            app_id: AppId::new("org.ferrix.phone").unwrap(),
+            intent: AppIntent::Dial {
+                number: "x".to_owned(),
+            },
+        };
+        assert_eq!(intent_of(bad), None, "invalid payloads are dropped");
+        assert_eq!(
+            intent_of(Notification::App {
+                event: AppEvent::CatalogChanged { apps: 1 }
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn inbox_dispatch_records_kind_and_delivery_never_the_number() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(AppIntent::Dial {
+            number: "+15550100042".to_owned(),
+        })
+        .unwrap();
+        let mut inbox = IntentInbox {
+            launch: Some(AppIntent::ShowCall),
+            running: Some(rx),
+            unavailable: None,
+        };
+        let mut lines = Vec::new();
+        let mut seen = Vec::new();
+        let changed = inbox.dispatch(
+            "mock",
+            "org.ferrix.phone",
+            |l| lines.push(l),
+            |i| {
+                seen.push(i.kind());
+                true
+            },
+        );
+        assert!(changed);
+        assert_eq!(
+            seen,
+            [
+                ferrix_app_api::IntentKind::ShowCall,
+                ferrix_app_api::IntentKind::Dial
+            ]
+        );
+        assert_eq!(
+            lines[0],
+            r#"{"evidence":"mock","event":"app-intent-received","app":"org.ferrix.phone","kind":"show-call","delivery":"launch"}"#
+        );
+        assert!(lines[1].contains(r#""delivery":"running""#));
+        assert!(lines.iter().all(|l| !l.contains("5550100042")));
+        // The launch intent applies once.
+        assert!(!inbox.dispatch("mock", "x", |_| {}, |_| true));
     }
 
     #[test]
