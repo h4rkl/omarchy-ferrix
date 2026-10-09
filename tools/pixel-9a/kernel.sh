@@ -313,8 +313,24 @@ apply_kernel_patches() {
   done
 }
 
+# A previous build leaves its patches applied. Reverse exactly those (in the
+# opposite order) so verification sees the pinned baseline again.
+revert_kernel_patches() {
+  [ -d "$kernel_patches" ] || return 0
+  find "$kernel_patches" -type f -name '*.patch' | LC_ALL=C sort -r | while IFS= read -r patch; do
+    component=$(dirname -- "${patch#"$kernel_patches"/}")
+    tree="$source_root/$component"
+    [ -d "$tree" ] || continue
+    if git -C "$tree" apply --reverse --check "$patch" 2>/dev/null; then
+      git -C "$tree" apply --reverse "$patch"
+      printf '%s\n' "- kernel patch reverted before verification: ${patch#"$kernel_patches"/}"
+    fi
+  done
+}
+
 build_kernel() {
   preflight
+  revert_kernel_patches
   verify_sources
   [ "${FERRIX_PIXEL9A_KERNEL_BUILD:-}" = I-understand-this-runs-a-large-kleaf-build ] ||
     die "kernel build is opt-in; set FERRIX_PIXEL9A_KERNEL_BUILD=I-understand-this-runs-a-large-kleaf-build"
