@@ -24,3 +24,8 @@ start_pre() {
 	checkpath -d -m 0755 /run/ferrix /var/log /var/lib/ferrix/telephony
 	checkpath -f -m 0644 /etc/ferrix/profile.toml
 }
+
+start_post() {
+	. /usr/lib/ferrix/openrc.sh
+	ferrix_grant_socket /run/ferrix/telephonyd.sock
+}

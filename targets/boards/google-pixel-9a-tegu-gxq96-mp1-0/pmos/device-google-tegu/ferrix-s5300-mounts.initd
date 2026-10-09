@@ -47,7 +47,9 @@ resolve_modem_source() {
 	# inactive slot.  Requiring exactly one recognized value also prevents a
 	# malformed or conflicting command line from attaching the wrong modem
 	# calibration image.
-	slot_values=$(awk '{
+	# GKI bootloaders pass it in bootconfig; older ones on the command line.
+	slot_values=$(sed -n 's/^[[:space:]]*androidboot\.slot_suffix[[:space:]]*=[[:space:]]*"*\([^"]*\)"*[[:space:]]*$/\1/p' /proc/bootconfig 2>/dev/null)
+	[ -n "$slot_values" ] || slot_values=$(awk '{
 		for (i = 1; i <= NF; i++) {
 			if ($i ~ /^androidboot\.slot_suffix=/) {
 				value = $i
