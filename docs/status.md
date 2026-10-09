@@ -1,5 +1,61 @@
 # Status
 
+## 2026-10-09 (Pixel 9a boots Ferrix on the Google Kleaf route; physical)
+
+Evidence: `physical:google-pixel-9a-tegu-gxq96-mp1-0` (slot b, flashed with
+`just pixel-9a-dev-flash`; stock slot a and the pinned factory restore were
+untouched and used for every fallback), `QEMU` for shared-code regressions.
+Images and logs stay under ignored `out/`; serials are redacted.
+
+- Kernel route: Google `android-gs-tegu-6.1` via Kleaf (`kernel.sh`), composed
+  by `tools/pixel-9a/dev-compose.py` (native-builder `dev-compose build`). The
+  radio-first source tree has no tegu MP1.0 overlay and is not used here.
+- Boot fixes found on hardware, each now in a checked-in workflow:
+  - vbmeta must carry `VERIFICATION_DISABLED` (flag 2); a flag-0 blank vbmeta
+    left the bootloader with no boot images.
+  - Ferrix ramdisks must be lz4-legacy like the Kleaf vendor_kernel_boot
+    segment, or the kernel never unpacks `/init`.
+  - `/init` (`initramfs-init-kleaf`): pKVM early modules through a
+    `/system/bin/modprobe` shim; bootloader cmdline module parameters passed
+    to insmod (UFS needs `ufs_pixel_fips140.*`); first-stage modules loaded
+    through `modules.dep` (s2mpg14 needs s2mpg15 first); watchdog driver first;
+    tmpfs `/dev` + mdev (GKI has no devtmpfs); CDC-ACM debug console (log +
+    shell, handed to the rootfs inittab at switch_root); `ferrix.checkpoint=`
+    Fastboot/delay/hold bisection; rootfs firmware path for dlkm modules.
+  - Logs read back via the new read-only `pixel-9a-dev-flash fetch` and the
+    vendor_boot_b tail logger.
+- Result: postmarketOS/OpenRC runs as PID 1 from the ext4 userdata rootfs;
+  ferrix-core, ferrix-networkd, ferrix-shell (pixman, DRM `DSI-1`
+  1080x2424@60), ferrix-appd and the reference home surface run; Settings,
+  Terminal, Phone, Messages, and Contacts surfaces were launched and
+  photographed. Battery/charging, backlight, and real panel geometry come from
+  the Pixel adapter.
+- Shared-code fixes (land on QEMU too; `just qemu-check` passes):
+  implicit-modifier scan-out formats; optional profile
+  `display.scanout_byte_order` (the tegu DPU reads 32-bit fourccs
+  byte-reversed, proven with libdrm `modetest` bars) and `display.safe_area`
+  (fullscreen clients clear the hole-punch and corners); no rule under the
+  reference status bar; Pixel adapter ignores writeback/disconnected DRM
+  connectors and parses `WxH@rate` modes.
+- Wi-Fi: the bcm4383 driver set firmware `scansuppress` whenever it created its
+  monitor netdev, so every scan failed with `BCME_EPERM`. Clearing it on the
+  phone restored scans and the phone joined a WPA2 network (DHCP lease, 0%
+  ping loss). Fixed permanently by `kernel-patches/` (applied by `kernel.sh`)
+  plus `networkmanager-ferrix.conf`; the patched image is not yet flashed.
+- Not working yet / limitations:
+  - App isolation: the prebuilt GKI lacks `CONFIG_USER_NS`/`CONFIG_PID_NS`, so
+    required isolation fails; apps were exercised only with an on-device,
+    uncommitted `best-effort` manifest override. `kernel-config.ferrix-gki` +
+    source-built GKI addresses it; not yet flashed.
+  - Without PID namespaces the best-effort sandbox loses track of the app
+    process (appd reports `signal 9` while the app keeps running).
+  - Bluetooth: the chip powers via rfkill but no HCI is attached (UART HCI
+    attach not implemented). Browser: the Android runtime needs Waydroid,
+    which is not in the rootfs. Mali GPU modules are skipped (pixman only).
+    WPA3/SAE association failed; WPA2-PSK works. Home still labels state
+    `mock` and the clock is not network-synced.
+  - The radio-route S5300 WWAN/SIT services fail on this kernel by design.
+
 ## 2026-10-09 (Pixel 9a recovery-invariant development flash route; device-free)
 
 - Owner policy: for `google-pixel-9a-tegu-gxq96-mp1-0` the only hard gate is
