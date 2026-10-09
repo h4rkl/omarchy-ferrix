@@ -42,8 +42,8 @@ pub fn clock_strip_height(basis: i32) -> i32 {
 }
 
 /// The top strip shared with the home surface: `bg_dark`, clock at the left,
-/// an optional right-aligned service label in `fg_dim`, and a `rust_dim`
-/// rule below.
+/// and an optional right-aligned service label in `fg_dim`. No rule below it,
+/// matching the home surface's status bar.
 pub fn clock_strip(c: &mut Canvas, ty: &Type, clock: &str, right_label: Option<&str>) {
     let t = theme::get();
     let b = basis((c.width() as u32, c.height() as u32));
@@ -57,15 +57,6 @@ pub fn clock_strip(c: &mut Canvas, ty: &Type, clock: &str, right_label: Option<&
             h: bar_h,
         },
         t.bg_dark,
-    );
-    c.fill_rect(
-        Rect {
-            x: 0,
-            y: bar_h,
-            w: c.width(),
-            h: hairline(b),
-        },
-        t.rust_dim,
     );
     let px = (bar_h * 5 / 12) as f32;
     ty.text(c, Style::bold(px, t.fg), clock, pad, bar_h * 2 / 3);
@@ -748,7 +739,11 @@ mod tests {
         let mut c = Canvas::new(1080, 2340, t.bg);
         clock_strip(&mut c, &ty, "09:41", Some("telephony \u{b7} mock"));
         assert_eq!(c.get(540, 10), t.bg_dark);
-        assert_eq!(c.get(540, clock_strip_height(1080)), t.rust_dim);
+        assert_eq!(
+            c.get(540, clock_strip_height(1080)),
+            t.bg,
+            "no rule under the strip"
+        );
         page_header(&mut c, &ty, "Phone", Some("status"), false);
         assert_eq!(c.get(540, 230), t.rust_dim);
         let r = Rect {
