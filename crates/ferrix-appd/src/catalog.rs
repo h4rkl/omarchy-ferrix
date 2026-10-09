@@ -195,6 +195,7 @@ mod tests {
             role,
             trust: TrustLevel::Untrusted,
             capabilities: Default::default(),
+            intents: Default::default(),
         }
     }
 

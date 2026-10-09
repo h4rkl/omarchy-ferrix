@@ -74,7 +74,8 @@ Descriptors are JSON files, one per application, in `apps/` (installed to
 `/usr/share/ferrix/apps/` in the guest). Fields: `schema_version`, `id`,
 `runtime` (`native` | `web` | `android`), `name`, `icon` (`glyph`, `tone`),
 `launchable`, `autostart`, `role` (`application` | `home`), `trust`,
-and `capabilities`. `capabilities` is a **declaration** (discovery: what the
+`capabilities`, and the optional `intents` (intent kinds the application
+handles; see *Intents*). `capabilities` is a **declaration** (discovery: what the
 application asks for); it grants nothing. Authorization comes from the
 separate grants policy described under *Grants and identity*. A daemon-private `launch` object in the same manifest is
 opaque to `ferrix-appd` and interpreted only by the selected runtime adapter. For the
@@ -284,17 +285,50 @@ then gates by the verified role:
 | `Home` | `compositor`, `home`, `application`, `tool` |
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
+| `Open` with `dial` / `compose` | `application`, `home`, `tool` |
+| `Open` with `show-call` | `service`, `tool` |
 | `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
 
 A `service` resolves identities and observes lifecycle events; it never
-launches, activates, terminates, returns home, or sends reports. Malformed
+launches, activates, or terminates a named application, returns home, or
+sends reports. The one thing it may raise is the handler of the system
+`show-call` intent. Malformed
 lines get `Reply::ProtocolError`; failures are typed `AppError`s. A schema
 mismatch is rejected at `Hello`. Compositor, tool, and service authentication
 is still a bootstrap trust boundary because those processes are not launched
 by `ferrix-appd` (they start from the session before any application exists);
 splitting their privileged endpoint or passing an inherited capability is
 future hardening.
+
+## Intents
+
+An application never launches another application by id. It asks
+`ferrix-appd` to open a typed intent (`ferrix_app_api::AppIntent`, wire
+`{"request":"open","intent":{"intent":"dial","number":"+15550100042"}}`) and
+`ferrix-appd` picks the handler: the first launchable catalog entry, in id
+order, whose descriptor lists the kind in `intents`. Kinds: `dial` (Phone
+opens the dialer with the number in the buffer), `compose` (Messages opens a
+new message addressed to the number), and `show-call` (Phone shows the
+ringing or live call). A number is validated (at most 32 characters, digits,
+a leading `+`, and ` -()*#`). Intents only prefill or reveal UI: nothing is
+dialed or sent until the user presses Call or Send, so opening one needs no
+grant beyond the role rule above.
+
+Delivery: a handler that is not running is launched with the intent as JSON
+in `FERRIX_APP_INTENT`; a running handler is activated through the normal
+`Activate` path (so an activation that precedes the surface map is still
+delivered) and receives `{"notification":"intent","app_id":...,"intent":...}`
+on its own subscription streams only (a subscriber is bound to the
+application its kernel peer pid resolves to). `ferrix_app_protocol::IntentInbox`
+is the shared client side: the launch intent once, then pushed ones on wake.
+No handler is `AppError::NoHandler`; a bad payload is
+`AppError::InvalidIntent`.
+
+Contacts uses `dial` and `compose` from a contact's detail page.
+`ferrix-telephonyd` opens `show-call` when a new incoming call starts
+ringing (from a worker thread, never the event loop), so Phone comes to the
+foreground over whatever was in front, whether or not it was running.
 
 ## Evidence
 
@@ -303,12 +337,15 @@ Records are single JSON lines with `"evidence"` first (`QEMU` in the guest,
 `app-started` (with `granted`, `denied_capabilities`), `sandbox-ready` (with
 `run_dir`), `grants-loaded`, `grants-missing`, `grants-invalid`,
 `appd-identify` (`pid`, `app|null`, `granted_count`; once per connection per
-pid), `app-surface`, `app-foreground`,
+pid), `app-intent` (`kind`, `handler`, `delivery`: `launch` | `running` |
+`activated-only`; never the number), `app-surface`, `app-foreground`,
 `app-background`, `app-exited`, `app-crashed`, `home-restarting`,
 `home-restart-abandoned`, `ferrix-appd-failed` (ferrix-appd and sandbox); `client-gone`,
 `client-activated`, `home-gesture`, `ferrix-appd-link` (compositor); `home-launch`,
 `home-crash-notice`, `ferrix-appd-unavailable` (home surface); `app-context`,
-`terminal-frame` (Terminal). `just qemu-check` is unchanged. Graphical
+`terminal-frame` (Terminal); `app-intent-received` (`kind`, `delivery`) and
+`app-intents-unavailable` (intent handlers); `telephony-attention`
+(`status`: `sent` | `failed` | `disabled`) from `ferrix-telephonyd`. `just qemu-check` is unchanged. Graphical
 evidence for this slice is recorded in `docs/status.md`.
 
 ## Remaining platform work

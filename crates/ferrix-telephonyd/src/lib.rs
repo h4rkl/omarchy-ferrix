@@ -11,6 +11,7 @@
 //! one. Everything here runs on the host for tests (`testing::FakeBackend`,
 //! `identity::StaticIdentity`).
 
+pub mod attention;
 pub mod control;
 pub mod identity;
 pub mod records;
@@ -19,6 +20,7 @@ pub mod service;
 pub mod store;
 pub mod testing;
 
+pub use attention::{AppdAttention, Attention};
 pub use control::{HOST_TOOL_APP, LOCAL_COMMANDS, LocalCommand, LocalControl};
 pub use identity::{
     AllowAll, AppdIdentity, CAP_CALL, CAP_DATA, CAP_RADIO, CAP_SMS, CAP_STATE, DenyAll, Identity,

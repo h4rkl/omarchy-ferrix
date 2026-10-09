@@ -19,6 +19,10 @@ pub enum Target {
     Export,
     Edit,
     Delete,
+    /// Detail: open Phone with the primary number.
+    Call,
+    /// Detail: open Messages addressed to the primary number.
+    Message,
     FormName,
     FormNumber(usize),
     FormLabel(usize),
@@ -100,7 +104,38 @@ impl Layout {
     }
 
     pub fn detail_number_rects(&self, count: usize) -> Vec<Rect> {
-        list_rects(self.size, self.s(720), count.min(6), 120)
+        list_rects(self.size, self.s(720), count.min(5), 120)
+    }
+
+    pub fn call_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(96),
+            y: s(1530),
+            w: s(420),
+            h: s(140),
+        }
+    }
+
+    pub fn message_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(564),
+            y: s(1530),
+            w: s(420),
+            h: s(140),
+        }
+    }
+
+    /// The detail page's notice, between the numbers and Call/Message.
+    pub fn detail_notice_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(48),
+            y: s(1400),
+            w: self.w() - s(96),
+            h: s(96),
+        }
     }
 
     pub fn edit_rect(&self) -> Rect {
@@ -256,6 +291,12 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
                 .map(Target::Row)
         }
         Page::Detail => {
+            if contains(l.call_rect(), position) {
+                return Some(Target::Call);
+            }
+            if contains(l.message_rect(), position) {
+                return Some(Target::Message);
+            }
             if contains(l.edit_rect(), position) {
                 return Some(Target::Edit);
             }
@@ -308,6 +349,8 @@ pub fn activate(model: &mut Model, target: Target) {
         Target::Export => model.export(),
         Target::Edit => model.edit_selected(),
         Target::Delete => model.ask_delete(),
+        Target::Call => model.call_selected(),
+        Target::Message => model.message_selected(),
         Target::FormName => model.focus = Some(Focus::Name),
         Target::FormNumber(i) => model.focus = Some(Focus::Number(i)),
         Target::FormLabel(i) => model.cycle_label(i),
@@ -446,6 +489,53 @@ mod tests {
                 .unwrap();
             tap(input, model, center(r));
         }
+    }
+
+    #[test]
+    fn detail_call_and_message_open_intents_with_the_primary_number() {
+        use crate::model::Action;
+        use ferrix_app_api::AppIntent;
+        let mut m = ready();
+        let mut input = Input::default();
+        let l = Layout::new(SIZE);
+        tap(&mut input, &mut m, center(l.row_rects(8, false)[0]));
+        assert_eq!(m.page, Page::Detail);
+        let number = m.primary_number().expect("fixture has a number");
+        tap(&mut input, &mut m, center(l.call_rect()));
+        tap(&mut input, &mut m, center(l.message_rect()));
+        assert_eq!(
+            m.pending,
+            vec![
+                Action::Open(AppIntent::Dial {
+                    number: number.clone()
+                }),
+                Action::Open(AppIntent::Compose { number })
+            ]
+        );
+        assert_eq!(m.page, Page::Detail, "the detail page stays put");
+        // A contact without numbers opens nothing and says why.
+        m.pending.clear();
+        let id = m.selected.clone().unwrap();
+        if let Some(c) = m.contacts.iter_mut().find(|c| c.id == id) {
+            c.numbers.clear();
+        }
+        tap(&mut input, &mut m, center(l.call_rect()));
+        assert!(m.pending.is_empty());
+        assert_eq!(m.last_error.as_deref(), Some("number \u{b7} none"));
+        // An unopenable raw number is refused before it reaches appd.
+        if let Some(c) = m.contacts.iter_mut().find(|c| c.id == id) {
+            c.numbers = vec![ferrix_contacts_api::PhoneNumber {
+                label: Default::default(),
+                raw: "ext. office".to_owned(),
+                e164: None,
+            }];
+        }
+        tap(&mut input, &mut m, center(l.message_rect()));
+        assert!(m.pending.is_empty());
+        assert_eq!(
+            m.last_error.as_deref(),
+            Some("number \u{b7} cannot be opened")
+        );
     }
 
     #[test]

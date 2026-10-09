@@ -62,7 +62,7 @@ fn next_app_event(rx: &Receiver<Notification>) -> AppEvent {
     loop {
         match rx.recv_timeout(TIMEOUT).expect("notification") {
             Notification::App { event } => return event,
-            Notification::Activate { .. } => continue,
+            Notification::Activate { .. } | Notification::Intent { .. } => continue,
         }
     }
 }
