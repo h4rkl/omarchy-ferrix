@@ -15,6 +15,7 @@ use ferrix_contacts_protocol::{
 use ferrix_telephony_api::{Dtmf, TelephonyError};
 use ferrix_telephony_protocol::{Client as TeleClient, ClientKind, Reconnector, Request, Update};
 use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrix_ui::clock::MinuteClock;
 use ferrix_ui::draw::{Canvas, Type};
 use ferrix_ui::evidence::{emit, json_escape, json_opt_str};
 use ferrix_ui::keymap::{self, Modifiers};
@@ -29,7 +30,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 
 struct Phone {
     ty: Type,
-    minute: u32,
+    clock: MinuteClock,
     model: Model,
     input: Input,
     size: (u32, u32),
@@ -44,16 +45,19 @@ struct Phone {
     last_link: Link,
 }
 
-pub fn run(initial_size: (u32, u32), minute: u32) -> Result<(), String> {
+pub fn run(initial_size: (u32, u32)) -> Result<(), String> {
     let config = ClientConfig {
         app_id: APP_ID.to_owned(),
         title: TITLE.to_owned(),
         initial_size,
-        evidence: EVIDENCE.to_owned(),
+        evidence: EVIDENCE.to_string(),
         first_frame_event: "phone-frame".to_owned(),
         first_frame_extra: Vec::new(),
     };
     ferrix_ui::client::run(config, move |wake: Wake| {
+        // Redraw the status-bar clock at each local minute boundary.
+        let tick = Arc::clone(&wake);
+        ferrix_ui::clock::spawn_minute_ticker(move || tick());
         let telephony_socket = ferrix_telephony_protocol::socket_path();
         let telephony =
             Reconnector::new(telephony_socket.clone(), ClientKind::Application, TIMEOUT)
@@ -71,7 +75,7 @@ pub fn run(initial_size: (u32, u32), minute: u32) -> Result<(), String> {
             .unwrap_or_else(|| ferrix_contacts_api::DEFAULT_REGION.to_owned());
         Ok(Phone {
             ty: Type::load()?,
-            minute,
+            clock: MinuteClock::now(),
             model,
             input: Input::default(),
             size: initial_size,
@@ -234,7 +238,13 @@ impl Phone {
 impl ClientHandler for Phone {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
         self.size = size;
-        screen::compose(&self.ty, size, self.minute, &self.model, &self.input)
+        screen::compose(
+            &self.ty,
+            size,
+            self.clock.minute(),
+            &self.model,
+            &self.input,
+        )
     }
 
     fn pointer_down(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
@@ -331,7 +341,7 @@ impl ClientHandler for Phone {
         if changed {
             self.report_ui_state();
         }
-        changed
+        self.clock.refresh() || changed
     }
 
     fn page_name(&self) -> String {

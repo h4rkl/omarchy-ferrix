@@ -27,12 +27,12 @@ use std::process::ExitCode;
 use ferrix_telephony_api::{CallEndReason, CallState, Direction};
 use ferrix_telephony_protocol::{StateView, Update};
 use ferrix_ui::draw::Type;
-use ferrix_ui::evidence::{emit, json_escape, json_opt_str};
+use ferrix_ui::evidence::{SessionEvidence, emit, json_escape, json_opt_str};
 use ferrix_ui::theme;
 
 use crate::model::{Model, Page};
 
-const EVIDENCE: &str = "QEMU";
+const EVIDENCE: SessionEvidence = SessionEvidence;
 const PREVIEW_SIZE: (u32, u32) = (1080, 2340);
 pub const APP_ID: &str = "org.ferrix.phone";
 
@@ -143,7 +143,7 @@ fn run() -> Result<(), String> {
         let canvas = screen::compose(
             &ty,
             size,
-            utc_minute_of_day(),
+            ferrix_ui::clock::local_minute_of_day(),
             &model,
             &interaction::Input::default(),
         );
@@ -161,24 +161,16 @@ fn run() -> Result<(), String> {
         ));
         return Ok(());
     }
-    emit(AppContext::from_env().record(EVIDENCE));
-    theme::init(EVIDENCE, None);
+    emit(AppContext::from_env().record(&EVIDENCE));
+    theme::init(&EVIDENCE, None);
     #[cfg(target_os = "linux")]
     {
-        app::run(size, utc_minute_of_day())
+        app::run(size)
     }
     #[cfg(not(target_os = "linux"))]
     {
         Err("the Wayland session is Linux-only on this host; use --preview <out.ppm>".to_owned())
     }
-}
-
-fn utc_minute_of_day() -> u32 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    ((secs % 86_400) / 60) as u32
 }
 
 #[cfg(test)]

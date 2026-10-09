@@ -39,10 +39,8 @@ fn main() -> ExitCode {
     let nested = args.iter().any(|a| a == "--nested");
     let evidence = if nested {
         Evidence::Mock
-    } else if std::env::var_os("FERRIX_EVIDENCE").is_some() {
-        Evidence::Physical
     } else {
-        Evidence::Qemu
+        Evidence::Session
     };
     match run(args, evidence) {
         Ok(()) => ExitCode::SUCCESS,
@@ -108,7 +106,7 @@ fn run(args: Vec<String>, evidence: Evidence) -> Result<(), Failure> {
     // ($FERRIX_COLORS, then /etc/ferrix/colors.toml, then the built-in). This
     // emits the `theme-loaded` (and, for a bad file, `theme-invalid`) record.
     let evidence_label = evidence.label();
-    ferrix_ui::theme::init(&evidence_label, None);
+    ferrix_ui::theme::init(evidence_label, None);
 
     let core = ferrix_protocol::subscribe(
         std::path::Path::new(&args.core_socket),

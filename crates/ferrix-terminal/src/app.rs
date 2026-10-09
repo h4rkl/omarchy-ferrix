@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use ferrix_app_protocol::{Client, ClientRole, Report};
 use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrix_ui::clock::MinuteClock;
 use ferrix_ui::draw::{Canvas, Type};
 use ferrix_ui::evidence::{emit, json_escape};
 use ferrix_ui::keymap::{self, Modifiers};
@@ -28,7 +29,7 @@ const APPD_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct Terminal {
     ty: Type,
-    minute: u32,
+    clock: MinuteClock,
     shell: String,
     ui: UiState,
     input: Input,
@@ -44,19 +45,22 @@ struct Terminal {
     appd_unavailable_reported: bool,
 }
 
-pub fn run(initial_size: (u32, u32), minute: u32, shell: String) -> Result<(), String> {
+pub fn run(initial_size: (u32, u32), shell: String) -> Result<(), String> {
     let config = ClientConfig {
         app_id: APP_ID.to_owned(),
         title: TITLE.to_owned(),
         initial_size,
-        evidence: EVIDENCE.to_owned(),
+        evidence: EVIDENCE.to_string(),
         first_frame_event: "terminal-frame".to_owned(),
         first_frame_extra: vec![("shell".to_owned(), shell.clone())],
     };
     ferrix_ui::client::run(config, move |wake| {
+        // Redraw the status-bar clock at each local minute boundary.
+        let tick = Arc::clone(&wake);
+        ferrix_ui::clock::spawn_minute_ticker(move || tick());
         Ok(Terminal {
             ty: Type::load()?,
-            minute,
+            clock: MinuteClock::now(),
             shell,
             ui: UiState::new(),
             input: Input::default(),
@@ -226,7 +230,7 @@ impl ClientHandler for Terminal {
             &self.ty,
             size.0,
             size.1,
-            self.minute,
+            self.clock.minute(),
             &self.ui,
             snapshot.as_ref(),
         )
@@ -315,8 +319,9 @@ impl ClientHandler for Terminal {
 
     /// The PTY reader produced output or the shell exited.
     fn wake(&mut self) -> bool {
+        let clock = self.clock.refresh();
         let Some(session) = self.session.as_mut() else {
-            return false;
+            return clock;
         };
         session.pump();
         let exited = session.exited().map(str::to_owned);

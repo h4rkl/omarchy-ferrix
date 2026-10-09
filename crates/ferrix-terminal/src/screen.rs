@@ -43,7 +43,7 @@ pub fn compose(
     let w = width as i32;
     let h = height as i32;
     let mut c = Canvas::new(w, h, theme::get().bg);
-    let clock = format!("{:02}:{:02}", minute_of_day / 60, minute_of_day % 60);
+    let clock = ferrix_ui::clock::hhmm(minute_of_day);
     let basis = w.min(h);
     let s = |v: i32| scale(v, basis);
     clock_strip(&mut c, ty, &clock, s(72), s(40));

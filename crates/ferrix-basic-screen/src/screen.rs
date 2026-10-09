@@ -3,10 +3,10 @@
 //! region, hairline borders, tight radii, JetBrains Mono. GrapheneOS-style
 //! status bar, minimal launcher grid, and bottom gesture pill where mobile UX
 //! is needed. Colors come from `ferrix_ui::theme::get()` so a loaded
-//! `colors.toml` restyles every surface. This is a QEMU reference surface
-//! rendered from the mock profile, not the product shell.
+//! `colors.toml` restyles every surface. This is a reference surface
+//! rendered from the connected target's state, not the product shell.
 
-use ferrix_hardware_api::HardwareState;
+use ferrix_hardware_api::{Capability, CapabilityMatrix, CapabilityStatus, HardwareState};
 use ferrix_ui::draw::{Canvas, Rect, Style, Type, Weight};
 use ferrix_ui::theme;
 
@@ -36,10 +36,43 @@ fn hairline(basis: i32) -> i32 {
 }
 
 /// The identity line under the clock: product, target, and where the state
-/// comes from. `target` is the hardware target id (`qemu-aarch64`); the state
-/// is always the mock adapter's, in QEMU and on the host alike.
-pub fn identity_line(target: &str) -> String {
-    format!("ferrix \u{b7} {target} \u{b7} mock")
+/// comes from. `target` is the hardware target id the session connected to;
+/// the source word summarises its capability matrix ([`matrix_word`]).
+pub fn identity_line(target: &str, capabilities: &CapabilityMatrix) -> String {
+    format!(
+        "ferrix \u{b7} {target} \u{b7} {}",
+        matrix_word(capabilities)
+    )
+}
+
+/// The user-facing word for one capability's status. `Unsupported` reads as
+/// "unadmitted": a value may still be shown, but the target's checked-in
+/// matrix does not claim the capability.
+pub fn capability_word(status: CapabilityStatus) -> &'static str {
+    match status {
+        CapabilityStatus::Supported => "supported",
+        CapabilityStatus::Mocked => "mock",
+        CapabilityStatus::Unsupported => "unadmitted",
+    }
+}
+
+/// One word for a whole matrix: `mock` when any capability is mocked, else
+/// `supported` only when every target capability is, else `unadmitted`.
+/// `MockControl` is a test seam, not a target capability, so it is ignored.
+pub fn matrix_word(capabilities: &CapabilityMatrix) -> &'static str {
+    let statuses = || {
+        Capability::ALL
+            .iter()
+            .filter(|c| **c != Capability::MockControl)
+            .map(|c| capabilities.status(*c))
+    };
+    if statuses().any(|s| s == CapabilityStatus::Mocked) {
+        capability_word(CapabilityStatus::Mocked)
+    } else if statuses().all(|s| s == CapabilityStatus::Supported) {
+        capability_word(CapabilityStatus::Supported)
+    } else {
+        capability_word(CapabilityStatus::Unsupported)
+    }
 }
 
 pub fn compose(
@@ -56,8 +89,7 @@ pub fn compose(
     let basis = w.min(h);
     let s = |v: i32| scale(v, basis);
     let mut c = Canvas::new(w, h, t.bg);
-    let hour = minute_of_day / 60;
-    let clock = format!("{:02}:{:02}", hour, minute_of_day % 60);
+    let clock = ferrix_ui::clock::hhmm(minute_of_day);
 
     if state.page != Page::Launcher {
         shell_page(&mut c, p, ty, &clock, state);
@@ -845,19 +877,21 @@ fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiStat
     page_header(c, ty, name, state);
     let fallback_title = format!("{name} \u{b7} not installed");
     // Phone, Messages, Contacts, and Settings are real applications launched
-    // by `ferrix-appd`; only camera and files keep illustrative pages.
+    // by `ferrix-appd`; only camera and files keep illustrative pages. The
+    // hardware API defines neither a camera nor a storage capability, so the
+    // pages say that about whichever target is connected.
     let (accent, eyebrow, title, detail) = match tile.map_or("", Tile::kind) {
         "camera" => (
             t.fg_dim,
             "CAMERA",
-            "No camera device",
-            "The generic QEMU target claims no camera hardware.",
+            "No camera capability",
+            "The hardware API defines no camera capability on any target yet.",
         ),
         "files" => (
             t.fg_dim,
             "FILES",
-            "Guest session \u{b7} ephemeral",
-            "Generated artifacts stay on the host under out/qemu-aarch64.",
+            "No file browser",
+            "The hardware API defines no storage capability on any target yet.",
         ),
         _ => (
             tile.map_or(t.fg_dim, |t| tone_color(t.icon.tone)),
@@ -942,13 +976,34 @@ fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
     c.fill_circle(track.x + fill, track.y + track.h / 2, s(34), t.fg);
     let value = format!("{}%", state.brightness);
     ty.text(c, Style::bold(s(34) as f32, t.fg), &value, s(96), s(1210));
-    ty.text(
+    // Long physical target ids wrap instead of running off narrow panels.
+    wrap_text(
         c,
-        Style::regular(s(27) as f32, t.fg_dim),
-        "display brightness \u{b7} mock \u{b7} QEMU",
+        ty,
+        &brightness_caption(state),
         s(96),
         s(1280),
+        c.width() - s(192),
+        s(27),
     );
+}
+
+/// Where the brightness value comes from: the display capability's status on
+/// the connected target, e.g. `display brightness · mock · qemu-aarch64`.
+fn brightness_caption(state: &UiState) -> String {
+    format!(
+        "display brightness \u{b7} {} \u{b7} {}",
+        capability_word(state.capabilities.status(Capability::Display)),
+        state.target
+    )
+}
+
+/// The session notification's body: the connected target, then input help.
+fn session_ready_detail(state: &UiState) -> String {
+    format!(
+        "{} \u{b7} touch input active. Bottom-edge swipe returns home.",
+        state.target
+    )
 }
 
 /// A quick-settings toggle. Off is a plain card; on keeps the slate fill and
@@ -1036,14 +1091,14 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
     ty.text(
         c,
         Style::bold(s(48) as f32, t.fg),
-        "Session ready \u{b7} QEMU",
+        "Session ready",
         s(116),
         s(575),
     );
     wrap_text(
         c,
         ty,
-        "Touch input active. Bottom-edge swipe returns home.",
+        &session_ready_detail(state),
         s(116),
         s(665),
         c.width() - s(232),
@@ -1127,11 +1182,46 @@ mod tests {
 
     #[test]
     fn identity_line_names_product_target_and_state_source() {
+        let mocked = CapabilityMatrix::uniform(CapabilityStatus::Mocked);
         assert_eq!(
-            identity_line("qemu-aarch64"),
+            identity_line("qemu-aarch64", &mocked),
             "ferrix \u{b7} qemu-aarch64 \u{b7} mock"
         );
-        assert_eq!(state().identity, identity_line("qemu-aarch64"));
+        assert_eq!(state().identity, identity_line("qemu-aarch64", &mocked));
+        let unadmitted = CapabilityMatrix::uniform(CapabilityStatus::Unsupported);
+        assert_eq!(
+            identity_line("google-pixel-9a-tegu-gxq96-mp1-0", &unadmitted),
+            "ferrix \u{b7} google-pixel-9a-tegu-gxq96-mp1-0 \u{b7} unadmitted"
+        );
+        let supported = CapabilityMatrix::uniform(CapabilityStatus::Supported)
+            .with(Capability::MockControl, CapabilityStatus::Unsupported);
+        assert_eq!(matrix_word(&supported), "supported");
+        assert_eq!(
+            matrix_word(&supported.with(Capability::Audio, CapabilityStatus::Unsupported)),
+            "unadmitted"
+        );
+    }
+
+    #[test]
+    fn session_copy_follows_the_connected_target_not_a_fixed_label() {
+        let mut ui = state();
+        assert_eq!(
+            brightness_caption(&ui),
+            "display brightness \u{b7} mock \u{b7} qemu-aarch64"
+        );
+        assert!(session_ready_detail(&ui).starts_with("qemu-aarch64 \u{b7} "));
+        ui.set_session(
+            "google-pixel-9a-tegu-gxq96-mp1-0",
+            CapabilityMatrix::uniform(CapabilityStatus::Unsupported)
+                .with(Capability::Display, CapabilityStatus::Supported),
+        );
+        assert_eq!(
+            brightness_caption(&ui),
+            "display brightness \u{b7} supported \u{b7} google-pixel-9a-tegu-gxq96-mp1-0"
+        );
+        assert!(session_ready_detail(&ui).starts_with("google-pixel-9a-tegu-gxq96-mp1-0"));
+        assert!(!session_ready_detail(&ui).contains("QEMU"));
+        assert!(!brightness_caption(&ui).contains("QEMU"));
     }
 
     #[test]

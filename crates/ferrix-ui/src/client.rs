@@ -60,7 +60,8 @@ pub struct ClientConfig {
     /// Size assumed until the compositor's first configure and used to size
     /// the shm pool.
     pub initial_size: (u32, u32),
-    /// Evidence label for every record the runner emits (`QEMU` or `mock`).
+    /// Evidence label for every record the runner emits: the session label
+    /// from [`crate::evidence::label`] in a session, `mock` for host runs.
     pub evidence: String,
     /// Event name of the first-frame record, e.g. `basic-screen-frame`.
     pub first_frame_event: String,
