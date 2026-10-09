@@ -90,6 +90,20 @@ if [ -f "$contacts_fixtures" ]; then
   cp "$contacts_fixtures" "$out/product/contacts/mock-contacts.json"
   contacts_fixtures_hash=$(shasum -a 256 "$contacts_fixtures" | awk '{print $1}')
 fi
+# Third-party notices for material compiled into the ferrix-ui binaries
+# (docs/licensing.md): the Remix Icon v4.7.0 licence for the UI glyphs and the
+# JetBrains Mono OFL. Installed as /usr/share/licenses/ferrix/<name>/.
+rm -rf "$out/product/licenses"
+for notice in "remixicon-4.7.0:$root/crates/ferrix-ui/assets/icons/remixicon/License" \
+              "jetbrains-mono:$root/crates/ferrix-ui/assets/OFL.txt"; do
+  name=${notice%%:*}
+  file=${notice#*:}
+  [ -f "$file" ] || { echo "missing third-party notice $file" >&2; exit 1; }
+  mkdir -p "$stage/usr/share/licenses/ferrix/$name" "$out/product/licenses/$name"
+  cp "$file" "$stage/usr/share/licenses/ferrix/$name/"
+  cp "$file" "$out/product/licenses/$name/"
+done
+notices_hash=$(cd "$out/product/licenses" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s\n' "$f"; cat "$f"; done | shasum -a 256 | awk '{print $1}')
 cp "$cache/guest-target/ferrix-shell/release/ferrix-shell" "$out/product/ferrix-shell"
 cp "${FERRIX_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$out/product/profile.toml"
 cp "${FERRIX_QEMU_COLORS:-$root/themes/ferrix/colors.toml}" "$out/product/colors.toml"
@@ -117,5 +131,5 @@ grants_hash=$(shasum -a 256 "$root/apps/grants.json" | awk '{print $1}')
 apps_hash=$(cd "$root/apps" && for f in $(ls *.json | sort); do printf '%s\n' "$f"; cat "$f"; done | shasum -a 256 | awk '{print $1}')
 # Theme hash: the exact colors.toml shipped as /etc/ferrix/colors.toml.
 colors_hash=$(shasum -a 256 "$out/product/colors.toml" | awk '{print $1}')
-printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s",%s"apps_sha256":"%s","grants_sha256":"%s","contacts_fixtures_sha256":"%s","colors_sha256":"%s","profile":"%s","colors":"%s","mock_control_ports":["ferrix.control","ferrix.telephony","ferrix.network"]}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$service_hashes" "$apps_hash" "$grants_hash" "$contacts_fixtures_hash" "$colors_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
+printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s",%s"apps_sha256":"%s","grants_sha256":"%s","contacts_fixtures_sha256":"%s","colors_sha256":"%s","third_party_notices_sha256":"%s","profile":"%s","colors":"%s","mock_control_ports":["ferrix.control","ferrix.telephony","ferrix.network"]}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$service_hashes" "$apps_hash" "$grants_hash" "$contacts_fixtures_hash" "$colors_hash" "$notices_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
 printf 'built: %s/Image and %s/initramfs.cpio.gz\n' "$out" "$out"

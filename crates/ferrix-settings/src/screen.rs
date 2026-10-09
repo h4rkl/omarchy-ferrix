@@ -5,10 +5,12 @@
 
 use ferrix_hardware_api::Capability;
 use ferrix_ui::draw::{Canvas, Rect, Style, Type};
+use ferrix_ui::icons::Icon;
 use ferrix_ui::theme;
 use ferrix_ui::widgets::{
-    ButtonKind, Tone, button, chip, clock_strip, ellipsize, gesture_pill, keyboard, list_row,
-    notice, page_header, section_label, slider, text_field, wrap, wrap_text,
+    ButtonKind, Tone, Trailing, button, chip, clock_strip, ellipsize, gesture_pill, keyboard,
+    list_row, list_row_with, notice, page_header, section_label, slider, text_field, wrap,
+    wrap_text,
 };
 
 use crate::bluetooth::{BtView, Card, device_name, failure_text, format_passkey, kind_label};
@@ -66,15 +68,17 @@ pub fn compose(
 }
 
 /// The category list: one row per page with its current state.
+/// Each row opens its page, so it ends in the forward chevron.
 fn root(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
     for (r, page) in l.section_rects() {
-        list_row(
+        list_row_with(
             c,
             ty,
             r,
+            None,
             page.title(),
             &model.section_summary(page),
-            None,
+            Trailing::Icon(Icon::Forward, Tone::Neutral),
             input.pressed == Some(Target::Section(page)),
         );
     }
@@ -153,7 +157,7 @@ fn bluetooth_main(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &
     }
     let pair_pressed = input.pressed == Some(Target::BtPairNew);
     let (pair_sub, pair_trailing) = match (&model.bt_devices, model.bluetooth_on()) {
-        (_, false) => ("turn Bluetooth on to pair", None),
+        (_, false) => ("turn Bluetooth on to pair", Trailing::None),
         (
             crate::bluetooth::DeviceList::Loaded {
                 controls: false, ..
@@ -161,14 +165,18 @@ fn bluetooth_main(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &
             true,
         ) => (
             "this target's Bluetooth service cannot pair",
-            Some(("unavailable", Tone::Warn)),
+            Trailing::Chip("unavailable", Tone::Warn),
         ),
-        _ => ("find nearby devices to pair", Some(("+", Tone::Accent))),
+        _ => (
+            "find nearby devices to pair",
+            Trailing::Icon(Icon::Add, Tone::Accent),
+        ),
     };
-    list_row(
+    list_row_with(
         c,
         ty,
         l.bt_pair_row_rect(),
+        None,
         "Pair new device",
         pair_sub,
         pair_trailing,
@@ -1153,9 +1161,20 @@ fn about(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model) {
     }
     let footer = Style::regular(s(26) as f32, t.fg_dim);
     let size = (c.width() as u32, c.height() as u32);
-    for (i, line) in about_footer_lines(ty, size).iter().enumerate() {
+    let lines = about_footer_lines(ty, size);
+    for (i, line) in lines.iter().enumerate() {
         ty.text(c, footer, line, s(96), s(1330) + i as i32 * s(39));
     }
+    // Third-party notice for the UI glyphs (the licence text is embedded in
+    // the binary and installed under /usr/share/licenses/ferrix/).
+    let notice = ellipsize(ty, footer, ferrix_ui::icons::ATTRIBUTION, max);
+    ty.text(
+        c,
+        footer,
+        &notice,
+        s(96),
+        s(1330) + (lines.len() as i32 + 1) * s(39),
+    );
 }
 
 /// Lines of the About footer at `size`, as drawn.

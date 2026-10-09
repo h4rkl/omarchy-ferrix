@@ -282,6 +282,76 @@ shaping. IBM Plex and Noto are design selections, not shipped claims, until
 font packaging, shaping, fallback, and script-specific graphical evidence
 exist. Unsupported text must expose a missing-glyph state honestly.
 
+## Icons
+
+First-party glyphs come from one set: a pinned subset of
+[Remix Icon](https://github.com/Remix-Design/RemixIcon/tree/v4.7.0) v4.7.0
+(Apache-2.0; pin and licence evidence in `docs/licensing.md`). `ferrix-ui`
+compiles the vendored SVGs into outline data at build time (`build.rs`, with
+hash-pinned inputs) and fills them through the same `tiny-skia` software path
+as every other shape, at the exact pixel size requested. There is no run-time
+SVG parsing, icon font, file, or network dependency. The API is
+`ferrix_ui::icons::{Icon, draw, draw_centered, draw_in}`.
+
+Rules:
+
+- **Filled always (owner rule, 2026-10-10).** Use the filled variant (`*-fill`)
+  wherever Remix has one, in every state, including inactive ones. Inactive
+  versus active is shown with colour, never by switching between line and
+  fill glyphs.
+- **Colour by state.** `fg_dim` for inactive or supporting glyphs, `fg` for
+  primary content (folders, the backspace key), `rust` for the active or
+  actionable state (an on toggle, the back affordance), `steel` for network
+  and connection state, the descriptor tone on launcher tiles, and `ok`/`err`
+  for charging and low battery. The colour budget above still applies.
+- **Additive, never a substitute.** Every glyph sits beside the text label or
+  accessible name that already existed (tile names, toggle names, tab labels,
+  `back`/`delete` targets in `ui-state`). Glyphs never carry state on their
+  own (`docs/design.md` contrast rules).
+- **UI symbols only.** Never use a glyph as a logo, brand mark, or product
+  identity (the Remix `Logos` category is not vendored). Ferrix remains the
+  only product identity.
+- **Sizes at the 1080 px basis:** 40 px in the 72 px status strip, 88 px back
+  affordance box (the chevron itself is about 22x44 px), 56 px leading row
+  glyphs, 72 px quick-settings glyphs, 96 px launcher glyphs inside about
+  290x290 px tiles. Scale with `value * basis / 1080` like every other metric.
+- **The home indicator stays a pill.** It is the one pill shape in the system
+  and is not an icon.
+
+Subset (Remix name): launcher `phone`, `message-2`, `contacts-book`,
+`settings-3`, `terminal-box`, `camera`, `folder` (Files), `global` (Browser),
+`home-5`; status `signal-wifi-off`,
+`signal-wifi-1`, `signal-wifi-2`, `signal-wifi`, `battery`, `battery-low`,
+`battery-charge`; quick settings and notifications `bluetooth`, `sun`,
+`notification-3`; navigation and actions `arrow-left-s` (back),
+`arrow-right-s` (forward chevron, breadcrumb separator), `more` (row
+details), `add`, `close`, `delete-back-2` (backspace), `grid` (Dialer tab),
+`history` (Recent tab); Files types `folder`, `file`, `file-text`,
+`file-image`, `file-music`, `file-video`, `file-zip`, `file-code`, `links`,
+`file-unknow`. All are `-fill` variants.
+
+Exceptions and departures:
+
+- **No line glyphs are used.** Every glyph in the subset has a filled variant,
+  so there is no line/outline exception today. Remix's filled `arrow-left-s`
+  and `arrow-right-s` are solid triangles rather than open chevrons; that is
+  the accepted consequence of the filled rule.
+- **Cellular signal meter:** Remix v4.7.0 has no cellular signal-level glyphs,
+  so the status strip keeps its drawn four-bar meter (`steel` lit, `surface_hi`
+  unlit).
+- **Battery levels:** Remix's half-level `battery-2` is a portrait battery that
+  does not match the others, so only full, low (<20 %), and charging glyphs are
+  used; the percentage is always printed beside the glyph.
+- **On-screen keyboard and Terminal:** key caps keep their text labels
+  (`⌫`, `←`, `→`, `SHIFT`); the keyboard is a text instrument and its labels
+  are shared with the terminal's key mapping. Only the Phone dialer's
+  backspace button uses the `delete-back-2` glyph.
+- **Not drawn yet:** `home-5` and `close` are pinned for the home and
+  dismiss controls but no current surface draws a home button or a close
+  control; the home gesture stays a pill.
+- **Third-party apps** without a first-party glyph keep their descriptor glyph
+  or first letter on the launcher tile.
+
 ## Components and states
 
 ### Status strip
@@ -418,7 +488,10 @@ Implemented today:
 - software-rendered cards, rows, fields, keyboard, launcher, status surfaces,
   quick settings, notifications, and Terminal;
 - tight radii, hairlines, instrument rails, focused fullscreen flows, and
-  concise evidence-labelled copy.
+  concise evidence-labelled copy;
+- the pinned filled Remix Icon glyph set on the launcher, status strip, quick
+  settings, notifications, page headers (back), Files rows and breadcrumbs,
+  Settings rows, and the Phone tabs and backspace key.
 
 Selected but not yet shipped:
 

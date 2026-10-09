@@ -8,11 +8,11 @@
 
 use ferrix_hardware_api::{Capability, CapabilityMatrix, CapabilityStatus, HardwareState};
 use ferrix_ui::draw::{Canvas, Rect, Style, Type, Weight};
+use ferrix_ui::icons::{self, Icon};
 use ferrix_ui::{theme, widgets};
 
 use crate::catalog::{Tile, tone_color};
 use crate::interaction::{Page, Target, UiState, tile_rects};
-use crate::status::Reach;
 
 /// Footer caption of the launcher. Says what this surface is, not what it
 /// wants to be.
@@ -294,133 +294,48 @@ fn status_bar(
     } else {
         t.fg
     };
-    let mut x = w - pad;
-    x -= battery_icon(c, x, mid, p, batt_color);
+    // Status glyphs are 40 design px in the 72 px strip (`docs/design.md`).
+    let glyph = bar_h * 5 / 9;
+    let glyph_y = mid - glyph / 2;
+    let mut x = w - pad - glyph;
+    icons::draw(
+        c,
+        Icon::battery(p.power.battery_percent, p.power.charging),
+        x,
+        glyph_y,
+        glyph,
+        batt_color,
+    );
     let pct_style = Style::regular(px, t.fg);
-    x -= ty.width(pct_style, &pct) + bar_h / 4;
+    x -= ty.width(pct_style, &pct) + bar_h / 8;
     ty.text(c, pct_style, &pct, x, baseline);
-    x -= bar_h / 3;
-    x -= wifi_icon(c, x, mid + bar_h / 4, bar_h / 2, state.net.reach);
-    x -= bar_h / 3;
+    x -= bar_h / 4 + glyph;
+    icons::draw(c, wifi_glyph(state), x, glyph_y, glyph, wifi_color(state));
+    x -= bar_h / 4;
     signal_bars(c, x, mid + bar_h / 4, bar_h / 2, state.tele.bars);
 }
 
-/// Draws a battery outline with proportional fill, right edge at `right`.
-/// Returns the consumed width.
-fn battery_icon(c: &mut Canvas, right: i32, mid: i32, p: &HardwareState, color: u32) -> i32 {
+/// Wi-Fi status glyph: Remix's filled Wi-Fi levels follow the connectivity
+/// check (`local`/`portal` one, `limited` two, `full` all); a radio that is
+/// off or not linked shows the crossed glyph.
+fn wifi_glyph(state: &UiState) -> Icon {
+    Icon::wifi(state.net.reach.arcs())
+}
+
+/// Network glyphs are steel, the secondary accent and never rust, while a
+/// link exists; `fg_dim` otherwise.
+fn wifi_color(state: &UiState) -> u32 {
     let t = theme::get();
-    let bw = 46;
-    let bh = 24;
-    let x = right - bw;
-    let y = mid - bh / 2;
-    c.stroke_rounded(
-        Rect {
-            x,
-            y,
-            w: bw - 4,
-            h: bh,
-        },
-        3,
-        3,
-        t.fg_dim,
-    );
-    c.fill_rounded(
-        Rect {
-            x: x + bw - 4,
-            y: mid - 5,
-            w: 4,
-            h: 10,
-        },
-        1,
-        t.fg_dim,
-    );
-    let inner = (bw - 12) * i32::from(p.power.battery_percent.min(100)) / 100;
-    if inner > 0 {
-        c.fill_rounded(
-            Rect {
-                x: x + 4,
-                y: y + 4,
-                w: inner,
-                h: bh - 8,
-            },
-            1,
-            color,
-        );
-    }
-    if p.power.charging {
-        bolt(c, x + (bw - 4) / 2, mid, bh - 8, t.bg_dark);
-    }
-    bw
-}
-
-/// A small filled lightning bolt centred on (`cx`, `cy`) with the given
-/// height: the GrapheneOS-style charging cue. Classic seven-point outline,
-/// scan-line filled so it stays solid at status-bar sizes.
-fn bolt(c: &mut Canvas, cx: i32, cy: i32, h: i32, color: u32) {
-    let h = h.max(6) as f32;
-    let w = h * 0.62;
-    let x0 = cx as f32 - w / 2.0;
-    let y0 = cy as f32 - h / 2.0;
-    const OUTLINE: [(f32, f32); 7] = [
-        (0.62, 0.0),
-        (0.12, 0.58),
-        (0.46, 0.58),
-        (0.34, 1.0),
-        (0.90, 0.40),
-        (0.54, 0.40),
-        (0.70, 0.0),
-    ];
-    let pts: Vec<(f32, f32)> = OUTLINE
-        .iter()
-        .map(|(px, py)| (x0 + px * w, y0 + py * h))
-        .collect();
-    let top = y0.floor() as i32;
-    let bottom = (y0 + h).ceil() as i32;
-    for y in top..=bottom {
-        let sy = y as f32 + 0.5;
-        let mut xs = Vec::new();
-        for i in 0..pts.len() {
-            let (ax, ay) = pts[i];
-            let (bx, by) = pts[(i + 1) % pts.len()];
-            if (ay <= sy && by > sy) || (by <= sy && ay > sy) {
-                xs.push(ax + (sy - ay) * (bx - ax) / (by - ay));
-            }
-        }
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for pair in xs.chunks(2) {
-            if let [l, r] = pair {
-                for x in l.round() as i32..r.round() as i32 {
-                    c.put(x, y, color);
-                }
-            }
-        }
+    if state.net.reach.arcs() > 0 {
+        t.steel
+    } else {
+        t.fg_dim
     }
 }
 
-/// Network glyphs are steel: the secondary accent, never rust. The lit arcs
-/// follow the connectivity check (`local`/`portal` one, `limited` two,
-/// `full` three); an unlinked radio keeps the dot only.
-fn wifi_icon(c: &mut Canvas, right: i32, base: i32, size: i32, reach: Reach) -> i32 {
-    let t = theme::get();
-    let cx = right - size;
-    let lit = reach.arcs() as usize;
-    let color = if lit > 0 { t.steel } else { t.fg_dim };
-    for (i, r) in [size / 4, size * 5 / 8, size].into_iter().enumerate() {
-        let on = i < lit;
-        for dy in -r - 2..=0 {
-            for dx in -r - 2..=r + 2 {
-                let d2 = dx * dx + dy * dy;
-                if d2 >= (r - 2) * (r - 2) && d2 <= (r + 2) * (r + 2) && dx.abs() <= -dy {
-                    c.put(cx + dx, base + dy, if on { color } else { t.surface_hi });
-                }
-            }
-        }
-    }
-    c.fill_circle(cx, base, 4, color);
-    2 * size
-}
-
-/// `bars` (0..=4) lit of four; the daemon's signal when reachable.
+/// `bars` (0..=4) lit of four; the daemon's signal when reachable. Remix Icon
+/// 4.7.0 has no cellular signal-level glyphs, so this meter stays drawn
+/// (documented exception in `docs/design.md`).
 fn signal_bars(c: &mut Canvas, right: i32, base: i32, size: i32, bars: u8) {
     let t = theme::get();
     let bw = size / 4;
@@ -506,11 +421,13 @@ fn battery_card(
     }
     if p.power.charging {
         let pct_w = ty.width(pct_style, &pct);
-        bolt(
+        let size = s(64);
+        icons::draw(
             c,
-            r.x + s(32) + pct_w + s(36),
-            r.y + s(160) - s(26),
-            s(52),
+            Icon::BatteryCharging,
+            r.x + s(32) + pct_w + s(20),
+            r.y + s(160) - s(26) - size / 2,
+            size,
             color,
         );
     }
@@ -663,135 +580,24 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
     }
 }
 
-/// Tile artwork. The reference entries keep their drawn icons; any other
-/// app shows its descriptor glyph when the face has it, else the first
-/// letter of its name (never a tofu box).
+/// Tile artwork: first-party applications use their filled Remix glyph
+/// (`ferrix_ui::icons`), 96 design px, in the descriptor tone. Any other app
+/// shows its descriptor glyph when the face has it, else the first letter of
+/// its name (never a tofu box). The label under the tile always stays.
 fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32) {
-    let t = theme::get();
     let width = design_width(c);
     let u = |v: i32| scale(v, width);
-    match tile.kind() {
-        "settings" => {
-            // Sliders: three rails with offset knobs.
-            for (i, knob) in [-u(24), u(20), -u(4)].into_iter().enumerate() {
-                let y = cy - u(28) + i as i32 * u(28);
-                c.fill_rounded(
-                    Rect {
-                        x: cx - u(44),
-                        y: y - u(4),
-                        w: u(88),
-                        h: u(8),
-                    },
-                    u(3),
-                    t.surface_hi,
-                );
-                c.fill_circle(cx + knob, y, u(12), accent);
-            }
-        }
-        "messages" => {
-            c.fill_rounded(
-                Rect {
-                    x: cx - u(44),
-                    y: cy - u(36),
-                    w: u(88),
-                    h: u(64),
-                },
-                u(8),
-                accent,
-            );
-            for i in 0..3 {
-                c.fill_rounded(
-                    Rect {
-                        x: cx - u(28),
-                        y: cy - u(22) + i * u(16),
-                        w: u(56) - i * u(14),
-                        h: u(6),
-                    },
-                    u(2),
-                    t.bg,
-                );
-            }
-        }
-        "terminal" => {
-            c.stroke_rounded(
-                Rect {
-                    x: cx - u(46),
-                    y: cy - u(38),
-                    w: u(92),
-                    h: u(72),
-                },
-                u(6),
-                u(4),
-                accent,
-            );
-            ty.text(
-                c,
-                Style::bold(u(36) as f32, accent),
-                ">_",
-                cx - u(24),
-                cy + u(14),
-            );
-        }
-        "phone" => {
-            for row in 0..3 {
-                for col in 0..3 {
-                    c.fill_circle(
-                        cx - u(28) + col * u(28),
-                        cy - u(28) + row * u(28),
-                        u(9),
-                        accent,
-                    );
-                }
-            }
-        }
-        "camera" => {
-            c.stroke_rounded(
-                Rect {
-                    x: cx - u(46),
-                    y: cy - u(34),
-                    w: u(92),
-                    h: u(68),
-                },
-                u(8),
-                u(4),
-                accent,
-            );
-            c.fill_circle(cx, cy, u(18), accent);
-            c.fill_circle(cx + u(30), cy - u(20), u(4), accent);
-        }
-        "files" => {
-            // Folder body with tab.
-            c.fill_rounded(
-                Rect {
-                    x: cx - u(44),
-                    y: cy - u(34),
-                    w: u(40),
-                    h: u(14),
-                },
-                u(3),
-                accent,
-            );
-            c.fill_rounded(
-                Rect {
-                    x: cx - u(44),
-                    y: cy - u(26),
-                    w: u(88),
-                    h: u(58),
-                },
-                u(5),
-                accent,
-            );
-        }
-        _ => {
-            let glyph = tile_glyph(ty, tile);
-            let style = Style::bold(
-                u(if glyph.chars().count() > 1 { 40 } else { 56 }) as f32,
-                accent,
-            );
-            let gw = ty.width(style, &glyph);
-            ty.text(c, style, &glyph, cx - gw / 2, cy + u(20));
-        }
+    if let Some(icon) = Icon::for_app(tile.kind()) {
+        icons::draw_centered(c, icon, cx, cy, u(96), accent);
+        return;
     }
+    let glyph = tile_glyph(ty, tile);
+    let style = Style::bold(
+        u(if glyph.chars().count() > 1 { 40 } else { 56 }) as f32,
+        accent,
+    );
+    let gw = ty.width(style, &glyph);
+    ty.text(c, style, &glyph, cx - gw / 2, cy + u(20));
 }
 
 /// The descriptor glyph when every character exists in the bold face, else
@@ -922,6 +728,7 @@ fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
             h: s(300),
         },
         "Wi-Fi",
+        Icon::WifiFull,
         state.wifi_on,
         state.pressed == Some(Target::Wifi),
     );
@@ -935,14 +742,16 @@ fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
             h: s(300),
         },
         "Bluetooth",
+        Icon::Bluetooth,
         state.bluetooth_on,
         state.pressed == Some(Target::Bluetooth),
     );
+    icons::draw(c, Icon::Brightness, s(92), s(970) - s(36), s(44), t.fg_dim);
     ty.text(
         c,
         Style::bold(s(28) as f32, t.fg_dim),
         "BRIGHTNESS",
-        s(96),
+        s(150),
         s(970),
     );
     let track = Rect {
@@ -989,8 +798,9 @@ fn session_ready_detail(state: &UiState) -> String {
 
 /// A quick-settings toggle. Off is a plain card; on keeps the slate fill and
 /// takes a rust outline and a rust state word, so the accent marks exactly
-/// the thing that is active.
-fn toggle(c: &mut Canvas, ty: &Type, r: Rect, label: &str, on: bool, pressed: bool) {
+/// the thing that is active. The filled glyph sits above the label and follows the
+/// same rule: rust when on, `fg_dim` when off.
+fn toggle(c: &mut Canvas, ty: &Type, r: Rect, label: &str, icon: Icon, on: bool, pressed: bool) {
     let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
@@ -1006,14 +816,22 @@ fn toggle(c: &mut Canvas, ty: &Type, r: Rect, label: &str, on: bool, pressed: bo
         Style::bold(s(44) as f32, t.fg),
         label,
         r.x + s(38),
-        r.y + s(104),
+        r.y + s(184),
     );
     ty.text(
         c,
         Style::bold(s(30) as f32, if on { t.rust } else { t.fg_dim }),
         if on { "on" } else { "off" },
         r.x + s(38),
-        r.y + s(190),
+        r.y + s(250),
+    );
+    icons::draw(
+        c,
+        icon,
+        r.x + s(30),
+        r.y + s(36),
+        s(72),
+        if on { t.rust } else { t.fg_dim },
     );
 }
 
@@ -1029,6 +847,14 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
         state.pressed == Some(Target::Back),
     );
     if !state.notification_visible {
+        icons::draw_centered(
+            c,
+            Icon::Notifications,
+            c.width() / 2,
+            s(640),
+            s(120),
+            t.fg_dim,
+        );
         let title = "No notifications";
         let style = Style::bold(s(48) as f32, t.fg);
         ty.text(
@@ -1057,6 +883,14 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
     };
     c.fill_rounded(card, s(10), t.surface);
     c.stroke_rounded(card, s(10), hairline(width), t.border);
+    icons::draw(
+        c,
+        Icon::Notifications,
+        s(116),
+        s(475) - s(32),
+        s(38),
+        t.fg_dim,
+    );
     // The rust rule at the left is the region's one accent.
     c.fill_rounded(
         Rect {
@@ -1072,7 +906,7 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
         c,
         Style::bold(s(28) as f32, t.fg_dim),
         "SYSTEM",
-        s(116),
+        s(166),
         s(475),
     );
     ty.text(
@@ -1143,6 +977,7 @@ fn wrap_text(c: &mut Canvas, ty: &Type, text: &str, x: i32, y: i32, max_width: i
 mod tests {
     use super::*;
     use crate::interaction::CrashNotice;
+    use crate::status::Reach;
     use crate::test_tiles;
 
     /// The checked-in profile's initial hardware state, as the core would
