@@ -22,3 +22,11 @@ ferrix_grant_socket() {
 		ewarn "$1 did not appear; clients running as user cannot connect"
 	fi
 }
+
+# ferrix_user_folders: the user's standard folders (Files lists them; Contacts
+# exports to Documents). Created once, never touched again.
+ferrix_user_folders() {
+	for folder in Documents Downloads Music Pictures Videos; do
+		[ -e "/home/user/$folder" ] || checkpath -d -o user:user -m 0755 "/home/user/$folder"
+	done
+}

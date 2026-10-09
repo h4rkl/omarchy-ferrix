@@ -39,6 +39,7 @@ start_pre() {
 	checkpath -d -m 0755 /var/log/ferrix
 	. /usr/lib/ferrix/openrc.sh
 	ferrix_user_runtime_dir || return 1
+	ferrix_user_folders
 	checkpath -f -m 0644 /etc/ferrix/profile.toml
 	checkpath -f -m 0644 /etc/ferrix/colors.toml
 }
