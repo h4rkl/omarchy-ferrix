@@ -358,7 +358,7 @@ $bb mount -o move /proc /newroot/proc 2>/dev/null || :
 $bb mount -o move /sys /newroot/sys 2>/dev/null || :
 checkpoint switch
 log 'switching to postmarketOS init'
-$bb switch_root /newroot /sbin/init
-# Only reached if switch_root failed; returning from PID 1 would panic and
-# reboot immediately.
-hold_then_reboot 'switch_root failed'
+# switch_root must run as PID 1, so exec it. If it fails, PID 1 exits and
+# the kernel panics and reboots (CONFIG_PANIC_TIMEOUT=-1), which still ends in
+# the bootloader's retry/fallback to the stock slot.
+exec $bb switch_root /newroot /sbin/init
