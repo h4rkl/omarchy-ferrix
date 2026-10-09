@@ -16,6 +16,9 @@ orientation = "portrait"
 # The exynos DPU reads 32-bit DRM fourccs byte-reversed (AB24 as RA24);
 # verified with libdrm modetest colour bars on this exact target.
 scanout_byte_order = "reversed"
+# Hole-punch camera (lower edge ~80 px) and rounded corners at the top; the
+# corner curve and home-gesture pill at the bottom. Panel pixels, portrait.
+safe_area = { top = 96, bottom = 36 }
 
 [input]
 touch = true

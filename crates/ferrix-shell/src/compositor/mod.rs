@@ -390,6 +390,13 @@ impl Shell {
         Rectangle::new((0, 0).into(), self.logical_size())
     }
 
+    /// Where fullscreen clients live: the logical output minus the profile's
+    /// safe area (camera cutout, rounded corners, gesture margin).
+    pub fn client_area(&self) -> Rectangle<i32, Logical> {
+        let (x, y, w, h) = self.plan.client_rect(self.config.safe_area);
+        Rectangle::new((x, y).into(), (w as i32, h as i32).into())
+    }
+
     /// Apply a (possibly new) output plan: mode is owned by the backend, this
     /// updates transform and re-configures every toplevel to the new logical
     /// size.
@@ -401,7 +408,7 @@ impl Shell {
             None,
             Some((0, 0).into()),
         );
-        let size = self.logical_size();
+        let size = self.client_area().size;
         for window in self.windows.iter() {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.with_pending_state(|state| state.size = Some(size));
@@ -501,7 +508,7 @@ impl Shell {
             return Some(hit);
         }
         if let Some(window) = self.windows.focused() {
-            let location = Point::from((0, 0)) - window.geometry().loc;
+            let location = self.client_area().loc - window.geometry().loc;
             if let Some((s, p)) =
                 window.surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
             {
@@ -717,7 +724,7 @@ impl XdgShellHandler for Shell {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let size = self.logical_size();
+        let size = self.client_area().size;
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Fullscreen);
             state.size = Some(size);
@@ -756,7 +763,7 @@ impl XdgShellHandler for Shell {
         surface: ToplevelSurface,
         _output: Option<wl_output::WlOutput>,
     ) {
-        let size = self.logical_size();
+        let size = self.client_area().size;
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Fullscreen);
             state.size = Some(size);

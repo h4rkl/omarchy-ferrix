@@ -48,6 +48,27 @@ pub struct DisplaySection {
     /// means the DRM standard.
     #[serde(default, skip_serializing_if = "ScanoutByteOrder::is_standard")]
     pub scanout_byte_order: ScanoutByteOrder,
+    /// Panel edges unusable for application content (camera cutout, rounded
+    /// corners, gesture margin), in panel pixels of the natural orientation.
+    /// Optional; absent means the whole panel is usable.
+    #[serde(default, skip_serializing_if = "SafeArea::is_empty")]
+    pub safe_area: SafeArea,
+}
+
+/// Insets from each panel edge, in pixels of the panel's natural orientation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SafeArea {
+    pub top: u32,
+    pub bottom: u32,
+    pub left: u32,
+    pub right: u32,
+}
+
+impl SafeArea {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Byte order the display controller applies to 32-bit DRM fourccs.

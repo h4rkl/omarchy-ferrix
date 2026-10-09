@@ -248,15 +248,6 @@ fn status_bar(
             t.bg_dark
         },
     );
-    c.fill_rect(
-        Rect {
-            x: 0,
-            y: bar_h,
-            w,
-            h: 2,
-        },
-        t.border,
-    );
     let px = (bar_h * 5 / 12) as f32;
     let baseline = bar_h * 2 / 3;
     // Clock on the left, GrapheneOS style.
@@ -1442,7 +1433,16 @@ mod tests {
             for frame in [&launcher, &shade, &quick] {
                 assert_eq!(frame.get(x, 0), t.bg_dark, "width={width}");
                 assert_eq!(frame.get(x, bar_h - 1), t.bg_dark, "width={width}");
-                assert_eq!(frame.get(x, bar_h), t.border, "width={width}");
+                // No separator rule under the bar.
+                assert_ne!(frame.get(x, bar_h), t.border, "width={width}");
+            }
+            // The bar itself is pixel-identical on every page.
+            for y in 0..bar_h {
+                for col in 0..width as i32 {
+                    let pixel = launcher.get(col, y);
+                    assert_eq!(shade.get(col, y), pixel, "width={width} ({col},{y})");
+                    assert_eq!(quick.get(col, y), pixel, "width={width} ({col},{y})");
+                }
             }
         }
     }

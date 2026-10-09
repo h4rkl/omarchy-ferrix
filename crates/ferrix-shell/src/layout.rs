@@ -10,6 +10,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_hardware_api::Orientation;
+use ferrix_target_profile::SafeArea;
 
 /// Output rotation applied between the panel scan-out and client logical space.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -89,6 +90,26 @@ impl OutputLayout {
         } else {
             (self.panel_width, self.panel_height)
         }
+    }
+
+    /// The logical rectangle `(x, y, width, height)` fullscreen clients
+    /// occupy: the logical output minus the panel's safe-area insets, which
+    /// turn with the content. Rotate90 is a quarter turn clockwise (the
+    /// panel's top edge becomes the logical right edge).
+    pub fn client_rect(&self, safe: SafeArea) -> (i32, i32, u32, u32) {
+        let (top, right, bottom, left) = match self.rotation {
+            Rotation::Normal => (safe.top, safe.right, safe.bottom, safe.left),
+            Rotation::Rotate90 => (safe.left, safe.top, safe.right, safe.bottom),
+            Rotation::Rotate180 => (safe.bottom, safe.left, safe.top, safe.right),
+            Rotation::Rotate270 => (safe.right, safe.bottom, safe.left, safe.top),
+        };
+        let (w, h) = self.logical_size();
+        (
+            left as i32,
+            top as i32,
+            w.saturating_sub(left + right),
+            h.saturating_sub(top + bottom),
+        )
     }
 }
 
@@ -463,5 +484,23 @@ mod tests {
         assert_eq!(stack.oldest_mapped(), None);
         stack.mark_mapped(&1);
         assert_eq!(stack.oldest_mapped(), Some(&1));
+    }
+
+    #[test]
+    fn client_rect_applies_safe_area_insets_and_turns_with_the_output() {
+        let safe = SafeArea {
+            top: 96,
+            bottom: 36,
+            left: 0,
+            right: 0,
+        };
+        let portrait = OutputLayout::plan(1080, 2424, Orientation::Portrait);
+        assert_eq!(portrait.client_rect(safe), (0, 96, 1080, 2292));
+        assert_eq!(
+            portrait.client_rect(SafeArea::default()),
+            (0, 0, 1080, 2424)
+        );
+        let landscape = OutputLayout::plan(1080, 2424, Orientation::Landscape);
+        assert_eq!(landscape.client_rect(safe), (36, 0, 2424 - 96 - 36, 1080));
     }
 }

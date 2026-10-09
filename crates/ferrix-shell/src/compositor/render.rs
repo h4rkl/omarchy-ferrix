@@ -92,9 +92,10 @@ where
     push_layers(&[Layer::Overlay, Layer::Top], &mut elements, renderer);
 
     if let Some(window) = shell.windows.focused() {
-        // The toplevel fills the output; honour its xdg window geometry offset.
-        let location = (smithay::utils::Point::from((0, 0)) - window.geometry().loc)
-            .to_physical_precise_round(scale);
+        // The toplevel fills the client area (output minus the safe area);
+        // honour its xdg window geometry offset.
+        let location =
+            (shell.client_area().loc - window.geometry().loc).to_physical_precise_round(scale);
         elements.extend(
             window
                 .render_elements::<WaylandSurfaceRenderElement<R>>(renderer, location, scale, 1.0)
