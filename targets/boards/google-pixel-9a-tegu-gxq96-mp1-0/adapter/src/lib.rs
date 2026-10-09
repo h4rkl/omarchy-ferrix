@@ -560,13 +560,15 @@ mod linux {
         for entry in entries.flatten() {
             let path = entry.path();
             let status = fs::read_to_string(path.join("status")).unwrap_or_default();
-            if status.trim() != "connected" {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            // Writeback connectors report "connected" with 4096x2160 modes but
+            // are capture sinks, not displays.
+            if status.trim() != "connected" || name.contains("-Writeback-") {
                 continue;
             }
             let Ok(contents) = fs::read_to_string(path.join("modes")) else {
                 continue;
             };
-            let name = entry.file_name().to_string_lossy().into_owned();
             connected.push((
                 name,
                 contents.lines().filter_map(parse_mode).collect::<Vec<_>>(),
@@ -592,8 +594,12 @@ mod linux {
         .unwrap_or((0, 0))
     }
 
+    /// `WIDTHxHEIGHT`, optionally followed by `@refresh...` (the exynos DRM
+    /// driver lists `1080x2424@60:60`).
     fn parse_mode(mode: &str) -> Option<(u32, u32)> {
-        let (width, height) = mode.trim().split_once('x')?;
+        let mode = mode.trim();
+        let mode = mode.split_once('@').map_or(mode, |(size, _)| size);
+        let (width, height) = mode.split_once('x')?;
         let width = width.parse().ok()?;
         let height = height.parse().ok()?;
         (width > 0 && height > 0).then_some((width, height))
@@ -879,6 +885,13 @@ mod linux {
             let external_only = vec![("card0-DP-1".to_owned(), vec![(1920, 1080)])];
             assert_eq!(select_panel_geometry(&external_only), (1920, 1080));
             assert_eq!(select_panel_geometry(&[]), (0, 0));
+        }
+
+        #[test]
+        fn modes_with_refresh_suffixes_parse() {
+            assert_eq!(parse_mode("1080x2424@60:60"), Some((1080, 2424)));
+            assert_eq!(parse_mode("4096x2160"), Some((4096, 2160)));
+            assert_eq!(parse_mode("bogus"), None);
         }
 
         #[test]
