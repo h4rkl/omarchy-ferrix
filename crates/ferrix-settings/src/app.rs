@@ -112,10 +112,20 @@ impl Settings {
             Ok(()) => ("ok", None),
             Err(error) => {
                 let text = error.to_string();
-                if !matches!(error, ClientError::Protocol { .. }) {
-                    self.network_client = None;
+                match error {
+                    // A typed connect failure (wrong secrets, unsupported
+                    // security) is the connection's state, shown with Retry.
+                    ClientError::Network(error) if name == "connect" => {
+                        self.model.connect_failed(error);
+                    }
+                    ClientError::Network(_) | ClientError::Protocol { .. } => {
+                        self.model.last_error = Some(format!("network \u{b7} {text}"));
+                    }
+                    _ => {
+                        self.network_client = None;
+                        self.model.last_error = Some(format!("network \u{b7} {text}"));
+                    }
                 }
-                self.model.last_error = Some(format!("network \u{b7} {text}"));
                 ("error", Some(text))
             }
         };
@@ -154,6 +164,23 @@ impl Settings {
             "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"settings-action\",\"action\":\"{name}\",\"service\":\"telephony\",\"status\":\"{status}\",\"error\":{}}}",
             json_opt_str(error.as_deref())
         ));
+    }
+
+    /// The reconnector's snapshot carries no evidence label; the daemon
+    /// reports it in every hello, so (re)open the request connection and
+    /// take it from there.
+    fn refresh_tele_evidence(&mut self) {
+        self.telephony_client = None;
+        match TeleClient::connect(&self.telephony_socket, TeleKind::Application, TIMEOUT) {
+            Ok(client) => {
+                self.model.set_tele_evidence(client.evidence());
+                self.telephony_client = Some(client);
+            }
+            Err(error) => emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"telephony-evidence-unavailable\",\"app\":\"{APP_ID}\",\"reason\":\"{}\"}}",
+                json_escape(&error)
+            )),
+        }
     }
 
     fn send(&mut self, action: Action) {
@@ -324,7 +351,15 @@ impl ClientHandler for Settings {
             changed |= self.model.apply_network(feed);
         }
         while let Ok(update) = self.telephony.try_recv() {
+            let fresh = matches!(update, Update::Snapshot(_));
+            if matches!(update, Update::Disconnected) {
+                // The request connection died with the daemon.
+                self.telephony_client = None;
+            }
             changed |= self.model.apply_telephony(update);
+            if fresh {
+                self.refresh_tele_evidence();
+            }
         }
         if changed {
             self.report_ui_state();
