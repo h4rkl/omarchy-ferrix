@@ -1,0 +1,59 @@
+#!/bin/busybox sh
+
+# /system/bin/modprobe for the Kleaf GKI development route (CONFIG_MODPROBE_PATH).
+# Before /init runs, GKI's finalize_pkvm() loads each module named in
+# kvm-arm.protected_modules= (tegu: exynos-pd, pkvm_s2mpu-v9) through a
+# usermode helper invoked as:
+#   modprobe -q [-d /lib/modules/] -- NAME
+# Only /proc is mounted at that point. Resolve NAME (dashes and underscores
+# are equivalent) in the vendor_kernel_boot modules.dep and insert its
+# dependencies first, then the module itself.
+
+bb=/bin/busybox
+directory=/lib/modules
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		-q) ;;
+		-d) shift; directory=${1%/} ;;
+		--) shift; break ;;
+		*) break ;;
+	esac
+	shift
+done
+name=$(printf '%s' "$1" | $bb tr - _)
+[ -n "$name" ] || exit 1
+
+release=$($bb uname -r)
+base=
+for candidate in "$directory/$release" "$directory" "/lib/modules/$release"; do
+	[ -f "$candidate/modules.dep" ] && {
+		base=$candidate
+		break
+	}
+done
+[ -n "$base" ] || exit 1
+
+line=$($bb awk -v want="$name" '{
+	path = $1
+	sub(/:$/, "", path)
+	file = path
+	sub(/^.*\//, "", file)
+	sub(/\.ko$/, "", file)
+	gsub(/-/, "_", file)
+	if (file == want) { print; exit }
+}' "$base/modules.dep")
+[ -n "$line" ] || exit 1
+
+module=${line%%:*}
+dependencies=${line#*:}
+# modules.dep lists the deepest dependency last; insert in reverse order.
+reversed=
+for dependency in $dependencies; do
+	reversed="$dependency $reversed"
+done
+for dependency in $reversed; do
+	$bb insmod "$base/$dependency" 2>/dev/null || :
+done
+$bb insmod "$base/$module" 2>/dev/null && exit 0
+# Already loaded counts as success.
+$bb grep -q "^$name " /proc/modules

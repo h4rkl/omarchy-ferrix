@@ -143,20 +143,36 @@ def debugfs_dump(image, sources, destination):
     die(f"could not read any of {sources} from the base rootfs")
 
 
-def make_initramfs(base_rootfs, init_script, work):
+def build_reboot_helper(source, work):
+    """Compile tools/pixel-9a/reboot-bootloader.rs into a static, libc-free binary."""
+    if shutil.which("rustc") is None:
+        die("rustc with the aarch64-unknown-linux-musl target is required (run via native-builder)")
+    output = work / "reboot-bootloader"
+    run("rustc", "--edition", "2021", "--target", "aarch64-unknown-linux-musl",
+        "-C", "panic=abort", "-C", "opt-level=s", "-C", "linker=rust-lld",
+        "-C", "linker-flavor=ld.lld", "-C", "link-self-contained=no",
+        "-C", "relocation-model=static", "-C", "target-feature=+crt-static",
+        "-C", "strip=symbols", "-o", output, source)
+    return output
+
+
+def make_initramfs(base_rootfs, init_script, modprobe_script, reboot_helper, work):
     busybox = work / "busybox"
     loader = work / "ld-musl-aarch64.so.1"
     debugfs_dump(base_rootfs, ("/usr/bin/busybox", "/bin/busybox"), busybox)
     debugfs_dump(base_rootfs, ("/usr/lib/ld-musl-aarch64.so.1", "/lib/ld-musl-aarch64.so.1"), loader)
     archive = Cpio()
-    for directory in ("bin", "dev", "lib", "newroot", "proc", "sys"):
+    for directory in ("bin", "dev", "lib", "newroot", "proc", "sys", "system", "system/bin"):
         archive.directory(directory)
     archive.chardev("dev/console", 5, 1)
     archive.chardev("dev/kmsg", 1, 11, 0o644)
     archive.file("bin/busybox", busybox.read_bytes())
     archive.symlink("bin/sh", "busybox")
+    archive.file("bin/reboot-bootloader", reboot_helper.read_bytes())
     archive.file("lib/ld-musl-aarch64.so.1", loader.read_bytes())
     archive.symlink("lib/libc.musl-aarch64.so.1", "ld-musl-aarch64.so.1")
+    # CONFIG_MODPROBE_PATH: GKI's pKVM early-module loader runs this before /init.
+    archive.file("system/bin/modprobe", modprobe_script.read_bytes())
     archive.file("init", init_script.read_bytes())
     output = work / "initramfs.cpio"
     output.write_bytes(archive.finish())
@@ -225,21 +241,39 @@ def install_modules(image, stage, release):
 
 
 def main():
+    env = os.environ.get
+    repo = Path(__file__).resolve().parents[2]
+    kernel_out = Path(env("FERRIX_PIXEL9A_KERNEL_OUT", repo / "out/pixel-9a/kernel/tegu"))
+    if not kernel_out.is_absolute():
+        kernel_out = repo / kernel_out
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--kernel-dist", required=True, type=Path)
-    parser.add_argument("--kernel-manifest", required=True, type=Path)
-    parser.add_argument("--kernel-source", required=True, type=Path,
+    parser.add_argument("command", nargs="?", choices=["build"], default="build")
+    parser.add_argument("--kernel-dist", type=Path, default=kernel_out / "dist")
+    parser.add_argument("--kernel-manifest", type=Path, default=kernel_out / "build-manifest.tsv")
+    parser.add_argument("--kernel-source", type=Path,
+                        default=Path(env("FERRIX_PIXEL9A_KERNEL_SOURCE",
+                                         repo / ".cache/ferrix/pixel-9a/kernel/source")),
                         help="synced Kleaf source root (provides mkbootimg and avbtool)")
-    parser.add_argument("--base-rootfs", required=True, type=Path)
-    parser.add_argument("--target-dir", required=True, type=Path)
-    parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--base-rootfs", type=Path, default=env("FERRIX_PIXEL9A_DEV_BASE_ROOTFS"))
+    parser.add_argument("--target-dir", type=Path,
+                        default=repo / "targets/boards/google-pixel-9a-tegu-gxq96-mp1-0")
+    parser.add_argument("--out", type=Path, default=env("FERRIX_PIXEL9A_DEV_OUT"))
+    parser.add_argument("--checkpoint", default=env("FERRIX_PIXEL9A_DEV_CHECKPOINT", ""),
+                        help="initramfs stage at which /init reboots to bootloader Fastboot")
     args = parser.parse_args()
+    if args.base_rootfs is None or args.out is None:
+        die("--base-rootfs/FERRIX_PIXEL9A_DEV_BASE_ROOTFS and --out/FERRIX_PIXEL9A_DEV_OUT are required")
+    if args.checkpoint and not args.checkpoint.isalnum():
+        die(f"checkpoint must be a bare stage name: {args.checkpoint}")
 
     package = args.target_dir / "pmos/device-google-tegu"
     init_script = package / "initramfs-init-kleaf"
+    modprobe_script = package / "initramfs-modprobe-kleaf"
     cmdline_file = package / "kernel-cmdline-kleaf.conf"
     bootconfig = package / "vendor-bootconfig-kleaf"
-    for path in (init_script, cmdline_file, bootconfig, args.base_rootfs, args.kernel_manifest):
+    reboot_source = repo / "tools/pixel-9a/reboot-bootloader.rs"
+    for path in (init_script, modprobe_script, cmdline_file, bootconfig, reboot_source,
+                 args.base_rootfs, args.kernel_manifest):
         if path.is_symlink() or not path.is_file():
             die(f"required input missing or symlinked: {path}")
     mkbootimg = args.kernel_source / "tools/mkbootimg/mkbootimg.py"
@@ -263,12 +297,16 @@ def main():
         for name in ("boot.img", "vendor_kernel_boot.img", "dtbo.img"):
             shutil.copyfile(verified(name), stage / name)
 
-        initramfs = make_initramfs(args.base_rootfs, init_script, work)
+        reboot_helper = build_reboot_helper(reboot_source, work)
+        initramfs = make_initramfs(args.base_rootfs, init_script, modprobe_script,
+                                   reboot_helper, work)
         run(sys.executable, mkbootimg, "--header_version", "4",
             "--ramdisk", initramfs, "--output", stage / "init_boot.img")
 
         cmdline = " ".join(line.strip() for line in cmdline_file.read_text().splitlines()
                            if line.strip() and not line.lstrip().startswith("#"))
+        if args.checkpoint:
+            cmdline += f" ferrix.checkpoint={args.checkpoint}"
         empty = work / "vendor-ramdisk.cpio"
         empty.write_bytes(Cpio().finish())
         run(sys.executable, mkbootimg, "--header_version", "4", "--pagesize", "2048",
@@ -301,6 +339,9 @@ def main():
             f"input\tkernel_manifest\t{args.kernel_manifest}\t{sha256(args.kernel_manifest)}",
             f"input\tbase_rootfs\t{args.base_rootfs}\t{sha256(args.base_rootfs)}",
             f"input\tinitramfs_init\t{init_script}\t{sha256(init_script)}",
+            f"input\tinitramfs_modprobe\t{modprobe_script}\t{sha256(modprobe_script)}",
+            f"input\treboot_helper\t{reboot_source}\t{sha256(reboot_source)}",
+            f"checkpoint\t{args.checkpoint or 'none'}",
             f"input\tvendor_cmdline\t{cmdline}",
             f"input\tvendor_bootconfig\t{bootconfig}\t{sha256(bootconfig)}",
         ]

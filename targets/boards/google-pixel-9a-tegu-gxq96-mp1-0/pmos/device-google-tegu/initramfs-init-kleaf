@@ -15,6 +15,11 @@
 # boot's pstore (ramoops) and the live kernel log; the second is a root shell.
 # Failure paths hold for $hold_seconds before rebooting, so the bootloader's
 # slot retry/fallback to the stock slot still applies.
+#
+# Automated bisection: with ferrix.checkpoint=STAGE on the kernel command line
+# (dev-compose --checkpoint), /init reboots straight to bootloader Fastboot
+# when it reaches STAGE (init, modules, gadget, root, mounted, dlkm, switch), so
+# a host sees how far boot got with nothing but `fastboot devices`.
 
 bb=/bin/busybox
 root_partlabel=userdata
@@ -100,6 +105,15 @@ start_usb_debug() {
 	) &
 }
 
+checkpoint() {
+	[ -n "$checkpoint_target" ] && [ "$1" = "$checkpoint_target" ] || return 0
+	log "checkpoint $1 reached; rebooting to bootloader Fastboot"
+	$bb sleep 1
+	/bin/reboot-bootloader
+	log 'reboot-bootloader returned; falling back to a plain reboot'
+	$bb reboot -f
+}
+
 hold_then_reboot() {
 	log "$1; holding ${hold_seconds}s for USB debugging, then rebooting"
 	$bb sleep "$hold_seconds"
@@ -130,10 +144,13 @@ $bb mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
 $bb mount -t proc proc /proc 2>/dev/null || :
 $bb mount -t sysfs sysfs /sys 2>/dev/null || :
 $bb mount -t pstore pstore /sys/fs/pstore 2>/dev/null || :
+checkpoint_target=$($bb sed -n 's/.*ferrix\.checkpoint=\([A-Za-z0-9]*\).*/\1/p' /proc/cmdline)
 release=$($bb uname -r)
-log "kernel $release"
+log "kernel $release checkpoint=${checkpoint_target:-none}"
+checkpoint init
 
 load_list "/lib/modules/$release/modules.load" "/lib/modules/$release"
+checkpoint modules
 
 # The Exynos watchdog (s3c2410_wdt) arms during first-stage loading; Android's
 # watchdogd normally pets it. Keep it fed so a quiet userspace is observable
@@ -146,6 +163,7 @@ for dog in /dev/watchdog0 /dev/watchdog; do
 done
 
 start_usb_debug
+checkpoint gadget
 
 $bb mkdir -p /newroot
 root_device=
@@ -157,8 +175,11 @@ while [ "$attempt" -lt 60 ]; do
 done
 [ -n "$root_device" ] || hold_then_reboot "PARTLABEL=$root_partlabel not found"
 
+checkpoint root
+
 log "mounting $root_device"
 $bb mount -t ext4 -o rw "$root_device" /newroot || hold_then_reboot "cannot mount $root_device"
+checkpoint mounted
 
 # Keep the previous boot's pstore with the rootfs for later inspection.
 if [ -n "$($bb ls /sys/fs/pstore 2>/dev/null)" ]; then
@@ -169,12 +190,14 @@ fi
 modules="/newroot/lib/modules/$release"
 load_list "$modules/system_dlkm.modules.load" "$modules"
 load_list "$modules/vendor_dlkm.modules.load" "$modules"
+checkpoint dlkm
 
 [ -e /newroot/sbin/init ] || [ -L /newroot/sbin/init ] || hold_then_reboot '/sbin/init missing from the rootfs'
 
 $bb mount -o move /dev /newroot/dev 2>/dev/null || :
 $bb mount -o move /proc /newroot/proc 2>/dev/null || :
 $bb mount -o move /sys /newroot/sys 2>/dev/null || :
+checkpoint switch
 log 'switching to postmarketOS init'
 $bb switch_root /newroot /sbin/init
 # Only reached if switch_root failed; returning from PID 1 would panic and

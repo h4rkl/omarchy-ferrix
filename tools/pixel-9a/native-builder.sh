@@ -84,7 +84,7 @@ run_workflow() {
 	shift 2
 
 	case "$workflow:$verb" in
-		env:check|kernel:preflight|kernel:sync|kernel:verify|kernel:build|boot:preflight|boot:build|kernel-radio:preflight|kernel-radio:sync|kernel-radio:verify|kernel-radio:build|product:preflight|product:build|firmware:preflight|firmware:inventory|firmware:inspect|firmware:stage|rootfs:preflight|rootfs:validate|rootfs:build|rootfs:finalize|boot-inputs:preflight|boot-inputs:build|boot-radio:preflight|boot-radio:build|radio-split:preflight|radio-split:build|static-boot:preflight|static-boot:build|static-boot:verify|artifacts:check|artifacts:manifest) ;;
+		env:check|kernel:preflight|kernel:sync|kernel:verify|kernel:build|boot:preflight|boot:build|kernel-radio:preflight|kernel-radio:sync|kernel-radio:verify|kernel-radio:build|product:preflight|product:build|firmware:preflight|firmware:inventory|firmware:inspect|firmware:stage|rootfs:preflight|rootfs:validate|rootfs:build|rootfs:finalize|boot-inputs:preflight|boot-inputs:build|boot-radio:preflight|boot-radio:build|radio-split:preflight|radio-split:build|static-boot:preflight|static-boot:build|static-boot:verify|dev-compose:build|artifacts:check|artifacts:manifest) ;;
 		*) die "unsupported or device-facing workflow: $workflow $verb" ;;
 	esac
 
@@ -100,6 +100,7 @@ run_workflow() {
 		boot-radio) script=tools/pixel-9a/boot-radio.sh; set -- "$script" "$verb" "$@" ;;
 		radio-split) script=tools/pixel-9a/radio-split.sh; set -- "$script" "$verb" "$@" ;;
 		static-boot) script=tools/pixel-9a/static-boot.py; set -- "$script" "$verb" "$@" ;;
+		dev-compose) script=tools/pixel-9a/dev-compose.py; set -- "$script" "$verb" "$@" ;;
 		artifacts) script=tools/pixel-9a/artifacts.sh; set -- "$script" "$verb" "$@" ;;
 	esac
 
@@ -136,7 +137,9 @@ run_workflow() {
 		FERRIX_PIXEL9A_STATIC_PARTITION_SIZES \
 		FERRIX_PIXEL9A_AVB_ALGORITHM FERRIX_PIXEL9A_AVB_KEY \
 		FERRIX_PIXEL9A_PMAPORTS_DIR FERRIX_PIXEL9A_PMAPORTS_COMMIT \
-		FERRIX_PIXEL9A_FACTORY_ARCHIVE FERRIX_PIXEL9A_RADIO_PARTITION_SIZES; do
+		FERRIX_PIXEL9A_FACTORY_ARCHIVE FERRIX_PIXEL9A_RADIO_PARTITION_SIZES \
+		FERRIX_PIXEL9A_DEV_BASE_ROOTFS FERRIX_PIXEL9A_DEV_OUT \
+		FERRIX_PIXEL9A_DEV_CHECKPOINT; do
 		value=$(printenv "$name" 2>/dev/null || true)
 		[ -n "$value" ] || continue
 		case "$name" in
@@ -154,7 +157,7 @@ run_workflow() {
 					*) value="/workspace/$value" ;;
 				esac
 				;;
-		*_DIR|*_ARCHIVE|*_SIZES|*_CPIO|*_ROOT|*_INITRAMFS|*_RAMDISK|*_BOOTCONFIG|FERRIX_PIXEL9A_KERNEL_OUT|FERRIX_PIXEL9A_KERNEL_DIST|FERRIX_PIXEL9A_KERNEL_MANIFEST|FERRIX_PIXEL9A_BOOT_OUT|FERRIX_PIXEL9A_RADIO_KERNEL_DIST|FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST|FERRIX_PIXEL9A_PRODUCT_OUT|FERRIX_PIXEL9A_ROOTFS_OUT|FERRIX_PIXEL9A_ROOTFS_MANIFEST|FERRIX_PIXEL9A_BOOT_INPUTS_OUT|FERRIX_PIXEL9A_BOOT_INPUTS_MANIFEST|FERRIX_PIXEL9A_STATIC_BOOT_OUT|FERRIX_PIXEL9A_AVB_KEY|FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST)
+		*_DIR|*_ARCHIVE|*_SIZES|*_CPIO|*_ROOT|*_INITRAMFS|*_RAMDISK|*_BOOTCONFIG|FERRIX_PIXEL9A_KERNEL_OUT|FERRIX_PIXEL9A_KERNEL_DIST|FERRIX_PIXEL9A_KERNEL_MANIFEST|FERRIX_PIXEL9A_BOOT_OUT|FERRIX_PIXEL9A_RADIO_KERNEL_DIST|FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST|FERRIX_PIXEL9A_PRODUCT_OUT|FERRIX_PIXEL9A_ROOTFS_OUT|FERRIX_PIXEL9A_ROOTFS_MANIFEST|FERRIX_PIXEL9A_BOOT_INPUTS_OUT|FERRIX_PIXEL9A_BOOT_INPUTS_MANIFEST|FERRIX_PIXEL9A_STATIC_BOOT_OUT|FERRIX_PIXEL9A_AVB_KEY|FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST|FERRIX_PIXEL9A_DEV_BASE_ROOTFS|FERRIX_PIXEL9A_DEV_OUT)
 				value=$(map_workspace_path "$value") ;;
 		esac
 		case "$value" in
@@ -186,7 +189,7 @@ usage:
   tools/pixel-9a/native-builder.sh run <workflow> <verb>
 
 Allowed workflows are device-free env, kernel, boot, kernel-radio, product, firmware,
-rootfs, boot-inputs, boot-radio, radio-split, static-boot, and artifacts stages. A native Linux
+rootfs, boot-inputs, boot-radio, radio-split, static-boot, dev-compose, and artifacts stages. A native Linux
 x86_64 Docker engine is mandatory; ADB/Fastboot and USB are never mounted.
 EOF
 	exit 2
