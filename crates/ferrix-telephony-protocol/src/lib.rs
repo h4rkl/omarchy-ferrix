@@ -108,6 +108,10 @@ pub enum Request {
     SetAudioRoute {
         route: AudioRoute,
     },
+    /// Mutes or unmutes the live call's microphone uplink.
+    SetMicMuted {
+        muted: bool,
+    },
     // --- telephony-sms ---
     SendSms {
         to: String,
@@ -152,6 +156,7 @@ impl Request {
             Request::Resume { .. } => "resume",
             Request::Dtmf { .. } => "dtmf",
             Request::SetAudioRoute { .. } => "set-audio-route",
+            Request::SetMicMuted { .. } => "set-mic-muted",
             Request::SendSms { .. } => "send-sms",
             Request::ListSms { .. } => "list-sms",
             Request::MarkRead { .. } => "mark-read",
@@ -681,6 +686,16 @@ mod tests {
             })
             .unwrap(),
             r#"{"request":"set-audio-route","route":"speaker"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::SetMicMuted { muted: true }).unwrap(),
+            r#"{"request":"set-mic-muted","muted":true}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"request":"set-mic-muted","muted":false}"#)
+                .unwrap()
+                .name(),
+            "set-mic-muted"
         );
         assert_eq!(
             serde_json::to_string(&Request::SendSms {

@@ -165,11 +165,12 @@ pub enum ProfileTelephonyFeature {
     AudioRoute,
     SimPin,
     RadioPower,
+    MicMute,
 }
 
 impl ProfileTelephonyFeature {
     /// Every feature the mock adapter can emulate.
-    pub const ALL: [ProfileTelephonyFeature; 10] = [
+    pub const ALL: [ProfileTelephonyFeature; 11] = [
         ProfileTelephonyFeature::Voice,
         ProfileTelephonyFeature::Sms,
         ProfileTelephonyFeature::MultipartSms,
@@ -180,6 +181,7 @@ impl ProfileTelephonyFeature {
         ProfileTelephonyFeature::AudioRoute,
         ProfileTelephonyFeature::SimPin,
         ProfileTelephonyFeature::RadioPower,
+        ProfileTelephonyFeature::MicMute,
     ];
 }
 

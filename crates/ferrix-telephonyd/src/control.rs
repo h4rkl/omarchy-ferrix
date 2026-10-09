@@ -45,6 +45,7 @@ pub const LOCAL_COMMANDS: &[&str] = &[
     "send-sms",
     "enter-pin",
     "set-audio-route",
+    "set-mic-muted",
     "set-radio-power",
     "mark-read",
 ];
@@ -92,6 +93,9 @@ pub enum LocalCommand {
     },
     SetAudioRoute {
         route: AudioRoute,
+    },
+    SetMicMuted {
+        muted: bool,
     },
     SetRadioPower {
         power: RadioPower,
@@ -171,6 +175,7 @@ impl LocalControl {
             LocalCommand::SendSms { number, body } => Request::SendSms { to: number, body },
             LocalCommand::EnterPin { pin } => Request::EnterPin { pin },
             LocalCommand::SetAudioRoute { route } => Request::SetAudioRoute { route },
+            LocalCommand::SetMicMuted { muted } => Request::SetMicMuted { muted },
             LocalCommand::SetRadioPower { power } => Request::SetRadioPower { power },
             LocalCommand::MarkRead { message_id } => Request::MarkRead {
                 id: MessageId(message_id),

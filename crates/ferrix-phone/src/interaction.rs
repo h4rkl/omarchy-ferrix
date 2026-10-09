@@ -22,6 +22,7 @@ pub enum Target {
     Answer,
     Reject,
     Hangup,
+    Mute,
     Hold,
     DtmfToggle,
     Dtmf(char),
@@ -180,24 +181,29 @@ impl Layout {
             .collect()
     }
 
-    pub fn hold_rect(&self) -> Rect {
+    /// The in-call control row: Mute | Hold | Keypad, equal widths.
+    fn control_rect(&self, column: i32) -> Rect {
         let s = |v| self.s(v);
+        let gap = s(24);
+        let w = (self.w() - 2 * s(96) - 2 * gap) / 3;
         Rect {
-            x: s(96),
+            x: s(96) + column * (w + gap),
             y: s(1084),
-            w: s(420),
+            w,
             h: s(120),
         }
     }
 
+    pub fn mute_rect(&self) -> Rect {
+        self.control_rect(0)
+    }
+
+    pub fn hold_rect(&self) -> Rect {
+        self.control_rect(1)
+    }
+
     pub fn dtmf_toggle_rect(&self) -> Rect {
-        let s = |v| self.s(v);
-        Rect {
-            x: s(564),
-            y: s(1084),
-            w: s(420),
-            h: s(120),
-        }
+        self.control_rect(2)
     }
 
     pub fn dtmf_keys(&self) -> Vec<(Rect, char)> {
@@ -271,6 +277,9 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
                     return Some(Target::Route(route));
                 }
             }
+            if contains(l.mute_rect(), position) {
+                return Some(Target::Mute);
+            }
             if contains(l.hold_rect(), position) {
                 return Some(Target::Hold);
             }
@@ -312,6 +321,7 @@ pub fn activate(model: &mut Model, target: Target) -> bool {
         Target::Answer => model.answer(),
         Target::Reject => model.reject(),
         Target::Hangup => model.hangup(),
+        Target::Mute => model.toggle_mute(),
         Target::Hold => model.toggle_hold(),
         Target::DtmfToggle => model.dtmf_open = !model.dtmf_open,
         Target::Dtmf(ch) => model.dtmf(ch),
@@ -402,6 +412,13 @@ impl Input {
         let had = self.tracker.cancel();
         had || self.pressed.take().is_some()
     }
+}
+
+/// Mute button copy and whether it is usable: the backend must advertise
+/// `mic-mute` and the focused call must be connected (active or held).
+pub fn mute_label(model: &Model) -> (&'static str, bool) {
+    let label = if model.muted() { "Unmute" } else { "Mute" };
+    (label, model.can_mute())
 }
 
 /// Whether the focused call can be put on hold or resumed.
@@ -518,6 +535,32 @@ mod tests {
         assert_eq!(hold_label(&m), ("Hold", true));
         tap(&mut input, &mut m, center(l.hold_rect()));
         assert!(matches!(m.pending.pop(), Some(Action::Hold(_))));
+        assert_eq!(mute_label(&m), ("Mute", true));
+        tap(&mut input, &mut m, center(l.mute_rect()));
+        assert_eq!(m.pending.pop(), Some(Action::SetMuted(true)));
+        let mut muted = m.state.clone().unwrap();
+        muted.audio.muted = true;
+        m.apply(Update::Event(ferrix_telephony_protocol::Event::Redacted(
+            ferrix_telephony_api::RedactedTelephonyEvent::AudioRouteChanged {
+                audio: muted.audio.clone(),
+            },
+        )));
+        assert_eq!(mute_label(&m), ("Unmute", true));
+        assert_eq!(m.state_name(), "active-muted");
+        tap(&mut input, &mut m, center(l.mute_rect()));
+        assert_eq!(m.pending.pop(), Some(Action::SetMuted(false)));
+        // Without the backend feature the button is inert.
+        m.state
+            .as_mut()
+            .unwrap()
+            .capabilities
+            .remove(&ferrix_telephony_api::TelephonyFeature::MicMute);
+        assert!(!mute_label(&m).1);
+        tap(&mut input, &mut m, center(l.mute_rect()));
+        assert!(m.pending.is_empty());
+        let row = [l.mute_rect(), l.hold_rect(), l.dtmf_toggle_rect()];
+        assert!(row[0].x + row[0].w < row[1].x && row[1].x + row[1].w < row[2].x);
+        assert_eq!(row[2].x + row[2].w, 1080 - l.s(96), "row spans the margins");
         assert_eq!(
             hit_test(&m, center(l.dtmf_keys()[0].0), SIZE),
             None,

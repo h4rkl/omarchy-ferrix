@@ -281,6 +281,10 @@ pub trait ModemBackend: Send + Sync {
     fn set_radio_power(&self, power: RadioPower) -> Result<(), BackendError>;
     fn enter_pin(&self, pin: &str) -> Result<(), BackendError>;
     fn set_audio_route(&self, route: AudioRoute) -> Result<(), BackendError>;
+    /// Mutes or unmutes the live call's microphone uplink. The change is
+    /// reported through [`BackendEvent::Audio`]; a backend that cannot mute
+    /// returns `Unsupported(MicMute)`.
+    fn set_mic_muted(&self, muted: bool) -> Result<(), BackendError>;
 }
 
 #[cfg(test)]

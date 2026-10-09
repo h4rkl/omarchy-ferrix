@@ -63,6 +63,7 @@ impl FakeBackend {
             audio: AudioRouteState {
                 active: AudioRoute::Earpiece,
                 available: [AudioRoute::Earpiece, AudioRoute::Speaker].into(),
+                muted: false,
             },
             ..BackendSnapshot::default()
         };
@@ -76,6 +77,7 @@ impl FakeBackend {
             TelephonyFeature::AudioRoute,
             TelephonyFeature::SimPin,
             TelephonyFeature::RadioPower,
+            TelephonyFeature::MicMute,
         ]
         .into_iter()
         .collect();
@@ -220,6 +222,20 @@ impl ModemBackend for FakeBackend {
                 return Ok(());
             }
             inner.snapshot.audio.active = route;
+            inner.snapshot.audio.clone()
+        };
+        self.emit(BackendEvent::Audio(audio));
+        Ok(())
+    }
+
+    fn set_mic_muted(&self, muted: bool) -> Result<(), BackendError> {
+        self.op(format!("set-mic-muted {muted}"))?;
+        let audio = {
+            let mut inner = lock(&self.0);
+            if !inner.emit_audio {
+                return Ok(());
+            }
+            inner.snapshot.audio.muted = muted;
             inner.snapshot.audio.clone()
         };
         self.emit(BackendEvent::Audio(audio));

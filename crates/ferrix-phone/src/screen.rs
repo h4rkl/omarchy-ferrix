@@ -11,7 +11,7 @@ use ferrix_ui::widgets::{
     page_header, section_label,
 };
 
-use crate::interaction::{Input, Layout, Target, hold_label};
+use crate::interaction::{Input, Layout, Target, hold_label, mute_label};
 use crate::model::{CallView, Link, Model, Page, format_duration};
 
 pub fn compose(
@@ -341,6 +341,21 @@ fn in_call(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
             input.pressed == Some(Target::Route(route)),
         );
     }
+    let (mute, mute_enabled) = mute_label(model);
+    button(
+        c,
+        ty,
+        l.mute_rect(),
+        mute,
+        // The accent marks the one exceptional state: a muted microphone.
+        if model.muted() {
+            ButtonKind::Primary
+        } else {
+            ButtonKind::Secondary
+        },
+        input.pressed == Some(Target::Mute),
+        mute_enabled,
+    );
     let (hold, enabled) = hold_label(model);
     button(
         c,
@@ -359,11 +374,9 @@ fn in_call(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
         c,
         ty,
         l.dtmf_toggle_rect(),
-        if model.dtmf_open {
-            "Hide keypad"
-        } else {
-            "Keypad"
-        },
+        // Three controls share the row; "Hide" sits directly above the
+        // open keypad, so the short form stays unambiguous.
+        if model.dtmf_open { "Hide" } else { "Keypad" },
         ButtonKind::Secondary,
         input.pressed == Some(Target::DtmfToggle),
         dtmf_ok,
@@ -482,6 +495,20 @@ mod tests {
         assert_eq!(in_call.get(spk.x + spk.w / 2, spk.y), t.border);
         let h = l.hangup_rect();
         assert_eq!(in_call.get(h.x + h.w / 2, h.y), t.err);
+        let mute = l.mute_rect();
+        assert_eq!(
+            in_call.get(mute.x + mute.w / 2, mute.y),
+            t.border,
+            "unmuted Mute is a plain secondary button"
+        );
+        let mut muted = active.clone();
+        muted.state.as_mut().unwrap().audio.muted = true;
+        let muted = compose(&ty, (1080, 2340), 600, &muted, &input);
+        assert_eq!(
+            muted.get(mute.x + mute.w / 2, mute.y),
+            t.rust,
+            "a muted microphone takes the accent"
+        );
         let (k1, _) = l.dtmf_keys()[0];
         assert_eq!(in_call.get(k1.x + 6, k1.y + 6), t.surface);
 
