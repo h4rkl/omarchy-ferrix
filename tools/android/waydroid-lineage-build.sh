@@ -140,6 +140,10 @@ do_patch() {
   patch_root="$src/vendor/extra/waydroid-patches/base-patches-$(pin WAYDROID_PATCH_SDK)"
   for patch in $(cd "$patch_root" && find . -name '*.patch' | LC_ALL=C sort); do
     project=$(dirname "${patch#./}")
+    if grep -qxF "${patch#./}" "$patches/superseded.txt" 2>/dev/null; then
+      printf '~ waydroid patch superseded by a Ferrix patch: %s\n' "${patch#./}"
+      continue
+    fi
     # git mailinfo unfolds the header and strips the [PATCH] prefix.
     subject=$(git mailinfo /dev/null /dev/null <"$patch_root/$patch" | sed -n 's/^Subject: //p')
     { [ -n "$subject" ] && git -C "$src/$project" log -n 5000 --format=%s | grep -qxF "$subject"; } ||

@@ -1,5 +1,4 @@
 diff --git a/hwcomposer/gralloc_handler.cpp b/hwcomposer/gralloc_handler.cpp
-index 4fd087b..a370ec1 100644
 --- a/hwcomposer/gralloc_handler.cpp
 +++ b/hwcomposer/gralloc_handler.cpp
 @@ -40,6 +40,7 @@
@@ -88,7 +87,6 @@ index 4fd087b..a370ec1 100644
          return update_shm_buffer_generic;
      }
 diff --git a/hwcomposer/wayland-hwc.cpp b/hwcomposer/wayland-hwc.cpp
-index f055988..7f3d0b7 100644
 --- a/hwcomposer/wayland-hwc.cpp
 +++ b/hwcomposer/wayland-hwc.cpp
 @@ -3369,7 +3369,8 @@ registry_handle_global(void *data, struct wl_registry *registry,
