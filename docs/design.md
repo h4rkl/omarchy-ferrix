@@ -284,71 +284,81 @@ exist. Unsupported text must expose a missing-glyph state honestly.
 
 ## Icons
 
-First-party glyphs come from one set: a pinned subset of
-[Remix Icon](https://github.com/Remix-Design/RemixIcon/tree/v4.7.0) v4.7.0
-(Apache-2.0; pin and licence evidence in `docs/licensing.md`). `ferrix-ui`
-compiles the vendored SVGs into outline data at build time (`build.rs`, with
-hash-pinned inputs) and fills them through the same `tiny-skia` software path
-as every other shape, at the exact pixel size requested. There is no run-time
-SVG parsing, icon font, file, or network dependency. The API is
-`ferrix_ui::icons::{Icon, draw, draw_centered, draw_in}`.
+First-party glyphs come from one set: a pinned subset of Google
+[Material Symbols](https://github.com/google/material-design-icons)
+(Apache-2.0), **Rounded** family, weight 400, grade 0, optical size 24,
+**FILL 1** (owner decision 2026-10-10, replacing Remix Icon, whose 2026
+licence is not MIT/Apache-compatible; pin and licence evidence in
+`docs/licensing.md` and `crates/ferrix-ui/assets/icons/material-symbols/README.md`).
+`ferrix-ui` compiles the vendored SVGs into outline data at build time
+(`build.rs`, hash-pinned inputs, `usvg` as a build-dependency only). At run
+time `ferrix_ui::icons::draw` fills an outline once per (glyph, pixel size)
+through the same `tiny-skia` software path as every other shape, caches the
+anti-aliased coverage mask, and tints it with the requested theme colour on
+each draw. There is no run-time SVG parsing, icon font, file, network or GPU
+dependency. The API is `ferrix_ui::icons::{Icon, draw, draw_centered, draw_in}`.
+
+Fit reason: the build-time outline compiler already existed for the previous
+set and keeps `usvg`/`roxmltree` out of every binary; caching masks per size
+gives the startup and redraw cost of an atlas without a fixed atlas
+resolution, so glyphs stay sharp at the 830, 1080 and 1200 px panel widths.
 
 Rules:
 
-- **Filled always (owner rule, 2026-10-10).** Use the filled variant (`*-fill`)
-  wherever Remix has one, in every state, including inactive ones. Inactive
-  versus active is shown with colour, never by switching between line and
-  fill glyphs.
-- **Colour by state.** `fg_dim` for inactive or supporting glyphs, `fg` for
-  primary content (folders, the backspace key), `rust` for the active or
-  actionable state (an on toggle, the back affordance), `steel` for network
-  and connection state, the descriptor tone on launcher tiles, and `ok`/`err`
-  for charging and low battery. The colour budget above still applies.
+- **Filled always (owner rule, 2026-10-10).** Use the FILL 1 file for every
+  glyph, in every state, in one style family (Rounded). Fall back to the
+  outlined (FILL 0) file only where no FILL 1 file exists, and record it in
+  the notice; today none falls back. Active, pressed and inactive states are
+  shown with colour, never by switching fill.
+- **Colour by state, from the theme.** `fg_dim` for inactive or supporting
+  glyphs, `fg` for primary content (folders, the backspace key), `rust` for
+  the active or actionable state (an on toggle, the back affordance), `steel`
+  for network and connection state (cellular and Wi-Fi), the descriptor tone on
+  launcher tiles, and `ok`/`err` for charging and low battery. All come from
+  `ferrix_ui::theme` (`colors.toml`); the one-accent-per-region budget still
+  applies.
 - **Additive, never a substitute.** Every glyph sits beside the text label or
   accessible name that already existed (tile names, toggle names, tab labels,
   `back`/`delete` targets in `ui-state`). Glyphs never carry state on their
-  own (`docs/design.md` contrast rules).
+  own (`docs/design.md` contrast rules); the battery percentage is always
+  printed.
 - **UI symbols only.** Never use a glyph as a logo, brand mark, or product
-  identity (the Remix `Logos` category is not vendored). Ferrix remains the
-  only product identity.
+  identity. Ferrix remains the only product identity.
 - **Sizes at the 1080 px basis:** 40 px in the 72 px status strip, 88 px back
-  affordance box (the chevron itself is about 22x44 px), 56 px leading row
-  glyphs, 72 px quick-settings glyphs, 96 px launcher glyphs inside about
-  290x290 px tiles. Scale with `value * basis / 1080` like every other metric.
+  affordance box, 56 px leading row glyphs, 72 px quick-settings glyphs, 96 px
+  launcher glyphs inside about 290x290 px tiles. Scale with
+  `value * basis / 1080` like every other metric.
 - **The home indicator stays a pill.** It is the one pill shape in the system
   and is not an icon.
 
-Subset (Remix name): launcher `phone`, `message-2`, `contacts-book`,
-`settings-3`, `terminal-box`, `camera`, `folder` (Files), `global` (Browser),
-`home-5`; status `signal-wifi-off`,
-`signal-wifi-1`, `signal-wifi-2`, `signal-wifi`, `battery`, `battery-low`,
-`battery-charge`; quick settings, notifications and Settings `bluetooth`, `sun`, `keyboard-box`,
-`notification-3`; navigation and actions `arrow-left-s` (back),
-`arrow-right-s` (forward chevron, breadcrumb separator), `more` (row
-details), `add`, `close`, `delete-back-2` (backspace), `grid` (Dialer tab),
-`history` (Recent tab); Files types `folder`, `file`, `file-text`,
-`file-image`, `file-music`, `file-video`, `file-zip`, `file-code`, `links`,
-`file-unknow`. All are `-fill` variants.
+Subset (Material Symbols name): launcher `call` (Phone), `chat` (Messages),
+`contacts`, `settings`, `terminal`, `photo_camera` (Camera), `folder`
+(Files), `language` (Browser), `home`; status strip `signal_cellular_0_bar`
+to `signal_cellular_4_bar` (lit bars solid, unlit outlined), `signal_wifi_off`,
+`network_wifi_1_bar`, `network_wifi_2_bar`, `signal_wifi_4_bar`,
+`battery_android_0` to `battery_android_6` and `battery_android_full` (charge
+in seven steps, full from 95 %), `battery_android_bolt` (charging); quick
+settings, notifications and Settings `bluetooth`, `light_mode` (brightness),
+`keyboard`, `notifications`; navigation and actions `chevron_left` (back),
+`chevron_right` (forward chevron, breadcrumb separator), `more_horiz` (row
+details), `add`, `close`, `backspace`, `dialpad` (Dialer tab), `history`
+(Recent tab); Files types `folder`, `draft`, `description`, `image`,
+`audio_file`, `video_file`, `folder_zip`, `code_blocks`, `link`,
+`unknown_document`.
 
 Exceptions and departures:
 
-- **No line glyphs are used.** Every glyph in the subset has a filled variant,
-  so there is no line/outline exception today. Remix's filled `arrow-left-s`
-  and `arrow-right-s` are solid triangles rather than open chevrons; that is
-  the accepted consequence of the filled rule.
-- **Cellular signal meter:** Remix v4.7.0 has no cellular signal-level glyphs,
-  so the status strip keeps its drawn four-bar meter (`steel` lit, `surface_hi`
-  unlit).
-- **Battery levels:** Remix's half-level `battery-2` is a portrait battery that
-  does not match the others, so only full, low (<20 %), and charging glyphs are
-  used; the percentage is always printed beside the glyph.
+- **No outlined fallbacks.** Every glyph has a FILL 1 file at the pin. For
+  stroke-like glyphs (chevrons, `add`, `close`, `link`, level meters) the
+  upstream FILL 1 file is identical to FILL 0; that is the set's design, not
+  a fallback.
 - **On-screen keyboard and Terminal:** key caps keep their text labels
   (`⌫`, `←`, `→`, `SHIFT`); the keyboard is a text instrument and its labels
   are shared with the terminal's key mapping. Only the Phone dialer's
-  backspace button uses the `delete-back-2` glyph.
-- **Not drawn yet:** `home-5` and `close` are pinned for the home and
-  dismiss controls but no current surface draws a home button or a close
-  control; the home gesture stays a pill.
+  backspace button uses the `backspace` glyph.
+- **Not drawn yet:** `home` and `close` are pinned for the home and dismiss
+  controls but no current surface draws a home button or a close control; the
+  home gesture stays a pill.
 - **Third-party apps** without a first-party glyph keep their descriptor glyph
   or first letter on the launcher tile.
 
@@ -489,9 +499,10 @@ Implemented today:
   quick settings, notifications, and Terminal;
 - tight radii, hairlines, instrument rails, focused fullscreen flows, and
   concise evidence-labelled copy;
-- the pinned filled Remix Icon glyph set on the launcher, status strip, quick
-  settings, notifications, page headers (back), Files rows and breadcrumbs,
-  Settings rows, and the Phone tabs and backspace key.
+- the pinned filled Material Symbols (Rounded) glyph set on the launcher,
+  status strip (cellular, Wi-Fi, battery), quick settings, notifications, page
+  headers (back), Files rows and breadcrumbs, Settings rows, and the Phone
+  tabs and backspace key.
 
 Selected but not yet shipped:
 

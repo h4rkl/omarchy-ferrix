@@ -1,6 +1,71 @@
 # Status
 
-## 2026-10-10 (Icon set: filled Remix Icon v4.7.0 glyphs, issue #20; QEMU/host preview only)
+## 2026-10-10 (Icon set moves to Google Material Symbols, issue #20; QEMU/mock evidence only)
+
+- **Licence and pin:** the owner replaced Remix Icon (2026 licence not
+  MIT/Apache-compatible) with Google Material Symbols from
+  `google/material-design-icons`, Apache-2.0 (GitHub licence API and the
+  `LICENSE` at the pin). Pinned commit
+  `49d4db35df873165d6bd6ba09b063c7dafbac2f4`; style Rounded, weight 400,
+  grade 0, optical size 24, **FILL 1** for all 48 glyphs (none falls back to
+  outlined; 27 have identical FILL 0/1 files upstream). Only the subset is
+  vendored, under `crates/ferrix-ui/assets/icons/material-symbols/` with the
+  upstream `LICENSE`, `SHA256SUMS` and a `README.md` notice. Pins:
+  `tools/icons/material-symbols.pins`; `just icons-verify` re-downloads every
+  file at the commit and compares bytes (passed); `just icons-fetch` rewrites
+  them for review. All Remix files are removed. Details: `docs/licensing.md`.
+- **Rendering:** `build.rs` still compiles the SVGs to outlines with `usvg`
+  (build-dependency only; it applies the `0 -960 960 960` viewBox). At run
+  time `ferrix_ui::icons` rasterises each (glyph, pixel size) once through
+  `tiny-skia`, caches the coverage mask (bounded, per thread) and tints it
+  with the theme colour on each draw. No run-time SVG, font, file, network or
+  GPU use. Unit tests cover pins/subset agreement, mask size and coverage at
+  17-96 px, one cached mask tinted in `fg`/`fg_dim`/`steel`/`rust`, and the
+  level mappings.
+- **What changed on screen:** launcher `call`, `chat`, `contacts`,
+  `settings`, `terminal`, `photo_camera`, `folder`, `language`; the status
+  strip's drawn four-bar cellular meter becomes `signal_cellular_0..4_bar`
+  (steel, `fg_dim` at zero), Wi-Fi is `signal_wifi_off` /
+  `network_wifi_1/2_bar` / `signal_wifi_4_bar`, the battery shows
+  `battery_android_0..6`/`full` by charge and `battery_android_bolt` while
+  charging; `chevron_left`/`chevron_right` for back and row chevrons;
+  quick-settings `bluetooth` and `light_mode`; Files `draft`, `description`,
+  `image`, `audio_file`, `video_file`, `folder_zip`, `code_blocks`, `link`,
+  `unknown_document`; `more_horiz`, `add`, `backspace`, `dialpad`, `history`,
+  `notifications`, `keyboard` elsewhere. Labels and hit areas are unchanged.
+  The QEMU images install the licence and notice under
+  `/usr/share/licenses/ferrix/material-symbols/`; Settings > About reads
+  "Icons: Material Symbols (Google), Apache-2.0".
+- **Evidence (mock host previews):** `ferrix-basic-screen --preview` launcher,
+  quick-settings and notifications at 1080x2215 and 1080x2340; Files browse,
+  Settings root, Phone dialer and recent, Contacts list and Messages
+  conversations at 1080x2340; and the `icon-sheet` example (30/56/96 px in
+  `fg`, `fg_dim`, `rust`). Inspected: glyphs are crisp, centred in tiles and
+  rows, themed, and not clipped.
+- **Evidence (QEMU, Alpine smoke guest rebuilt from this tree, TCG,
+  `FERRIX_OUT_DIR=/tmp/ficons`):** `just qemu-build` and `just qemu-check`
+  passed (`unplugged-to-charging`). The graphical agent session started first
+  time (9 s). Inspected 1080x2340 framebuffer frames: home (glyph tiles;
+  status strip with three-bar cellular, full Wi-Fi in steel, `battery_android_5`
+  at 75 %), home after `set-power charging=true` (bolt glyph in `ok`), quick
+  settings with both toggles on (rust glyphs) and with Wi-Fi off (toggle glyph
+  `fg_dim`, status strip shows the crossed Wi-Fi glyph), Settings root (row
+  chevrons) and About (attribution), Files empty and with a new folder
+  (folder glyph, `more_horiz` chip), and the Phone dialer (dialpad/history tab
+  glyphs, backspace glyph). `just linux-check clippy --workspace --all-targets
+  -- -D warnings` passed.
+- **Fix found while inspecting:** the Phone Recent list started at y 300 and
+  covered the Dialer/Recent tabs (y 280..352), hiding their glyphs and labels.
+  Rows now start at y 380 (1080 basis); seen in the host `--page recent`
+  preview (mock), not yet in a QEMU frame.
+- **Limitations:** no physical-device evidence; legibility on the Pixel 9a
+  panel (`physical:google-pixel-9a-tegu-gxq96-mp1-0`) is unverified and the
+  Pixel image composer still does not install `/usr/share/licenses/ferrix/`.
+  `just qemu-scenario-check` was not re-run for this change. `home` and
+  `close` are pinned but not drawn. Contacts, Messages and Terminal only use
+  the shared back glyph. The Remix Icon entry below is superseded.
+
+## 2026-10-10 (Superseded: filled Remix Icon v4.7.0 glyphs, issue #20; QEMU/host preview only)
 
 - **Licence:** Remix Icon is under the non-OSI Remix Icon License v1.0 from
   v4.9.0. The `License` file at tag `v4.7.0` (commit `4ef5087`) is the full
