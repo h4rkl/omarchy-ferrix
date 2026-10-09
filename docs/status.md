@@ -1,5 +1,110 @@
 # Status
 
+## 2026-10-10 (QEMU harness flakes: cursor-ready start, serial interleaving, socket path limit, record identity, daemon kill; QEMU only)
+
+Issue #15. Host tooling and guest evidence plumbing only. Nothing here was
+run on the Pixel 9a or any physical device.
+
+- **cursor-ready start flake, root cause:** the agent-start pointer probe
+  began at `wayland-ready`, which comes before the home surface binds its
+  `wl_pointer` (its `input-ready` records followed the compositor's
+  `input-device` records). The first probe motion set pointer focus when
+  the client had no pointer object to receive `wl_pointer.enter`. Every
+  later motion stayed on the same surface, so smithay never re-sent enter
+  (`GetPointer` only registers the object), and smithay-client-toolkit drops
+  motion that has no entered surface. Two baseline `qemu-scenario-check`
+  runs on this branch's parent reproduced it: `input-ready` pointer, touch
+  and keyboard all `ok`, zero `cursor-ready`. `qemu-agent-start.sh` now
+  sends probe moves only after `input-ready` pointer (still alternating two
+  pixels). The wait is wall-clock bounded (`FERRIX_QEMU_AGENT_TIMEOUT`,
+  default 150 s). A failure prints one `agent-start-failed` record with
+  `reason`, the `missing` readiness records, and the probe count. The
+  compositor still sends no enter to a `wl_pointer` that is bound while
+  its client already has focus. This is a minor product gap for pointers
+  (touch is unaffected) and is left unfixed.
+- **Line-atomic serial records:** Rust emitters serialized through
+  `LineWriter` in pieces, so a record over the 1 KiB buffer reached the
+  console in several `write(2)` calls. The init also relayed app and
+  compositor logs with busybox `tail -f`, which copies arbitrary read
+  chunks. The baseline serial log showed an `app-started` record split by a
+  compositor `display-geometry` line. Every emitter (core, telephonyd,
+  networkd, contactsd, appd, runtime-native, runtime-android, ferrix-shell,
+  `ferrix_ui::evidence`) now writes the serialized line in one `write(2)`.
+  The init relays through `relay_log` (`read` up to the newline, then
+  busybox `echo` in one write). `ferrix-scenario` parses through
+  `records::RecordParser`:
+  - records are anchored at `{"evidence":`, so a nested object of a broken
+    record is never taken for a record;
+  - several records per line are accepted, and console noise (the final
+    shell's `/ # ESC[6n` prompt) is skipped;
+  - a head fragment is rejoined with the next line only if the result is
+    one complete JSON object. Otherwise both pieces are dropped.
+- **Socket path limit:** `targets/qemu-aarch64/scripts/paths.sh` resolves
+  paths for every QEMU script. QMP and the three mock-control sockets live
+  in `${TMPDIR:-/tmp}/ferrix-<uid>-<cksum of out dir>/{agent,run}`
+  (`nested/` for `shell-nested`). It falls back to `/tmp` when `TMPDIR` is
+  long, and `FERRIX_QEMU_SOCKET_DIR` overrides it. Logs, serial, frames and
+  evidence stay in the out dir, and `out/qemu-aarch64/agent/socket-dir`
+  names the agent socket dir. Runs from
+  `.claude/worktrees/agent-a55b7c3f315899141` (whose old socket paths were
+  116 to 122 bytes) now need no `FERRIX_OUT_DIR`.
+- **Process identity:** `ferrix_ui::evidence::emit` appends
+  `"process"`, `"pid"` and, when `FERRIX_APP_ID` is set, `"app_id"` to
+  every record that lacks a `process` field. Serial now shows `theme-loaded`
+  with `process` `ferrix-shell` (host pid) and with
+  `ferrix-basic-screen`/`org.ferrix.home` and `ferrix-phone`/`org.ferrix.phone`
+  (pid 2: inside the app PID namespace, so `app_id` is the discriminator).
+  The daemons' own records are unchanged: each daemon has its own events.
+- **Daemon kill path:** `ferrix-core` accepts mock-only
+  `{"cmd":"kill-daemon","name":...}` (`just qemu-mock kill-daemon
+  name=ferrix-networkd`).
+  - It requires the mock-control capability and accepts only the daemons
+    init supervises: telephonyd, networkd and contactsd.
+  - It matches processes by exact argv[0] basename in `/proc` and records
+    `daemon-kill` (`status` `sending`, `pids`) before it sends SIGKILL
+    through rustix.
+  - Any other name, including `ferrix-core` and `ferrix-shell`, is
+    refused with an error ack and a record.
+  - New scenario `supervision-daemon-kill-restart` asserts `daemon-restarted`
+    (`exit` 137), the new process's `*-ready` record, and a mock-control ack
+    from the restarted networkd and telephonyd. The restarted daemon starts
+    in the profile boot state.
+- **Test fix:** `ferrix-shell` `appd_link` round-trip test read the wake
+  counter once, racing the link thread (it queues the event before it calls
+  `wake`). In the Linux container it failed 3 of 5 times on this branch and
+  passed 5 of 5 on the parent, which points to timing, not logic. It now
+  waits (bounded) for the second wake. It passed 5 of 5 after the change.
+- **Evidence (QEMU, Alpine smoke guest, macOS host; `qemu-scenario-check`
+  forces TCG; run from the worktree path with no `FERRIX_OUT_DIR`):**
+  - Before the fix: 2 of 2 `qemu-scenario-check` runs failed
+    `agent-session-start-failed` (cursor-ready).
+  - After the fix, rebased on `main` cc34ec8: `just qemu-check` passed
+    (`unplugged-to-charging`, sockets under
+    `/var/folders/…/T/ferrix-501-…/run/`).
+  - 10 consecutive `just qemu-scenario-check` runs passed 32/32 with no
+    retries, 41 to 50 s each, with the agent session ready in 8 to 11 s
+    after 4 or 5 probe moves.
+  - An earlier 10-run series before the rebase also passed 30/30.
+  - The last run's serial log has 617 anchored records and every one parses
+    as JSON.
+  - In a graphical agent session the first `qemu-tap` after start opened
+    Phone, so the tap was not consumed. The inspected frame shows the dialer
+    with the cursor ring at the tap point. `kill-daemon
+    name=ferrix-contactsd` produced `daemon-restarted` and `contactsd-ready`,
+    and `name=ferrix-shell` was refused.
+  - `cargo fmt --check`, workspace clippy with `-D warnings` and
+    `cargo test --workspace` passed on macOS. `just linux-check` clippy and
+    tests passed for the touched crates.
+- **Limitations:**
+  - Linux/TCG hosts were not available. The 10-run series ran on macOS at
+    host load 4 to 8, not under the load of about 33 that the #6 agent saw
+    the cursor-ready timeouts at.
+  - `relay_log` relies on busybox `echo` writing its output in one call. A
+    printk line can still land inside a record; the parser tolerates that
+    but cannot recover a record split with no newline in between
+    (`"event":"home-ready/bin/sh: "`).
+  - The pmOS route has no log relays and was not re-run.
+
 ## 2026-10-10 (Bluetooth legacy PIN, incoming pairing raise, live scan countdown; QEMU/mock only)
 
 Issue #6. Nothing here was run on the Pixel 9a or any physical controller.
