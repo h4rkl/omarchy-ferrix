@@ -1,5 +1,65 @@
 # Status
 
+## 2026-10-10 (Icon set: filled Remix Icon v4.7.0 glyphs, issue #20; QEMU/host preview only)
+
+- **Licence:** Remix Icon is under the non-OSI Remix Icon License v1.0 from
+  v4.9.0. The `License` file at tag `v4.7.0` (commit `4ef5087`) is the full
+  Apache-2.0 text (SHA-256 `c71d239d…0ab4`) and its `package.json` says
+  `Apache-2.0`, so v4.7.0 is pinned. Only the 36 glyphs in use are vendored
+  under `crates/ferrix-ui/assets/icons/remixicon/` with the upstream
+  `License`, each hash-pinned in `SHA256SUMS`. Decision, hashes and source
+  URLs: `docs/licensing.md`. The notice ships in both QEMU guest routes as
+  `/usr/share/licenses/ferrix/remixicon-4.7.0/License` (with the JetBrains
+  Mono OFL, which was not shipped before); the manifest records
+  `third_party_notices_sha256`; Settings > About names the set.
+- **Rendering:** `ferrix-ui/build.rs` verifies the hashes, normalises each SVG
+  with `usvg` (build-dependency only) and emits outline data;
+  `ferrix_ui::icons` fills it through `tiny-skia` at the exact pixel size.
+  No run-time SVG parsing, font, file, or network access. This departs from
+  the issue's "pre-rasterised atlas": outlines are smaller than per-size
+  bitmaps and stay sharp at the 830, 1080 and 1200 px panel widths without
+  resampling. `cargo run -p ferrix-ui --example icon-sheet -- OUT.ppm [basis]`
+  renders a contact sheet.
+- **Rules (docs/design.md, "Icons"):** filled variants everywhere (owner rule);
+  state is colour (`fg_dim` inactive, `fg`/`rust` active, `steel` network,
+  `ok`/`err` battery); labels and accessible names stay; never a logo. No line
+  glyph exception exists. Drawn exceptions: the cellular four-bar meter (Remix
+  has no cellular levels), the on-screen keyboard caps, and the home pill.
+- **Where:** launcher tiles (Phone, Messages, Contacts, Settings, Terminal,
+  Camera, Files, Browser; unknown apps keep the descriptor glyph or letter),
+  status strip (Wi-Fi levels/off, battery full/low/charging; the drawn bolt
+  and gauge are gone), quick-settings toggles and brightness, notifications
+  (card and empty state), the back affordance in every page header
+  (`arrow-left-s-fill` replaces the `<` text), Files type glyphs, the `More`
+  glyph (was `···`) and forward-chevron breadcrumb separators (was `/`),
+  Settings root rows (forward chevron) and the Pair-new-device `Add` (was
+  `+`), Phone Dialer/Recent tabs and the backspace key (was U+232B).
+- **Evidence (QEMU, Alpine smoke guest rebuilt from this tree, TCG agent
+  session, 1080x2340, `FERRIX_OUT_DIR=/tmp/f20`):** `just qemu-check` passed
+  (`unplugged-to-charging`); `just qemu-scenario-check` passed 29/29 on the
+  second run (the first failed only `bluetooth-pair-confirm-success`, where
+  a `ui-state` line interleaved into the awaited `bluetooth-session-changed`
+  record on serial: the known harness flake); two of three
+  `qemu-agent-start` attempts timed out on `cursor-ready`, also a known
+  flake. Inspected framebuffer frames: home (glyph tiles; Wi-Fi full steel,
+  battery full amber), home after `set-power charging=true` (status and card
+  charging glyphs in `ok`), quick settings with both toggles on (rust glyphs)
+  and with Wi-Fi off (glyph `fg_dim`, status strip switches to the crossed
+  Wi-Fi glyph), notifications card and empty state, Files with a folder row
+  (folder glyph, `More` chip inside its hit area) and inside it (chevron
+  crumb), Settings root (bare chevrons) and About (attribution line), Phone
+  dialer (grid and history tab glyphs; backspace glyph disabled in `fg_dim`)
+  and Recent. Host `--preview` frames (mock) at 1080 and 830 px wide were
+  inspected for the same pages; the 30/40 px status glyphs and 96 px tile
+  glyphs stay legible at 830.
+- **Limitations:** no Pixel 9a captures yet
+  (`physical:google-pixel-9a-tegu-gxq96-mp1-0` pending); the Pixel image
+  composer (`tools/pixel-9a`) does not yet install the
+  `/usr/share/licenses/ferrix/` notices, so that must land before these
+  binaries ship in a Pixel image. Legibility on the 420 dpi panel is
+  unverified. Messages, Contacts and Terminal only gained the shared back
+  glyph. `home-5` and `close` are pinned but not drawn anywhere yet.
+
 ## 2026-10-10 (Terminal and shared keyboard: key repeat, selection and clipboard, scrollbar, bell and title, non-US layouts; QEMU only)
 
 - **Key repeat (`ferrix-ui`):** `keyboard::KeyRepeat` is a pure timer. A
