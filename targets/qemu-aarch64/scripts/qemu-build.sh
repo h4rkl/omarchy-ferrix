@@ -91,10 +91,12 @@ if [ -f "$contacts_fixtures" ]; then
   contacts_fixtures_hash=$(shasum -a 256 "$contacts_fixtures" | awk '{print $1}')
 fi
 # Third-party notices for material compiled into the ferrix-ui binaries
-# (docs/licensing.md): the Remix Icon v4.7.0 licence for the UI glyphs and the
-# JetBrains Mono OFL. Installed as /usr/share/licenses/ferrix/<name>/.
+# (docs/licensing.md): the Apache-2.0 licence of the pinned Material Symbols
+# subset used for the UI glyphs (with its README/NOTICE) and the JetBrains Mono
+# OFL. Installed as /usr/share/licenses/ferrix/<name>/.
 rm -rf "$out/product/licenses"
-for notice in "remixicon-4.7.0:$root/crates/ferrix-ui/assets/icons/remixicon/License" \
+for notice in "material-symbols:$root/crates/ferrix-ui/assets/icons/material-symbols/LICENSE" \
+              "material-symbols:$root/crates/ferrix-ui/assets/icons/material-symbols/README.md" \
               "jetbrains-mono:$root/crates/ferrix-ui/assets/OFL.txt"; do
   name=${notice%%:*}
   file=${notice#*:}

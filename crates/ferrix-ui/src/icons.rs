@@ -1,34 +1,41 @@
-//! The Ferrix UI glyph set: a pinned subset of [Remix Icon] v4.7.0
-//! (Apache-2.0), compiled into outline data by `build.rs` and filled through
-//! the `tiny-skia` software rasteriser at the exact pixel size each surface
-//! asks for.
+//! The Ferrix UI glyph set: a pinned subset of Google [Material Symbols]
+//! (Apache-2.0), Rounded family, weight 400, grade 0, optical size 24, FILL 1.
+//! `build.rs` compiles the vendored SVGs into outline data; [`draw`] fills an
+//! outline once per (glyph, pixel size) through the `tiny-skia` software
+//! rasteriser, caches the coverage mask, and tints it with the caller's theme
+//! colour on every later draw.
 //!
 //! Rules (`docs/design.md`, "Icons"):
 //!
 //! - Glyphs are UI symbols only, never a logo or brand mark.
-//! - The filled variant is used wherever Remix has one, in every state.
-//!   Inactive versus active is shown with colour (`fg_dim` versus `fg` or the
-//!   accent), never by swapping a line glyph for a filled one.
+//! - The filled (FILL 1) file is used for every glyph, in every state.
+//!   Inactive versus active or pressed is shown with colour (`fg_dim` versus
+//!   `fg` or the region's one accent), never by switching fill. Every glyph in
+//!   the subset has a FILL 1 file at the pin, so none falls back to outlined.
 //! - An icon is additive: the text label or accessible name it accompanies
 //!   stays.
 //!
 //! There is no run-time SVG parsing, font, file, or network access; the
 //! outlines are `static` data in the binary.
 //!
-//! [Remix Icon]: https://github.com/Remix-Design/RemixIcon/tree/v4.7.0
+//! [Material Symbols]: https://github.com/google/material-design-icons
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::draw::{Canvas, Rect};
 
 /// Upstream licence text of the vendored subset, for surfaces that display
 /// third-party notices. Images ship the same file as
-/// `/usr/share/licenses/ferrix/remixicon-4.7.0/License` (Apache-2.0 section
+/// `/usr/share/licenses/ferrix/material-symbols/LICENSE` (Apache-2.0 section
 /// 4(a)).
-pub const REMIX_LICENSE: &str = include_str!("../assets/icons/remixicon/License");
+pub const MATERIAL_SYMBOLS_LICENSE: &str = include_str!("../assets/icons/material-symbols/LICENSE");
 
 /// One-line attribution for About pages and notices.
-pub const ATTRIBUTION: &str = "Icons: Remix Icon 4.7.0, Apache-2.0";
+pub const ATTRIBUTION: &str = "Icons: Material Symbols (Google), Apache-2.0";
 
-/// One compiled outline in the 24x24 Remix grid.
+/// One compiled outline in the 24x24 unit grid.
 pub(crate) struct Outline {
     pub name: &'static str,
     pub even_odd: bool,
@@ -39,7 +46,7 @@ pub(crate) struct Outline {
 include!(concat!(env!("OUT_DIR"), "/icons.rs"));
 
 /// Every glyph the system uses. Names say what the glyph means in Ferrix; the
-/// Remix source name is [`Icon::source`].
+/// Material Symbols source name is [`Icon::source`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     // Launcher applications.
@@ -55,8 +62,19 @@ pub enum Icon {
     WifiLow,
     WifiMid,
     WifiFull,
-    Battery,
-    BatteryLow,
+    Cellular0,
+    Cellular1,
+    Cellular2,
+    Cellular3,
+    Cellular4,
+    Battery0,
+    Battery1,
+    Battery2,
+    Battery3,
+    Battery4,
+    Battery5,
+    Battery6,
+    BatteryFull,
     BatteryCharging,
     Bluetooth,
     Notifications,
@@ -85,88 +103,76 @@ pub enum Icon {
     FileUnknown,
 }
 
-impl Icon {
-    pub const ALL: [Icon; 37] = [
-        Icon::Phone,
-        Icon::Messages,
-        Icon::Contacts,
-        Icon::Settings,
-        Icon::Terminal,
-        Icon::Camera,
-        Icon::Browser,
-        Icon::WifiOff,
-        Icon::WifiLow,
-        Icon::WifiMid,
-        Icon::WifiFull,
-        Icon::Battery,
-        Icon::BatteryLow,
-        Icon::BatteryCharging,
-        Icon::Bluetooth,
-        Icon::Notifications,
-        Icon::Brightness,
-        Icon::Keyboard,
-        Icon::Home,
-        Icon::Back,
-        Icon::Forward,
-        Icon::More,
-        Icon::Add,
-        Icon::Close,
-        Icon::Backspace,
-        Icon::Dialpad,
-        Icon::History,
-        Icon::Folder,
-        Icon::File,
-        Icon::FileText,
-        Icon::FileImage,
-        Icon::FileAudio,
-        Icon::FileVideo,
-        Icon::FileArchive,
-        Icon::FileCode,
-        Icon::Link,
-        Icon::FileUnknown,
-    ];
+const SOURCES: [(Icon, &str); 48] = [
+    (Icon::Phone, "call"),
+    (Icon::Messages, "chat"),
+    (Icon::Contacts, "contacts"),
+    (Icon::Settings, "settings"),
+    (Icon::Terminal, "terminal"),
+    (Icon::Camera, "photo_camera"),
+    (Icon::Browser, "language"),
+    (Icon::WifiOff, "signal_wifi_off"),
+    (Icon::WifiLow, "network_wifi_1_bar"),
+    (Icon::WifiMid, "network_wifi_2_bar"),
+    (Icon::WifiFull, "signal_wifi_4_bar"),
+    (Icon::Cellular0, "signal_cellular_0_bar"),
+    (Icon::Cellular1, "signal_cellular_1_bar"),
+    (Icon::Cellular2, "signal_cellular_2_bar"),
+    (Icon::Cellular3, "signal_cellular_3_bar"),
+    (Icon::Cellular4, "signal_cellular_4_bar"),
+    (Icon::Battery0, "battery_android_0"),
+    (Icon::Battery1, "battery_android_1"),
+    (Icon::Battery2, "battery_android_2"),
+    (Icon::Battery3, "battery_android_3"),
+    (Icon::Battery4, "battery_android_4"),
+    (Icon::Battery5, "battery_android_5"),
+    (Icon::Battery6, "battery_android_6"),
+    (Icon::BatteryFull, "battery_android_full"),
+    (Icon::BatteryCharging, "battery_android_bolt"),
+    (Icon::Bluetooth, "bluetooth"),
+    (Icon::Notifications, "notifications"),
+    (Icon::Brightness, "light_mode"),
+    (Icon::Keyboard, "keyboard"),
+    (Icon::Home, "home"),
+    (Icon::Back, "chevron_left"),
+    (Icon::Forward, "chevron_right"),
+    (Icon::More, "more_horiz"),
+    (Icon::Add, "add"),
+    (Icon::Close, "close"),
+    (Icon::Backspace, "backspace"),
+    (Icon::Dialpad, "dialpad"),
+    (Icon::History, "history"),
+    (Icon::Folder, "folder"),
+    (Icon::File, "draft"),
+    (Icon::FileText, "description"),
+    (Icon::FileImage, "image"),
+    (Icon::FileAudio, "audio_file"),
+    (Icon::FileVideo, "video_file"),
+    (Icon::FileArchive, "folder_zip"),
+    (Icon::FileCode, "code_blocks"),
+    (Icon::Link, "link"),
+    (Icon::FileUnknown, "unknown_document"),
+];
 
-    /// The Remix Icon v4.7.0 file stem. Every entry is a `-fill` variant.
-    pub fn source(self) -> &'static str {
-        match self {
-            Icon::Phone => "phone-fill",
-            Icon::Messages => "message-2-fill",
-            Icon::Contacts => "contacts-book-fill",
-            Icon::Settings => "settings-3-fill",
-            Icon::Terminal => "terminal-box-fill",
-            Icon::Camera => "camera-fill",
-            Icon::Browser => "global-fill",
-            Icon::WifiOff => "signal-wifi-off-fill",
-            Icon::WifiLow => "signal-wifi-1-fill",
-            Icon::WifiMid => "signal-wifi-2-fill",
-            Icon::WifiFull => "signal-wifi-fill",
-            Icon::Battery => "battery-fill",
-            Icon::BatteryLow => "battery-low-fill",
-            Icon::BatteryCharging => "battery-charge-fill",
-            Icon::Bluetooth => "bluetooth-fill",
-            Icon::Notifications => "notification-3-fill",
-            Icon::Brightness => "sun-fill",
-            Icon::Keyboard => "keyboard-box-fill",
-            Icon::Home => "home-5-fill",
-            Icon::Back => "arrow-left-s-fill",
-            Icon::Forward => "arrow-right-s-fill",
-            Icon::More => "more-fill",
-            Icon::Add => "add-fill",
-            Icon::Close => "close-fill",
-            Icon::Backspace => "delete-back-2-fill",
-            Icon::Dialpad => "grid-fill",
-            Icon::History => "history-fill",
-            Icon::Folder => "folder-fill",
-            Icon::File => "file-fill",
-            Icon::FileText => "file-text-fill",
-            Icon::FileImage => "file-image-fill",
-            Icon::FileAudio => "file-music-fill",
-            Icon::FileVideo => "file-video-fill",
-            Icon::FileArchive => "file-zip-fill",
-            Icon::FileCode => "file-code-fill",
-            Icon::Link => "links-fill",
-            Icon::FileUnknown => "file-unknow-fill",
+impl Icon {
+    pub const ALL: [Icon; 48] = {
+        let mut all = [Icon::Phone; 48];
+        let mut i = 0;
+        while i < SOURCES.len() {
+            all[i] = SOURCES[i].0;
+            i += 1;
         }
+        all
+    };
+
+    /// The Material Symbols name: `symbols/web/<name>/materialsymbolsrounded/
+    /// <name>_fill1_24px.svg` at the commit in `tools/icons/material-symbols.pins`.
+    pub fn source(self) -> &'static str {
+        SOURCES
+            .iter()
+            .find(|(icon, _)| *icon == self)
+            .map(|(_, name)| *name)
+            .expect("every Icon has a source (checked by tests)")
     }
 
     /// The Wi-Fi status glyph for `arcs` lit levels (0 = no link).
@@ -179,15 +185,35 @@ impl Icon {
         }
     }
 
-    /// The battery glyph: charging shows the bolt, below 20 % the low glyph,
-    /// otherwise the full one. Remix's half-level `battery-2` is a portrait
-    /// battery that does not match the others, so it is not used; the exact
-    /// percentage is always printed beside the glyph.
+    /// The battery glyph: charging shows the bolt; otherwise the landscape
+    /// battery filled to one of seven steps (`battery_android_0`..`6`), then
+    /// `full` from 95 %. The exact percentage is always printed beside the
+    /// glyph, and low charge is coloured by the caller.
     pub fn battery(percent: u8, charging: bool) -> Icon {
-        match (charging, percent) {
+        const STEPS: [Icon; 7] = [
+            Icon::Battery0,
+            Icon::Battery1,
+            Icon::Battery2,
+            Icon::Battery3,
+            Icon::Battery4,
+            Icon::Battery5,
+            Icon::Battery6,
+        ];
+        match (charging, percent.min(100)) {
             (true, _) => Icon::BatteryCharging,
-            (false, p) if p < 20 => Icon::BatteryLow,
-            _ => Icon::Battery,
+            (false, 95..) => Icon::BatteryFull,
+            (false, p) => STEPS[usize::from(p) * 7 / 95],
+        }
+    }
+
+    /// The cellular glyph for `bars` (0..=4) lit of four.
+    pub fn cellular(bars: u8) -> Icon {
+        match bars {
+            0 => Icon::Cellular0,
+            1 => Icon::Cellular1,
+            2 => Icon::Cellular2,
+            3 => Icon::Cellular3,
+            _ => Icon::Cellular4,
         }
     }
 
@@ -239,13 +265,23 @@ impl Icon {
     }
 }
 
-/// Fills `icon` into the square `size` px box whose top-left is (`x`, `y`),
-/// tinted `color`. The 24-unit grid scales exactly to `size`, so callers keep
-/// `size` a whole number of pixels for crisp edges.
-pub fn draw(c: &mut Canvas, icon: Icon, x: i32, y: i32, size: i32, color: u32) {
-    if size <= 0 {
-        return;
-    }
+/// A rasterised coverage mask (0..=255 per pixel, row-major, `size` square).
+type Mask = Rc<[u8]>;
+
+/// Upper bound on cached masks; a caller cycling through sizes can never hold
+/// more than this many.
+const CACHE_LIMIT: usize = 256;
+
+thread_local! {
+    /// Masks keyed by glyph and pixel size. A mask is colour-independent, so
+    /// a theme, state or accent change costs one tinted blend, not a re-fill;
+    /// per (size, colour) the work is the same as a cached tinted bitmap.
+    static MASKS: RefCell<HashMap<(Icon, i32), Mask>> = RefCell::new(HashMap::new());
+}
+
+/// Fills the outline once into a transparent `size` px square with
+/// anti-aliasing and keeps the alpha channel.
+fn rasterise(icon: Icon, size: i32) -> Mask {
     let outline = icon.outline();
     let mut pb = tiny_skia::PathBuilder::new();
     let mut p = outline.pts.iter().copied();
@@ -271,12 +307,64 @@ pub fn draw(c: &mut Canvas, icon: Icon, x: i32, y: i32, size: i32, color: u32) {
             _ => pb.close(),
         }
     }
-    let Some(path) = pb.finish() else {
+    let side = size as u32;
+    let mut pm = tiny_skia::Pixmap::new(side, side).expect("positive icon size");
+    if let Some(path) = pb.finish() {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(255, 255, 255, 255);
+        paint.anti_alias = true;
+        let rule = if outline.even_odd {
+            tiny_skia::FillRule::EvenOdd
+        } else {
+            tiny_skia::FillRule::Winding
+        };
+        let k = size as f32 / 24.0;
+        pm.fill_path(
+            &path,
+            &paint,
+            rule,
+            tiny_skia::Transform::from_scale(k, k),
+            None,
+        );
+    }
+    pm.data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|px| px[3])
+        .collect()
+}
+
+fn mask(icon: Icon, size: i32) -> Mask {
+    MASKS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(mask) = cache.get(&(icon, size)) {
+            return Rc::clone(mask);
+        }
+        if cache.len() >= CACHE_LIMIT {
+            cache.clear();
+        }
+        let mask = rasterise(icon, size);
+        cache.insert((icon, size), Rc::clone(&mask));
+        mask
+    })
+}
+
+/// Fills `icon` into the square `size` px box whose top-left is (`x`, `y`),
+/// tinted `color` (a theme colour such as `fg`, `fg_dim` or an accent). The
+/// 24-unit grid scales exactly to `size`; keep it a whole number of pixels for
+/// crisp edges. The first draw at a size rasterises and caches the coverage;
+/// later draws, in any colour, only blend.
+pub fn draw(c: &mut Canvas, icon: Icon, x: i32, y: i32, size: i32, color: u32) {
+    if size <= 0 {
         return;
-    };
-    let k = size as f32 / 24.0;
-    let transform = tiny_skia::Transform::from_row(k, 0.0, 0.0, k, x as f32, y as f32);
-    c.fill_path(&path, color, outline.even_odd, transform);
+    }
+    let mask = mask(icon, size);
+    for (row, line) in mask.chunks_exact(size as usize).enumerate() {
+        for (col, alpha) in line.iter().enumerate() {
+            c.blend(x + col as i32, y + row as i32, color, *alpha);
+        }
+    }
 }
 
 /// [`draw`] centred on (`cx`, `cy`).
@@ -301,10 +389,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_icon_has_a_compiled_filled_outline_and_none_is_unused() {
+    fn every_icon_has_one_compiled_outline_and_none_is_unused() {
         for icon in Icon::ALL {
-            assert!(icon.source().ends_with("-fill"), "{icon:?} must be filled");
             assert!(OUTLINES.iter().any(|o| o.name == icon.source()), "{icon:?}");
+            assert_eq!(
+                Icon::ALL
+                    .iter()
+                    .filter(|i| i.source() == icon.source())
+                    .count(),
+                1,
+                "{icon:?} shares its source"
+            );
         }
         for outline in OUTLINES {
             assert!(
@@ -314,6 +409,23 @@ mod tests {
             );
         }
         assert_eq!(OUTLINES.len(), Icon::ALL.len());
+        assert_eq!(Icon::ALL.len(), SOURCES.len());
+    }
+
+    #[test]
+    fn the_vendored_subset_matches_the_pins_file() {
+        let pins = include_str!("../../../tools/icons/material-symbols.pins");
+        let pinned: Vec<&str> = pins
+            .lines()
+            .filter_map(|l| l.strip_prefix("ICON="))
+            .collect();
+        let mut used: Vec<&str> = Icon::ALL.iter().map(|i| i.source()).collect();
+        let mut sorted = pinned.clone();
+        sorted.sort_unstable();
+        used.sort_unstable();
+        assert_eq!(sorted, used, "pins file and Icon::ALL disagree");
+        assert!(pins.contains("MATERIAL_SYMBOLS_VARIANT=fill1_24px"));
+        assert!(pins.contains("MATERIAL_SYMBOLS_FAMILY=materialsymbolsrounded"));
     }
 
     #[test]
@@ -322,6 +434,22 @@ mod tests {
             assert!(!outline.ops.is_empty(), "{}", outline.name);
             for v in outline.pts {
                 assert!((-0.01..=24.01).contains(v), "{}: {v}", outline.name);
+            }
+        }
+    }
+
+    #[test]
+    fn masks_have_the_requested_size_and_real_coverage() {
+        for size in [17, 24, 40, 96] {
+            for icon in Icon::ALL {
+                let m = rasterise(icon, size);
+                assert_eq!(m.len(), (size * size) as usize, "{icon:?} at {size}");
+                let covered = m.iter().filter(|a| **a > 0).count();
+                // Every glyph covers a visible share of its box but never all
+                // of it (Material glyphs keep a padding margin).
+                assert!(covered * 25 > m.len(), "{icon:?} at {size}: {covered}");
+                assert!(covered < m.len(), "{icon:?} at {size} fills its box");
+                assert!(m.contains(&255), "{icon:?} at {size}: no solid px");
             }
         }
     }
@@ -341,7 +469,7 @@ mod tests {
                         continue;
                     }
                     assert!(
-                        (7..57).contains(&x) && (7..57).contains(&y),
+                        (8..56).contains(&x) && (8..56).contains(&y),
                         "{icon:?} spilled to ({x},{y})"
                     );
                     inside += 1;
@@ -357,12 +485,47 @@ mod tests {
     }
 
     #[test]
+    fn the_cached_mask_is_reused_in_any_theme_colour() {
+        let t = crate::theme::get();
+        let mut first = Canvas::new(40, 40, t.bg);
+        draw(&mut first, Icon::Settings, 0, 0, 40, t.fg);
+        let a = mask(Icon::Settings, 40);
+        let b = mask(Icon::Settings, 40);
+        assert!(Rc::ptr_eq(&a, &b), "second lookup must hit the cache");
+        for color in [t.fg, t.fg_dim, t.steel, t.rust] {
+            let mut c = Canvas::new(40, 40, t.bg);
+            draw(&mut c, Icon::Settings, 0, 0, 40, color);
+            // Same coverage, new colour: every solid pixel is the tint and
+            // every empty one is the background.
+            for (i, alpha) in a.iter().enumerate() {
+                let (x, y) = ((i % 40) as i32, (i / 40) as i32);
+                match alpha {
+                    255 => assert_eq!(c.get(x, y), color),
+                    0 => assert_eq!(c.get(x, y), t.bg),
+                    _ => {}
+                }
+            }
+        }
+        // A different size is its own mask.
+        assert_eq!(mask(Icon::Settings, 20).len(), 400);
+    }
+
+    #[test]
     fn level_and_file_mappings() {
         assert_eq!(Icon::wifi(0), Icon::WifiOff);
+        assert_eq!(Icon::wifi(1), Icon::WifiLow);
+        assert_eq!(Icon::wifi(2), Icon::WifiMid);
         assert_eq!(Icon::wifi(3), Icon::WifiFull);
         assert_eq!(Icon::battery(10, true), Icon::BatteryCharging);
-        assert_eq!(Icon::battery(10, false), Icon::BatteryLow);
-        assert_eq!(Icon::battery(90, false), Icon::Battery);
+        assert_eq!(Icon::battery(0, false), Icon::Battery0);
+        assert_eq!(Icon::battery(10, false), Icon::Battery0);
+        assert_eq!(Icon::battery(50, false), Icon::Battery3);
+        assert_eq!(Icon::battery(94, false), Icon::Battery6);
+        assert_eq!(Icon::battery(95, false), Icon::BatteryFull);
+        assert_eq!(Icon::battery(255, false), Icon::BatteryFull);
+        assert_eq!(Icon::cellular(0), Icon::Cellular0);
+        assert_eq!(Icon::cellular(4), Icon::Cellular4);
+        assert_eq!(Icon::cellular(9), Icon::Cellular4);
         assert_eq!(Icon::for_file_name("notes.TXT"), Icon::FileText);
         assert_eq!(Icon::for_file_name("main.rs"), Icon::FileCode);
         assert_eq!(Icon::for_file_name(".bashrc"), Icon::File);
@@ -373,7 +536,8 @@ mod tests {
 
     #[test]
     fn the_licence_ships_with_the_glyphs() {
-        assert!(REMIX_LICENSE.contains("Apache License"));
-        assert!(REMIX_LICENSE.contains("Version 2.0, January 2004"));
+        assert!(MATERIAL_SYMBOLS_LICENSE.contains("Apache License"));
+        assert!(MATERIAL_SYMBOLS_LICENSE.contains("Version 2.0, January 2004"));
+        assert!(ATTRIBUTION.contains("Apache-2.0"));
     }
 }

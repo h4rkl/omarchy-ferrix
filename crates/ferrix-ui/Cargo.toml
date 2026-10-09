@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 tiny-skia = "0.11"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 
-# Build-time only: compile the pinned Remix Icon SVG subset into outline data
+# Build-time only: compile the pinned Material Symbols SVG subset into outline data
 # (see build.rs). Neither crate is linked into any binary.
 [build-dependencies]
 sha2 = "0.10"

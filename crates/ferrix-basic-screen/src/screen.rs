@@ -284,7 +284,7 @@ fn status_bar(
     // Clock on the left, GrapheneOS style.
     ty.text(c, Style::bold(px, t.fg), clock, pad, baseline);
 
-    // Right-aligned: signal bars, wifi arcs, battery percent and gauge.
+    // Right-aligned: cellular, Wi-Fi, battery percent and battery glyph.
     let mid = bar_h / 2;
     let pct = format!("{}%", p.power.battery_percent);
     let batt_color = if p.power.charging {
@@ -311,13 +311,20 @@ fn status_bar(
     ty.text(c, pct_style, &pct, x, baseline);
     x -= bar_h / 4 + glyph;
     icons::draw(c, wifi_glyph(state), x, glyph_y, glyph, wifi_color(state));
-    x -= bar_h / 4;
-    signal_bars(c, x, mid + bar_h / 4, bar_h / 2, state.tele.bars);
+    x -= bar_h / 8 + glyph;
+    icons::draw(
+        c,
+        Icon::cellular(state.tele.bars),
+        x,
+        glyph_y,
+        glyph,
+        cellular_color(state.tele.bars),
+    );
 }
 
-/// Wi-Fi status glyph: Remix's filled Wi-Fi levels follow the connectivity
-/// check (`local`/`portal` one, `limited` two, `full` all); a radio that is
-/// off or not linked shows the crossed glyph.
+/// Wi-Fi status glyph: the Material Symbols Wi-Fi levels follow the
+/// connectivity check (`local`/`portal` one bar, `limited` two, `full` all
+/// four); a radio that is off or not linked shows the crossed glyph.
 fn wifi_glyph(state: &UiState) -> Icon {
     Icon::wifi(state.net.reach.arcs())
 }
@@ -333,26 +340,12 @@ fn wifi_color(state: &UiState) -> u32 {
     }
 }
 
-/// `bars` (0..=4) lit of four; the daemon's signal when reachable. Remix Icon
-/// 4.7.0 has no cellular signal-level glyphs, so this meter stays drawn
-/// (documented exception in `docs/design.md`).
-fn signal_bars(c: &mut Canvas, right: i32, base: i32, size: i32, bars: u8) {
+/// Cellular glyph colour: steel (the secondary accent, never rust) while any
+/// bar is lit, `fg_dim` with no signal. The glyph itself shows the lit bars
+/// solid and the unlit ones as an outline (`signal_cellular_N_bar`).
+fn cellular_color(bars: u8) -> u32 {
     let t = theme::get();
-    let bw = size / 4;
-    let gap = 4;
-    for i in 0..4 {
-        let bh = size * (i + 1) / 4 + 4;
-        let on = i < i32::from(bars.min(4));
-        c.fill_rect(
-            Rect {
-                x: right - (4 - i) * (bw + gap),
-                y: base - bh,
-                w: bw,
-                h: bh,
-            },
-            if on { t.steel } else { t.surface_hi },
-        );
-    }
+    if bars > 0 { t.steel } else { t.fg_dim }
 }
 
 /// A card: slate surface, hairline border, tight radius. Pressed raises the
@@ -580,7 +573,7 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
     }
 }
 
-/// Tile artwork: first-party applications use their filled Remix glyph
+/// Tile artwork: first-party applications use their filled Material glyph
 /// (`ferrix_ui::icons`), 96 design px, in the descriptor tone. Any other app
 /// shows its descriptor glyph when the face has it, else the first letter of
 /// its name (never a tofu box). The label under the tile always stays.
@@ -1308,19 +1301,27 @@ mod tests {
         weak.net.connected = false;
         let faint = compose(&p, 600, &ty, 1080, 2340, &weak);
         let bar_h = scale(72, 1080);
-        // Somewhere in the right third of the strip the strong frame shows
-        // steel where the weak one shows the dim track.
-        let region = (700..1080).flat_map(|x| (0..bar_h).map(move |y| (x, y)));
-        let mut steel_to_track = 0;
+        // In the right part of the strip the strong frame shows solid steel
+        // (four lit cellular bars, full Wi-Fi) where the weak one shows only
+        // the strip background: unlit bars are outlines and the Wi-Fi glyph
+        // is the dim crossed one.
+        let region = (600..1080).flat_map(|x| (0..bar_h).map(move |y| (x, y)));
+        let mut steel_to_empty = 0;
+        let mut weak_steel = 0;
         for (x, y) in region {
-            if strong.get(x, y) == t.steel && faint.get(x, y) == t.surface_hi {
-                steel_to_track += 1;
+            if strong.get(x, y) == t.steel && faint.get(x, y) == t.bg_dark {
+                steel_to_empty += 1;
+            }
+            if faint.get(x, y) == t.steel {
+                weak_steel += 1;
             }
         }
         assert!(
-            steel_to_track > 20,
-            "signal bars and wifi arcs dim with the summary"
+            steel_to_empty > 200,
+            "cellular and Wi-Fi glyphs fill with the summary ({steel_to_empty})"
         );
+        // One lit bar is still steel; the crossed Wi-Fi glyph is not.
+        assert!(weak_steel > 0, "one lit cellular bar stays steel");
     }
 
     #[test]

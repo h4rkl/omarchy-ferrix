@@ -156,23 +156,6 @@ impl Canvas {
         );
     }
 
-    /// Anti-aliased fill of an arbitrary outline (the icon glyphs).
-    pub(crate) fn fill_path(
-        &mut self,
-        path: &tiny_skia::Path,
-        color: u32,
-        even_odd: bool,
-        transform: Transform,
-    ) {
-        let rule = if even_odd {
-            FillRule::EvenOdd
-        } else {
-            FillRule::Winding
-        };
-        self.pm
-            .fill_path(path, &paint(color), rule, transform, None);
-    }
-
     /// Little-endian XRGB8888 bytes as expected by `wl_shm` format `xrgb8888`.
     pub fn xrgb_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.pm.data().len());
