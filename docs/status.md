@@ -1,5 +1,89 @@
 # Status
 
+## 2026-10-10 (Terminal and shared keyboard: key repeat, selection and clipboard, scrollbar, bell and title, non-US layouts; QEMU only)
+
+- **Key repeat (`ferrix-ui`):** `keyboard::KeyRepeat` is a pure timer. A
+  held backspace, delete, arrow or space key fires once after the delay and
+  then at the interval, delivering at most 4 repeats per poll so a stalled
+  TCG frame cannot dump a burst. A key that already repeated does not fire
+  again when released. Letters do not repeat. The client runner sleeps until
+  the surface's `deadline()` and calls `timer()`; Terminal, Settings,
+  Messages, Contacts and Files wire it in, which covers every on-screen
+  `Text` field and the PIN card. Timing comes from `keyboard.toml`
+  (`repeat_delay_ms` 400 and `repeat_interval_ms` 50 by default, clamped).
+  Held hardware keys repeat at the compositor's `repeat_info`, but never
+  sooner than the `keyboard.toml` delay.
+- **Layouts:** the letter rows are data (`crates/ferrix-ui/layouts/{us,de,sv}.toml`,
+  embedded and validated: three rows, lowercase letters, `a`-`z` required).
+  Symbols, modifiers and the accessory row are shared. Layouts wider than
+  ten letters narrow every letter key evenly. Shift uses single-character
+  Unicode capitals (`ü`→`Ü`; `ß` stays `ß`). **Settings > Keyboard** (a new
+  root row between Display and Airplane mode) lists the layouts and has a
+  "Try it" field. Choosing a layout writes `$XDG_CONFIG_HOME` or
+  `$HOME/.config/ferrix/keyboard.toml` (atomic rename), and every app's
+  keyboard picks it up on its next frame through a rate-limited mtime check
+  (`keyboard-config`, `keyboard-config-invalid`, `keyboard-layout-set`
+  records). The hardware `wl_keyboard` keymap is still the hand-rolled US
+  table.
+- **Selection and clipboard (Terminal):** holding a finger on the grid for
+  500 ms selects the word under it (shell and path delimiters end a word).
+  Dragging grows the selection from that word, and two steel handles adjust
+  either end; a handle dragged past the other swaps roles. A Copy, Paste
+  and Done bar acts on the selection, and a tap on the grid clears it.
+  Selection points are buffer lines, so the selection follows scrolling and
+  output that pushes lines into history. Copy uses alacritty's
+  `bounds_to_string`, so wrapped lines join and trailing blanks drop. Paste
+  turns newlines into CR and honours bracketed paste (an embedded
+  `ESC[201~` is stripped). `ferrix-shell` already served `wl_data_device`
+  through Smithay, with the selection following keyboard focus, so the
+  shared runner binds `wl_data_device_manager`. Offers are read and our own
+  source is written on short-lived threads, so pasting this app's own copy
+  cannot deadlock its loop. Without a data device there is an in-process
+  fallback, and the note says "this app only". Records carry counts only
+  (`clipboard`, `terminal-copy`), never text.
+- **Scrollbar, bell, title (Terminal):** a thin steel thumb on a
+  `surface_hi` track at the grid's right edge. It shows while scrolling and
+  for 1.5 s after, and while shown it can be dragged to an absolute history
+  offset (`ScrollTo`). The `SCROLLBACK N` badge stays. BEL flashes the grid
+  well's outline in `warn` for 180 ms (`terminal-bell`). OSC 0/2 sets the
+  header status line; the record `terminal-title` carries its length only.
+  `docs/design.md` records the steel-not-rust choices: the cursor drops to
+  `fg_dim` during a selection and Copy carries the rust cue.
+- **Evidence (QEMU, Alpine smoke guest, TCG agent session, 1080x2340,
+  frames under `/tmp/f13/`, not in Git):** `settings-de.png` shows the
+  Keyboard page with Deutsch active and the shared keyboard in QWERTZ (ü ö ä
+  ß). `settings-de-typed.png` shows "Über ää" typed by touch with one-shot
+  shift. `settings-de-repeat.png` shows that a single ~750 ms hold of
+  backspace emptied the 7-character field. `term-de.png` shows the Terminal
+  keyboard in the same German layout after the change in Settings, picked
+  up through `keyboard.toml` (`keyboard-config` with source
+  `/root/.config/ferrix/keyboard.toml`, `keyboard-layout-set` `saved`).
+  `term-after.png` and `term-scrollbar.png` show OSC title "build: make
+  check" in the header, `SCROLLBACK 63`, and the steel thumb held and
+  dragged. `term-select2.png` shows a long press selecting `/etc/hostname`
+  with both handles and the Copy/Paste/Done bar at the bottom (the
+  selection is near the top), with the cursor dimmed. `term-handle.png`
+  shows the end handle dragged back to `/etc/`. `term-paste.png` (from the
+  first build, before the word-extension fix) shows Copy then Paste
+  round-tripping `/etc/` through ferrix-shell's selection to the prompt
+  (`clipboard` `copied` `wayland`, then `pasted` `wayland` `bytes:5`).
+  `terminal-bell` `count:1` after `printf '\a'`; the 180 ms flash was not
+  caught in a frame (TCG capture latency). `just qemu-check` passed and
+  `just qemu-scenario-check` passed 32/32 after rebasing onto the #15
+  harness fixes. Before that rebase, three agent starts timed out on
+  `cursor-ready` (the #15 flake). An unrebased `main` build started on the
+  first try in that window, so the cause cannot be pinned on the flake
+  alone; after the rebase the start and taps worked.
+- **Limitations:** QEMU only. **Not re-checked on the Pixel 9a**: the
+  `tools/pixel-9a/devtest/inject.py` long-press acceptance item is open. A
+  selection drifts if output keeps scrolling once history reaches the
+  2000-line cap, and a resize clears it. Selecting does not auto-scroll at
+  the grid edges. Only the Terminal has a selection and clipboard UI. Other
+  apps' text fields do not paste, though the runner API is shared. There
+  is no primary selection. Layouts cover letters only: no long-press
+  accents or dead keys, and French AZERTY is not shipped. Dirty-row damage
+  (task 6) is not done; frames are still full redraws.
+
 ## 2026-10-10 (QEMU harness flakes: cursor-ready start, serial interleaving, socket path limit, record identity, daemon kill; QEMU only)
 
 Issue #15. Host tooling and guest evidence plumbing only. Nothing here was
