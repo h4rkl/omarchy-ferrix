@@ -140,7 +140,8 @@ do_patch() {
   patch_root="$src/vendor/extra/waydroid-patches/base-patches-$(pin WAYDROID_PATCH_SDK)"
   for patch in $(cd "$patch_root" && find . -name '*.patch' | LC_ALL=C sort); do
     project=$(dirname "${patch#./}")
-    subject=$(sed -n 's/^Subject: \[PATCH[^]]*\] //p' "$patch_root/$patch" | head -n 1)
+    # git mailinfo unfolds the header and strips the [PATCH] prefix.
+    subject=$(git mailinfo /dev/null /dev/null <"$patch_root/$patch" | sed -n 's/^Subject: //p')
     git -C "$src/$project" log -n 5000 --format=%s | grep -qxF "$subject" || {
       printf 'missing waydroid patch: %s\n' "${patch#./}" >&2; missing=$((missing + 1)); }
   done
