@@ -61,6 +61,16 @@
   binaries ship in a Pixel image. Legibility on the 420 dpi panel is
   unverified. Messages, Contacts and Terminal only gained the shared back
   glyph. `home-5` and `close` are pinned but not drawn anywhere yet.
+- **After rebasing onto the Terminal/keyboard (#13), harness (#15) and
+  Bluetooth PIN (#6) work (QEMU, guest rebuilt into `/tmp/f20`):**
+  `just qemu-check` passed and `just qemu-scenario-check` passed 32/32 on the
+  first run; the agent session started first time (9 s). Inspected frames:
+  Settings root (seven rows, Keyboard included, each with the forward
+  chevron), Settings > Keyboard (layout rows with `keyboard-box`, rust on the
+  active English (US) row), and the Terminal header (back glyph; the key
+  caps keep their text labels). The PIN card itself was checked only in the
+  host preview of the confirm card (mock), which shares the new Bluetooth
+  glyph.
 
 ## 2026-10-10 (Terminal and shared keyboard: key repeat, selection and clipboard, scrollbar, bell and title, non-US layouts; QEMU only)
 
