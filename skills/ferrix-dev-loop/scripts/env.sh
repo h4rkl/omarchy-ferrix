@@ -1,7 +1,7 @@
 #!/bin/sh
 # Shared settings for the dev-loop scripts. Source it; do not run it.
 # Machine-local values (builder host, paths) live in the ignored file
-# out/dev-loop.env so no host name or path is committed. Example:
+# local/dev/dev-loop.env. The older out/dev-loop.env remains supported. Example:
 #   FERRIX_REMOTE=user@builder
 #   FERRIX_REMOTE_REPO=/home/user/omarchy-ferrix
 #   FERRIX_REMOTE_BRANCH=mac-handoff
@@ -11,7 +11,11 @@
 #   FERRIX_WEBCAM_CROP=900:1000:500:40
 
 FERRIX_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-[ -r "$FERRIX_ROOT/out/dev-loop.env" ] && . "$FERRIX_ROOT/out/dev-loop.env"
+if [ -r "$FERRIX_ROOT/local/dev/dev-loop.env" ]; then
+	. "$FERRIX_ROOT/local/dev/dev-loop.env"
+elif [ -r "$FERRIX_ROOT/out/dev-loop.env" ]; then
+	. "$FERRIX_ROOT/out/dev-loop.env"
+fi
 
 : "${FERRIX_REMOTE_BRANCH:=mac-handoff}"
 : "${FERRIX_SHOTS:=$FERRIX_ROOT/out/dev-loop/shots}"
@@ -23,7 +27,7 @@ mkdir -p "$FERRIX_SHOTS"
 need() {
 	for v in "$@"; do
 		eval "x=\${$v-}"
-		[ -n "$x" ] || { echo "STOP: set $v in out/dev-loop.env" >&2; exit 2; }
+		[ -n "$x" ] || { echo "STOP: set $v in local/dev/dev-loop.env (or out/dev-loop.env)" >&2; exit 2; }
 	done
 }
 

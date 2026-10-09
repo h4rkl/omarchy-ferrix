@@ -6,9 +6,6 @@
 .env.*
 !.env.example
 
-# Machine-local agent access reference (no credentials).
-/DEBA_ACCESS.local.txt
-
 # Local tool state
 /.direnv/
 __pycache__/
@@ -53,3 +50,6 @@ __pycache__/
 # macOS Finder metadata
 .DS_Store
 .claude
+
+# Machine-local access notes and private release audits
+/local/

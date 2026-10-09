@@ -139,6 +139,12 @@ pinned pmbootstrap builder). Generated artifacts stay under the ignored `out/`.
 
 ## Quick start (macOS / Apple Silicon or Linux)
 
+For a fresh clone, run `just local-init` to create an ignored workspace for
+developer and device details. Developers with a Pixel 9a can follow
+[`docs/pixel-9a-developer-setup.md`](docs/pixel-9a-developer-setup.md) with an
+agent. The current physical workflow is scoped to the identified
+`GXQ96` / `MP1.0` revision; read-only discovery checks the attached device.
+
 ```sh
 just host-check          # reports prerequisites; installs nothing
 just qemu-build          # pinned containers build the guest kernel/initramfs and Rust binaries

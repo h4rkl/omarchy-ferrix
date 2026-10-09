@@ -25,7 +25,7 @@ FERRIX_PIXEL9A_PRODUCT_BUILD=I-understand-this-builds-the-pixel-9a-product \
 export FERRIX_PIXEL9A_KERNEL_OUT=out/pixel-9a/kernel/tegu-\$k
 export FERRIX_PIXEL9A_DEV_BASE_ROOTFS='$FERRIX_BASE_ROOTFS'
 export FERRIX_PIXEL9A_DEV_PRODUCT_DIR=out/pixel-9a/product/tegu-\$a
-export FERRIX_PIXEL9A_DEV_MODULES_SKIP=\${FERRIX_PIXEL9A_DEV_MODULES_SKIP:-mali_kbase,mali_pixel}
+export FERRIX_PIXEL9A_DEV_MODULES_SKIP=\${FERRIX_PIXEL9A_DEV_MODULES_SKIP:-}
 export FERRIX_PIXEL9A_DEV_OUT=out/pixel-9a/images/tegu-kleaf-dev-\$a
 export FERRIX_PIXEL9A_DEV_ANDROID=${ANDROID:-1}
 tools/pixel-9a/native-builder.sh run dev-compose build 2>&1 | grep -E 'PASS|FAIL|rror' | tail -3 >&2

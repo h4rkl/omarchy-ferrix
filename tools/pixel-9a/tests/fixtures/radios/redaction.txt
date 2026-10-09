@@ -4,7 +4,7 @@ wlan0: MAC 12:34:56:78:9a:bc joined
   SIM  | iccid: 89014103211118510720
        | imsi: 310150123456789
   Numbers | own: +15551234567
-usb 1-1: SerialNumber: 3A091FDJG0012X
+usb 1-1: SerialNumber: SYN-USB-0001
 serial=SYN0001234
 GENERAL.CONNECTION:Synthetic Home 5G
 SSID:Synthetic Home 5G

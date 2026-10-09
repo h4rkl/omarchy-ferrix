@@ -157,7 +157,8 @@ on 2026-09-30. This does not authorize a device write. The source-only
 partition, built-in-driver and AVB requirements. A separate device-free
 `static-boot.py` composer now validates those inputs and has offline gate
 tests. An earlier native composition and independent AVB payload verifier
-passed on deba on 2026-09-30; that historical bundle manifest has SHA-256
+passed on the authorized native builder on 2026-09-30; that historical bundle
+manifest has SHA-256
 `95b5bcf20f74b83eb00f4159f1a69b6b9e31f0ea143953f6b0f4640bb4ebd78a`.
 It remains `composed-not-booted` / `bootable=false`. A checked-in static
 candidate and `flash-static.py` adapter now perform strict read-only physical
@@ -278,7 +279,7 @@ phone returned. ADB could not list console pstore. The boot reason supports
 investigating an early timeout; it cannot identify the failed component or
 establish that the candidate kernel ran.
 
-Read-only inspection of deba at source commit
+Read-only inspection of the authorized native builder at source commit
 `26fc9f9beb1d1faf041a8d4df71fe6142353c133` found empty selected initfs/vendor/
 system module policies and empty generated DLKM `modules.dep`/`modules.load`
 files. The built kernel configuration has SHA-256
@@ -359,8 +360,9 @@ ignored output. The live capture at `2026-09-30T00:17:38Z` passed; it neither
 queries DLKM sizes nor upgrades the broader partial inventory. Fresh evidence
 must be collected after any restore that changes the layout.
 
-The kernel's embedded IKCONFIG was extracted read-only on deba using the
-pinned upstream helper and matched the recorded `.config` digest exactly.
+The kernel's embedded IKCONFIG was extracted read-only on the native builder
+using the pinned upstream helper and matched the recorded `.config` digest
+exactly.
 The new contract binds the extractor digest and requires future composition
 to repeat this extraction from the verified `Image`, not trust an unrelated
 configuration file. No generated image or extracted config enters Git.

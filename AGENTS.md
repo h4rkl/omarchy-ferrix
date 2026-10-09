@@ -31,6 +31,9 @@ These rules apply repository-wide. Load only task-relevant detail: `docs/status.
 
 - For a fresh developer machine, follow `AGENT_INSTALL.md`; installation is
   explicit and opt-in, while `just host-check` remains read-only.
+- For a fresh clone, `sh tools/dev/local-init.sh` creates the ignored
+  developer and device notes under `local/` without changing build inputs.
+  Pixel 9a contributors start with `docs/pixel-9a-developer-setup.md`.
 - Preserve user changes; keep work scoped, reproducible through checked-in scripts/`just` recipes, and do not install host tools automatically (`just host-check` reports prerequisites).
 - Prefer popular, maintained libraries and MIT/Apache-2.0-compatible dependencies from existing ecosystems. Hand-roll only with a documented fit reason.
 - Run the applicable subset before handoff: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, and `just qemu-check`.

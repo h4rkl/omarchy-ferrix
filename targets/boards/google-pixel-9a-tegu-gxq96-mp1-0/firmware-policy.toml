@@ -65,6 +65,19 @@ bundle_runtime_paths = ["carrierconfig", "uecapconfig"]
 required_names = []
 
 [[controller]]
+id = "gpu-mali"
+# The pinned Kleaf GPU source emits `mali_kbase.ko` (DDK r52p0, CSF). It asks
+# for the DT `firmware-name`, then `mali_csffw-r52p0.bin`, then
+# `mali_csffw.bin`. The CP3A.260905.009 vendor image has no r52p0 build; its
+# closest older CSF image, vendor.img:/firmware/mali_csffw-r51p0.bin, boots on
+# this kernel (`Firmware boot completed`, physical:google-pixel-9a-tegu-gxq96-mp1-0,
+# 2026-10-10) and is staged under both names.
+kernel_driver = "mali_kbase"
+source_images = ["vendor.img"]
+runtime_paths = ["mali"]
+required_names = ["mali_csffw-r51p0.bin"]
+
+[[controller]]
 id = "display-audio-touch"
 kernel_driver = "tegu-board-kernel"
 source_images = ["vendor.img", "vendor_dlkm.img"]

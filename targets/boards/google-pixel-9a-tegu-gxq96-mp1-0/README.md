@@ -78,8 +78,8 @@ watchdog reboot; ADB could not list console pstore. These values do not show
 which component failed or prove a Ferrix kernel boot.
 
 For each new physical loading attempt, rebuild the kernel, product, rootfs,
-boot inputs, and static image bundle on native deba from the reviewed commit
-into new attempt-specific output directories. Recheck the complete bundle
+boot inputs, and static image bundle on a native Linux builder from the
+reviewed commit into new attempt-specific output directories. Recheck the complete bundle
 after transfer to the Mac with `FERRIX_PIXEL9A_STATIC_BOOT_OUT` set to its
 exact path, then update the checked-in candidate hashes and run a fresh
 read-only device preflight. An earlier probe approval names the earlier boot

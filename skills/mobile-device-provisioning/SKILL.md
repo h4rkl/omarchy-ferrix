@@ -531,25 +531,20 @@ or radio capability is claimed. For each new physical loading attempt, use
 the fresh-output handoff in
 `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/dev/README.md`.
 Native Linux x86_64 is still required. For the current Pixel 9a objective, use
-the remote `deba` build machine for Docker, UTM, QEMU, kernel and radio-kernel
-builds, product builds, and postmarketOS rootfs construction:
-
-```sh
-ssh -i ~/.ssh/id_ed25519 ezy@100.95.82.97
-```
-
-Use `/home/ezy/orca/workspaces/omarchy-ferrix/remora` when it is the convenient
-checked-out workspace, and synchronize reviewed repository commits through Git
-instead of copying ignored caches, firmware, images, or device evidence. Keep
-the local Mac exclusively for the Pixel's ADB/Fastboot
-operations, device logs, flashing, rebooting, and hardware validation; never
-expose its USB transport or ADB server socket to `deba`. If `deba` is
+a native Linux builder controlled by the device owner for Docker, UTM, QEMU,
+kernel and radio-kernel builds, product builds, and postmarketOS rootfs
+construction. Machine-specific access and workspace notes belong in the
+ignored `local/dev/` directory. Synchronize reviewed repository commits through
+Git instead of copying ignored caches, firmware, images, or device evidence.
+Keep the device's ADB/Fastboot operations, device logs, flashing, rebooting,
+and hardware validation on its directly connected host; never expose its USB
+transport or ADB server socket to a remote builder. If the selected builder is
 unavailable, stop the physical build handoff and report the blocker rather
-than substituting the Mac, emulated UTM, or another unapproved host.
+than substituting an emulated or unreviewed host.
 
 On macOS, run only the read-only `*-check`/`*-test` recipes that do not contact
-the device, then hand the target build to `deba`. Do not use an ARM64 UTM
-guest, an x86_64 UTM guest under CPU emulation, OrbStack/Lima, or a
+the device, then hand the target build to the native builder. Do not use an
+ARM64 UTM guest, an x86_64 UTM guest under CPU emulation, OrbStack/Lima, or a
 cross-compilation substitute; the pinned native kernel source, toolchain, and
 `pmbootstrap` are Linux-only by design. A digest-pinned `linux/amd64` tool
 container is allowed only when its Docker engine runs on native Linux x86_64;

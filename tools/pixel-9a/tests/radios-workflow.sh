@@ -432,7 +432,7 @@ check "redact: IMEI/ICCID/IMSI digits removed" \
   sh -c '! printf "%s\n" "$1" | grep -Eq "356789012345678|89014103211118510720|310150123456789"' sh "$redacted"
 check "redact: identifiers marked" sh -c 'test "$(printf "%s\n" "$1" | grep -c "<redacted-id>")" -eq 3' sh "$redacted"
 check "redact: phone number removed" sh -c '! printf "%s\n" "$1" | grep -q "15551234567"' sh "$redacted"
-check "redact: serials removed" sh -c '! printf "%s\n" "$1" | grep -Eq "3A091FDJG0012X|SYN0001234"' sh "$redacted"
+check "redact: serials removed" sh -c '! printf "%s\n" "$1" | grep -Eq "SYN-USB-0001|SYN0001234"' sh "$redacted"
 check "redact: SSID plaintext removed" sh -c '! printf "%s\n" "$1" | grep -q "Synthetic Home 5G"' sh "$redacted"
 check "redact: SSID hashed consistently" \
   sh -c 'test "$(printf "%s\n" "$1" | grep -o "ssid:[0-9a-f]\{12\}" | sort -u | wc -l | tr -d " ")" -eq 1' sh "$redacted"

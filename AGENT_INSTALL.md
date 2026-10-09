@@ -44,6 +44,11 @@ sh tools/dev/check.sh
 just host-check
 ```
 
+Create the ignored per-developer workspace with `just local-init`. It copies
+only missing note and configuration templates from `templates/local/` and
+does not install tools or change build inputs. For Pixel 9a development, use
+`docs/pixel-9a-developer-setup.md` after the host check.
+
 After a successful install, establish the normal development baseline with:
 
 ```sh

@@ -11,8 +11,10 @@ Read `AGENTS.md` first; this skill grants nothing it withholds. Device
 gates and recovery live in `skills/mobile-device-provisioning/SKILL.md`.
 
 Scripts are in `scripts/` (POSIX sh, macOS host). They read machine-local
-settings from the ignored `out/dev-loop.env`; see `scripts/env.sh` for the
-keys. Never commit the builder host, its paths, serials or MACs.
+settings from the ignored `local/dev/dev-loop.env`, with the existing
+`out/dev-loop.env` path retained as a fallback. Run `just local-init` for a
+template, and see `scripts/env.sh` for the keys. Never commit the builder host,
+its paths, serials or MACs.
 
 ## 1. Pick work
 
@@ -39,7 +41,7 @@ keys. Never commit the builder host, its paths, serials or MACs.
 
 - The builder only sees commits: commit, then `scripts/builder-sync.sh`
   (pushes `HEAD` to `$FERRIX_REMOTE_BRANCH` and fast-forwards there). Access
-  notes for the owner's builder are in the ignored `DEBA_ACCESS.local.txt`.
+  notes for a builder belong in ignored `local/dev/`.
 - Every builder run goes through `tools/pixel-9a/attempt-env.sh` (UTC stamp +
   named capacity TSV) and `tools/pixel-9a/native-builder.sh run kernel|product|dev-compose build`
   with its typed acknowledgement variable. The scripts do this for you.
@@ -50,8 +52,11 @@ keys. Never commit the builder host, its paths, serials or MACs.
   normal. Only rebuild the kernel when patches or the defconfig fragment
   changed; otherwise the last kernel attempt (`/tmp/ferrix-attempt` on the
   builder) is reused.
-- Mali modules are skipped (`FERRIX_PIXEL9A_DEV_MODULES_SKIP=mali_kbase,mali_pixel`);
-  rendering is software. See issue #4 before touching that.
+- Mali: `mali_kbase`/`mali_pixel` load on every boot (eudev modalias
+  coldplug; `ferrix.modules_skip` only filters the initramfs lists). The CSF
+  firmware is staged from the factory image (`gpu-mali` in the firmware
+  allowlist). Product rendering is still software. GPU work is tracked in
+  issues #4 and #19; read `targets/boards/…/gpu-research.md` first.
 
 ## 3. Get code onto the phone
 

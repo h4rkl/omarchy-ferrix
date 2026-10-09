@@ -19,3 +19,5 @@ wifi-bcm4383	vendor.img	/firmware/bcmdhd_txcap.blob_4383_a3	lib/firmware/bcmdhd_
 bluetooth-broadcom	vendor.img	/firmware/brcm/BCM.hcd	lib/firmware/brcm/BCM.hcd
 modem-s5300	vendor.img	/firmware/carrierconfig	lib/firmware/carrierconfig	bundle
 modem-s5300	vendor.img	/firmware/uecapconfig	lib/firmware/uecapconfig	bundle
+gpu-mali	vendor.img	/firmware/mali_csffw-r51p0.bin	lib/firmware/mali_csffw-r52p0.bin
+gpu-mali	vendor.img	/firmware/mali_csffw-r51p0.bin	lib/firmware/mali_csffw.bin

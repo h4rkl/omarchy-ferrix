@@ -588,7 +588,8 @@ Images and logs stay under ignored `out/`; serials are redacted.
   `ec8c4015ad162da7e7916b6ca95739042a74159b` with the same named
   capacity handoff. Source verification passed, but the kernel build was
   stopped with exit 143 after the missing exact-target overlay was found;
-  it produced no image candidate. Its ignored kernel log remains on deba.
+  it produced no image candidate. Its ignored kernel log remains on the native
+  builder.
   Product, rootfs, boot-input, and image stages were not started for this
   attempt. The later exact-MP DTBO gate is a new source contract and needs a
   separate source-bound attempt after the overlay/base-tree work is complete.
@@ -786,7 +787,8 @@ Images and logs stay under ignored `out/`; serials are redacted.
   attempt. The mobile-device playbook and target README state that policy, and
   the native wrapper forwards separate attempt-specific kernel, product, and
   rootfs output paths. Its offline test passed. The reviewed source commit is
-  `29eb332d54505e0c1fccb84482915d810277c95c` on native deba Linux x86_64.
+  `29eb332d54505e0c1fccb84482915d810277c95c` on the native Linux x86_64
+  builder.
 - Attempt `20260930T032948Z` freshly built a radio kernel (manifest SHA-256
   `578c0e35bdafe7ee11b4475ffe58470ef9a309a473ee21b128dbd29827a3d809`),
   product (manifest SHA-256
@@ -864,7 +866,8 @@ Images and logs stay under ignored `out/`; serials are redacted.
   The broader inventory is still `partial`, and this targeted read-only map
   authorizes no format, flash, or user-data wipe.
 - **Native build and validation:** The fresh source-pinned radio kernel rebuild
-  completed on deba Linux x86_64. Its ignored `build-manifest.tsv` SHA-256 is
+  completed on the native Linux x86_64 builder. Its ignored
+  `build-manifest.tsv` SHA-256 is
   `5e45844cab8841f6b3cfe359bafe612db917a480372078b7ea46cffdf8708eec`,
   with the current split-contract hash
   `0af2c011b468cbf97837abca29d666f828109999cb30f4c158534530e202046e`.
@@ -956,8 +959,8 @@ Images and logs stay under ignored `out/`; serials are redacted.
   (SHA-256 `0ee63a7a0432108bcddf893334ca5208fab28f3c47f897a853c5e708926d549f`).
   No post-restore static or ten-partition capacity handoff was published;
   the pre-restore static capacity file is historical only.
-- **Native builder refusal:** The authorized `deba` Linux x86_64 checkout at
-  `/home/ezy/github-projects/omarchy-ferrix` remains clean at `26fc9f9`.
+- **Native builder refusal:** The authorized native Linux x86_64 checkout
+  remains clean at `26fc9f9`.
   `tools/pixel-9a/native-builder.sh run boot-radio preflight` refused:
   `FAIL pixel-9a-radio-boot: radio kernel manifest split-artifact contract hash differs from the checked-in contract`.
   The existing kernel manifest names SHA-256 `221347949752c3a7865264958bd5ad58e0fec1f9a080630902b3c384488bac12`;
@@ -1089,7 +1092,7 @@ Images and logs stay under ignored `out/`; serials are redacted.
   observations do not establish free extents or authorize allocation changes.
   Ignored evidence:
   `out/pixel-9a/partition-capacity-diagnostic-20260930T000913Z-36717.txt`.
-- **Builder read-only evidence:** deba remains at
+- **Builder read-only evidence:** The native builder remains at
   `26fc9f9beb1d1faf041a8d4df71fe6142353c133` with built source inputs. Empty
   selected module policies and generated load lists, together with built-in
   Exynos UFS, ext4, USB, display, and radio drivers, support investigating an
@@ -1265,7 +1268,7 @@ Images and logs stay under ignored `out/`; serials are redacted.
   but it is not reporting userspace Fastboot. No capacity handoff was
   published and no reboot, flash, slot change, or gate bypass occurred.
   Per the provisioning playbook, the run stopped pending owner-entered
-  Fastbootd. Deba was not used for any USB/device operation.
+  Fastbootd. The native builder was not used for any USB/device operation.
 
 ## 2026-09-30 (owner-entered Fastbootd, transport not visible)
 
@@ -1304,7 +1307,8 @@ Images and logs stay under ignored `out/`; serials are redacted.
   inventory and reviewed rootfs mapping gates. No reboot, temporary boot,
   flash, slot change, or gate bypass occurred.
 - **Validation and builder:** host/tool checks and all provisioning-playbook
-  prerequisite workflow tests passed (stub evidence only). Deba remains at
+  prerequisite workflow tests passed (stub evidence only). The native builder
+  remains at
   `26fc9f9` with the previously verified boot-input manifest; it has no final
   split boot manifest or complete capacity handoff. Device transcripts remain
   ignored under `out/device/` and `out/pixel-9a/`; no generated output or
@@ -1313,7 +1317,7 @@ Images and logs stay under ignored `out/`; serials are redacted.
 ## 2026-09-30 (native boot-input retry passed)
 
 - **Source synchronization:** selector correction `206b41f` was pushed and
-  fast-forwarded into the clean `deba` build checkout. The checked-in native
+  fast-forwarded into the clean native build checkout. The checked-in native
   builder's boot-input preflight and build both passed. No phone operation
   ran and no recovery or hardware capability was promoted.
 - **Unchanged substrate:** the rootfs archive remains SHA-256
@@ -1343,9 +1347,8 @@ Images and logs stay under ignored `out/`; serials are redacted.
 ## 2026-09-30 (source synchronization and native boot-input failure)
 
 - **Source synchronization:** `7075934` was committed, pushed to the canonical
-  repository, and fast-forwarded into the clean native builder checkout at
-  `/home/ezy/github-projects/omarchy-ferrix`. The older Orca `remora` worktree
-  was left unchanged.
+  repository, and fast-forwarded into the clean native builder checkout.
+  An older local worktree was left unchanged.
 - **Native result:** the boot-input preflight passed, but construction stopped
   with `FAIL pixel-9a-boot-inputs: rootfs BusyBox is not an AArch64 executable`.
   No completed boot-input output was published and no device operation ran.
@@ -1378,13 +1381,12 @@ Images and logs stay under ignored `out/`; serials are redacted.
 
 ## 2026-09-30 (native builder access restored)
 
-- **Builder connectivity:** SSH to the authorized `deba` host now succeeds.
+- **Builder connectivity:** SSH to the authorized native builder now succeeds.
   The host reports Linux x86_64; the existing native builder's
   `tools/pixel-9a/native-builder.sh run env check build` passed. No host tools
   were installed and no phone transport was exposed to the builder.
-- **Workspace reconciliation:** the clean builder checkout at
-  `/home/ezy/github-projects/omarchy-ferrix` is at `9728c29`, matching the
-  Mac's committed baseline. The suggested Orca `remora` worktree is clean
+- **Workspace reconciliation:** the clean builder checkout is at `9728c29`,
+  matching the Mac's committed baseline. An older local worktree is clean
   but older (`1354afd`) and has no `out/pixel-9a` outputs. Neither checkout
   was switched or overwritten.
 - **Existing handoffs located:** kernel, product, and rootfs manifest hashes
@@ -1481,7 +1483,7 @@ Images and logs stay under ignored `out/`; serials are redacted.
   Firmware is still ignored/generated and was consumed only through its
   verified external manifest.
 - **Native build host:** The exact-target product, radio-first kernel, and
-  postmarketOS rootfs were built on the authorized native Linux x86_64 `deba`
+  postmarketOS rootfs were built on the authorized native Linux x86_64
   builder. No ADB, Fastboot, USB, temporary boot, or physical-device command
   was used by the build.
 - **Radio-first kernel handoff:** The source-pinned Kbuild revision is
@@ -1582,7 +1584,7 @@ Images and logs stay under ignored `out/`; serials are redacted.
   handoff must be inspected before rootfs construction.
 - **Current boundary:** The corrected radio-kernel build was launched on the
   native `x86_64` builder, but the build host is temporarily unreachable from
-  this session (`deba` DNS/Tailscale transport failure). Its completion is
+  this session (builder transport failure). Its completion is
   intentionally unclaimed, and the radio-first rootfs remains unbuilt. No
   temporary boot, persistent flash, or physical radio evidence exists.
 - **Local validation:** The target-scoped environment, kernel-route, firmware,
@@ -1591,13 +1593,10 @@ Images and logs stay under ignored `out/`; serials are redacted.
 
 ## 2026-09-29 (native remote builder handoff and radio-first flash route)
 
-- **Build host:** The supplied `ezy@deba` endpoint is a native Linux
-  `x86_64` host (`Linux 7.2.5-3-omarchy`) with roughly 893 GiB free under
-  `/home`. The repository is cloned at
-  `/home/ezy/github-projects/omarchy-ferrix`. This satisfies the physical
-  architecture and disk-space gate; it is distinct from the rejected
-  Apple-Silicon OrbStack/UTM emulation path. Docker access is now enabled for
-  `ezy`; the pinned target builder image
+- **Build host:** The authorized native Linux `x86_64` builder had sufficient
+  disk space for the recorded build. This satisfied the physical architecture
+  and disk-space gate for that attempt. Docker access was enabled for the
+  builder account; the pinned target builder image
   `ferrix-pixel9a-builder:rust-1.98.1` was built on the native engine as
   `linux/amd64` (`sha256:a12eaf304773edb45590e7a0a764ca3b6465649bacd10aeadde136de098fd7c2`).
   Its device-free `env check build`, radio-kernel, product, and rootfs

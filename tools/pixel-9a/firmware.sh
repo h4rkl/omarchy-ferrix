@@ -93,6 +93,8 @@ check_policy() {
     die "firmware policy must name the pinned Nitrous module output"
   grep -q '^kernel_driver = "cpif"$' "$policy" ||
     die "firmware policy must name the pinned S5300 primary module output"
+  grep -q '^kernel_driver = "mali_kbase"$' "$policy" ||
+    die "firmware policy must name the pinned Mali kbase module output"
 }
 
 validate_allowlist() {

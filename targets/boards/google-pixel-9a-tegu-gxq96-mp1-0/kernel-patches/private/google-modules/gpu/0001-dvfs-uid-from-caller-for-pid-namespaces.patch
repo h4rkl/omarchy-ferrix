@@ -1,0 +1,33 @@
+diff --git a/mali_kbase/platform/pixel/pixel_gpu_dvfs_metrics.c b/mali_kbase/platform/pixel/pixel_gpu_dvfs_metrics.c
+--- a/mali_kbase/platform/pixel/pixel_gpu_dvfs_metrics.c
++++ b/mali_kbase/platform/pixel/pixel_gpu_dvfs_metrics.c
+@@ -266,8 +266,6 @@ int gpu_dvfs_kctx_init(struct kbase_context *kctx)
+ 	struct kbase_device *kbdev = kctx->kbdev;
+ 	struct pixel_context *pc = kbdev->platform_context;
+ 	struct pixel_platform_data *pd = kctx->platform_data;
+-	struct task_struct *task;
+-	struct pid *pid;
+ 	kuid_t uid;
+ 	u8 uid_hash;
+ 	unsigned long flags;
+@@ -275,12 +273,14 @@ int gpu_dvfs_kctx_init(struct kbase_context *kctx)
+ 	struct gpu_dvfs_metrics_uid_stats *stats = NULL;
+ 	int ret = 0;
+ 
+-	/* Get UID from task_struct */
+-	pid = find_get_pid(kctx->kprcs->tgid);
+-	task = get_pid_task(pid, PIDTYPE_TGID);
+-	uid = task->cred->uid;
+-	put_task_struct(task);
+-	put_pid(pid);
++	/*
++	 * Ferrix: take the UID from the caller. Contexts are created from the
++	 * owning process's ioctl, so current is that process. The upstream
++	 * find_get_pid(kctx->kprcs->tgid) looks the init-namespace TGID up in
++	 * the caller's PID namespace; inside a container (Waydroid/LXC) that
++	 * returns NULL and task->cred oopses the kernel.
++	 */
++	uid = current_uid();
+ 	uid_hash = gpu_dvfs_hash_uid_stats(__kuid_val(uid));
+ 
+ 	mutex_lock(&kbdev->kctx_list_lock);

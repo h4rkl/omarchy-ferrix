@@ -6,6 +6,10 @@ out := env_var_or_default("FERRIX_OUT_DIR", root + "/out") + "/qemu-aarch64"
 host-check:
     @"{{root}}/tools/dev/check.sh"
 
+# Prepare ignored per-developer notes and settings without touching builds.
+local-init:
+    @sh "{{root}}/tools/dev/local-init.sh"
+
 license-check:
     @sh "{{root}}/tools/dev/license-check.sh"
 

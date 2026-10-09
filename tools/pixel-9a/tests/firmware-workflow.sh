@@ -24,7 +24,8 @@ allowlist="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/firmware-stage-
 grep -q '^kernel_driver = "bcmdhd4383"$' "$policy"
 grep -q '^kernel_driver = "nitrous"$' "$policy"
 grep -q '^kernel_driver = "cpif"$' "$policy"
-awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 11 ? 0 : 1) }' "$allowlist"
+grep -q '^kernel_driver = "mali_kbase"$' "$policy"
+awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 13 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 5 && $5 == "bundle" { count++ } END { exit(count == 2 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && (NF == 4 || (NF == 5 && $5 == "bundle")) { if (seen[$4]++) bad=1 } END { exit(bad ? 1 : 0) }' "$allowlist"
 awk -F '\t' '$1 == "bluetooth-broadcom" && $2 == "vendor.img" && $3 == "/firmware/brcm/BCM.hcd" && $4 == "lib/firmware/brcm/BCM.hcd" { found=1 } END { exit(found ? 0 : 1) }' \
@@ -32,6 +33,8 @@ awk -F '\t' '$1 == "bluetooth-broadcom" && $2 == "vendor.img" && $3 == "/firmwar
 awk -F '\t' '$1 == "wifi-bcm4383" && $2 == "vendor.img" && $3 == "/firmware/bcmdhd.cal_4383_a3" && ($4 == "lib/firmware/bcmdhd.cal" || $4 == "lib/firmware/bcmdhd.cal_4383_a3") { count++ } END { exit(count == 2 ? 0 : 1) }' \
   "$allowlist" >/dev/null
 awk -F '\t' '$1 == "wifi-bcm4383" && $2 == "vendor.img" && $3 == "/firmware/bcmdhd_clm.blob_4383_a3" && ($4 == "lib/firmware/bcmdhd_clm.blob" || $4 == "lib/firmware/bcmdhd_clm.blob_4383_a3") { count++ } END { exit(count == 2 ? 0 : 1) }' \
+  "$allowlist" >/dev/null
+awk -F '\t' '$1 == "gpu-mali" && $2 == "vendor.img" && $3 == "/firmware/mali_csffw-r51p0.bin" && ($4 == "lib/firmware/mali_csffw-r52p0.bin" || $4 == "lib/firmware/mali_csffw.bin") { count++ } END { exit(count == 2 ? 0 : 1) }' \
   "$allowlist" >/dev/null
 awk -F '\t' '$1 == "modem-s5300" && $2 == "vendor.img" && $3 == "/firmware/carrierconfig" && $4 == "lib/firmware/carrierconfig" && $5 == "bundle" { found=1 } END { exit(found ? 0 : 1) }' \
   "$allowlist" >/dev/null
