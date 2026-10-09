@@ -48,7 +48,14 @@ RGBA8 FBO with `glFinish` after each frame.
 | renderer | ms/frame | fps |
 | --- | --- | --- |
 | SwiftShader via ANGLE (Waydroid LOS20 system EGL) | 22.50 | 44 |
-| Mali-G715, stock `libGLES_mali.so` r54p3 (GLES 3.2) | 2.87 | 349 |
+| Mali-G715, stock `libGLES_mali.so` r54p3 (GLES 3.2), host PID namespace, unpatched kernel | 2.87 | 349 |
+| SwiftShader, inside the Waydroid container | 21.81 | 46 |
+| Mali-G715, inside the Waydroid container, patched kernel | 1.63–2.12 | 470–613 |
+
+Inside the container on the patched kernel, the blob ran with only
+`LD_LIBRARY_PATH` pointing at the CP3A vendor `lib64` (the vendor
+`libbinder.so` hidden so the Android 13 one loads). It needed no allocator
+service and no VINTF change. GPU DVFS reported 419 MHz under load.
 
 The Mali run loaded the CP3A vendor `lib64` from an Android 13 bionic process
 inside the Waydroid rootfs. It needed:
@@ -85,9 +92,8 @@ Waydroid GPU use panics the phone.
 
 ## Recommendation and next steps
 
-1. Land the kernel patch and CSF firmware staging (done in this change),
-   rebuild the kernel, and confirm a GPU context created inside the Waydroid
-   container no longer oopses.
+1. Done: the kernel patch and CSF firmware staging are flashed, and a GPU
+   context created inside the Waydroid container no longer oopses.
 2. Build a Waydroid `lineage-23.2` arm64_only system/vendor image on the
    builder. The owner must decide this: it needs `repo` and `git-lfs` on the
    builder, roughly 300 GB of disk and several hours. Then add the CP3A vendor

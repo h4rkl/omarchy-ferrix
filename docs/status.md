@@ -1,5 +1,53 @@
 # Status
 
+## 2026-10-10 (Pixel 9a: Mali GPU runs in the Waydroid container; panel-accurate safe area; physical)
+
+- **Baseline browser (physical:google-pixel-9a-tegu-gxq96-mp1-0):** Fulguris
+  on SwiftShader (`ANGLE … SwiftShader Device`) scrolls at p50/p95 frame
+  times of 81/101 ms (about 12 fps, 95 % janky, 56 % of 8 CPUs busy). CPU
+  DVFS was checked and is not the cause.
+- **GPU bring-up:** `mali_kbase` r52p0 loads on every boot (eudev coldplug;
+  `ferrix.modules_skip` only filters initramfs lists, so the stale skip
+  default was dropped). The CSF firmware `vendor.img:/firmware/mali_csffw-r51p0.bin`
+  from the pinned CP3A package is staged as `mali_csffw-r52p0.bin` and
+  `mali_csffw.bin` (`gpu-mali` firmware controller). The kernel logs
+  `Firmware boot completed`, and DVFS runs (419 MHz under load).
+- **Kernel fix:** creating a GPU context from inside Waydroid's PID namespace
+  oopsed the kernel in `gpu_dvfs_kctx_init`, which looked the owner TGID up
+  in the caller's namespace. Reproduced twice (pstore `KP: Oops … egltest`).
+  `kernel-patches/private/google-modules/gpu/0001-…` uses `current_uid()`.
+  On the patched kernel the same run inside the container is clean.
+- **Offscreen GL in the container (4 blended 1080x2292 layers per frame):**
+  the stock CP3A `libGLES_mali.so` (GLES 3.2, r54p3) takes 1.6–2.1 ms per
+  frame; Waydroid's SwiftShader takes 21.8 ms. That is about 10–13×.
+  Framework rendering is unchanged: LineageOS 20 (Android 13) cannot load
+  the vendor's stable-C mapper (`mapper.pixel.so`). Declaring the vendor
+  allocator crash-loops SurfaceFlinger (`gralloc-mapper is missing`), which
+  made the panel flicker; that experiment was reverted. Fulguris stays on
+  SwiftShader. The next step is an Android 14+ Waydroid image; see
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/gpu-research.md` and
+  issue #19.
+- **Safe area from the factory overlay:** cutout circle at (540, 86) r 41.5,
+  corners r 115, stock status bar 52dp at density 420. The profile is now
+  top 137 / bottom 72: the client area is 1080x2215, the bottom inset equals
+  the home-gesture zone, and Waydroid runs at density 420. `ferrix-shell`
+  draws the home indicator in the bottom inset for windows without a Ferrix
+  pill (Waydroid).
+  - Before: app content started under the camera, and the lower part of
+    Waydroid's nav bar sat inside the gesture zone, so taps there went Home.
+  - Framebuffer and webcam captures, inspected: home, and Fulguris's first
+    run (left for the owner to accept).
+- **Fixes found on the way:**
+  - `ferrix-ui` panicked copying into SCTK's 64-byte-rounded shm slice at
+    heights such as 2215, which crash-looped home.
+  - The home grid now lifts or shrinks to stay above the footer.
+  - The radio firmware gate allowlist lists the GPU firmware; without it the
+    gate failed closed and kept the product down.
+- **Limitations:** only the Mali offscreen path is proven; no Android
+  framework or browser acceleration yet. Wi-Fi credentials were lost with
+  the userdata reflash, so these captures were made disconnected. `qemu-check`
+  covers the software path only.
+
 ## 2026-10-10 (Terminal and shared keyboard: key repeat, selection and clipboard, scrollbar, bell and title, non-US layouts; QEMU only)
 
 - **Key repeat (`ferrix-ui`):** `keyboard::KeyRepeat` is a pure timer. A
