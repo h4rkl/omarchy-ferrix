@@ -59,6 +59,7 @@ source="
 	ferrix-s5300-mounts.initd
 	ferrix-radio-firmware.initd
 	ferrix-bluetooth-uart.initd
+	ferrix-contactsd.initd
 	exynos-modem.initd
 	sit-proxy.initd
 	99-google-tegu-sit.rules
@@ -112,6 +113,8 @@ package() {
 		"$pkgdir"/etc/init.d/ferrix-radio-firmware
 	install -Dm755 "$srcdir"/ferrix-bluetooth-uart.initd \
 		"$pkgdir"/etc/init.d/ferrix-bluetooth-uart
+	install -Dm755 "$srcdir"/ferrix-contactsd.initd \
+		"$pkgdir"/etc/init.d/ferrix-contactsd
 	install -Dm755 "$srcdir"/exynos-modem.initd \
 		"$pkgdir"/etc/init.d/exynos-modem
 	install -Dm755 "$srcdir"/sit-proxy.initd \
@@ -124,7 +127,7 @@ package() {
 	# user-session processes rather than system daemons. UPower is D-Bus
 	# activated and deliberately has no OpenRC runlevel link on Alpine.
 	mkdir -p "$pkgdir"/etc/runlevels/default
-	for service in dbus udev ferrix-radio-firmware networkmanager ferrix-s5300-mounts exynos-modem sit-proxy modemmanager ferrix-bluetooth-uart bluetooth seatd ferrix-core ferrix-networkd ferrix-telephonyd ferrix-audio ferrix-product; do
+	for service in dbus udev ferrix-radio-firmware networkmanager ferrix-s5300-mounts exynos-modem sit-proxy modemmanager ferrix-bluetooth-uart bluetooth seatd ferrix-core ferrix-networkd ferrix-telephonyd ferrix-contactsd ferrix-audio ferrix-product; do
 		ln -sf /etc/init.d/$service "$pkgdir"/etc/runlevels/default/$service
 	done
 }
@@ -147,11 +150,12 @@ e7b3709d984b5a4bf0dda54ea67232ca46d1b7858576722b04f26e3cb687e743cf63344f94a24f0c
 399be7eb464c4e9f6dc7450e887d00e9af790e5874843b0b134d831ffa4178dfa6e6032748edb295668ccb5ce0fd4f530948a5de8e6482f55bf6023969ca1fcc  ferrix-networkd.initd
 a26cd676321a658c719f9b53fcf6099031c22bbd874794f79d551966f6680683ce2f37674bbd284d769c603d335a34c65e17e30f2e9507140910008d6a11d90c  ferrix-telephonyd.initd
 4d3d90b85c71e7333b41feb766cf87659885672ff126261fc8679db217d15f95aa9810a67adee37dff63acd56b1a162f45904892aeec6e47ab4bf34f62ec768b  ferrix-audio.initd
-cddfe7056aa86aadac5208d4c8e881c04b56bc833507d44e540f162dee3ff4ac2b757b490738b8355f209f73e18656a65a8fe0d14e9713befcc23085f7ff08fe  ferrix-product.initd
+0c67dc1105bd7f465556ce7fc666d2c68114dced87f38c2c9c3503df967f195ed863fee034e9cda62a35e109f824d22f3bd1de18d7aff5d9dc8b072a36f987c3  ferrix-product.initd
 501e1b3b461fce267ed729d4fb0d02ce2a4ba27c2db9143fe9857d4784881db0d46d7619b390a9cb504094a79b8fa7c0dd17f5df8e7ffcbb76315fa74e4a3a9b  ferrix-android.initd
 62ee79f318bc06fe3a6b9bbe2d564577c92754f828030415c309a7dfb512efdd80f71e7df8a0e5dc210c3086620a270be4c4ad4b878d4f3b2a89f09f3d87774b  ferrix-s5300-mounts.initd
 c4e81f9a0e463d25fdcd69ab635838e29f5a95f389ef52bb978864daeeeabd220e4fafccf9ff85149e38d2166530881cc24eb3bc2d21c7293c52febe5c4df36a  ferrix-radio-firmware.initd
 399c310705ec2412a190a958592213234dcbedd4d84b4405e18441d3d9560a545721b1ea53c5a24346d071131cf1692a08cf76ef9b3b90c61e135716f9328cdb  ferrix-bluetooth-uart.initd
+4f238070884a16c0df4f2a83652c0735a08c8f881fb7b9e59c5a6a594b69cbb5b7338c13b53042e3d3ba2b73e85d91c2d9f3e968024bfd750aafeba6b20dbc12  ferrix-contactsd.initd
 391987e6cd7692efe7440bcadb7089f71b3edb0dd4c3c23c72986ea214aa9deb607055d23f84a97db59265bdcf9025be2f4af18faf6599b63349deb844ed35fe  exynos-modem.initd
 a412595cb70017a359114a3388ebee998964ee37b9c8e55237693741bc9dd9b403f4b1a528be073e3adf73cc10fe853b67aa8504080ff84769cacfeb875d009e  sit-proxy.initd
 4a86a4c43172c61e06688dc7e579c29bdbc254524d38fa07516d7bb9d78238c84daf8d754584d75d885bbed9ec6627c7ef8b90a89667849845edc32f3f4fa0dd  99-google-tegu-sit.rules

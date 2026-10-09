@@ -15,7 +15,7 @@ appd_pidfile=/run/ferrix/ferrix-appd.pid
 shell_pidfile=/run/ferrix/ferrix-shell.pid
 
 depend() {
-	need ferrix-core ferrix-networkd ferrix-telephonyd ferrix-radio-firmware seatd
+	need ferrix-core ferrix-networkd ferrix-telephonyd ferrix-contactsd ferrix-radio-firmware seatd
 	use ferrix-audio
 	after dbus udev networkmanager modemmanager bluetooth ferrix-s5300-mounts exynos-modem sit-proxy
 }

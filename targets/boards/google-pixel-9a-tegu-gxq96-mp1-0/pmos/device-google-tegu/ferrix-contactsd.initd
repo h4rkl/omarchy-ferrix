@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+export FERRIX_TARGET FERRIX_EVIDENCE
+
+name="Ferrix contacts store"
+description="Owns the user's contacts; apps reach it through their grants"
+command="/usr/bin/ferrix-contactsd"
+command_args="--socket /run/ferrix/contactsd.sock --data-dir /var/lib/ferrix/contacts --appd /run/ferrix/ferrix-appd.sock"
+command_background="yes"
+pidfile="/run/ferrix-contactsd.pid"
+output_log="/var/log/ferrix-contactsd.log"
+error_log="/var/log/ferrix-contactsd.err"
+
+depend() {
+	after udev
+	# Apps get only sockets that exist when they launch (private-run).
+	before ferrix-product
+}
+
+start_pre() {
+	checkpath -d -m 0755 /run/ferrix /var/log
+	checkpath -d -m 0700 /var/lib/ferrix/contacts
+}
+
+start_post() {
+	. /usr/lib/ferrix/openrc.sh
+	ferrix_grant_socket /run/ferrix/contactsd.sock
+}
