@@ -301,12 +301,15 @@ build_kernel() {
   mkdir -p "$source_root/ferrix"
   cp "$gki_fragment" "$source_root/ferrix/ferrix_gki_defconfig"
   printf '%s\n' 'exports_files(["ferrix_gki_defconfig"])' >"$source_root/ferrix/BUILD.bazel"
+  # Overrides follow the --config expansions: device.bazelrc's tegu config
+  # sets --use_prebuilt_gki=true, and Bazel keeps the last value.
   set -- --output_user_root="$bazel_cache" run \
     --kernel_package=@//aosp \
-    --use_prebuilt_gki=false \
-    --defconfig_fragment=//ferrix:ferrix_gki_defconfig \
     --config=stamp \
     --config=tegu \
+    --use_prebuilt_gki=false \
+    --use_signed_prebuilts=false \
+    --defconfig_fragment=//ferrix:ferrix_gki_defconfig \
     //private/devices/google/tegu:zumapro_tegu_dist \
     -- --destdir="$dist"
   printf '%s\n' "+ cd $source_root"
