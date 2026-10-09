@@ -398,11 +398,7 @@ impl Model {
         match &self.listing {
             Ok(l) => {
                 let n = l.entries.len() + l.truncated;
-                let mut text = if n == 1 {
-                    "1 item".to_owned()
-                } else {
-                    format!("{n} items")
-                };
+                let mut text = item_count(n);
                 if l.hidden > 0 {
                     text.push_str(&format!(" \u{b7} {} hidden", l.hidden));
                 }
@@ -448,8 +444,7 @@ impl Model {
             Some(n) if n > crate::store::CHILD_COUNT_LIMIT => {
                 format!("{}+ items", crate::store::CHILD_COUNT_LIMIT)
             }
-            Some(1) => "1 item".to_owned(),
-            Some(n) => format!("{n} items"),
+            Some(n) => item_count(n),
             None => "folder".to_owned(),
         }
     }
@@ -468,10 +463,19 @@ impl Model {
     /// `ui-state` value: depth and counts only, never names.
     pub fn state_name(&self) -> String {
         let listing = match &self.listing {
-            Ok(l) => format!("{} items", l.entries.len()),
+            Ok(l) => item_count(l.entries.len()),
             Err(e) => e.code().to_owned(),
         };
         format!("depth {} \u{b7} {listing}", self.cwd.len())
+    }
+}
+
+/// `1 item`, `3 items`.
+fn item_count(n: usize) -> String {
+    if n == 1 {
+        "1 item".to_owned()
+    } else {
+        format!("{n} items")
     }
 }
 
