@@ -26,6 +26,7 @@ are installed into the rootfs and loaded by /init. Runs on the Linux build host
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -241,6 +242,128 @@ def install_modules(image, stage, release):
     run("e2fsck", "-fn", image, capture=True)
 
 
+class RootfsEditor:
+    """Batches file writes and text patches into the ext4 image via debugfs."""
+
+    def __init__(self, image, work):
+        self.image = image
+        self.work = work / "rootfs-edit"
+        self.work.mkdir()
+        self.script = []
+        self.count = 0
+
+    def _stage(self, data):
+        self.count += 1
+        path = self.work / f"f{self.count}"
+        path.write_bytes(data)
+        return path
+
+    def mkdir_p(self, dest):
+        parts = [part for part in dest.split("/") if part]
+        for index in range(1, len(parts) + 1):
+            path = "/" + "/".join(parts[:index])
+            if debugfs_type(self.image, path) is None and f"mkdir {path}" not in self.script:
+                self.script.append(f"mkdir {path}")
+
+    def put(self, data, dest, mode):
+        self.mkdir_p(dest.rsplit("/", 1)[0])
+        source = self._stage(data)
+        self.script += [f"rm {dest}", f"write {source} {dest}",
+                        f"sif {dest} mode 0{0o100000 | mode:o}",
+                        f"sif {dest} uid 0", f"sif {dest} gid 0"]
+
+    def read(self, path):
+        target = self.work / f"r{self.count}"
+        self.count += 1
+        run("debugfs", "-R", f"dump -p {path} {target}", self.image, capture=True)
+        return target.read_text() if target.exists() else ""
+
+    def patch(self, path, edit, mode=0o644):
+        before = self.read(path)
+        after = edit(before)
+        if after != before:
+            self.put(after.encode(), path, mode)
+
+    def commit(self):
+        if self.script:
+            run("debugfs", "-w", "-f", "-", self.image, capture=True,
+                stdin="\n".join(self.script) + "\n")
+
+
+def gki_rootfs_patches():
+    """Text edits that let the postmarketOS userland run on Google's GKI kernel
+    (no devtmpfs, no VT): returns {path: edit-function}."""
+
+    def udev(text):
+        # /init provides a tmpfs /dev populated by mdev; eudev runs fine on it.
+        return (text
+                .replace("if ! grep -qs devtmpfs /proc/filesystems; then",
+                         "if ! mountinfo -q -f tmpfs /dev && ! grep -qs devtmpfs /proc/filesystems; then")
+                .replace("if ! mountinfo -q -f devtmpfs /dev; then",
+                         "if ! mountinfo -q -f devtmpfs /dev && ! mountinfo -q -f tmpfs /dev; then"))
+
+    def seatd(text):
+        line = "export SEATD_VTBOUND=0"
+        return text if line in text else text.rstrip("\n") + "\n# GKI has no VTs.\n" + line + "\n"
+
+    def group(text):
+        out = []
+        for line in text.splitlines():
+            fields = line.split(":")
+            if len(fields) == 4 and fields[0] in ("seat", "input"):
+                members = [m for m in fields[3].split(",") if m]
+                if "user" not in members:
+                    members.append("user")
+                fields[3] = ",".join(members)
+                line = ":".join(fields)
+            out.append(line)
+        return "\n".join(out) + "\n"
+
+    def inittab(text):
+        # No VTs on GKI; the tty gettys only respawn-fail and leave stray nodes.
+        return "\n".join(f"#{line}" if re.match(r"tty[0-9]+::", line) else line
+                         for line in text.splitlines()) + "\n"
+
+    return {"/etc/init.d/udev": udev, "/etc/conf.d/seatd": seatd,
+            "/etc/group": group, "/etc/inittab": inittab}
+
+
+# Same destinations rootfs.sh stages the product to.
+PRODUCT_BINARIES = (
+    "ferrix-core", "ferrix-shell", "ferrix-basic-screen", "ferrix-appd", "ferrix-sandbox",
+    "ferrix-terminal", "ferrix-telephonyd", "ferrix-networkd", "ferrix-contactsd",
+    "ferrix-phone", "ferrix-messages", "ferrix-contacts", "ferrix-settings",
+)
+
+
+def integrate_rootfs(image, work, package, profile, product):
+    """Bring the base rootfs up to date with this checkout: product binaries,
+    profile and app catalog, the device package's service scripts, and the
+    GKI userland patches. Returns the files written, for the manifest."""
+    editor = RootfsEditor(image, work)
+    written = []
+    if product is not None:
+        for name in PRODUCT_BINARIES:
+            editor.put((product / name).read_bytes(), f"/usr/bin/{name}", 0o755)
+            written.append(f"/usr/bin/{name}")
+        editor.put((product / "colors.toml").read_bytes(), "/etc/ferrix/colors.toml", 0o644)
+        for descriptor in sorted((product / "apps").glob("*.json")):
+            editor.put(descriptor.read_bytes(), f"/usr/share/ferrix/apps/{descriptor.name}", 0o644)
+        written += ["/etc/ferrix/colors.toml", "/usr/share/ferrix/apps/*.json"]
+    editor.put(profile.read_bytes(), "/etc/ferrix/profile.toml", 0o644)
+    editor.put((package / "ferrix-openrc.sh").read_bytes(), "/usr/lib/ferrix/openrc.sh", 0o644)
+    for script in sorted(package.glob("ferrix-*.initd")):
+        dest = f"/etc/init.d/{script.stem}"
+        editor.put(script.read_bytes(), dest, 0o755)
+        written.append(dest)
+    for path, edit in gki_rootfs_patches().items():
+        editor.patch(path, edit, 0o755 if path.startswith("/etc/init.d/") else 0o644)
+        written.append(path)
+    editor.commit()
+    run("e2fsck", "-fn", image, capture=True)
+    return written
+
+
 def main():
     env = os.environ.get
     repo = Path(__file__).resolve().parents[2]
@@ -269,7 +392,11 @@ def main():
                         help="load only the first N first-stage modules (bisection)")
     parser.add_argument("--modules-skip", default=env("FERRIX_PIXEL9A_DEV_MODULES_SKIP", ""),
                         help="comma-separated module names /init must not load (bisection)")
+    parser.add_argument("--product-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_PRODUCT_DIR"),
+                        help="pixel-9a product build to install over the base rootfs")
     args = parser.parse_args()
+    if args.product_dir is not None and not (args.product_dir / "ferrix-shell").is_file():
+        die(f"product dir has no ferrix-shell: {args.product_dir}")
     if args.modules_skip and not all(part.replace("-", "").replace("_", "").isalnum()
                                      for part in args.modules_skip.split(",")):
         die(f"modules skip must be comma-separated module names: {args.modules_skip}")
@@ -358,6 +485,8 @@ def main():
         rootfs = work / "rootfs.img"
         shutil.copyfile(args.base_rootfs, rootfs)
         install_modules(rootfs, modules, release)
+        integrated = integrate_rootfs(rootfs, work, package, args.target_dir / "dev/profile.toml",
+                                      args.product_dir)
         run(img2simg, rootfs, stage / "userdata.img")
         shutil.rmtree(work)
 
@@ -380,6 +509,8 @@ def main():
             f"input\tinitramfs_modprobe\t{modprobe_script}\t{sha256(modprobe_script)}",
             f"input\treboot_helper\t{reboot_source}\t{sha256(reboot_source)}",
             f"checkpoint\t{args.checkpoint or 'none'}\t{args.checkpoint_action}",
+            f"input\tproduct_dir\t{args.product_dir or 'base-rootfs'}",
+            f"rootfs_integrated\t{len(integrated)}",
             f"input\tvendor_cmdline\t{cmdline}",
             f"input\tvendor_bootconfig\t{bootconfig}\t{sha256(bootconfig)}",
         ]

@@ -19,6 +19,7 @@ dist="$kernel_out/dist"
 manifest="$kernel_out/build-manifest.tsv"
 module_list="$target/pmos/device-google-tegu/modules-initfs"
 config_fragment="$target/kernel-config.tegu"
+gki_fragment="$target/kernel-config.ferrix-gki"
 minimum_kib=${FERRIX_PIXEL9A_KERNEL_MIN_FREE_KIB:-83886080}
 sync_confirmation=I-understand-this-downloads-large-kernel-sources
 
@@ -270,6 +271,7 @@ write_manifest() {
     printf 'source\tmanifest\t%s\n' "$(git -C "$source_root/.repo/manifests" rev-parse HEAD)"
     printf 'source\tsuperproject\t%s\n' "$(git -C "$source_root/.repo/ferrix-superproject" rev-parse HEAD)"
     printf 'config\ttegu_defconfig\t%s\n' "$(sha256_of "$config_fragment")"
+    printf 'config\tferrix_gki_defconfig\t%s\n' "$(sha256_of "$gki_fragment")"
     for name in $(component_names); do
       path=$(source_path "$name")
       printf 'source\t%s\t%s\n' "$name" "$(git -C "$source_root/$path" rev-parse HEAD)"
@@ -294,16 +296,24 @@ build_kernel() {
     die "dist path is not empty; choose a fresh FERRIX_PIXEL9A_KERNEL_OUT: $dist"
   fi
   mkdir -p "$dist" "$bazel_cache"
+  # Ferrix-owned Bazel package for the GKI config fragment; Google's tree is
+  # left untouched.
+  mkdir -p "$source_root/ferrix"
+  cp "$gki_fragment" "$source_root/ferrix/ferrix_gki_defconfig"
+  printf '%s\n' 'exports_files(["ferrix_gki_defconfig"])' >"$source_root/ferrix/BUILD.bazel"
+  set -- --output_user_root="$bazel_cache" run \
+    --kernel_package=@//aosp \
+    --use_prebuilt_gki=false \
+    --defconfig_fragment=//ferrix:ferrix_gki_defconfig \
+    --config=stamp \
+    --config=tegu \
+    //private/devices/google/tegu:zumapro_tegu_dist \
+    -- --destdir="$dist"
   printf '%s\n' "+ cd $source_root"
-  printf '%s\n' "+ tools/bazel --output_user_root=$bazel_cache run --kernel_package=@//aosp --config=stamp --config=tegu //private/devices/google/tegu:zumapro_tegu_dist -- --destdir=$dist"
+  printf '%s\n' "+ tools/bazel $*"
   (
     cd "$source_root"
-    tools/bazel --output_user_root="$bazel_cache" run \
-      --kernel_package=@//aosp \
-      --config=stamp \
-      --config=tegu \
-      //private/devices/google/tegu:zumapro_tegu_dist \
-      -- --destdir="$dist"
+    tools/bazel "$@"
   )
   find "$dist" -type f -print -quit | grep -q . || die "Kleaf completed without dist artifacts"
   verify_required_modules

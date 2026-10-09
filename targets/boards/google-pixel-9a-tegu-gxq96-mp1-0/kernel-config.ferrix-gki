@@ -1,0 +1,10 @@
+# Ferrix additions to Google's GKI defconfig for the tegu Kleaf route, applied
+# with --defconfig_fragment while building GKI from source
+# (--use_prebuilt_gki=false; Kleaf rebuilds the vendor modules against it).
+#
+# ferrix-sandbox requires user and PID namespaces for app isolation
+# (docs/app-platform.md); the prebuilt GKI ships without them.
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+# postmarketOS userspace (eudev, OpenRC devfs) expects a devtmpfs /dev.
+CONFIG_DEVTMPFS=y
