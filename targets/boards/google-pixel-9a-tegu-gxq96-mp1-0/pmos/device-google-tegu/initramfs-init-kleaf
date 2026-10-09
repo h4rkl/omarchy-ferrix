@@ -300,15 +300,18 @@ checkpoint early
 # Load it (and its four dependencies) before the long module list.
 /system/bin/modprobe -q -- s3c2410_wdt || log 's3c2410_wdt did not load'
 checkpoint watchdog
-# GKI has no devtmpfs (Android's ueventd populates a tmpfs /dev), so do the
-# same with busybox mdev on a tmpfs /dev. GKI also lacks CONFIG_UEVENT_HELPER,
-# so there is no hotplug callback: rescan with `mdev -s` wherever this script
-# waits for a device that a module creates.
-$bb mount -t tmpfs -o mode=0755,size=64k tmpfs /dev 2>/dev/null || :
-$bb mknod -m 600 /dev/console c 5 1 2>/dev/null || :
-$bb mknod -m 644 /dev/kmsg c 1 11 2>/dev/null || :
-$bb mknod -m 666 /dev/null c 1 3 2>/dev/null || :
-$bb mdev -s 2>/dev/null || :
+# The Ferrix GKI build (kernel-config.ferrix-gki) has devtmpfs. Without it
+# (the prebuilt GKI), fall back to what Android's ueventd does: a tmpfs /dev
+# populated here with busybox mdev. GKI also lacks CONFIG_UEVENT_HELPER, so
+# rescan with `mdev -s` wherever this script waits for a module's device.
+if ! $bb mount -t devtmpfs devtmpfs /dev 2>/dev/null; then
+	$bb mount -t tmpfs -o mode=0755,size=64k tmpfs /dev 2>/dev/null || :
+	$bb mknod -m 600 /dev/console c 5 1 2>/dev/null || :
+	$bb mknod -m 644 /dev/kmsg c 1 11 2>/dev/null || :
+	$bb mknod -m 666 /dev/null c 1 3 2>/dev/null || :
+	$bb mdev -s 2>/dev/null || :
+	$bb chmod 0666 /dev/null /dev/zero /dev/full /dev/random /dev/urandom /dev/tty 2>/dev/null || :
+fi
 $bb mount -t pstore pstore /sys/fs/pstore 2>/dev/null || :
 release=$($bb uname -r)
 log "kernel $release checkpoint=${checkpoint_target:-none}"

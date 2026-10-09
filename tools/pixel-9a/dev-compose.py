@@ -272,6 +272,10 @@ class RootfsEditor:
                         f"sif {dest} mode 0{0o100000 | mode:o}",
                         f"sif {dest} uid 0", f"sif {dest} gid 0"]
 
+    def remove(self, path):
+        if debugfs_type(self.image, path) is not None:
+            self.script.append(f"rm {path}")
+
     def read(self, path):
         target = self.work / f"r{self.count}"
         self.count += 1
@@ -324,8 +328,20 @@ def gki_rootfs_patches():
         return "\n".join(f"#{line}" if re.match(r"tty[0-9]+::", line) else line
                          for line in text.splitlines()) + "\n"
 
+    def modemmanager(text):
+        # The SIT ModemManager chain belongs to the radio-first WWAN kernel; on
+        # the Kleaf/cpif route ModemManager runs without it (no modem yet).
+        return re.sub(r"^\s*need ferrix-s5300-mounts exynos-modem sit-proxy\n", "", text,
+                      flags=re.M)
+
     return {"/etc/init.d/udev": udev, "/etc/conf.d/seatd": seatd,
-            "/etc/group": group, "/etc/inittab": inittab}
+            "/etc/group": group, "/etc/inittab": inittab,
+            "/etc/init.d/modemmanager": modemmanager}
+
+
+# Radio-first (linux-google-tegu WWAN/SIT) services that cannot run on the
+# Kleaf/cpif kernel; removed from the default runlevel by the Kleaf composer.
+RADIO_ROUTE_SERVICES = ("ferrix-s5300-mounts", "exynos-modem", "sit-proxy")
 
 
 # Same destinations rootfs.sh stages the product to.
@@ -359,6 +375,9 @@ def integrate_rootfs(image, work, package, profile, product):
         dest = f"/etc/init.d/{script.stem}"
         editor.put(script.read_bytes(), dest, 0o755)
         written.append(dest)
+    for service in RADIO_ROUTE_SERVICES:
+        editor.remove(f"/etc/runlevels/default/{service}")
+        written.append(f"-/etc/runlevels/default/{service}")
     for path, edit in gki_rootfs_patches().items():
         editor.patch(path, edit, 0o755 if path.startswith("/etc/init.d/") else 0o644)
         written.append(path)
