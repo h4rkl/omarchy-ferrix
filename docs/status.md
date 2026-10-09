@@ -1,5 +1,59 @@
 # Status
 
+## 2026-10-09 (Files app: home-confined file browser; QEMU framebuffer, shared with Pixel 9a)
+
+- New crate `ferrix-files` (app id `org.ferrix.files`). It lists a folder
+  under `$HOME`: folders first, case-folded names, size or item count, and
+  the local modification date. Dot-entries are hidden and counted in the
+  status strip. The breadcrumb chips (leading folders collapse into `…`)
+  and Back navigate. Text files open read-only in a wrapped monospace
+  viewer (first 256 KB; NUL or non-UTF-8 content reads "Not a text file").
+  A row's trailing `···` opens its details: Open, Rename, and Delete with a
+  confirmation that names the item count. New folder and Rename use the
+  shared `Text` keyboard. Empty, missing-`HOME`, and unreadable-folder
+  states are explicit, and failures show a local notice.
+- Confinement is enforced in the app, not by the sandbox. Folder paths are
+  canonicalized and must stay under the canonical home, entry names are
+  single components, and symlinks that leave home are listed but never
+  followed. A deleted link removes the link only. `HOME` unset, relative,
+  or `/` is refused.
+- Scrolling: `ferrix-ui` has no list scroller, so `ferrix-files/src/scroll.rs`
+  has a self-contained whole-row viewport and position rail, written to be
+  lifted into `ferrix-ui` later. Other apps are unchanged.
+- Descriptor: launchable, `private-run`, no capabilities, and no grants row.
+  The mount namespace replaces only `/proc`, `/tmp`, and `/run`, so `$HOME`
+  stays shared and writable (`docs/app-platform.md`). Camera is now the only
+  reference tile, and the home surface's Files placeholder page is gone.
+- Shipping: `ferrix-files` is in every list that ships `ferrix-contacts`:
+  the QEMU smoke build and manifest, pmOS pre-flight and finalize, the Pixel
+  9a product build and rootfs staging, dev-compose `PRODUCT_BINARIES`, and
+  the workflow tests that pin them. The new tile sorts before Messages, so
+  `qemu-gesture-check` taps Messages at the first tile of row two.
+- Evidence (QEMU, Alpine smoke guest, headless TCG agent session, 1080x2340,
+  `HOME=/root`):
+  - Contacts Export vCard (`contacts-export bytes:1082`), Home, then the
+    Files tile gave `home-launch`, `files-frame committed`, `app-surface`,
+    and `client-activated raised:true` for `org.ferrix.files`.
+  - The frames were inspected. They show `~` with `Documents/ · 1 item`,
+    then `contacts.vcf` open read-only (1.1 KB, all eight synthetic
+    contacts), a drag-scrolled viewer, and a folder created through the
+    virtual keyboard (`files-action create-folder ok`, notice
+    `notes · created`).
+  - `just qemu-check` passed.
+  - `just qemu-gesture-check` passed 2 of 4 runs. The other 2 failed before
+    any gesture, at `agent-session-start-failed` (boot readiness under TCG).
+  - The QEMU sockets need a short output path, so these runs used
+    `FERRIX_OUT_DIR=/tmp/fxf` because the worktree path exceeds the
+    104-byte Unix socket limit.
+  - Host `--preview` renders (`mock`) of all pages were inspected.
+- Not verified: the Pixel 9a. No image was built or flashed and no device
+  was touched, so there is no physical evidence for Files. The pmOS QEMU
+  route was not rebuilt. The Pixel product and rootfs workflow tests pass on
+  the host with the new lists (the rootfs test prints `rg: command not
+  found` at one line on this host and still reports pass). Files has no
+  inotify, so external changes appear at the next minute tick or on
+  Refresh. There is no sandbox-enforced filesystem view yet.
+
 ## 2026-10-09 (Phone, Settings, Contacts user-visible fixes; host previews only)
 
 - Phone: call duration counts from when the app saw the call become active
