@@ -11,7 +11,7 @@
 
 use ferrix_ui::draw::{Canvas, Rect, Style, Type};
 use ferrix_ui::osk::{self, Key};
-use ferrix_ui::theme;
+use ferrix_ui::{theme, widgets};
 
 use crate::interaction::{Target, UiState};
 use crate::terminal::Snapshot;
@@ -44,85 +44,17 @@ pub fn compose(
     let h = height as i32;
     let mut c = Canvas::new(w, h, theme::get().bg);
     let clock = ferrix_ui::clock::hhmm(minute_of_day);
-    let basis = w.min(h);
-    let s = |v: i32| scale(v, basis);
-    clock_strip(&mut c, ty, &clock, s(72), s(40));
-    page_header(&mut c, ty, "Terminal", state);
+    widgets::clock_strip(&mut c, ty, &clock, None);
+    widgets::page_header(
+        &mut c,
+        ty,
+        "Terminal",
+        None,
+        state.pressed == Some(Target::Back),
+    );
     terminal_page(&mut c, ty, state, term);
-    gesture_pill(&mut c, state);
+    widgets::gesture_pill(&mut c, state.pressed == Some(Target::Home));
     c
-}
-
-/// The top strip: same height and colours as the home status bar, clock only.
-fn clock_strip(c: &mut Canvas, ty: &Type, clock: &str, bar_h: i32, pad: i32) {
-    let t = theme::get();
-    let w = c.width();
-    c.fill_rect(
-        Rect {
-            x: 0,
-            y: 0,
-            w,
-            h: bar_h,
-        },
-        t.bg_dark,
-    );
-    c.fill_rect(
-        Rect {
-            x: 0,
-            y: bar_h,
-            w,
-            h: hairline(design_width(c)),
-        },
-        t.rust_dim,
-    );
-    let px = (bar_h * 5 / 12) as f32;
-    ty.text(c, Style::bold(px, t.fg), clock, pad, bar_h * 2 / 3);
-}
-
-/// The compositor home indicator: the one pill shape in the system.
-fn gesture_pill(c: &mut Canvas, state: &UiState) {
-    let t = theme::get();
-    let width = design_width(c);
-    let s = |v: i32| scale(v, width);
-    let pressed = state.pressed == Some(Target::Home);
-    c.fill_rounded(
-        Rect {
-            x: (c.width() - s(320)) / 2,
-            y: c.height() - s(60),
-            w: s(320),
-            h: if pressed { s(18) } else { s(12) },
-        },
-        s(9),
-        if pressed { t.steel } else { t.fg_dim },
-    );
-}
-
-fn page_header(c: &mut Canvas, ty: &Type, title: &str, state: &UiState) {
-    let t = theme::get();
-    let width = design_width(c);
-    let s = |v: i32| scale(v, width);
-    // The back hit rect (`interaction.rs`) is unchanged; only its corner
-    // radius follows the 8 px card radius.
-    let back = Rect {
-        x: s(36),
-        y: s(106),
-        w: s(160),
-        h: s(104),
-    };
-    if state.pressed == Some(Target::Back) {
-        c.fill_rounded(back, s(8), t.surface_hi);
-    }
-    ty.text(c, Style::bold(s(48) as f32, t.rust), "<", s(64), s(178));
-    ty.text(c, Style::bold(s(54) as f32, t.fg), title, s(150), s(178));
-    c.fill_rect(
-        Rect {
-            x: s(48),
-            y: s(230),
-            w: c.width() - s(96),
-            h: hairline(width),
-        },
-        t.rust_dim,
-    );
 }
 
 /// Terminal grid geometry derived from the panel size and the monospace face.

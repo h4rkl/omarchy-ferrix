@@ -8,7 +8,7 @@
 
 use ferrix_hardware_api::{Capability, CapabilityMatrix, CapabilityStatus, HardwareState};
 use ferrix_ui::draw::{Canvas, Rect, Style, Type, Weight};
-use ferrix_ui::theme;
+use ferrix_ui::{theme, widgets};
 
 use crate::catalog::{Tile, tone_color};
 use crate::interaction::{Page, Target, UiState, tile_rects};
@@ -114,7 +114,7 @@ pub fn compose(
 
     if state.page != Page::Launcher {
         shell_page(&mut c, p, ty, &clock, state);
-        gesture_pill(&mut c, state);
+        widgets::gesture_pill(&mut c, state.pressed == Some(Target::Home));
         return c;
     }
 
@@ -186,7 +186,7 @@ pub fn compose(
     let cap_style = Style::regular(s(26) as f32, t.fg_dim);
     let capw = ty.width(cap_style, CAPTION);
     ty.text(&mut c, cap_style, CAPTION, (w - capw) / 2, h - s(150));
-    gesture_pill(&mut c, state);
+    widgets::gesture_pill(&mut c, state.pressed == Some(Target::Home));
     c
 }
 
@@ -252,32 +252,7 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
         );
     }
     launcher_grid(c, ty, state);
-    gesture_pill(c, state);
-}
-
-/// The compositor's home indicator: the one pill shape in the system.
-fn gesture_pill(c: &mut Canvas, state: &UiState) {
-    let t = theme::get();
-    let width = design_width(c);
-    let s = |v: i32| scale(v, width);
-    c.fill_rounded(
-        Rect {
-            x: (c.width() - s(320)) / 2,
-            y: c.height() - s(60),
-            w: s(320),
-            h: if state.pressed == Some(Target::Home) {
-                s(18)
-            } else {
-                s(12)
-            },
-        },
-        s(9),
-        if state.pressed == Some(Target::Home) {
-            t.rust
-        } else {
-            t.fg_dim
-        },
-    );
+    widgets::gesture_pill(c, state.pressed == Some(Target::Home));
 }
 
 fn status_bar(
@@ -872,34 +847,6 @@ fn shell_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: 
     }
 }
 
-/// Back chevron, title, and a warm oxidized-orange rule: section emphasis is
-/// thin and low-luminance, never a filled header.
-fn page_header(c: &mut Canvas, ty: &Type, title: &str, state: &UiState) {
-    let t = theme::get();
-    let width = design_width(c);
-    let s = |v: i32| scale(v, width);
-    let back = Rect {
-        x: s(36),
-        y: s(106),
-        w: s(160),
-        h: s(104),
-    };
-    if state.pressed == Some(Target::Back) {
-        c.fill_rounded(back, s(6), t.surface_hi);
-    }
-    ty.text(c, Style::bold(s(48) as f32, t.fg_dim), "<", s(64), s(178));
-    ty.text(c, Style::bold(s(54) as f32, t.fg), title, s(150), s(178));
-    c.fill_rect(
-        Rect {
-            x: s(48),
-            y: s(230),
-            w: c.width() - s(96),
-            h: hairline(width),
-        },
-        t.rust_dim,
-    );
-}
-
 /// Illustrative content of a non-launchable catalog entry, keyed by the id's
 /// last segment. Unknown entries get a generic "not installed" page. Every
 /// line names the thing, then its state, and says where the state comes from.
@@ -908,7 +855,7 @@ fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiStat
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     let name = tile.map_or("Unknown", |t| t.name.as_str());
-    page_header(c, ty, name, state);
+    widgets::page_header(c, ty, name, None, state.pressed == Some(Target::Back));
     let fallback_title = format!("{name} \u{b7} not installed");
     // Phone, Messages, Contacts, Settings, and Files are real applications
     // launched by `ferrix-appd`; only camera keeps an illustrative page. The
@@ -958,7 +905,13 @@ fn quick_settings(c: &mut Canvas, ty: &Type, state: &UiState) {
     let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
-    page_header(c, ty, "Quick settings", state);
+    widgets::page_header(
+        c,
+        ty,
+        "Quick settings",
+        None,
+        state.pressed == Some(Target::Back),
+    );
     toggle(
         c,
         ty,
@@ -1068,7 +1021,13 @@ fn notifications(c: &mut Canvas, ty: &Type, state: &UiState) {
     let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
-    page_header(c, ty, "Notifications", state);
+    widgets::page_header(
+        c,
+        ty,
+        "Notifications",
+        None,
+        state.pressed == Some(Target::Back),
+    );
     if !state.notification_visible {
         let title = "No notifications";
         let style = Style::bold(s(48) as f32, t.fg);
