@@ -1,3 +1,4 @@
+androidboot.boot_devices = "13200000.ufs"
 ferrix.target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
 ferrix.route_id = "development-google-kleaf-gki"
 ferrix.rootfs_partlabel = "userdata"
