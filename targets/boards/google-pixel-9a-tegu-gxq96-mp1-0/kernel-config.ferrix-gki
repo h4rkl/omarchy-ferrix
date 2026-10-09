@@ -8,3 +8,6 @@ CONFIG_USER_NS=y
 CONFIG_PID_NS=y
 # postmarketOS userspace (eudev, OpenRC devfs) expects a devtmpfs /dev.
 CONFIG_DEVTMPFS=y
+# Waydroid's container network (waydroid-net.sh) adds a mangle CHECKSUM rule
+# for DHCP replies and aborts when the target is missing.
+CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y
