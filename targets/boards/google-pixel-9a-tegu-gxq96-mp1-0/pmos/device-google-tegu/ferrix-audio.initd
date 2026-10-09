@@ -24,7 +24,8 @@ start_pre() {
 			return 1
 		}
 	done
-	checkpath -d -o user:user -m 0700 "$runtime_dir"
+	. /usr/lib/ferrix/openrc.sh
+	ferrix_user_runtime_dir || return 1
 	checkpath -d -m 0755 /run
 }
 

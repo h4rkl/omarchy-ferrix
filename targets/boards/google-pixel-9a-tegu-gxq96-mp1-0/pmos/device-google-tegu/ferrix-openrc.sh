@@ -1,5 +1,12 @@
 # Shared helpers for the Ferrix OpenRC services on the Pixel 9a target.
-# Installed as /usr/lib/ferrix/openrc.sh and sourced from start_post().
+# Installed as /usr/lib/ferrix/openrc.sh and sourced by the service scripts.
+
+# ferrix_user_runtime_dir: the `user` session's XDG_RUNTIME_DIR. /run is a
+# fresh tmpfs at boot and checkpath does not create missing parents.
+ferrix_user_runtime_dir() {
+	checkpath -d -m 0755 /run/user &&
+		checkpath -d -o user:user -m 0700 /run/user/1000
+}
 
 # ferrix_grant_socket PATH: wait for a root-owned daemon socket and open it to
 # the unprivileged `user` session (ferrix-shell and apps) that connects to it.

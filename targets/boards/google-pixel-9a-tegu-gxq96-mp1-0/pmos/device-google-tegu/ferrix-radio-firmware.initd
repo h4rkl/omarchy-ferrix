@@ -7,8 +7,6 @@
 
 name="Ferrix Pixel 9a radio firmware gate"
 description="Verifies the exact target firmware handoff before radio services"
-command=/bin/true
-command_background="no"
 
 firmware_manifest=${FERRIX_PIXEL9A_FIRMWARE_MANIFEST:-/usr/share/ferrix/pixel-9a/firmware-manifest.tsv}
 firmware_allowlist=${FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST:-/usr/share/ferrix/pixel-9a/firmware-allowlist.tsv}
@@ -323,4 +321,11 @@ start_pre() {
 	validate_firmware_manifest || return 1
 	validate_radio_aliases || return 1
 	einfo "verified $firmware_manifest and $radio_manifest before radio services"
+}
+
+# A one-shot gate, not a daemon: with `command` set, OpenRC tracked the
+# exited /bin/true and reported the service as crashed.
+start() {
+	ebegin "Starting $name"
+	eend 0
 }
