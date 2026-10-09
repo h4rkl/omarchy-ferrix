@@ -11,9 +11,11 @@
 - Packages: `FERRIX_PIXEL9A_ANDROID=1 tools/pixel-9a/rootfs.sh build` appends
   `pmos/android/packages` (waydroid, waydroid-openrc, lxc, dnsmasq, iptables)
   to pmbootstrap. pipewire-pulse is left out because apk refuses it
-  alongside pmOS's `postmarketos-base-ui-audio-backend-pulseaudio`. It refuses nftables and waydroid-nftrules
-  because the GKI has no nftables, so waydroid-net.sh takes its
-  iptables-legacy path. The manifest records `android_runtime`. A new,
+  alongside pmOS's `postmarketos-base-ui-audio-backend-pulseaudio`. It refuses waydroid-nftrules because the GKI has no
+  nftables. postmarketos-base installs nftables itself, but `nft list
+  ruleset` fails on the GKI, so waydroid-net.sh takes its iptables-legacy
+  path. Required packages may be satisfied through apk provides (dnsmasq
+  comes from dnsmasq-dnssec-dbus). The manifest records `android_runtime`. A new,
   explicit `FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE=kleaf-dev` validates the
   rootfs against the Kleaf GKI dist that dev-compose actually uses, and
   records `route_id development-google-kleaf-gki`. The radio-first kernel

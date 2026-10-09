@@ -426,7 +426,10 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
 # bootstrap (tools/android/guest/ferrix-waydroid.sh), the target's renderer
 # properties, and the ferrix-android runlevel link.
 ANDROID_SERVICE = "ferrix-android"
-ANDROID_FORBIDDEN_PACKAGES = ("nftables", "waydroid-nftrules")
+# nftables itself comes with postmarketos-base and is harmless: without
+# CONFIG_NF_TABLES waydroid-net.sh falls back to iptables. Its Waydroid
+# ruleset package is refused.
+ANDROID_FORBIDDEN_PACKAGES = ("waydroid-nftrules",)
 DEFAULT_ANDROID_ROOTFS_MIB = 8192
 
 
@@ -490,10 +493,16 @@ def verify_android_inputs(repo, images_dir, apk):
 
 
 def installed_packages(image, work):
-    """Package names from the rootfs apk database (merged /usr aware)."""
+    """Package names and apk provides from the rootfs database (merged /usr aware)."""
     dest = work / "apk-installed"
     debugfs_dump(image, ("/usr/lib/apk/db/installed", "/lib/apk/db/installed"), dest)
-    return {line[2:] for line in dest.read_text().splitlines() if line.startswith("P:")}
+    names = set()
+    for line in dest.read_text().splitlines():
+        if line.startswith("P:"):
+            names.add(line[2:])
+        elif line.startswith("p:"):
+            names.update(token.split("=", 1)[0] for token in line[2:].split())
+    return names
 
 
 def check_android_rootfs(packages, required):
@@ -503,7 +512,7 @@ def check_android_rootfs(packages, required):
             f"FERRIX_PIXEL9A_ANDROID=1): missing {', '.join(missing)}")
     forbidden = sorted(packages & set(ANDROID_FORBIDDEN_PACKAGES))
     if forbidden:
-        die(f"base rootfs contains {', '.join(forbidden)}; the GKI has no nftables")
+        die(f"base rootfs contains {', '.join(forbidden)}; the GKI cannot load its nft ruleset")
 
 
 def free_bytes(image):

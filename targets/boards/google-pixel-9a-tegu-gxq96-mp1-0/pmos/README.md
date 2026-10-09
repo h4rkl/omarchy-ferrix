@@ -13,7 +13,8 @@ with `FERRIX_PIXEL9A_ANDROID=1` for `tools/pixel-9a/rootfs.sh`, which appends
 the package set in `android/packages` (Waydroid, LXC, dnsmasq, iptables;
 deliberately no `nftables`/`waydroid-nftrules`, because the
 pinned GKI has no `CONFIG_NF_TABLES`) and refuses a result containing
-nftables. `tools/pixel-9a/dev-compose.py --android` then grows the rootfs
+`waydroid-nftrules`. postmarketos-base still installs `nftables`; on the
+GKI `nft list ruleset` fails, so `waydroid-net.sh` uses iptables. `tools/pixel-9a/dev-compose.py --android` then grows the rootfs
 (default 8 GiB) and stages the QEMU route's pinned LineageOS Waydroid images
 and Fulguris APK (verified against `tools/android/*.pins`), the shared guest
 bootstrap `tools/android/guest/ferrix-waydroid.sh`, the renderer properties in

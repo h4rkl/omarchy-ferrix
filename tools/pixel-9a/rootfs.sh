@@ -167,19 +167,21 @@ android_package_list() {
 }
 
 # verify_android_rootfs DB: the installed rootfs carries the Android package
-# set and none of the nftables packages (fail closed rather than shipping a
-# container network the kernel cannot provide).
+# set (by name or apk provides, e.g. dnsmasq from dnsmasq-dnssec-dbus) and not
+# waydroid-nftrules, whose nft ruleset the GKI cannot load. nftables itself is
+# pulled in by postmarketos-base; without CONFIG_NF_TABLES `nft list ruleset`
+# fails and waydroid-net.sh falls back to iptables(-legacy).
 verify_android_rootfs() {
 	installed=$(cat "$1" 2>/dev/null || sudo -n cat "$1" 2>/dev/null) ||
 		die "built rootfs has no readable apk database: $1"
 	for package in $(android_package_list | tr ',' ' '); do
-		printf '%s\n' "$installed" | grep -qx "P:$package" || die "built rootfs is missing Android package: $package"
+		printf '%s\n' "$installed" | grep -qx "P:$package" && continue
+		printf '%s\n' "$installed" | grep -Eq "^p:(.* )?$package(=[^ ]*)?( |\$)" && continue
+		die "built rootfs is missing Android package: $package"
 	done
-	for package in nftables waydroid-nftrules; do
-		if printf '%s\n' "$installed" | grep -qx "P:$package"; then
-			die "built rootfs contains $package, which the GKI cannot use"
-		fi
-	done
+	if printf '%s\n' "$installed" | grep -qx 'P:waydroid-nftrules'; then
+		die 'built rootfs contains waydroid-nftrules, which the GKI cannot use'
+	fi
 }
 
 check_static_inputs() {

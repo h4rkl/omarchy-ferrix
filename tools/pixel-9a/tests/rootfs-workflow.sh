@@ -653,7 +653,8 @@ awk -F "$tab" '$1 == "android_runtime" && $2 == "none" { found=1 } END { exit(fo
 
 # Opt-in Android package set (owner request 2026-10-09): appended to the
 # staged pmbootstrap config, verified in the built apk database, recorded in
-# the manifest; nftables in the result is refused because the GKI lacks it.
+# the manifest; waydroid-nftrules in the result is refused (the GKI lacks
+# nftables; postmarketos-base's own nftables package is tolerated).
 android_build() {
 	PATH="$fake_bin:$PATH" FERRIX_OUT_DIR="$1" FERRIX_PIXEL9A_PINS="$pins_fixture" \
 	FERRIX_CACHE_DIR="$work/cache" FERRIX_PIXEL9A_RADIO_KERNEL_DIST="$radio_kernel" \
@@ -687,10 +688,10 @@ if ROUTE=guess android_build "$work/android-route-out" >/dev/null 2>"$work/andro
 fi
 grep -q 'FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE must be radio-first or kleaf-dev' "$work/android-route.err" ||
 	fail 'unknown kernel route reason'
-if FAKE_EXTRA_INSTALLED=nftables ROUTE=kleaf-dev android_build "$work/android-nft-out" >/dev/null 2>"$work/android-nft.err"; then
-	fail 'Android rootfs with nftables installed was accepted'
+if FAKE_EXTRA_INSTALLED=waydroid-nftrules ROUTE=kleaf-dev android_build "$work/android-nft-out" >/dev/null 2>"$work/android-nft.err"; then
+	fail 'Android rootfs with waydroid-nftrules installed was accepted'
 fi
-grep -q 'contains nftables, which the GKI cannot use' "$work/android-nft.err" || { cat "$work/android-nft.err" >&2; fail 'nftables refusal reason'; }
+grep -q 'contains waydroid-nftrules, which the GKI cannot use' "$work/android-nft.err" || { cat "$work/android-nft.err" >&2; fail 'nftables refusal reason'; }
 if grep -Eqx '(nftables|waydroid-nftrules)' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/android/packages"; then
 	fail 'Android package set lists an nftables package'
 fi

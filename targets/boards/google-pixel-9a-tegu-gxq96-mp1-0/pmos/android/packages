@@ -5,7 +5,9 @@
 #
 # Deliberately absent: nftables and waydroid-nftrules. The pinned GKI has no
 # CONFIG_NF_TABLES, so waydroid-net.sh must take its iptables(-legacy) path;
-# rootfs.sh refuses a built rootfs that contains either package.
+# rootfs.sh refuses a built rootfs containing waydroid-nftrules. (nftables
+# itself arrives with postmarketos-base; `nft list ruleset` fails on the GKI,
+# so waydroid-net.sh still selects iptables.)
 # Also absent: pipewire-pulse. pmOS's console UI pulls
 # postmarketos-base-ui-audio-backend-pulseaudio, which apk declares as
 # conflicting with it; Waydroid 1.6 starts without a pulse socket (no

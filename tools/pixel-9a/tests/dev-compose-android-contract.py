@@ -2,7 +2,7 @@
 """Offline checks for dev-compose's opt-in Android (Waydroid + Fulguris) mode.
 
 Always: pin verification against tools/android/*.pins shapes, package-set
-policy (no nftables), and the checked-in target/guest inputs. On a host with
+policy (no waydroid-nftrules), and the checked-in target/guest inputs. On a host with
 e2fsprogs (mke2fs -d, debugfs, resize2fs, dumpe2fs; the Linux build host or
 the native builder) it also stages a fake runtime into a small ext4 image and
 checks growth, file sizes, the runlevel link, and the manifest rows.
@@ -37,7 +37,7 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-# Checked-in policy: the package set carries Waydroid but never nftables, and
+# Checked-in policy: the package set carries Waydroid but no nftables packages, and
 # the guest bootstrap/properties/service the composer stages exist.
 packages = compose.android_package_set(target)
 assert "waydroid" in packages and "iptables" in packages, packages
@@ -65,7 +65,9 @@ runlevel_line = next(line for line in apkbuild.splitlines() if line.strip().star
 assert "ferrix-android" not in runlevel_line
 
 assert refused(compose.check_android_rootfs, {"lxc"}, packages)
-assert refused(compose.check_android_rootfs, set(packages) | {"nftables"}, packages)
+assert refused(compose.check_android_rootfs, set(packages) | {"waydroid-nftrules"}, packages)
+# postmarketos-base pulls nftables; it is tolerated (iptables fallback).
+compose.check_android_rootfs(set(packages) | {"nftables"}, packages)
 compose.check_android_rootfs(set(packages) | {"busybox"}, packages)
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -121,8 +123,11 @@ with tempfile.TemporaryDirectory() as tmp:
         for directory in ("usr/lib/apk/db", "etc/init.d", "etc/runlevels/default", "etc/ferrix"):
             (root / directory).mkdir(parents=True)
         (root / "lib").symlink_to("usr/lib")
+        # dnsmasq arrives through an apk provides line, as on the real image.
         (root / "usr/lib/apk/db/installed").write_text(
-            "".join(f"P:{name}\nV:1-r0\n\n" for name in packages + ["busybox"]))
+            "".join(f"P:{name}\nV:1-r0\n\n" for name in packages + ["busybox", "nftables"]
+                    if name != "dnsmasq")
+            + "P:dnsmasq-dnssec-dbus\nV:2.91-r0\np:dnsmasq=2.91-r0 cmd:dnsmasq=2.91-r0\n\n")
         (root / "etc/init.d/ferrix-android").write_text(service)
         image = tmp / "rootfs.img"
         subprocess.run(["mke2fs", "-q", "-t", "ext4", "-F", "-d", str(root), str(image), "64M"],
