@@ -546,7 +546,10 @@ impl Client {
             self.running = false;
             return;
         }
-        canvas_bytes.copy_from_slice(&frame.xrgb_bytes());
+        // SlotPool rounds each buffer up to 64 bytes, so the slice can be
+        // longer than w*h*4 (e.g. 1080x2215); fill exactly the frame.
+        let bytes = frame.xrgb_bytes();
+        canvas_bytes[..bytes.len()].copy_from_slice(&bytes);
         self.window
             .wl_surface()
             .damage_buffer(0, 0, w as i32, h as i32);
