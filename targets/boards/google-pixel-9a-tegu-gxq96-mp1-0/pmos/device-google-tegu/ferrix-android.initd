@@ -58,15 +58,16 @@ start_pre() {
 
 start() {
 	ebegin "Starting Ferrix Android runtime bootstrap"
-	start-stop-daemon --start --background --make-pidfile --pidfile "$pidfile" \
-		--stdout "$logfile" --stderr "$logfile" \
-		--exec /bin/sh -- "$helper" run
+	# A one-shot bootstrap, not a daemon: started detached so OpenRC does not
+	# report the service crashed once provisioning finishes. The pidfile only
+	# lets stop() end an attempt that is still running.
+	( /bin/sh "$helper" run >>"$logfile" 2>&1 & echo $! >"$pidfile" )
 	eend $?
 }
 
 stop() {
 	ebegin "Stopping Ferrix Android runtime"
-	start-stop-daemon --stop --pidfile "$pidfile" --retry TERM/5/KILL/5 2>/dev/null || true
+	[ -s "$pidfile" ] && kill "$(cat "$pidfile")" 2>/dev/null || true
 	rm -f "$pidfile"
 	waydroid session stop >/dev/null 2>&1 || true
 	rc-service waydroid-container stop >/dev/null 2>&1 || true
