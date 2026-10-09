@@ -1,0 +1,17 @@
+[package]
+name = "ferrix-files"
+description = "Omarchy Ferrix Files: independent software-rendered Wayland file browser confined to the user's home (app id org.ferrix.files)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-protocol = { path = "../ferrix-app-protocol" }
+ferrix-ui = { path = "../ferrix-ui" }
+# Modification times in the session's local zone: the same library and
+# features ferrix-ui's status clock uses, so there is one time-zone stack.
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
+
+[lints]
+workspace = true

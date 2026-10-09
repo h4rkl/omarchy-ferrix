@@ -910,22 +910,16 @@ fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiStat
     let name = tile.map_or("Unknown", |t| t.name.as_str());
     page_header(c, ty, name, state);
     let fallback_title = format!("{name} \u{b7} not installed");
-    // Phone, Messages, Contacts, and Settings are real applications launched
-    // by `ferrix-appd`; only camera and files keep illustrative pages. The
-    // hardware API defines neither a camera nor a storage capability, so the
-    // pages say that about whichever target is connected.
+    // Phone, Messages, Contacts, Settings, and Files are real applications
+    // launched by `ferrix-appd`; only camera keeps an illustrative page. The
+    // hardware API defines no camera capability, so the page says that about
+    // whichever target is connected.
     let (accent, eyebrow, title, detail) = match tile.map_or("", Tile::kind) {
         "camera" => (
             t.fg_dim,
             "CAMERA",
             "No camera capability",
             "The hardware API defines no camera capability on any target yet.",
-        ),
-        "files" => (
-            t.fg_dim,
-            "FILES",
-            "No file browser",
-            "The hardware API defines no storage capability on any target yet.",
         ),
         _ => (
             tile.map_or(t.fg_dim, |t| tone_color(t.icon.tone)),

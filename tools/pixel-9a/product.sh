@@ -30,7 +30,7 @@ case "$product_target" in
 esac
 production_features='ferrix-networkd/production,ferrix-telephonyd/production'
 build_confirmation=I-understand-this-builds-the-pixel-9a-product
-product_bins='ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings'
+product_bins='ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files'
 
 absolute_path() {
   case "$1" in
@@ -161,8 +161,8 @@ print_resolution() {
   printf '%s\n' "colors: $colors_path"
   printf '%s\n' "manifest: $manifest_path"
   printf '%s\n' "production features: $production_features"
-  printf '%s\n' 'product packages: ferrix-core ferrix-appd ferrix-runtime-native ferrix-basic-screen ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings'
-  printf '%s\n' 'product binaries: ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings'
+  printf '%s\n' 'product packages: ferrix-core ferrix-appd ferrix-runtime-native ferrix-basic-screen ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files'
+  printf '%s\n' 'product binaries: ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files'
 }
 
 preflight() {
@@ -186,7 +186,7 @@ run_cargo_builds() {
     CARGO_TARGET_DIR="$cargo_target_dir" cargo build --release --locked --target "$product_target" \
       -p ferrix-core -p ferrix-appd -p ferrix-runtime-native -p ferrix-basic-screen \
       -p ferrix-terminal -p ferrix-telephonyd -p ferrix-networkd -p ferrix-contactsd \
-      -p ferrix-phone -p ferrix-messages -p ferrix-contacts -p ferrix-settings \
+      -p ferrix-phone -p ferrix-messages -p ferrix-contacts -p ferrix-settings -p ferrix-files \
       --features "$production_features"
   )
 

@@ -7,5 +7,16 @@
     "glyph": "▤",
     "tone": "neutral"
   },
-  "launchable": false
+  "launchable": true,
+  "capabilities": [],
+  "launch": {
+    "exec": [
+      "ferrix-files"
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
+  }
 }

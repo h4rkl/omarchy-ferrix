@@ -12,6 +12,7 @@ members = [
     "crates/ferrix-contacts-protocol",
     "crates/ferrix-contactsd",
     "crates/ferrix-core",
+    "crates/ferrix-files",
     "crates/ferrix-hardware-api",
     "crates/ferrix-hardware-emulator",
     "crates/ferrix-messages",

@@ -919,6 +919,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-files"
+version = "0.1.0"
+dependencies = [
+ "ferrix-app-api",
+ "ferrix-app-protocol",
+ "ferrix-ui",
+ "jiff",
+]
+
+[[package]]
 name = "ferrix-hardware-api"
 version = "0.1.0"
 dependencies = [

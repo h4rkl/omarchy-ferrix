@@ -49,8 +49,10 @@ case "$width:$height" in *[!0-9:]*|:*|*:) fail "invalid-profile-geometry" ;; esa
 
 # Proportional points land on Messages and inside the compositor gesture zones
 # for the versioned portrait profile while remaining valid for scaled profiles.
-message_x=$((width * 77 / 100))
-message_y=$((height * 53 / 100))
+# Launchable tiles sort by name (Browser, Contacts, Files, Messages, ...), so
+# Messages is the first tile of the second launcher row.
+message_x=$((width * 19 / 100))
+message_y=$((height * 67 / 100))
 center_x=$((width / 2))
 bottom_y=$((height * 98 / 100))
 home_y=$((height * 81 / 100))

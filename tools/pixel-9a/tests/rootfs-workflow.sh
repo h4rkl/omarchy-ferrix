@@ -248,7 +248,7 @@ printf 'schema_version\t1\ninstall_root\tsplit-inputs/module-install\n' >"$radio
 } >"$radio_kernel/build-manifest.tsv"
 
 product_bins='ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal
-ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings'
+ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files'
 product_app_descriptors='grants.json org.ferrix.browser.json org.ferrix.camera.json
 org.ferrix.contacts.json org.ferrix.files.json org.ferrix.home.json
 org.ferrix.messages.json org.ferrix.phone.json org.ferrix.settings.json

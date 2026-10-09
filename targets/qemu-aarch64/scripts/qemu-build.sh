@@ -17,16 +17,16 @@ mkdir -p "$out" "$out/product" "$cache/cargo-registry" "$cache/guest-target"
 # Statically linked guest binaries (musl): the core, the application service
 # and its namespace sandbox, the home surface, the Terminal app, the service
 # daemons (telephony, network, contacts; ADR-001..003) and the Phone,
-# Messages, Contacts, and Settings apps. One list drives the build, the
+# Messages, Contacts, Settings, and Files apps. One list drives the build, the
 # install, the product copy, and the manifest hashes.
-static_bins="ferrix-core ferrix-appd ferrix-sandbox ferrix-basic-screen ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings"
+static_bins="ferrix-core ferrix-appd ferrix-sandbox ferrix-basic-screen ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files"
 printf 'building %s (aarch64 musl, pinned rust builder)\n' "$static_bins"
 docker run --rm --platform linux/arm64 \
   -v "$root":/src \
   -v "$cache/cargo-registry":/usr/local/cargo/registry \
   -v "$cache/guest-target":/build \
   -w /src -e CARGO_TARGET_DIR=/build -e "RUSTUP_TOOLCHAIN=$rust_toolchain" \
-  "$rust_image" sh -ec 'apk add --no-cache gcc musl-dev >/dev/null; cargo build --release --locked -p ferrix-core -p ferrix-appd -p ferrix-runtime-native -p ferrix-basic-screen -p ferrix-terminal -p ferrix-telephonyd -p ferrix-networkd -p ferrix-contactsd -p ferrix-phone -p ferrix-messages -p ferrix-contacts -p ferrix-settings'
+  "$rust_image" sh -ec 'apk add --no-cache gcc musl-dev >/dev/null; cargo build --release --locked -p ferrix-core -p ferrix-appd -p ferrix-runtime-native -p ferrix-basic-screen -p ferrix-terminal -p ferrix-telephonyd -p ferrix-networkd -p ferrix-contactsd -p ferrix-phone -p ferrix-messages -p ferrix-contacts -p ferrix-settings -p ferrix-files'
 for bin in $static_bins; do
   [ -x "$cache/guest-target/release/$bin" ] || { echo "guest $bin build failed" >&2; exit 1; }
 done
@@ -106,7 +106,7 @@ sandbox_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-sandbox" | awk 
 terminal_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-terminal" | awk '{print $1}')
 # Service daemons and apps: "<name with _>_sha256" for each, from one list.
 service_hashes=""
-for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do
+for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files; do
   key=$(printf '%s' "$bin" | tr '-' '_')
   hash=$(shasum -a 256 "$cache/guest-target/release/$bin" | awk '{print $1}')
   service_hashes="$service_hashes\"${key}_sha256\":\"$hash\","

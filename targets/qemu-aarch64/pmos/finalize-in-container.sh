@@ -70,8 +70,8 @@ boot_mounted=1
 install -Dm755 "$marker_src" "$mnt$marker_dst"
 install -Dm755 "$product_src" "$mnt$product_dst"
 # Product binaries: the same set qemu-build.sh stages for the smoke guest,
-# including the service daemons and the Phone/Messages/Contacts/Settings apps.
-product_bins="ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings"
+# including the service daemons and the Phone/Messages/Contacts/Settings/Files apps.
+product_bins="ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files"
 for bin in $product_bins; do
   [ -f "/product/$bin" ] || fail "missing-product-binary" "$bin not in /product; run just qemu-build first"
   install -Dm755 "/product/$bin" "$mnt/usr/bin/$bin"
@@ -214,7 +214,7 @@ terminal_sha=$(sha256sum "$mnt/usr/bin/ferrix-terminal" | cut -d' ' -f1)
 colors_sha=$(sha256sum "$mnt/etc/ferrix/colors.toml" | cut -d' ' -f1)
 grants_sha=$(sha256sum "$mnt/usr/share/ferrix/apps/grants.json" | cut -d' ' -f1)
 service_shas=""
-for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do
+for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files; do
   key=$(printf '%s' "$bin" | tr '-' '_')
   service_shas="$service_shas, \"${key}_sha256\": \"$(sha256sum "$mnt/usr/bin/$bin" | cut -d' ' -f1)\""
 done
