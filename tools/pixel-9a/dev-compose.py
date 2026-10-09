@@ -12,7 +12,9 @@ manifest:
   init_boot.img           Ferrix /init (initramfs-init-kleaf) + busybox/musl
   vendor_boot.img         Ferrix vendor cmdline + bootconfig, no DTB
   vbmeta.img              unsigned AVB metadata (bootloader is unlocked)
-  userdata.img            base rootfs + Kleaf vendor_dlkm/system_dlkm modules
+  userdata.img            base rootfs + Kleaf vendor_dlkm/system_dlkm modules, as
+                          an Android sparse image (fastboot cannot stream the raw
+                          2 GiB ext4 image past max-download-size)
 
 Only partitions the stock factory image rewrites are produced. vendor_dlkm and
 system_dlkm live inside super, which dev-flash never writes, so their modules
@@ -242,7 +244,8 @@ def main():
             die(f"required input missing or symlinked: {path}")
     mkbootimg = args.kernel_source / "tools/mkbootimg/mkbootimg.py"
     avbtool = args.kernel_source / "prebuilts/kernel-build-tools/linux-x86/bin/avbtool"
-    for tool in (mkbootimg, avbtool):
+    img2simg = args.kernel_source / "prebuilts/kernel-build-tools/linux-x86/bin/img2simg"
+    for tool in (mkbootimg, avbtool, img2simg):
         if not tool.is_file():
             die(f"tool missing from the Kleaf source tree: {tool}")
     for tool in ("debugfs", "e2fsck", "depmod"):
@@ -276,9 +279,10 @@ def main():
             "--output", stage / "vbmeta.img")
 
         modules, release = stage_modules(args.kernel_dist, verified, work)
-        rootfs = stage / "userdata.img"
+        rootfs = work / "rootfs.img"
         shutil.copyfile(args.base_rootfs, rootfs)
         install_modules(rootfs, modules, release)
+        run(img2simg, rootfs, stage / "userdata.img")
         shutil.rmtree(work)
 
         partitions = {

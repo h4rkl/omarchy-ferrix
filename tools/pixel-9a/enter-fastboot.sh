@@ -52,7 +52,7 @@ sha256_prefix() {
 }
 
 adb_prop() {
-	adb -s "$adb_serial" shell getprop "$1" | tr -d '\r' | sed -n '1p'
+	adb -s "$adb_serial" shell getprop "$1" </dev/null | tr -d '\r' | sed -n '1p'
 }
 
 fastboot_getvar() {
