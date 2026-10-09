@@ -54,6 +54,7 @@ usage:
   tools/pixel-9a/dev-flash.sh boot [--confirm TOKEN] IMAGE
   tools/pixel-9a/dev-flash.sh set-active [--confirm TOKEN] a|b
   tools/pixel-9a/dev-flash.sh reboot [bootloader]
+  tools/pixel-9a/dev-flash.sh fetch PARTITION OUTPUT
 
 PARTITION is one of boot init_boot vendor_boot vendor_kernel_boot dtbo vbmeta
 vbmeta_system vbmeta_vendor (optionally suffixed _a or _b; unsuffixed means
@@ -62,7 +63,9 @@ the current slot), userdata, or metadata.
 Without --confirm, a mutating mode is a read-only plan that prints
 confirm_token. Rerun the identical command with --confirm TOKEN to execute.
 set-active first flashes the pinned stock bootloader and radio to the target
-slot, then selects it. Restore stock with: just pixel-9a-factory-restore.
+slot, then selects it. fetch is read-only (no token): it copies a partition
+from the same allowlist into OUTPUT, which must stay below the ignored output
+directory. Restore stock with: just pixel-9a-factory-restore.
 EOF
   exit 2
 }
@@ -341,6 +344,7 @@ case "$mode" in
   boot) [ "$#" -eq 1 ] || usage ;;
   set-active) [ "$#" -eq 1 ] && case "$1" in a|b) true ;; *) false ;; esac || usage ;;
   reboot) [ "$#" -le 1 ] && case "${1:-}" in ''|bootloader) true ;; *) false ;; esac || usage ;;
+  fetch) [ "$#" -eq 2 ] || usage ;;
   *) usage ;;
 esac
 
@@ -362,6 +366,23 @@ if [ "$mode" = reboot ]; then
     fastboot -s "$serial" reboot >&2
   fi
   emit result rebooted
+  exit 0
+fi
+
+if [ "$mode" = fetch ]; then
+  read_device
+  print_device
+  planned_slot=$current_slot
+  resolve_partition "$1"
+  case "$2" in
+    "$out"/*|out/pixel-9a/*) ;;
+    *) die "fetch output must stay below $out" ;;
+  esac
+  [ ! -e "$2" ] || die "refusing to overwrite existing fetch output: $2"
+  emit read "fastboot fetch $resolved $2 (read-only)"
+  run_fastboot fetch "$resolved" "$2"
+  emit fetched_sha256 "$(sha256_of "$2")"
+  emit result fetched
   exit 0
 fi
 

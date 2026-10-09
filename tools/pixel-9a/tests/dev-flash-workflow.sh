@@ -92,6 +92,7 @@ case "$1" in
     esac
     printf '%s: %s\nFinished. Total time: 0.001s\n' "$2" "$v" >&2 ;;
   set_active) printf '%s' "$2" > "$STUB_SLOT" ;;
+  fetch) printf 'fetched %s\n' "$2" > "$3" ;;
   flash|boot|--slot=*|reboot|reboot-bootloader) exit "${STUB_MUTATION_EXIT:-0}" ;;
   *) exit 9 ;;
 esac
@@ -257,6 +258,22 @@ check "refuse: slot switch from non-pinned bootloader" refuses active_old 'not p
 reset_stub
 run_case active_same set-active a
 check "refuse: slot switch to the current slot" refuses active_same 'already current'
+
+# --- read-only fetch ---------------------------------------------------------
+reset_stub
+run_case fetch_ok fetch vendor_boot_b "$work/fetch_ok/out/pixel-9a/dev-flash/vendor_boot_b.img"
+check "fetch: allowlisted partition is copied read-only without a token" \
+  sh -c "[ $status -eq 0 ] && grep -q '^result=fetched' '$work/fetch_ok/stdout' && grep -q 'fetched vendor_boot_b' '$work/fetch_ok/out/pixel-9a/dev-flash/vendor_boot_b.img' && ! grep -q confirm_token '$work/fetch_ok/stdout'"
+
+reset_stub
+run_case fetch_deny fetch persist "$work/fetch_deny/out/pixel-9a/dev-flash/persist.img"
+check "fetch: refuses partitions outside the allowlist" \
+  sh -c "[ $status -eq 1 ] && ! grep -q 'fetch' '$calls'"
+
+reset_stub
+run_case fetch_outside fetch vendor_boot_b "$work/elsewhere.img"
+check "fetch: refuses output outside the ignored output directory" \
+  sh -c "[ $status -eq 1 ] && [ ! -e '$work/elsewhere.img' ]"
 
 # --- failure handling --------------------------------------------------------
 reset_stub

@@ -159,8 +159,9 @@ hold_then_reboot() {
 	$bb reboot -f
 }
 
-find_root_device() {
-	for candidate in /dev/disk/by-partlabel/$root_partlabel /dev/block/by-name/$root_partlabel; do
+# Print the block device for a GPT partition label, if it exists yet.
+partition_device() {
+	for candidate in /dev/disk/by-partlabel/$1 /dev/block/by-name/$1; do
 		[ -b "$candidate" ] && {
 			printf '%s\n' "$candidate"
 			return 0
@@ -169,7 +170,7 @@ find_root_device() {
 	for uevent in /sys/class/block/*/uevent; do
 		[ -f "$uevent" ] || continue
 		partname=$($bb sed -n 's/^PARTNAME=//p' "$uevent")
-		[ "$partname" = "$root_partlabel" ] || continue
+		[ "$partname" = "$1" ] || continue
 		name=${uevent%/uevent}
 		name=${name##*/}
 		[ -b "/dev/$name" ] || continue
@@ -177,6 +178,53 @@ find_root_device() {
 		return 0
 	done
 	return 1
+}
+
+find_root_device() {
+	partition_device "$root_partlabel"
+}
+
+# Persist logs where the host can read them back with
+# `just pixel-9a-dev-flash fetch vendor_boot_b OUT`: the unused tail of slot
+# b's vendor_boot (the image is ~10 KiB of a 64 MiB partition and AVB
+# verification is disabled). 48 MiB: the previous boot's pstore, written once.
+# 56 MiB: this boot's dmesg, rewritten every two seconds. Never on slot a,
+# which is the stock recovery slot.
+start_flash_logger() {
+	slot=$($bb sed -n 's/^androidboot\.slot_suffix = "\(.*\)"$/\1/p' /proc/bootconfig 2>/dev/null)
+	[ "$slot" = _b ] || {
+		log "flash logger disabled on slot '${slot:-unknown}'"
+		return 0
+	}
+	(
+		device=
+		while [ -z "$device" ]; do
+			$bb mdev -s 2>/dev/null
+			device=$(partition_device vendor_boot_b) || $bb sleep 1
+		done
+		log "flash logger writing to $device (vendor_boot_b tail)"
+		{
+			echo "FERRIX-PSTORE uptime=$($bb cat /proc/uptime) kernel=$release"
+			for record in /sys/fs/pstore/*; do
+				[ -f "$record" ] || continue
+				echo "--- $record"
+				$bb cat "$record"
+			done
+			echo 'FERRIX-PSTORE-END'
+		} 2>/dev/null | $bb head -c 8388608 |
+			$bb dd of="$device" bs=1048576 seek=48 conv=notrunc,fsync 2>/dev/null
+		rounds=0
+		while [ "$rounds" -lt 300 ]; do
+			{
+				echo "FERRIX-DMESG uptime=$($bb cat /proc/uptime)"
+				$bb dmesg
+				echo 'FERRIX-DMESG-END'
+			} 2>/dev/null | $bb head -c 8388608 |
+				$bb dd of="$device" bs=1048576 seek=56 conv=notrunc,fsync 2>/dev/null
+			rounds=$((rounds + 1))
+			$bb sleep 2
+		done
+	) &
 }
 
 $bb mount -t proc proc /proc 2>/dev/null || :
@@ -203,6 +251,7 @@ $bb mount -t pstore pstore /sys/fs/pstore 2>/dev/null || :
 release=$($bb uname -r)
 log "kernel $release checkpoint=${checkpoint_target:-none}"
 checkpoint init
+start_flash_logger
 
 start_usb_debug
 checkpoint gadget
