@@ -1,6 +1,6 @@
 schema_version = 1
 name = "bluetooth-pair-failures"
-description = "Typed pairing failures on the mock controller: the user declines the passkey prompt, the remote rejects, an unanswered prompt and a silent remote time out on the mock clock, a legacy PIN device is refused, and a busy controller refuses a second attempt."
+description = "Typed pairing failures on the mock controller: the user declines the passkey prompt, the remote rejects, an unanswered prompt and a silent remote time out on the mock clock, a declined legacy PIN request, and a busy controller refuses a second attempt."
 
 [[step]]
 service = "core"
@@ -80,8 +80,14 @@ expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", 
 [[step]]
 service = "core"
 command = { cmd = "bluetooth-pair", device = "mock-bt-found-4" }
-expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", reason = "pin-required" } } ]
-note = "legacy PIN entry is not offered"
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "request-pin" } } ]
+note = "the synthetic legacy headset asks for a PIN (see bluetooth-pair-pin)"
+
+[[step]]
+service = "core"
+command = { cmd = "bluetooth-reply", accept = false }
+expect = [ { event = "bluetooth-session-changed", pairing = { stage = "failed", reason = "declined" } } ]
+note = "Cancel on the PIN card declines"
 
 [[step]]
 service = "core"

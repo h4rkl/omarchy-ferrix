@@ -17,6 +17,9 @@
     "core-state",
     "core-control"
   ],
+  "intents": [
+    "show-bluetooth-pairing"
+  ],
   "launch": {
     "exec": [
       "ferrix-settings"

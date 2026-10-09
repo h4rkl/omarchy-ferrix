@@ -79,12 +79,13 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
 /// | `Identify` | `service`, `tool` |
 /// | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
 /// | `Open` (`dial`, `compose`) | `application`, `home`, `tool` |
-/// | `Open` (`show-call`) | `service`, `tool` |
+/// | `Open` (`show-call`, `show-bluetooth-pairing`) | `service`, `tool` |
 /// | surface/focus/gesture reports | `compositor` |
 /// | `YieldForeground` | `application`, `home` |
 ///
 /// A `service` resolves identities and observes; the only thing it may
-/// raise is the handler of a system intent (`show-call`), never a named app.
+/// raise is the handler of a system intent (`show-call`,
+/// `show-bluetooth-pairing`), never a named app.
 pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
     use ClientRole::*;
     match inbound {
@@ -107,7 +108,9 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
         Inbound::Report(Report::YieldForeground) => matches!(role, Application | Home),
         Inbound::Request(Request::Open { intent }) => match intent.kind() {
             IntentKind::Dial | IntentKind::Compose => matches!(role, Application | Home | Tool),
-            IntentKind::ShowCall => matches!(role, Service | Tool),
+            IntentKind::ShowCall | IntentKind::ShowBluetoothPairing => {
+                matches!(role, Service | Tool)
+            }
         },
     }
 }

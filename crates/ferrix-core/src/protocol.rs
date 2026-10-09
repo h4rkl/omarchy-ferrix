@@ -8,8 +8,8 @@
 //! Both are versioned by [`ferrix_hardware_api::SCHEMA_VERSION`].
 
 use ferrix_hardware_api::{
-    AudioRoute, BluetoothCommand, HardwareState, MockPairingOutcome, ModemRegistration,
-    Orientation, SimState, SuspendOutcome, WifiState,
+    AudioRoute, BluetoothCommand, BluetoothPin, HardwareState, MockPairingOutcome,
+    ModemRegistration, Orientation, SimState, SuspendOutcome, WifiState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,11 @@ pub enum ControlCommand {
     BluetoothTick {
         ms: u32,
     },
+    /// A remote (mock id) starts pairing with this phone. Mocked targets
+    /// only.
+    BluetoothIncoming {
+        device: String,
+    },
     /// Client verbs: the same product Bluetooth operations Settings sends,
     /// through the portable capability (a real call, not a mock mutation).
     BluetoothDiscovery {
@@ -71,6 +76,11 @@ pub enum ControlCommand {
     },
     BluetoothReply {
         accept: bool,
+    },
+    /// Answers a PIN request. The PIN is never echoed: records name the
+    /// command only.
+    BluetoothReplyPin {
+        pin: BluetoothPin,
     },
     BluetoothCancel,
     BluetoothConnect {
@@ -101,6 +111,8 @@ impl ControlCommand {
             ControlCommand::Suspend { .. } => "suspend",
             ControlCommand::SetBluetoothPairingOutcome { .. } => "set-bluetooth-pairing-outcome",
             ControlCommand::BluetoothTick { .. } => "bluetooth-tick",
+            ControlCommand::BluetoothIncoming { .. } => "bluetooth-incoming",
+            ControlCommand::BluetoothReplyPin { .. } => "bluetooth-reply-pin",
             ControlCommand::BluetoothDiscovery { .. } => "bluetooth-discovery",
             ControlCommand::BluetoothPair { .. } => "bluetooth-pair",
             ControlCommand::BluetoothReply { .. } => "bluetooth-reply",
@@ -122,6 +134,9 @@ impl ControlCommand {
             },
             ControlCommand::BluetoothReply { accept } => {
                 BluetoothCommand::ReplyPairing { accept: *accept }
+            }
+            ControlCommand::BluetoothReplyPin { pin } => {
+                BluetoothCommand::ReplyPin { pin: pin.clone() }
             }
             ControlCommand::BluetoothCancel => BluetoothCommand::CancelPairing,
             ControlCommand::BluetoothConnect { device } => BluetoothCommand::Connect {

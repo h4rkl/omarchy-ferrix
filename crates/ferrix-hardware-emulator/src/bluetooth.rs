@@ -6,8 +6,8 @@
 
 use ferrix_hardware_api::{
     BLUETOOTH_DISCOVERY_TIMEOUT_MS, BLUETOOTH_PROMPT_TIMEOUT_MS, BluetoothDevice,
-    BluetoothDeviceKind, BluetoothDiscovery, BluetoothPairing, BluetoothSession, Capability,
-    HardwareError, MockPairingMethod, MockPairingOutcome, PairingFailure, PairingPhase,
+    BluetoothDeviceKind, BluetoothDiscovery, BluetoothPairing, BluetoothPin, BluetoothSession,
+    Capability, HardwareError, MockPairingMethod, MockPairingOutcome, PairingFailure, PairingPhase,
     signal_bars_from_rssi,
 };
 use ferrix_target_profile::Profile;
@@ -31,6 +31,8 @@ struct MockDevice {
     method: MockPairingMethod,
     outcome: MockPairingOutcome,
     passkey: u32,
+    /// The legacy PIN a `pin` remote expects.
+    pin: String,
     /// Remembered devices are always listed; discoverable ones only after a
     /// discovery found them (like BlueZ's device cache).
     visible: bool,
@@ -52,7 +54,15 @@ struct Attempt {
     device: String,
     phase: PairingPhase,
     due: Option<(u64, Step)>,
+    /// The remote started the attempt.
+    incoming: bool,
+    /// An outcome decided locally (a wrong PIN) that wins over the
+    /// device's profile outcome and the override.
+    forced: Option<MockPairingOutcome>,
 }
+
+/// Default legacy PIN of a mock `pin` remote.
+const DEFAULT_MOCK_PIN: &str = "0000";
 
 #[derive(Debug)]
 pub struct MockBluetooth {
@@ -85,6 +95,7 @@ impl MockBluetooth {
                 method: MockPairingMethod::JustWorks,
                 outcome: MockPairingOutcome::Success,
                 passkey: 0,
+                pin: DEFAULT_MOCK_PIN.to_owned(),
                 visible: true,
             })
             .collect();
@@ -103,6 +114,10 @@ impl MockBluetooth {
                     method: device.pairing,
                     outcome: device.outcome,
                     passkey: device.passkey,
+                    pin: device
+                        .pin
+                        .clone()
+                        .unwrap_or_else(|| DEFAULT_MOCK_PIN.to_owned()),
                     visible: false,
                 }),
         );
@@ -151,6 +166,7 @@ impl MockBluetooth {
             pairing: self.attempt.as_ref().map(|a| BluetoothPairing {
                 device: a.device.clone(),
                 phase: a.phase,
+                incoming: a.incoming,
             }),
             operation: None,
         }
@@ -195,49 +211,80 @@ impl MockBluetooth {
         if device.paired {
             return Err(invalid("the device is already paired"));
         }
-        let (phase, due) = match device.method {
-            MockPairingMethod::JustWorks => (
-                PairingPhase::Pairing,
-                Some((now + MOCK_PAIR_STEP_MS, Step::Resolve)),
-            ),
-            MockPairingMethod::Confirm => (
-                PairingPhase::ConfirmPasskey {
-                    passkey: device.passkey,
-                },
-                Some((
-                    now + u64::from(BLUETOOTH_PROMPT_TIMEOUT_MS),
-                    Step::PromptTimeout,
-                )),
-            ),
-            MockPairingMethod::Authorize => (
-                PairingPhase::Authorize,
-                Some((
-                    now + u64::from(BLUETOOTH_PROMPT_TIMEOUT_MS),
-                    Step::PromptTimeout,
-                )),
-            ),
-            MockPairingMethod::DisplayPasskey => (
-                PairingPhase::DisplayPasskey {
-                    passkey: device.passkey,
-                },
-                Some((now + MOCK_REMOTE_TYPING_MS, Step::Resolve)),
-            ),
-            MockPairingMethod::Pin => (
-                PairingPhase::Failed {
-                    reason: PairingFailure::PinRequired,
-                },
-                None,
-            ),
-        };
+        let (phase, due) = Self::first_phase(device.method, device.passkey, now);
         self.attempt = Some(Attempt {
             device: id.to_owned(),
             phase,
             due,
+            incoming: false,
+            forced: None,
         });
         // As the BlueZ adapter does: discovery competes with paging the
         // remote, so pairing stops it.
         self.discovery_until = None;
         Ok(true)
+    }
+
+    /// A remote starts pairing with this phone. It becomes visible (BlueZ
+    /// creates the device object on the incoming connection); a Just Works
+    /// remote is asked about explicitly, as BlueZ's agent is for incoming
+    /// requests.
+    pub fn incoming(&mut self, id: &str) -> Result<bool, HardwareError> {
+        if self.running().is_some() {
+            return Err(invalid("a pairing attempt is already in progress"));
+        }
+        let now = self.clock_ms;
+        let device = self
+            .devices
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| invalid("no such bluetooth device"))?;
+        if device.paired {
+            return Err(invalid("the device is already paired"));
+        }
+        device.visible = true;
+        let method = match device.method {
+            MockPairingMethod::JustWorks => MockPairingMethod::Authorize,
+            other => other,
+        };
+        let (phase, due) = Self::first_phase(method, device.passkey, now);
+        self.attempt = Some(Attempt {
+            device: id.to_owned(),
+            phase,
+            due,
+            incoming: true,
+            forced: None,
+        });
+        Ok(true)
+    }
+
+    fn first_phase(
+        method: MockPairingMethod,
+        passkey: u32,
+        now: u64,
+    ) -> (PairingPhase, Option<(u64, Step)>) {
+        let prompt = |phase| {
+            (
+                phase,
+                Some((
+                    now + u64::from(BLUETOOTH_PROMPT_TIMEOUT_MS),
+                    Step::PromptTimeout,
+                )),
+            )
+        };
+        match method {
+            MockPairingMethod::JustWorks => (
+                PairingPhase::Pairing,
+                Some((now + MOCK_PAIR_STEP_MS, Step::Resolve)),
+            ),
+            MockPairingMethod::Confirm => prompt(PairingPhase::ConfirmPasskey { passkey }),
+            MockPairingMethod::Authorize => prompt(PairingPhase::Authorize),
+            MockPairingMethod::DisplayPasskey => (
+                PairingPhase::DisplayPasskey { passkey },
+                Some((now + MOCK_REMOTE_TYPING_MS, Step::Resolve)),
+            ),
+            MockPairingMethod::Pin => prompt(PairingPhase::RequestPin),
+        }
     }
 
     pub fn reply(&mut self, accept: bool) -> Result<bool, HardwareError> {
@@ -247,6 +294,9 @@ impl MockBluetooth {
             .as_mut()
             .filter(|a| a.phase.awaits_reply())
             .ok_or_else(|| invalid("no pairing prompt is waiting for an answer"))?;
+        if accept && attempt.phase == PairingPhase::RequestPin {
+            return Err(invalid("this pairing needs a PIN"));
+        }
         if accept {
             attempt.phase = PairingPhase::Pairing;
             attempt.due = Some((now + MOCK_PAIR_STEP_MS, Step::Resolve));
@@ -255,6 +305,30 @@ impl MockBluetooth {
                 reason: PairingFailure::Declined,
             };
             attempt.due = None;
+        }
+        Ok(true)
+    }
+
+    /// Answers a PIN request. A PIN the remote does not expect still
+    /// bonds for a moment, then the remote rejects it (as a real legacy
+    /// device does). The PIN is compared and dropped; nothing records it.
+    pub fn reply_pin(&mut self, pin: &BluetoothPin) -> Result<bool, HardwareError> {
+        let now = self.clock_ms;
+        let device = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.phase == PairingPhase::RequestPin)
+            .map(|a| a.device.clone())
+            .ok_or_else(|| invalid("no PIN request is waiting for an answer"))?;
+        let expected = self
+            .devices
+            .iter()
+            .find(|d| d.id == device)
+            .is_some_and(|d| d.pin == pin.expose());
+        if let Some(attempt) = self.attempt.as_mut() {
+            attempt.phase = PairingPhase::Pairing;
+            attempt.due = Some((now + MOCK_PAIR_STEP_MS, Step::Resolve));
+            attempt.forced = (!expected).then_some(MockPairingOutcome::Rejected);
         }
         Ok(true)
     }
@@ -359,7 +433,7 @@ impl MockBluetooth {
         let Some(attempt) = self.attempt.clone() else {
             return;
         };
-        let outcome = self.outcome_override.unwrap_or_else(|| {
+        let outcome = attempt.forced.or(self.outcome_override).unwrap_or_else(|| {
             self.devices
                 .iter()
                 .find(|d| d.id == attempt.device)

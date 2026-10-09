@@ -95,6 +95,10 @@ fn preview_model(name: &str, target: &str) -> Option<Model> {
             Some(PairingPhase::ConfirmPasskey { passkey: 482_913 }),
         ),
         "bluetooth-paired" => (Some(bluetooth::BtView::Pair), Some(PairingPhase::Paired)),
+        "bluetooth-pin" => (
+            Some(bluetooth::BtView::Pair),
+            Some(PairingPhase::RequestPin),
+        ),
         "bluetooth-failed" => (
             Some(bluetooth::BtView::Pair),
             Some(PairingPhase::Failed {

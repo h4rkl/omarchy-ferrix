@@ -9,11 +9,15 @@
 //! 2. opens the mock-control channel when the target has one
 //!    (`--control auto|none|PATH`, `FERRIX_CONTROL_PORT`);
 //! 3. publishes every hardware event as a JSON record on stdout (serial in
-//!    the guest) and to every subscribed client.
+//!    the guest) and to every subscribed client;
+//! 4. raises the system `show-bluetooth-pairing` handler through
+//!    `ferrix-appd` (`--appd PATH|none`, `FERRIX_APPD_SOCKET`) when a remote
+//!    starts pairing and its request waits on the user.
 //!
 //! Any startup failure prints a `boot-failed` record and exits non-zero.
 //! Nothing here knows about QEMU beyond the neutral control-port name.
 
+mod attention;
 mod control;
 mod core;
 mod protocol;
@@ -57,6 +61,8 @@ struct Args {
     socket: PathBuf,
     control: control::ControlPath,
     shutdown_marker: PathBuf,
+    /// `None` disables the incoming-pairing raise.
+    appd: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -68,6 +74,10 @@ fn parse_args() -> Result<Args, String> {
         shutdown_marker: PathBuf::from(
             env("FERRIX_SHUTDOWN_MARKER").unwrap_or(DEFAULT_SHUTDOWN_MARKER.to_owned()),
         ),
+        appd: Some(PathBuf::from(
+            env(ferrix_app_api::APPD_SOCKET_ENV)
+                .unwrap_or(ferrix_app_api::DEFAULT_APPD_SOCKET.to_owned()),
+        )),
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -81,9 +91,13 @@ fn parse_args() -> Result<Args, String> {
                 args.shutdown_marker =
                     PathBuf::from(it.next().ok_or("--shutdown-marker needs a path")?)
             }
+            "--appd" => {
+                let text = it.next().ok_or("--appd needs PATH|none")?;
+                args.appd = (text != "none").then(|| PathBuf::from(text));
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: ferrix-core [profile.toml] [--socket PATH] [--control auto|none|PATH] [--shutdown-marker PATH]"
+                    "usage: ferrix-core [profile.toml] [--socket PATH] [--control auto|none|PATH] [--shutdown-marker PATH] [--appd PATH|none]"
                         .to_owned(),
                 );
             }
@@ -227,6 +241,13 @@ fn run() -> Result<(), String> {
         .spawn(move || server.serve(listener))
         .map_err(|e| format!("cannot start socket thread: {e}"))?;
 
+    // Incoming Bluetooth pairing requests raise Settings system-wide.
+    let attention = match args.appd {
+        Some(socket) => attention::Attention::spawn(socket, std::time::Duration::from_secs(2))?,
+        None => attention::Attention::disabled(),
+    };
+    let mut incoming = attention::IncomingEdge::default();
+
     // Event pump: serial record + fan-out. Runs until the adapter goes away.
     for event in events {
         // Records lead with the evidence label, then the event's own fields.
@@ -237,6 +258,11 @@ fn run() -> Result<(), String> {
         }
         emit(Value::Object(record));
         broadcast(&subscribers, &event);
+        if let ferrix_hardware_api::HardwareEvent::BluetoothSessionChanged(summary) = &event
+            && incoming.update(summary)
+        {
+            attention.incoming_pairing();
+        }
     }
     Err("hardware event source closed".to_owned())
 }

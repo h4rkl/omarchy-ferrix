@@ -1,5 +1,102 @@
 # Status
 
+## 2026-10-10 (Bluetooth legacy PIN, incoming pairing raise, live scan countdown; QEMU/mock only)
+
+Issue #6. Nothing here was run on the Pixel 9a or any physical controller.
+
+- **Contract (`ferrix-hardware-api`):** `PairingPhase::RequestPin` (stage
+  `request-pin`; carries nothing), `BluetoothPin` (1-16 printable ASCII, no
+  spaces; `Debug` prints `<redacted>`), `BluetoothCommand::ReplyPin {pin}` and
+  `Bluetooth::reply_bluetooth_pin` (default `Unsupported`).
+  `ReplyPairing {accept: false}` still declines a PIN request, and a plain
+  accept on one is refused. `BluetoothPairing.incoming` and the summary's
+  `incoming` flag (serde default false) mark remote-initiated attempts, and
+  `BluetoothSessionSummary::incoming_prompt` is the raise condition. Events
+  still carry counts and stages only. `PairingFailure::PinRequired` remains
+  for adapters that cannot ask for a PIN.
+- **BlueZ adapter:** `Agent1.RequestPinCode` now hands a `RequestPin` prompt
+  to the session and awaits the answer on the existing `async-channel` (no
+  D-Bus call from the agent, no lock held across the wait). The typed PIN is
+  only the method's return value. Prompt answers are a typed `PromptAnswer`
+  (accept, decline, PIN). An agent request for an attempt this adapter did
+  not start (no `Pair()` of ours) is marked `incoming`, and the 30 s prompt
+  timeout still declines it. There are mocked-bus tests for the PIN round
+  trip (events never contain it) and for the incoming flag with timeout.
+- **Emulator and profile:** a `pin` remote now asks for its profile `pin`
+  (`[[bluetooth.discoverable]] pin`, default `0000`; the legacy headset sets
+  `0000`). A wrong PIN bonds for one mock step, then the remote rejects it.
+  The mock-only `bluetooth-incoming {device}` starts a remote-initiated
+  request with the device's method (Just Works is asked explicitly as
+  `authorize`, as BlueZ does for incoming requests). New core control verbs
+  are `bluetooth-reply-pin {pin}` and `bluetooth-incoming {device}`; the
+  `mock-command` record names the command only.
+- **System prompt:** there is a new system intent `show-bluetooth-pairing`
+  (`ferrix-app-api`; `Open` allowed for the `service` and `tool` roles) that
+  carries nothing. Settings declares it in its descriptor. `ferrix-core`
+  gained `--appd PATH|none` (`FERRIX_APPD_SOCKET`, default
+  `/run/ferrix/ferrix-appd.sock`) and an attention thread. On the rising edge
+  of an incoming prompt it opens the intent with role `service`, the same
+  route `ferrix-telephonyd` uses to raise incoming calls, and records
+  `bluetooth-attention {sent|failed|disabled}`. Settings is launched with the
+  intent, or receives it while running, and opens Bluetooth with the
+  request's card ("X wants to pair with this phone"). Issue #12 (a
+  shell-owned notification surface) does not exist yet, so this raise takes
+  the foreground; it should move to that surface when it lands.
+- **Settings:** the PIN card shows "PIN for X", a field, Pair/Cancel, the
+  30 s caption, and the shared `Text` keyboard opened on its digit (`?123`)
+  layer. Letters stay one key away for alphanumeric PINs. Enter sends, Esc
+  or Back declines, and spaces and over-long input are dropped. The draft
+  has a redacted `Debug` and is cleared once sent. `ui-state` reads
+  `request-pin`. The scan countdown now ticks on a UI timer: the session's
+  `remaining_ms` is anchored when it arrives, and a 250 ms ticker thread
+  wakes the client only while the Pair view's countdown is on screen. It
+  redraws when the shown second changes and sends nothing to the core.
+- **Scenarios:** `bluetooth-pair-pin` (plain accept and malformed PIN
+  refused, wrong PIN rejected, profile PIN bonds) and
+  `bluetooth-incoming-request` (incoming authorize raises Settings, is
+  accepted and bonds; an incoming PIN request is raised and then declined
+  after 30 s on the mock clock). `bluetooth-pair-failures` now declines the
+  PIN request instead of expecting `pin-required`. `ferrix-core`'s
+  in-process replay skips the guest-only `app-intent` and
+  `bluetooth-attention` records.
+- **Evidence (QEMU, Alpine smoke guest, TCG, 1080x2340,
+  `FERRIX_OUT_DIR=/tmp/f06`):** `just qemu-check` passed
+  (`unplugged-to-charging`). `just qemu-scenario-check` passed 31/31,
+  including both new scenarios (Settings was cold-launched with
+  `delivery: launch`, then received a running push). Earlier runs: two
+  failed to start the agent session on `cursor-ready` (issue #15 harness
+  flake; `input-ready` pointer present, zero `cursor-ready` lines). One run
+  passed 29/31: all five Bluetooth scenarios passed, `in-call-mic-mute`
+  timed out because a `{{"evidence"` interleaved serial line corrupted its
+  `muted:false` record, and that left a call that failed
+  `incoming-call-answer-route-remote-hangup` (pre-existing flake, as on
+  2026-10-10). Inspected frames, driven by `qemu-tap`, `qemu-type`, and
+  `qemu-mock`:
+  - the Pair view showing "stops in 28 s", then "stops in 23 s" four
+    seconds later with no `bluetooth-tick`, the rail shorter;
+  - the legacy headset's PIN card with `0000` typed and the digit-layer
+    keyboard;
+  - "Paired with Ferrix Mock Legacy Headset" after Pair and one mock tick;
+  - Files in front, then, after `bluetooth-incoming`, Settings raised over
+    it showing "Ferrix Mock Phone wants to pair with this phone"
+    (`app-foreground org.ferrix.settings`);
+  - the incoming PIN card raised over Home.
+
+  The 30 s tick declined it (`timed-out`, `incoming: true`). No JSON record
+  in the serial logs carried a PIN, passkey, device name, mock id, or
+  address (grep hits were only telephony timestamps and the SIM lock type
+  `pin`).
+- **Limitations:** real BlueZ `RequestPinCode` and remote-initiated agent
+  calls are unverified on hardware. The incoming heuristic ("agent asked
+  without our `Pair()`") is untested against a real controller. The raise
+  takes the foreground until #12 provides a notification surface. A raised
+  request that times out simply disappears from the saved list. In QEMU the
+  UI countdown runs on wall time while the mock deadline moves only on
+  `bluetooth-tick`, so the two can disagree until the next session event
+  re-anchors the countdown (on BlueZ both are wall time). The PIN field
+  shows the typed characters, like the remote's fixed code, rather than
+  masking them.
+
 ## 2026-10-10 (Bluetooth discovery, pairing, connect/disconnect, forget; QEMU/mock only)
 
 - **Contract:** `ferrix-hardware-api` adds `BluetoothSession` (bounded
@@ -73,7 +170,8 @@
   pairing request is shown only while Settings is on its Bluetooth page
   (no system notification yet); the scan countdown refreshes on session
   events, not on a UI timer; in QEMU nothing progresses without
-  `bluetooth-tick`.
+  `bluetooth-tick`. (PIN entry, the incoming raise, and the UI-timer
+  countdown were added in the entry above.)
 
 ## 2026-10-09 (Pixel 9a: product reaches home unattended under required isolation; physical `google-pixel-9a-tegu-gxq96-mp1-0`)
 

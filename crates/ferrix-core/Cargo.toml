@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Raises the system `show-bluetooth-pairing` handler (role `service`).
+ferrix-app-api = { path = "../ferrix-app-api" }
+ferrix-app-protocol = { path = "../ferrix-app-protocol" }
 ferrix-hardware-api = { path = "../ferrix-hardware-api" }
 ferrix-session = { path = "../ferrix-session" }
 ferrix-protocol = { path = "../ferrix-protocol" }

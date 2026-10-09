@@ -257,7 +257,7 @@ impl Contacts {
         let action = match intent.kind() {
             IntentKind::Dial => "call",
             IntentKind::Compose => "message",
-            IntentKind::ShowCall => return,
+            IntentKind::ShowCall | IntentKind::ShowBluetoothPairing => return,
         };
         let result = self.appd().map(|client| client.open(intent));
         let (status, error) = match result {

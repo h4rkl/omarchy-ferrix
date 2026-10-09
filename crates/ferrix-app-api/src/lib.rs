@@ -409,6 +409,7 @@ pub enum IntentKind {
     Dial,
     Compose,
     ShowCall,
+    ShowBluetoothPairing,
 }
 
 impl IntentKind {
@@ -417,6 +418,7 @@ impl IntentKind {
             IntentKind::Dial => "dial",
             IntentKind::Compose => "compose",
             IntentKind::ShowCall => "show-call",
+            IntentKind::ShowBluetoothPairing => "show-bluetooth-pairing",
         }
     }
 }
@@ -442,6 +444,10 @@ pub enum AppIntent {
     Compose { number: String },
     /// Show the ringing or live call (system services only).
     ShowCall,
+    /// Show the pending Bluetooth pairing request a remote started (system
+    /// services only). It carries nothing: the handler reads the request
+    /// from the core, so no device name or code passes through here.
+    ShowBluetoothPairing,
 }
 
 impl AppIntent {
@@ -450,6 +456,7 @@ impl AppIntent {
             AppIntent::Dial { .. } => IntentKind::Dial,
             AppIntent::Compose { .. } => IntentKind::Compose,
             AppIntent::ShowCall => IntentKind::ShowCall,
+            AppIntent::ShowBluetoothPairing => IntentKind::ShowBluetoothPairing,
         }
     }
 
@@ -457,7 +464,7 @@ impl AppIntent {
     pub fn number(&self) -> Option<&str> {
         match self {
             AppIntent::Dial { number } | AppIntent::Compose { number } => Some(number),
-            AppIntent::ShowCall => None,
+            AppIntent::ShowCall | AppIntent::ShowBluetoothPairing => None,
         }
     }
 
