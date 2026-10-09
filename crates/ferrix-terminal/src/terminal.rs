@@ -12,12 +12,15 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions as _;
+use alacritty_terminal::index::{Column, Line, Point as TermPoint};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Term, TermMode, point_to_viewport, test::TermSize};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 
 use ferrix_ui::theme;
+
+use crate::selection::Selection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
@@ -48,8 +51,14 @@ pub struct Snapshot {
     pub cells: Vec<Cell>,
     /// Cursor `(column, row)` in the viewport, if visible.
     pub cursor: Option<(usize, usize)>,
-    /// Lines scrolled back into history.
+    /// Lines scrolled back into history (the display offset).
     pub scrollback: usize,
+    /// Lines stored in history above the live screen.
+    pub history: usize,
+    /// The OSC 0/2 window title the program set, if any.
+    pub title: Option<String>,
+    /// Bracketed paste mode (`CSI ? 2004 h`): pastes are fenced.
+    pub bracketed_paste: bool,
     /// DECCKM application cursor mode (arrow keys send SS3 sequences).
     pub app_cursor: bool,
     /// Set once the shell has exited (or failed to start), with the reason.
@@ -65,9 +74,20 @@ impl Snapshot {
             cells: Vec::new(),
             cursor: None,
             scrollback: 0,
+            history: 0,
+            title: None,
+            bracketed_paste: false,
             app_cursor: false,
             exited: Some(reason),
         }
+    }
+
+    /// The characters of one viewport row (for word selection).
+    pub fn row_chars(&self, row: usize) -> Vec<char> {
+        (0..self.cols)
+            .filter_map(|col| self.cell(col, row))
+            .map(|cell| cell.c)
+            .collect()
     }
 
     pub fn cell(&self, col: usize, row: usize) -> Option<&Cell> {
@@ -141,6 +161,9 @@ impl Snapshot {
             cells,
             cursor,
             scrollback: content.display_offset,
+            history: term.history_size(),
+            title: None,
+            bracketed_paste: content.mode.contains(TermMode::BRACKETED_PASTE),
             app_cursor: content.mode.contains(TermMode::APP_CURSOR),
             exited: None,
         }
@@ -149,17 +172,57 @@ impl Snapshot {
     /// Feeds raw terminal output through the emulator without a PTY. Used by
     /// the host preview and by deterministic rendering tests.
     pub fn from_bytes(cols: usize, rows: usize, bytes: &[u8]) -> Self {
-        use alacritty_terminal::event::VoidListener;
-        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
-        let mut term = Term::new(
-            Config::default(),
-            &TermSize::new(cols.max(2), rows.max(1)),
-            VoidListener,
-        );
-        let mut processor = Processor::<StdSyncHandler>::new();
-        processor.advance(&mut term, bytes);
-        Self::from_term(&term)
+        Self::from_term(&term_from_bytes(cols, rows, bytes))
     }
+}
+
+/// The text of `selection` in `term`, clamped to the stored buffer. Lines
+/// that wrapped join without a newline; trailing blanks are dropped, as
+/// Alacritty copies.
+pub fn selection_text<T: EventListener>(term: &Term<T>, selection: &Selection) -> String {
+    let (start, end) = selection.range();
+    let top = -(term.history_size() as i32);
+    let bottom = term.screen_lines() as i32 - 1;
+    let last_col = term.columns().saturating_sub(1);
+    if end.line < top || start.line > bottom {
+        return String::new();
+    }
+    let clamp = |line: i32, col: usize| {
+        TermPoint::new(Line(line.clamp(top, bottom)), Column(col.min(last_col)))
+    };
+    let start = if start.line < top {
+        clamp(top, 0)
+    } else {
+        clamp(start.line, start.col)
+    };
+    let end = if end.line > bottom {
+        clamp(bottom, last_col)
+    } else {
+        clamp(end.line, end.col)
+    };
+    term.bounds_to_string(start, end)
+}
+
+/// Builds a terminal from raw output without a PTY (tests and previews).
+pub fn term_from_bytes(
+    cols: usize,
+    rows: usize,
+    bytes: &[u8],
+) -> Term<alacritty_terminal::event::VoidListener> {
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+    let config = Config {
+        scrolling_history: 2000,
+        ..Config::default()
+    };
+    let mut term = Term::new(
+        config,
+        &TermSize::new(cols.max(2), rows.max(1)),
+        VoidListener,
+    );
+    let mut processor = Processor::<StdSyncHandler>::new();
+    processor.advance(&mut term, bytes);
+    term
 }
 
 fn pack(rgb: Rgb) -> u32 {
@@ -256,6 +319,7 @@ mod session {
     use alacritty_terminal::tty;
 
     use super::{Snapshot, indexed_default, unpack};
+    use crate::selection::Selection;
     use ferrix_ui::theme;
 
     /// Grid size in cells plus the cell size in pixels (reported to the PTY
@@ -305,6 +369,8 @@ mod session {
         geometry: Geometry,
         exited: Option<String>,
         program: String,
+        title: Option<String>,
+        bells: u32,
     }
 
     impl Session {
@@ -350,6 +416,8 @@ mod session {
                 geometry,
                 exited: None,
                 program: program.to_owned(),
+                title: None,
+                bells: 0,
             })
         }
 
@@ -382,6 +450,14 @@ mod session {
             self.term.lock().scroll_display(Scroll::Delta(lines));
         }
 
+        /// Scrolls the viewport to an absolute display offset (0 is live).
+        pub fn scroll_to(&self, offset: usize) {
+            let mut term = self.term.lock();
+            let current = term.grid().display_offset() as i32;
+            let target = i32::try_from(offset).unwrap_or(i32::MAX);
+            term.scroll_display(Scroll::Delta(target - current));
+        }
+
         /// Drains emulator events. Returns `true` when anything arrived, which
         /// means the visible content may have changed.
         pub fn pump(&mut self) -> bool {
@@ -405,6 +481,12 @@ mod session {
                         self.notifier
                             .notify(format(self.geometry.window_size()).into_bytes());
                     }
+                    Event::Title(title) => {
+                        let title: String = title.chars().filter(|c| !c.is_control()).collect();
+                        self.title = (!title.trim().is_empty()).then_some(title);
+                    }
+                    Event::ResetTitle => self.title = None,
+                    Event::Bell => self.bells = self.bells.saturating_add(1),
                     Event::ColorRequest(index, format) => {
                         let color = u8::try_from(index)
                             .map(indexed_default)
@@ -420,7 +502,23 @@ mod session {
         pub fn snapshot(&self) -> Snapshot {
             let mut snapshot = Snapshot::from_term(&self.term.lock());
             snapshot.exited = self.exited.clone();
+            snapshot.title = self.title.clone();
             snapshot
+        }
+
+        /// The OSC 0/2 title, if the program set one.
+        pub fn title(&self) -> Option<&str> {
+            self.title.as_deref()
+        }
+
+        /// Bells rung since the last call.
+        pub fn take_bells(&mut self) -> u32 {
+            std::mem::take(&mut self.bells)
+        }
+
+        /// The selected text.
+        pub fn selection_text(&self, selection: &Selection) -> String {
+            super::selection_text(&self.term.lock(), selection)
         }
     }
 
@@ -452,6 +550,31 @@ mod tests {
         assert!(!s.app_cursor);
         let app = Snapshot::from_bytes(10, 2, b"\x1b[?1h");
         assert!(app.app_cursor);
+    }
+
+    #[test]
+    fn selection_text_follows_buffer_lines_and_history() {
+        use crate::selection::{Point, Selection};
+        let mut bytes = Vec::new();
+        for i in 0..8 {
+            bytes.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"$ echo hello world");
+        let term = term_from_bytes(20, 4, &bytes);
+        let snap = Snapshot::from_term(&term);
+        assert_eq!(snap.history, 5, "9 lines on a 4-row screen");
+        assert_eq!(snap.line_text(3), "$ echo hello world");
+        let word = Selection::word(&snap.row_chars(3), Point::new(3, 9));
+        assert_eq!(selection_text(&term, &word), "hello");
+        // Across lines, from history into the screen; trailing blanks drop.
+        let across = Selection::new(Point::new(-1, 0), Point::new(1, 5));
+        assert_eq!(selection_text(&term, &across), "line 4\nline 5\nline 6");
+        // Points outside the buffer are clamped, or yield nothing.
+        let all = Selection::new(Point::new(-50, 0), Point::new(50, 99));
+        assert!(selection_text(&term, &all).starts_with("line 0\n"));
+        assert!(selection_text(&term, &all).ends_with("hello world"));
+        let gone = Selection::new(Point::new(-90, 0), Point::new(-80, 3));
+        assert_eq!(selection_text(&term, &gone), "");
     }
 
     #[test]

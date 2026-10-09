@@ -4,6 +4,11 @@
 //! a sharp `rust` action accent and quieter `rust_dim` structural rules. The
 //! block cursor, sticky modifier, pressed outline, and back glyph use rust;
 //! rules carry oxidized orange without glare.
+//! Selection, the transient scrollbar, and the selection handles are passive
+//! state and use `steel` (teal), never rust: the grid's one rust element stays
+//! the block cursor, which a live selection hands to the Copy action instead.
+//! The visual bell flashes the grid well's outline in `warn` for a moment.
+//! The OSC 0/2 title a program sets is the header's status line.
 //! The status indicators (battery, radio) belong to the home surface; the
 //! terminal draws only the clock strip so the header geometry matches the rest
 //! of the reference surfaces. Colors come from [`theme::get`]; geometry used
@@ -13,8 +18,28 @@ use ferrix_ui::draw::{Canvas, Rect, Style, Type};
 use ferrix_ui::osk::{self, Key};
 use ferrix_ui::{theme, widgets};
 
-use crate::interaction::{Target, UiState};
+use crate::interaction::{
+    GridView, SelAction, Target, UiState, action_rects, handle_center, handle_radius,
+    scrollbar_thumb, scrollbar_track,
+};
+use crate::selection::{Handle, Point};
 use crate::terminal::Snapshot;
+
+/// `a` blended toward `b` by `t` (0 keeps `a`).
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    let ch = |shift: u32| {
+        let x = (a >> shift & 0xff) as f32;
+        let y = (b >> shift & 0xff) as f32;
+        ((x * (1.0 - t) + y * t).round() as u32) << shift
+    };
+    ch(16) | ch(8) | ch(0)
+}
+
+/// Selected-cell background: a quiet teal wash on the grid well.
+pub fn selection_color() -> u32 {
+    let t = theme::get();
+    mix(t.bg_dark, t.steel, 0.32)
+}
 
 /// Scale a 1080-wide design length. Multiply first so narrow panels never
 /// truncate to zero.
@@ -49,7 +74,7 @@ pub fn compose(
         &mut c,
         ty,
         "Terminal",
-        None,
+        term.and_then(|snap| snap.title.as_deref()),
         state.pressed == Some(Target::Back),
     );
     terminal_page(&mut c, ty, state, term);
@@ -89,6 +114,20 @@ pub fn terminal_metrics(ty: &Type, width: u32, height: u32) -> TermMetrics {
     }
 }
 
+/// The hit-test view of a frame: grid geometry plus what the snapshot shows.
+pub fn grid_view(m: &TermMetrics, snap: Option<&Snapshot>) -> GridView {
+    GridView {
+        area: m.area,
+        origin: m.origin,
+        cell_w: m.cell_w,
+        cell_h: m.cell_h,
+        cols: snap.map_or(m.cols, |s| s.cols.min(m.cols)),
+        rows: snap.map_or(m.rows, |s| s.rows.min(m.rows)),
+        history: snap.map_or(0, |s| s.history),
+        offset: snap.map_or(0, |s| s.scrollback),
+    }
+}
+
 /// Small uppercase mono chrome label, right-aligned to `right` on `baseline`.
 fn chrome_label_right(c: &mut Canvas, ty: &Type, text: &str, right: i32, baseline: i32, px: i32) {
     let style = Style::bold(px as f32, theme::get().fg_dim);
@@ -125,13 +164,19 @@ fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snaps
         Some(snap) => {
             let cols = snap.cols.min(m.cols);
             let rows = snap.rows.min(m.rows);
+            let selected = selection_color();
             for row in 0..rows {
                 for col in 0..cols {
                     let Some(cell) = snap.cell(col, row) else {
                         continue;
                     };
                     let r = cell_rect(col, row);
-                    if let Some(bg) = cell.bg {
+                    let in_selection = state.selection.is_some_and(|sel| {
+                        sel.contains(Point::from_viewport(row, col, snap.scrollback))
+                    });
+                    if in_selection {
+                        c.fill_rect(r, selected);
+                    } else if let Some(bg) = cell.bg {
                         c.fill_rect(r, bg);
                     }
                     if cell.c != ' ' {
@@ -151,7 +196,7 @@ fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snaps
                 && row < rows
             {
                 let r = cell_rect(col, row);
-                let color = if snap.exited.is_some() {
+                let color = if snap.exited.is_some() || state.selection.is_some() {
                     t.fg_dim
                 } else {
                     t.rust
@@ -191,9 +236,99 @@ fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snaps
                     m.area.y + m.area.h - s(24),
                 );
             }
+            let view = grid_view(&m, Some(snap));
+            if state.scrollbar_visible {
+                scrollbar(c, &view, state.pressed == Some(Target::Scrollbar));
+            }
+            if let Some(selection) = &state.selection {
+                selection_chrome(c, ty, &view, selection, state.pressed);
+            }
+            if let Some(note) = &state.notice {
+                let style = Style::bold(s(26) as f32, t.fg_dim);
+                let w = ty.width(style, note);
+                ty.text(
+                    c,
+                    style,
+                    note,
+                    m.area.x + (m.area.w - w) / 2,
+                    m.area.y + m.area.h - s(24),
+                );
+            }
         }
     }
+    if state.bell {
+        c.stroke_rounded(m.area, s(8), s(4).max(2), t.warn);
+    }
     keyboard(c, ty, state);
+}
+
+/// The transient scrollbar: a faint track and a steel thumb, wider while
+/// it is held.
+fn scrollbar(c: &mut Canvas, view: &GridView, held: bool) {
+    let t = theme::get();
+    let size = (c.width() as u32, c.height() as u32);
+    let width = design_width(c);
+    let s = |v: i32| scale(v, width);
+    let Some(mut thumb) = scrollbar_thumb(view, size) else {
+        return;
+    };
+    let track = scrollbar_track(view, size);
+    c.fill_rounded(track, s(4), t.surface_hi);
+    if held {
+        thumb.x -= s(4);
+        thumb.w += s(8);
+    }
+    c.fill_rounded(thumb, s(4), t.steel);
+}
+
+/// Selection handles (steel drops under each end) and the Copy / Paste /
+/// Done bar. Copy carries the region's rust action cue.
+fn selection_chrome(
+    c: &mut Canvas,
+    ty: &Type,
+    view: &GridView,
+    selection: &crate::selection::Selection,
+    pressed: Option<Target>,
+) {
+    let t = theme::get();
+    let size = (c.width() as u32, c.height() as u32);
+    let width = design_width(c);
+    let s = |v: i32| scale(v, width);
+    let radius = handle_radius(size);
+    for handle in [Handle::Start, Handle::End] {
+        let Some((x, y)) = handle_center(view, size, selection, handle) else {
+            continue;
+        };
+        let held = pressed == Some(Target::Handle(handle));
+        // A stem from the cell edge to the drop, then the drop itself.
+        c.fill_rect(
+            Rect {
+                x: x - s(1).max(1),
+                y: y - radius - view.cell_h,
+                w: s(3).max(2),
+                h: view.cell_h + radius,
+            },
+            t.steel,
+        );
+        c.fill_circle(x, y, if held { radius + s(6) } else { radius }, t.steel);
+    }
+    for (r, action) in action_rects(view, size, selection) {
+        let tone = if action == SelAction::Copy {
+            widgets::Tone::Accent
+        } else {
+            widgets::Tone::Neutral
+        };
+        // A solid plate so grid text never shows through the bar.
+        c.fill_rounded(r, s(6), t.bg_dark);
+        widgets::chip(
+            c,
+            ty,
+            r,
+            action.label(),
+            tone,
+            pressed == Some(Target::Action(action)),
+        );
+    }
 }
 
 fn keyboard(c: &mut Canvas, ty: &Type, state: &UiState) {
@@ -318,6 +453,52 @@ mod tests {
         assert_eq!(c.get(blank.0, blank.1), t.bg_dark);
         let c = compose(&ty, 1080, 2340, 600, &state, None);
         assert_eq!(c.get(blank.0, blank.1), t.bg_dark);
+    }
+
+    #[test]
+    fn selection_scrollbar_bell_and_title_render_in_their_colors() {
+        use crate::selection::{Point, Selection};
+        let t = theme::get();
+        let ty = Type::load().expect("embedded fonts load");
+        let m = terminal_metrics(&ty, 1080, 2340);
+        let mut bytes = Vec::new();
+        for i in 0..60 {
+            bytes.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"$ ");
+        let mut snap = Snapshot::from_bytes(m.cols, m.rows, &bytes);
+        snap.title = Some("root@ferrix: ~".to_owned());
+        assert!(snap.history > 0);
+        let mut state = UiState::new();
+        state.selection = Some(Selection::new(Point::new(10, 0), Point::new(11, 3)));
+        state.scrollbar_visible = true;
+        state.bell = true;
+        let c = compose(&ty, 1080, 2340, 600, &state, Some(&snap));
+        let view = grid_view(&m, Some(&snap));
+        // A blank selected cell carries the teal wash; an unselected one not.
+        let r = view.cell_rect(11, 2);
+        assert_eq!(c.get(r.x + r.w - 2, r.y + 2), selection_color());
+        let r = view.cell_rect(12, 2);
+        assert_eq!(c.get(r.x + r.w - 2, r.y + 2), t.bg_dark);
+        // Both handles and the thumb are steel; Copy is the rust cue and the
+        // cursor gives up its accent while selecting.
+        let sel = state.selection.unwrap();
+        for handle in [Handle::Start, Handle::End] {
+            let (x, y) = handle_center(&view, (1080, 2340), &sel, handle).unwrap();
+            assert_eq!(c.get(x, y), t.steel, "{handle:?}");
+        }
+        let thumb = scrollbar_thumb(&view, (1080, 2340)).unwrap();
+        assert_eq!(c.get(thumb.x + thumb.w / 2, thumb.y + thumb.h / 2), t.steel);
+        let (copy, _) = action_rects(&view, (1080, 2340), &sel)[0];
+        assert_eq!(c.get(copy.x + copy.w / 2, copy.y), t.rust);
+        let (cx, cy) = snap.cursor.unwrap();
+        let cur = view.cell_rect(cy, cx);
+        assert_eq!(c.get(cur.x + 2, cur.y + 2), t.fg_dim);
+        // The bell outlines the well in warn; the title sits in the header.
+        assert_eq!(c.get(m.area.x + m.area.w / 2, m.area.y + 1), t.warn);
+        let header_right = (700..1030).any(|x| (150..190).any(|y| c.get(x, y) == t.fg_dim));
+        assert!(header_right, "title drawn as header status");
+        assert!(t.steel != t.rust && selection_color() != t.rust);
     }
 
     #[test]

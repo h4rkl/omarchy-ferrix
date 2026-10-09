@@ -17,6 +17,7 @@
 
 mod interaction;
 mod screen;
+mod selection;
 mod terminal;
 
 #[cfg(target_os = "linux")]

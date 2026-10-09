@@ -1,0 +1,7 @@
+# German QWERTZ letter layer: Z and Y swap and the umlauts sit at the row
+# ends, as on a German phone keyboard. Shift turns ü/ö/ä into Ü/Ö/Ä; ß has no
+# single-character capital in common use and stays ß.
+schema_version = 1
+id = "de"
+name = "Deutsch (QWERTZ)"
+letters = ["qwertzuiopü", "asdfghjklöä", "yxcvbnmß"]

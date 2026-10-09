@@ -1,0 +1,5 @@
+# Swedish QWERTY letter layer with å, ö and ä at the row ends.
+schema_version = 1
+id = "sv"
+name = "Svenska"
+letters = ["qwertyuiopå", "asdfghjklöä", "zxcvbnm"]

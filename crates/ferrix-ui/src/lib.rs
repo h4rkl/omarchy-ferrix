@@ -6,6 +6,8 @@
 //!   and the `colors.toml` loader behind [`theme::get`].
 //! - [`osk`] and [`keymap`]: the touch keyboard geometry and the evdev keymap
 //!   shared by hit testing, rendering, and terminal input.
+//! - [`keyboard`]: the data-driven letter layouts, the per-user
+//!   `keyboard.toml` (layout, repeat timing), and the key-repeat timer.
 //! - [`widgets`] and [`gesture`]: shared chips, rows, fields, keypad, and
 //!   keyboard drawing plus the touch tracker every app surface reuses.
 //! - [`evidence`]: single-line JSON evidence records on stdout and the
@@ -23,6 +25,7 @@ pub mod clock;
 pub mod draw;
 pub mod evidence;
 pub mod gesture;
+pub mod keyboard;
 pub mod keymap;
 pub mod osk;
 pub mod theme;

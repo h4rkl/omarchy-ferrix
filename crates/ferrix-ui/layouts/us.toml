@@ -1,0 +1,7 @@
+# US English QWERTY letter layer for the shared on-screen keyboard.
+# A layout file names its letter rows only; the symbol pages, the shift,
+# backspace, space and enter keys, and the terminal accessory row are shared.
+schema_version = 1
+id = "us"
+name = "English (US)"
+letters = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]

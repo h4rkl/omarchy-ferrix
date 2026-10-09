@@ -693,7 +693,7 @@ pub fn edit_text(text: &mut String, key: Key, osk: &mut OskState) -> Edit {
         }
         Key::Char(ch) => {
             let upper = osk.take_char_case();
-            text.push(if upper { ch.to_ascii_uppercase() } else { ch });
+            text.push(if upper { osk::upper(ch) } else { ch });
             Edit::Changed
         }
         _ => Edit::Unchanged,

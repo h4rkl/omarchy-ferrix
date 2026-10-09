@@ -18,7 +18,24 @@
 //! tap timer) keeps the state machine deterministic and testable. Every
 //! layout fills the same tray height, so focusing a different field never
 //! moves the content above the keyboard.
+//!
+//! The letter rows are data: [`crate::keyboard`] supplies the active
+//! [`LetterLayout`](crate::keyboard::LetterLayout) (US, German, Swedish, ...),
+//! and letter keys narrow evenly when a layout's widest row holds more than
+//! ten letters. Symbols, modifiers, and the accessory row are shared by every
+//! layout.
 use crate::draw::Rect;
+use crate::keyboard::{self, LetterLayout};
+
+/// The capital form of a letter when it is a single character (`ü` -> `Ü`);
+/// letters without one (`ß`) and non-letters are returned unchanged.
+pub fn upper(c: char) -> char {
+    let mut it = c.to_uppercase();
+    match (it.next(), it.next()) {
+        (Some(u), None) => u,
+        _ => c,
+    }
+}
 
 /// Which key set a focused input field asks for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -160,7 +177,7 @@ pub fn bytes(key: Key, upper: bool, ctrl: bool, app_cursor: bool) -> Option<Vec<
     };
     match key {
         Key::Char(c) => {
-            let c = if upper { c.to_ascii_uppercase() } else { c };
+            let c = if upper { self::upper(c) } else { c };
             if ctrl && let Some(control) = control_byte(c) {
                 return Some(vec![control]);
             }
@@ -200,7 +217,6 @@ fn control_byte(c: char) -> Option<u8> {
     }
 }
 
-const LETTER_ROWS: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const SYMBOL_ROWS: [&str; 3] = ["1234567890", "-/:;()$&@\"", "_=+*'!?"];
 /// Shift in the symbol layer swaps the digit row for the remaining ASCII
 /// punctuation, so every printable ASCII character is reachable by touch.
@@ -269,7 +285,7 @@ pub fn terminal_area(size: (u32, u32)) -> Rect {
 /// Key label in the current layer. Letters follow the shift state.
 pub fn label(key: Key, state: &OskState) -> String {
     match key {
-        Key::Char(c) if state.upper() => c.to_ascii_uppercase().to_string(),
+        Key::Char(c) if state.upper() => upper(c).to_string(),
         Key::Char(c) => c.to_string(),
         Key::Shift => "\u{21e7}".to_owned(),
         Key::Ctrl => "ctrl".to_owned(),
@@ -299,34 +315,52 @@ fn chars(row: &str) -> Row {
     row.chars().map(|c| (1.0, Some(Key::Char(c)))).collect()
 }
 
+/// Letter rows from the layout data: letters share one width (narrower when
+/// the widest row holds more than ten), rows are centred, and the shift and
+/// backspace keys take what the third row leaves.
+fn letter_rows(letters: &LetterLayout) -> (Row, Row, Row) {
+    let n3 = letters.rows[2].len();
+    let widest = letters.rows[0].len().max(letters.rows[1].len());
+    let k = ROW_UNITS / (widest.max(n3 + 3).max(10) as f64);
+    let centred = |row: &[char]| {
+        let pad = (ROW_UNITS - row.len() as f64 * k) / 2.0;
+        let mut out: Row = Vec::new();
+        if pad > 1e-6 {
+            out.push((pad, None));
+        }
+        out.extend(row.iter().map(|c| (k, Some(Key::Char(*c)))));
+        if pad > 1e-6 {
+            out.push((pad, None));
+        }
+        out
+    };
+    let side = (ROW_UNITS - n3 as f64 * k) / 2.0;
+    let mut row3: Row = vec![(side, Some(Key::Shift))];
+    row3.extend(letters.rows[2].iter().map(|c| (k, Some(Key::Char(*c)))));
+    row3.push((side, Some(Key::Backspace)));
+    (centred(&letters.rows[0]), centred(&letters.rows[1]), row3)
+}
+
 /// Letter or symbol layers shared by the text and terminal layouts.
-fn text_rows(state: &OskState) -> Vec<Row> {
-    let mut row1;
-    let row2;
-    let mut row3;
-    if state.symbols {
-        row1 = chars(if state.shift {
+fn text_rows(state: &OskState, letters: &LetterLayout) -> Vec<Row> {
+    let (row1, row2, row3) = if state.symbols {
+        let row1 = chars(if state.shift {
             SHIFTED_SYMBOL_ROW
         } else {
             SYMBOL_ROWS[0]
         });
-        row2 = chars(SYMBOL_ROWS[1]);
-        row3 = chars(if state.shift && state.layout == Layout::Text {
+        let row2 = chars(SYMBOL_ROWS[1]);
+        let mut row3 = chars(if state.shift && state.layout == Layout::Text {
             TEXT_SHIFTED_SYMBOL_ROW3
         } else {
             SYMBOL_ROWS[2]
         });
+        row3.insert(0, (1.5, Some(Key::Shift)));
+        row3.push((1.5, Some(Key::Backspace)));
+        (row1, row2, row3)
     } else {
-        row1 = chars(LETTER_ROWS[0]);
-        let mut middle = vec![(0.5, None)];
-        middle.extend(chars(LETTER_ROWS[1]));
-        middle.push((0.5, None));
-        row2 = middle;
-        row3 = chars(LETTER_ROWS[2]);
-    }
-    row1.truncate(10);
-    row3.insert(0, (1.5, Some(Key::Shift)));
-    row3.push((1.5, Some(Key::Backspace)));
+        letter_rows(letters)
+    };
     let row4 = vec![
         (1.5, Some(Key::Layer)),
         (1.0, Some(Key::Char(','))),
@@ -337,13 +371,13 @@ fn text_rows(state: &OskState) -> Vec<Row> {
     vec![row1, row2, row3, row4]
 }
 
-fn rows(state: &OskState) -> Vec<Row> {
+fn rows(state: &OskState, letters: &LetterLayout) -> Vec<Row> {
     match state.layout {
-        Layout::Text => text_rows(state),
+        Layout::Text => text_rows(state, letters),
         Layout::Terminal => {
             let accessory = ACCESSORY_ROW.iter().map(|k| (1.0, Some(*k))).collect();
             let mut rows = vec![accessory];
-            rows.extend(text_rows(state));
+            rows.extend(text_rows(state, letters));
             rows
         }
         Layout::Phone => PHONE_ROWS
@@ -353,13 +387,19 @@ fn rows(state: &OskState) -> Vec<Row> {
     }
 }
 
-/// Key rectangles for the current layer, in panel pixels.
+/// Key rectangles for the current layer in the active letter layout
+/// ([`keyboard::active_letters`]), in panel pixels.
 pub fn keys(size: (u32, u32), state: &OskState) -> Vec<(Rect, Key)> {
+    keys_with(size, state, keyboard::active_letters())
+}
+
+/// Key rectangles for the current layer in an explicit letter layout.
+pub fn keys_with(size: (u32, u32), state: &OskState, letters: &LetterLayout) -> Vec<(Rect, Key)> {
     let w = f64::from(size.0);
     let unit = w / ROW_UNITS;
     let gap = w * GAP;
     let (top, bottom) = extent(size);
-    let rows = rows(state);
+    let rows = rows(state, letters);
     // Fewer rows share the same tray, so text keys get taller targets.
     let row_h = f64::from(bottom - top) / rows.len() as f64;
     let mut out = Vec::new();
@@ -535,6 +575,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_layout_fits_reaches_ascii_and_cases_its_own_letters() {
+        for letters in crate::keyboard::layouts() {
+            for layout in [Layout::Text, Layout::Terminal] {
+                let mut seen = std::collections::HashSet::new();
+                for state in states(layout) {
+                    let keys = keys_with(SIZE, &state, letters);
+                    let (top, bottom) = extent(SIZE);
+                    for (i, (r, key)) in keys.iter().enumerate() {
+                        assert!(
+                            r.x >= 0 && r.x + r.w <= 1080 && r.y >= top && r.y + r.h <= bottom,
+                            "{} {r:?}",
+                            letters.id
+                        );
+                        assert!(r.w >= 80, "{} keys stay touchable: {r:?}", letters.id);
+                        for (r2, _) in &keys[i + 1..] {
+                            let overlap = r.x < r2.x + r2.w
+                                && r2.x < r.x + r.w
+                                && r.y < r2.y + r2.h
+                                && r2.y < r.y + r.h;
+                            assert!(!overlap, "{} {r:?} overlaps {r2:?}", letters.id);
+                        }
+                        if let Key::Char(c) = key {
+                            seen.insert(if state.upper() { upper(*c) } else { *c });
+                        }
+                        if *key == Key::Space {
+                            seen.insert(' ');
+                        }
+                    }
+                }
+                for c in (0x20u8..0x7f).map(char::from) {
+                    assert!(seen.contains(&c), "{} {layout:?} missing {c:?}", letters.id);
+                }
+                for c in letters.rows.iter().flatten() {
+                    assert!(seen.contains(c) && seen.contains(&upper(*c)), "{c}");
+                }
+            }
+        }
+        let de = crate::keyboard::layout("de").unwrap();
+        let mut state = OskState::default();
+        let has = |state: &OskState, c: char| {
+            keys_with(SIZE, state, de)
+                .iter()
+                .any(|(_, k)| *k == Key::Char(c))
+        };
+        assert!(has(&state, '\u{fc}') && has(&state, 'z') && has(&state, '\u{df}'));
+        state.press(Key::Shift, false);
+        assert_eq!(label(Key::Char('\u{fc}'), &state), "\u{dc}");
+        assert_eq!(
+            state.press(Key::Char('\u{fc}'), false),
+            Some("\u{dc}".as_bytes().to_vec())
+        );
+        state.press(Key::Shift, false);
+        assert_eq!(
+            state.press(Key::Char('\u{df}'), false),
+            Some("\u{df}".as_bytes().to_vec()),
+            "sharp s has no single-character capital"
+        );
+        assert_eq!(upper('a'), 'A');
+        assert_eq!(upper('1'), '1');
     }
 
     #[test]

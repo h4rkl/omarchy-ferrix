@@ -9,10 +9,12 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrix_app_protocol::{Client, ClientRole, Report};
-use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrix_ui::client::{
+    ClientConfig, ClientHandler, ClipboardEvent, ClipboardRequest, ClipboardRoute, Wake,
+};
 use ferrix_ui::clock::MinuteClock;
 use ferrix_ui::draw::{Canvas, Type};
 use ferrix_ui::evidence::{emit, json_escape};
@@ -43,6 +45,8 @@ struct Terminal {
     appd_socket: Option<PathBuf>,
     ferrix_appd: Option<Client>,
     appd_unavailable_reported: bool,
+    clipboard: Vec<ClipboardRequest>,
+    title_chars: Option<usize>,
 }
 
 pub fn run(initial_size: (u32, u32), shell: String) -> Result<(), String> {
@@ -76,6 +80,8 @@ pub fn run(initial_size: (u32, u32), shell: String) -> Result<(), String> {
                 .map(PathBuf::from),
             ferrix_appd: None,
             appd_unavailable_reported: false,
+            clipboard: Vec::new(),
+            title_chars: None,
         })
     })
 }
@@ -147,6 +153,31 @@ impl Terminal {
                         session.scroll(lines);
                     }
                 }
+                TermAction::ScrollTo(offset) => {
+                    if let Some(session) = &self.session {
+                        session.scroll_to(offset);
+                    }
+                }
+                TermAction::Copy(selection) => {
+                    let text = self
+                        .session
+                        .as_ref()
+                        .map(|session| session.selection_text(&selection))
+                        .unwrap_or_default();
+                    // Counts only: the selected text never reaches the log.
+                    emit(format!(
+                        "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"terminal-copy\",\"cells\":{},\"chars\":{}}}",
+                        selection.cells(self.ui.view.cols),
+                        text.chars().count()
+                    ));
+                    if text.is_empty() {
+                        self.ui
+                            .note("selection \u{b7} empty".to_owned(), Instant::now());
+                    } else {
+                        self.clipboard.push(ClipboardRequest::Copy(text));
+                    }
+                }
+                TermAction::Paste => self.clipboard.push(ClipboardRequest::Paste),
             }
         }
         while self.ui.pending_back > 0 {
@@ -207,6 +238,29 @@ impl Terminal {
         ));
     }
 
+    /// Writes pasted text to the shell: newlines become carriage returns
+    /// (what Enter sends), and bracketed-paste mode fences the text so a
+    /// shell can tell it from typing. Returns the characters written.
+    fn paste_into_shell(&mut self, text: &str) -> usize {
+        let Some(session) = self.session.as_ref().filter(|s| s.exited().is_none()) else {
+            return 0;
+        };
+        let body = text.replace("\r\n", "\r").replace('\n', "\r");
+        // A paste must not be able to close the bracket itself.
+        let body = body.replace("\x1b[201~", "");
+        let bracketed = session.snapshot().bracketed_paste;
+        let mut bytes = Vec::with_capacity(body.len() + 12);
+        if bracketed {
+            bytes.extend_from_slice(b"\x1b[200~");
+        }
+        bytes.extend_from_slice(body.as_bytes());
+        if bracketed {
+            bytes.extend_from_slice(b"\x1b[201~");
+        }
+        session.write(bytes);
+        body.chars().count()
+    }
+
     fn snapshot(&self) -> Option<Snapshot> {
         match (&self.session, &self.session_error) {
             (Some(session), _) => Some(session.snapshot()),
@@ -226,6 +280,8 @@ impl ClientHandler for Terminal {
         if let Some(snapshot) = &snapshot {
             self.ui.term_app_cursor = snapshot.app_cursor;
         }
+        let metrics = screen::terminal_metrics(&self.ty, size.0, size.1);
+        self.ui.sync(screen::grid_view(&metrics, snapshot.as_ref()));
         screen::compose(
             &self.ty,
             size.0,
@@ -245,7 +301,9 @@ impl ClientHandler for Terminal {
     }
 
     fn pointer_down(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
-        let redraw = self.input.down(0, position, &mut self.ui, size);
+        let redraw = self
+            .input
+            .down(0, position, &mut self.ui, size, Instant::now());
         if redraw {
             self.after_input();
         }
@@ -253,7 +311,9 @@ impl ClientHandler for Terminal {
     }
 
     fn pointer_motion(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
-        let redraw = self.input.motion(0, position, &mut self.ui, size);
+        let redraw = self
+            .input
+            .motion(0, position, &mut self.ui, size, Instant::now());
         if redraw {
             self.after_input();
         }
@@ -261,8 +321,10 @@ impl ClientHandler for Terminal {
     }
 
     fn pointer_up(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
-        let mut redraw = self.input.motion(0, position, &mut self.ui, size);
-        redraw |= self.input.up(0, &mut self.ui, size);
+        let mut redraw = self
+            .input
+            .motion(0, position, &mut self.ui, size, Instant::now());
+        redraw |= self.input.up(0, &mut self.ui, size, Instant::now());
         if redraw {
             self.after_input();
         }
@@ -274,7 +336,9 @@ impl ClientHandler for Terminal {
     }
 
     fn touch_down(&mut self, id: i32, position: (f64, f64), size: (u32, u32)) -> bool {
-        let redraw = self.input.down(id, position, &mut self.ui, size);
+        let redraw = self
+            .input
+            .down(id, position, &mut self.ui, size, Instant::now());
         if redraw {
             self.after_input();
         }
@@ -282,7 +346,9 @@ impl ClientHandler for Terminal {
     }
 
     fn touch_motion(&mut self, id: i32, position: (f64, f64), size: (u32, u32)) -> bool {
-        let redraw = self.input.motion(id, position, &mut self.ui, size);
+        let redraw = self
+            .input
+            .motion(id, position, &mut self.ui, size, Instant::now());
         if redraw {
             self.after_input();
         }
@@ -290,7 +356,7 @@ impl ClientHandler for Terminal {
     }
 
     fn touch_up(&mut self, id: i32, size: (u32, u32)) -> bool {
-        let redraw = self.input.up(id, &mut self.ui, size);
+        let redraw = self.input.up(id, &mut self.ui, size, Instant::now());
         if redraw {
             self.after_input();
         }
@@ -324,6 +390,25 @@ impl ClientHandler for Terminal {
             return clock;
         };
         session.pump();
+        let bells = session.take_bells();
+        let title_chars = session.title().map(|t| t.chars().count());
+        if bells > 0 {
+            self.ui.ring(Instant::now());
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"terminal-bell\",\"count\":{bells}}}"
+            ));
+        }
+        if title_chars != self.title_chars {
+            self.title_chars = title_chars;
+            // The title can name a working directory: record its length only.
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"terminal-title\",\"chars\":{}}}",
+                title_chars.map_or_else(|| "null".to_owned(), |n| n.to_string())
+            ));
+        }
+        let Some(session) = self.session.as_mut() else {
+            return clock;
+        };
         let exited = session.exited().map(str::to_owned);
         let first_line = (!self.terminal_ready_reported)
             .then(|| session.snapshot().first_text_line())
@@ -350,5 +435,40 @@ impl ClientHandler for Terminal {
 
     fn page_name(&self) -> String {
         "Terminal".to_owned()
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.input.deadline(&self.ui)
+    }
+
+    fn timer(&mut self, now: Instant) -> bool {
+        let snapshot = self.snapshot();
+        let redraw = self.input.timer(&mut self.ui, snapshot.as_ref(), now);
+        if redraw {
+            self.after_input();
+        }
+        redraw
+    }
+
+    fn clipboard_requests(&mut self) -> Vec<ClipboardRequest> {
+        std::mem::take(&mut self.clipboard)
+    }
+
+    fn clipboard(&mut self, event: ClipboardEvent) -> bool {
+        let scope = |route: ClipboardRoute| match route {
+            ClipboardRoute::Wayland => "",
+            ClipboardRoute::InProcess => " \u{b7} this app only",
+        };
+        let note = match event {
+            ClipboardEvent::Copied(route) => format!("copied{}", scope(route)),
+            ClipboardEvent::Pasted(text, route) => {
+                let chars = self.paste_into_shell(&text);
+                format!("pasted \u{b7} {chars} chars{}", scope(route))
+            }
+            ClipboardEvent::Empty => "clipboard \u{b7} empty".to_owned(),
+            ClipboardEvent::Failed(_) => "clipboard \u{b7} unavailable".to_owned(),
+        };
+        self.ui.note(note, Instant::now());
+        true
     }
 }
