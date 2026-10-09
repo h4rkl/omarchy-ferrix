@@ -60,9 +60,13 @@ height=$(awk -F= '/^[[:space:]]*height[[:space:]]*=/ { gsub(/[[:space:]]/, "", $
 # the compositor), and home-ready (the launcher's catalog is loaded and
 # hit-testable). Requiring cursor-ready prevents the first developer tap from
 # being consumed while the compositor initializes its pointer surface.
-for _ in $(seq 1 450); do
+# The probe alternates between two neighbouring pixels: QEMU drops an
+# absolute move to the position it already reported, so a single fixed
+# point sent before the compositor's pointer was ready never produced a
+# second event and readiness timed out.
+for i in $(seq 1 450); do
   if [ -f "$runtime/serial.log" ] && grep -q '"event":"wayland-ready"' "$runtime/serial.log"; then
-    python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" move "$((width / 2))" "$((height / 3))" --width "$width" --height "$height" >/dev/null
+    python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$runtime/qmp.sock" move "$((width / 2 + i % 2))" "$((height / 3))" --width "$width" --height "$height" >/dev/null
   fi
   if [ -f "$runtime/serial.log" ] \
     && grep -q '"event":"wayland-ready"' "$runtime/serial.log" \
