@@ -96,6 +96,9 @@ pub struct Model {
     /// An access point awaiting a passphrase.
     pub passphrase_for: Option<ApId>,
     pub passphrase: String,
+    /// The passphrase field shows plain text instead of bullets; every new
+    /// prompt starts masked.
+    pub passphrase_shown: bool,
     pub osk: OskState,
     pub pending: Vec<Action>,
     pub last_error: Option<String>,
@@ -137,6 +140,7 @@ impl Model {
             data_profile: DataProfile::default(),
             passphrase_for: None,
             passphrase: String::new(),
+            passphrase_shown: false,
             osk: OskState::default(),
             pending: Vec::new(),
             last_error: None,
@@ -473,6 +477,7 @@ impl Model {
         if ap.security.needs_passphrase() && !saved {
             self.passphrase_for = Some(id.clone());
             self.passphrase.clear();
+            self.passphrase_shown = false;
             self.last_error = None;
         } else {
             self.pending.push(Action::Connect {

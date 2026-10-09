@@ -162,8 +162,24 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
             .map(|ap| ap.ssid.to_string())
             .unwrap_or_default();
         section_label(c, ty, &format!("passphrase \u{b7} {ssid}"), s(96), s(870));
-        let shown: String = model.passphrase.chars().map(|_| '\u{2022}').collect();
+        let shown: String = if model.passphrase_shown {
+            model.passphrase.clone()
+        } else {
+            model.passphrase.chars().map(|_| '\u{2022}').collect()
+        };
         text_field(c, ty, l.pass_field_rect(), &shown, "Passphrase", true);
+        chip(
+            c,
+            ty,
+            l.pass_reveal_rect(),
+            if model.passphrase_shown {
+                "hide"
+            } else {
+                "show"
+            },
+            Tone::Neutral,
+            input.pressed == Some(Target::PassReveal),
+        );
         button(
             c,
             ty,
@@ -414,6 +430,17 @@ mod tests {
         );
         let (kb_top, _) = ferrix_ui::osk::extent((1080, 2340));
         assert_eq!(c.get(540, kb_top + 2), t.bg_dark);
+        let reveal = l.pass_reveal_rect();
+        assert!(reveal.x >= f.x + f.w, "toggle sits beside the field");
+        assert_eq!(c.get(reveal.x + 8, reveal.y + 8), t.surface);
+        m.passphrase = "Mock-Pass1".to_owned();
+        let masked = compose(&ty, (1080, 2340), 600, &m, &input);
+        m.passphrase_shown = true;
+        let shown = compose(&ty, (1080, 2340), 600, &m, &input);
+        let differs =
+            (f.x..f.x + f.w).any(|x| (f.y..f.y + f.h).any(|y| masked.get(x, y) != shown.get(x, y)));
+        assert!(differs, "show/hide changes the field text");
+        m.passphrase_shown = false;
 
         m.cancel_passphrase();
         m.show(Page::Radios);

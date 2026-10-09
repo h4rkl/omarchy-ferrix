@@ -1,5 +1,31 @@
 # Status
 
+## 2026-10-09 (field-appropriate keyboards and hardware Shift/Caps Lock; QEMU/Pixel shared code)
+
+- `ferrix_ui::keymap::char_for(code, modifiers)` / `text_key` apply Shift
+  xor Caps Lock to letters and Shift to US-layout symbols; Ctrl/Alt chords
+  insert nothing. Settings, Messages, Contacts, and Phone use it for
+  hardware keys, so "Audit Person" and mixed-case passphrases keep their
+  case. The terminal byte path shares the same casing helper.
+- `ferrix_ui::osk::Layout` adds `Text` (letters, shift, `?123`, space,
+  backspace, enter; no terminal row) and `Phone` (E.161 dial pad plus `+`,
+  backspace, enter) beside `Terminal`. All three layouts use the same
+  keyboard height, so changing fields does not move the page. Fields declare
+  their layout: Contacts numbers and the Messages recipient use `Phone`. The
+  contact name, search, message body, and Wi-Fi passphrase use `Text`, and
+  Terminal stays `Terminal`. Shift applies to one letter. A second tap while
+  shift is armed turns on caps lock, shown by a bar under the glyph, and a
+  third tap turns it off. This follows the tap sequence rather than a tap
+  timer, so it stays deterministic.
+- The Settings passphrase is still masked by default and now has a
+  `show`/`hide` chip beside the field. Every new prompt starts masked.
+- Evidence: `mock` only. Unit and interaction tests cover the layouts,
+  shifted output, caps lock, and reveal. Host `--preview` renders of
+  Contacts edit (Text) and Messages compose (Phone), plus a test render of
+  the passphrase field, were inspected. `just qemu-check` was not run because
+  the guest build needs the Docker daemon, which was not running. No QEMU or
+  Pixel 9a framebuffer claim is made.
+
 ## 2026-10-09 (Pixel 9a recovery-invariant development flash route; device-free)
 
 - Owner policy: for `google-pixel-9a-tegu-gxq96-mp1-0` the only hard gate is
