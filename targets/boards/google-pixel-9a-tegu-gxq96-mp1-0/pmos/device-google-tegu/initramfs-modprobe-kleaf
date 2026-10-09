@@ -23,6 +23,15 @@ done
 name=$(printf '%s' "$1" | $bb tr - _)
 [ -n "$name" ] || exit 1
 
+# The bootloader appends module parameters (e.g. ufs_pixel_fips140.fips_first_lba=,
+# exynos_drm.panel_name=) to the kernel command line. The kernel applies those
+# only to built-in drivers; like Android's first-stage init, pass them to
+# insmod for loadable modules. Values containing spaces are not supported.
+module_args() {
+	name=$(printf '%s' "${1##*/}" | $bb sed 's/\.ko$//' | $bb tr - _)
+	$bb tr ' ' '\n' </proc/cmdline | $bb sed -n "s/^$name\.\([A-Za-z0-9_]*=[^\"]*\)$/\1/p" | $bb tr '\n' ' '
+}
+
 release=$($bb uname -r)
 base=
 for candidate in "$directory/$release" "$directory" "/lib/modules/$release"; do
@@ -60,8 +69,10 @@ resolve() {
 	esac
 }
 for dependency in $reversed; do
-	$bb insmod "$(resolve "$dependency")" 2>/dev/null || :
+	# shellcheck disable=SC2046
+	$bb insmod "$(resolve "$dependency")" $(module_args "$dependency") 2>/dev/null || :
 done
-$bb insmod "$(resolve "$module")" 2>/dev/null && exit 0
+# shellcheck disable=SC2046
+$bb insmod "$(resolve "$module")" $(module_args "$module") 2>/dev/null && exit 0
 # Already loaded counts as success.
 $bb grep -q "^$name " /proc/modules

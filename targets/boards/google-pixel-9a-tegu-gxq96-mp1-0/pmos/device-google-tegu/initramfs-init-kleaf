@@ -32,6 +32,15 @@ log() {
 		$bb printf 'ferrix-init: %s\n' "$*" >/dev/console 2>/dev/null || :
 }
 
+# The bootloader appends module parameters (e.g. ufs_pixel_fips140.fips_first_lba=,
+# exynos_drm.panel_name=) to the kernel command line. The kernel applies those
+# only to built-in drivers; like Android's first-stage init, pass them to
+# insmod for loadable modules. Values containing spaces are not supported.
+module_args() {
+	name=$(printf '%s' "${1##*/}" | $bb sed 's/\.ko$//' | $bb tr - _)
+	$bb tr ' ' '\n' </proc/cmdline | $bb sed -n "s/^$name\.\([A-Za-z0-9_]*=[^\"]*\)$/\1/p" | $bb tr '\n' ' '
+}
+
 # Insert every module named in a Kleaf modules.load list (paths relative to
 # the release directory). Lists are dependency-ordered; a second and third pass
 # pick up anything that raced a dependency.
@@ -62,7 +71,8 @@ load_list() {
 	while [ -n "$pending" ] && [ "$pass" -lt 3 ]; do
 		retry=
 		for module in $pending; do
-			$bb insmod "$directory/$module" 2>/dev/null || retry="$retry $module"
+			# shellcheck disable=SC2046
+			$bb insmod "$directory/$module" $(module_args "$module") 2>/dev/null || retry="$retry $module"
 		done
 		pending=$retry
 		pass=$((pass + 1))
