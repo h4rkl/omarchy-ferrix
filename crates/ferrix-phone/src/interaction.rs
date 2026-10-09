@@ -132,9 +132,12 @@ impl Layout {
         }
     }
 
+    /// Recent-call rows start below the Dialer/Recent tabs (`tab_rects`,
+    /// y 280..352) and a 28 px gap, so the tab glyphs and labels stay visible.
     pub fn recent_rects(&self, count: usize) -> Vec<Rect> {
-        let limit = ((self.size.1 as i32 * 92 / 100 - self.s(300)) / self.s(152)).max(1) as usize;
-        list_rects(self.size, self.s(300), count.min(limit), 140)
+        let top = self.s(380);
+        let limit = ((self.size.1 as i32 * 92 / 100 - top) / self.s(152)).max(1) as usize;
+        list_rects(self.size, top, count.min(limit), 140)
     }
 
     pub fn answer_rect(&self) -> Rect {
