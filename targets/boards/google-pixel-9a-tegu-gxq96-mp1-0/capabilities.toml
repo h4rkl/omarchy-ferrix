@@ -21,8 +21,8 @@ status = "supported"
 evidence = "bcm4383 Wi-Fi scans and joins a WPA2/WPA3 transition AP as WPA2-PSK through NetworkManager and ferrix-networkd (DHCP, ping). WPA3-SAE association fails on this driver. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
 
 [bluetooth]
-status = "unsupported"
-evidence = "No Ferrix adapter or physical Linux evidence."
+status = "supported"
+evidence = "ferrix-bluetooth-uart attaches the BCM4383 controller (btattach -P bcm on ttySAC18, brcm/BCM.hcd); ferrix-core reports present/enabled through ferrix-bluetooth-bluez and BlueZ scans find devices. Pairing UI is not built; link runs at 115200 baud. 2026-10-09 Kleaf dev route; see docs/status.md."
 
 [audio]
 status = "unsupported"

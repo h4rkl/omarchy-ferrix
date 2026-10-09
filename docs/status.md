@@ -38,14 +38,15 @@ touchscreen through libinput. Identifiers are not recorded.
   rfkill and runs `btattach -P bcm` on `/dev/ttySAC18`; hci0 loads
   `brcm/BCM.hcd`, registers with BlueZ, powers on, and an LE/BR scan found
   devices (~90 s after boot at 115200 baud). The controller keeps its chip
-  default address (no bootloader BT address is exposed). Capability stays
-  unsupported until the Settings path is verified.
+  default address (no bootloader BT address is exposed). ferrix-core reports
+  the controller present and enabled through the BlueZ adapter, so the
+  capability is now `supported`; pairing is not built.
 - **Display/UI:** portrait 1080x2424, correct colours (byte-reversed scanout
   profile), safe area; the rule under the app clock strip is removed and the
   home identity line fits the panel.
 - **Capabilities:** `capabilities.toml` now drives the adapter's matrix;
-  power, display, input and network are `supported` with the evidence above.
-  Bluetooth, audio, telephony and lifecycle stay unsupported.
+  power, display, input, network and Bluetooth are `supported` with the
+  evidence above. Audio, telephony and lifecycle stay unsupported.
 - **Not yet working on hardware:** Browser (Waydroid image composed, not yet
   booted), WPA3-SAE, Bluetooth pairing UI, cellular (SIT modem route is off
   on Kleaf), camera, Mali GPU (software rendering only), zram swap.
