@@ -43,7 +43,7 @@ for the image). No new pins are introduced: the board reuses
 `tools/android/waydroid.pins` and `tools/android/fulguris.pins`. The guest
 bootstrap is shared with QEMU (`tools/android/guest/ferrix-waydroid.sh`).
 The Pixel differs only in target staging: a session owned by `user`,
-pipewire-pulse, an iptables-only container network, and SwiftShader because
+no pulse socket yet (no Android audio), an iptables-only container network, and SwiftShader because
 there is no Mali/DRM render node. Product code, `ferrix-runtime-android` and
 the `org.ferrix.browser` descriptor are unchanged. Physical evidence does not
 exist yet. QEMU evidence must not be relabeled as Pixel evidence.

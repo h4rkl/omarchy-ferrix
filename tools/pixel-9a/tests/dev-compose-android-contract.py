@@ -40,7 +40,8 @@ def digest(data):
 # Checked-in policy: the package set carries Waydroid but never nftables, and
 # the guest bootstrap/properties/service the composer stages exist.
 packages = compose.android_package_set(target)
-assert "waydroid" in packages and "pipewire-pulse" in packages, packages
+assert "waydroid" in packages and "iptables" in packages, packages
+assert "pipewire-pulse" not in packages, "conflicts with the pmOS pulseaudio audio backend"
 assert not set(packages) & set(compose.ANDROID_FORBIDDEN_PACKAGES), packages
 assert (repo / "tools/android/guest/ferrix-waydroid.sh").is_file()
 props = (target / "pmos/android/waydroid-properties.ini").read_text()

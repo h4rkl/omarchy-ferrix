@@ -10,8 +10,8 @@ Boundary change (owner request, 2026-10-09): the **development route only**
 may optionally carry Waydroid as an *application runtime* for the Browser tile
 (Fulguris, ADR-005/ADR-007). It is never the operating environment. Opt in
 with `FERRIX_PIXEL9A_ANDROID=1` for `tools/pixel-9a/rootfs.sh`, which appends
-the package set in `android/packages` (Waydroid, LXC, dnsmasq, iptables,
-pipewire-pulse; deliberately no `nftables`/`waydroid-nftrules`, because the
+the package set in `android/packages` (Waydroid, LXC, dnsmasq, iptables;
+deliberately no `nftables`/`waydroid-nftrules`, because the
 pinned GKI has no `CONFIG_NF_TABLES`) and refuses a result containing
 nftables. `tools/pixel-9a/dev-compose.py --android` then grows the rootfs
 (default 8 GiB) and stages the QEMU route's pinned LineageOS Waydroid images
@@ -150,8 +150,8 @@ On first boot, the background `ferrix-android` service does the following
 - applies the SwiftShader/400 dpi properties and runs `waydroid upgrade -o`;
 - starts `waydroid-container`;
 - waits for ferrix-shell's `/run/user/1000/wayland-0`;
-- as `user`, starts a session bus at `/run/user/1000/bus`, `pipewire-pulse`,
-  and `waydroid session start`;
+- as `user`, starts a session bus at `/run/user/1000/bus` and
+  `waydroid session start` (no pulse socket, so Android has no audio yet);
 - waits for Android `sys.boot_completed`;
 - installs Fulguris as `user`;
 - assigns the browser role.

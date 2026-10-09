@@ -9,8 +9,9 @@
   (`targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/README.md`,
   `linux-plan.md`, ADR-007 amendment).
 - Packages: `FERRIX_PIXEL9A_ANDROID=1 tools/pixel-9a/rootfs.sh build` appends
-  `pmos/android/packages` (waydroid, waydroid-openrc, lxc, dnsmasq, iptables,
-  pipewire-pulse) to pmbootstrap. It refuses nftables and waydroid-nftrules
+  `pmos/android/packages` (waydroid, waydroid-openrc, lxc, dnsmasq, iptables)
+  to pmbootstrap. pipewire-pulse is left out because apk refuses it
+  alongside pmOS's `postmarketos-base-ui-audio-backend-pulseaudio`. It refuses nftables and waydroid-nftrules
   because the GKI has no nftables, so waydroid-net.sh takes its
   iptables-legacy path. The manifest records `android_runtime`. A new,
   explicit `FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE=kleaf-dev` validates the
@@ -33,8 +34,8 @@
   `ferrix-android` OpenRC service runs it in the background so the shell is
   never delayed. It does offline `waydroid init`, applies properties, runs
   `waydroid upgrade -o`, and starts the container. Once ferrix-shell's
-  socket exists it starts a session D-Bus, pipewire-pulse and
-  `waydroid session start` as `user`. It installs Fulguris as `user` and
+  socket exists it starts a session D-Bus and `waydroid session start`
+  as `user`, with no pulse socket. It installs Fulguris as `user` and
   sets the browser role (root `lxc-attach`). Records go to
   `/var/log/ferrix-android.log` with the physical evidence label.
   ferrix-appd gets `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`.
@@ -47,8 +48,7 @@
   The QEMU Android route was not re-run after the helper extraction.
 - Unverified risks: Waydroid/LXC on GKI 6.1 with SELinux enabled but no
   loaded policy; the CHECKSUM mangle rule is missing
-  (`NETFILTER_XT_TARGET_CHECKSUM`, non-fatal); pipewire-pulse in place of
-  PulseAudio; SwiftShader frame rate; rc-status shows the one-shot
+  (`NETFILTER_XT_TARGET_CHECKSUM`, non-fatal); no Android audio (no pulse socket); SwiftShader frame rate; rc-status shows the one-shot
   bootstrap as stopped or crashed after it exits; a Browser tap before
   provisioning finishes on first boot fails with `not-installed` or a
   session error, and a retry is needed.
