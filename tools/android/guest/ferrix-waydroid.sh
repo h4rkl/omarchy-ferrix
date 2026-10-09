@@ -27,7 +27,7 @@
 #   FERRIX_ANDROID_XDG_RUNTIME_DIR session runtime dir ($XDG_RUNTIME_DIR, /run/user/0)
 #   FERRIX_ANDROID_WAYLAND_DISPLAY compositor socket name (wayland-0)
 #   FERRIX_ANDROID_SESSION_BUS     session D-Bus address (unix:path=<xdg>/ferrix-android-bus)
-#   FERRIX_ANDROID_PULSE           system | pipewire | null | none (system)
+#   FERRIX_ANDROID_PULSE           system | pipewire (falls back to null) | null | none (system)
 #   FERRIX_ANDROID_PROPS, _IMAGES, _CONFIG, _BASE_PROPS, _FULGURIS_APK,
 #   _CONSOLE, _RUN_DIR, _LXC_PATH, _BOOT_TICKS, _WAYLAND_TICKS  paths/bounds
 set -u
@@ -158,6 +158,18 @@ start_session_bus() {
   as_session "dbus-daemon --session --address=$bus --fork --nopidfile >>$log 2>&1" || true
 }
 
+# Waydroid always bind-mounts <xdg>/pulse/native into the container and LXC
+# refuses to start without it. A socket-only PulseAudio with a null sink
+# satisfies it (Android plays silently); it loads no ALSA module, so PipeWire
+# keeps the sound card.
+start_null_pulse() {
+  [ ! -S "$pulse_dir/native" ] || return 0
+  command -v pulseaudio >/dev/null 2>&1 || return 0
+  log=$(session_log android-pulse.log)
+  as_session "pulseaudio -n --daemonize=yes --exit-idle-time=-1 --use-pid-file=no -L module-native-protocol-unix -L module-null-sink -L module-always-sink >>$log 2>&1" || true
+  for _ in $(seq 1 50); do [ -S "$pulse_dir/native" ] && break; sleep 0.1; done
+}
+
 start_pulse() {
   case $pulse in
     system)
@@ -172,24 +184,17 @@ start_pulse() {
       ;;
     pipewire)
       # pipewire-pulse serves <xdg>/pulse/native for the PipeWire session
-      # ferrix-audio already runs. Waydroid 1.6 starts without a pulse socket
-      # but Android then has no audio.
+      # ferrix-audio already runs, so Android audio reaches the speaker.
       if [ ! -S "$xdg/pulse/native" ] && command -v pipewire-pulse >/dev/null 2>&1; then
         log=$(session_log android-pulse.log)
         as_session "pipewire-pulse >>$log 2>&1 &" || true
         for _ in $(seq 1 50); do [ -S "$xdg/pulse/native" ] && break; sleep 0.1; done
       fi
+      # Without it the container could not start at all; fall back to null.
+      [ -S "$pulse_dir/native" ] || start_null_pulse
       ;;
     null)
-      # Waydroid always bind-mounts <xdg>/pulse/native into the container and
-      # LXC refuses to start without it. Without a PipeWire bridge, serve a
-      # socket-only PulseAudio whose sink is null: Android plays silently.
-      # It loads no ALSA module, so PipeWire keeps the sound card.
-      if [ ! -S "$pulse_dir/native" ] && command -v pulseaudio >/dev/null 2>&1; then
-        log=$(session_log android-pulse.log)
-        as_session "pulseaudio -n --daemonize=yes --exit-idle-time=-1 --use-pid-file=no -L module-native-protocol-unix -L module-null-sink -L module-always-sink >>$log 2>&1" || true
-        for _ in $(seq 1 50); do [ -S "$pulse_dir/native" ] && break; sleep 0.1; done
-      fi
+      start_null_pulse
       ;;
   esac
   ev android-pulse ",\"mode\":\"$pulse\",\"socket\":\"$(present "$pulse_dir/native")\""

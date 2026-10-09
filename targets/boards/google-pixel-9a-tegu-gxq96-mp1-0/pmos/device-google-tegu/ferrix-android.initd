@@ -26,11 +26,9 @@ export FERRIX_ANDROID_XDG_RUNTIME_DIR=/run/user/1000
 export FERRIX_ANDROID_WAYLAND_DISPLAY=wayland-0
 # ferrix-product.initd hands the same address to ferrix-appd.
 export FERRIX_ANDROID_SESSION_BUS=unix:path=/run/user/1000/bus
-# Waydroid's container needs a pulse socket to start. pipewire-pulse
-# conflicts with pmOS's pulseaudio backend package and PulseAudio must not
-# contend with PipeWire for ALSA, so a socket-only null-sink PulseAudio
-# serves it: Android runs, silently.
-export FERRIX_ANDROID_PULSE=null
+# Android audio through pipewire-pulse on the PipeWire session ferrix-audio
+# runs; ferrix-waydroid.sh falls back to a null-sink socket without it.
+export FERRIX_ANDROID_PULSE=pipewire
 export FERRIX_ANDROID_CONSOLE="$logfile"
 export FERRIX_ANDROID_RUN_DIR=/run/ferrix-android
 # Waydroid's Python tooling must not write bytecode into the rootfs at runtime.
