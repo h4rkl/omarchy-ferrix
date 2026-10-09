@@ -142,7 +142,8 @@ do_patch() {
     project=$(dirname "${patch#./}")
     # git mailinfo unfolds the header and strips the [PATCH] prefix.
     subject=$(git mailinfo /dev/null /dev/null <"$patch_root/$patch" | sed -n 's/^Subject: //p')
-    git -C "$src/$project" log -n 5000 --format=%s | grep -qxF "$subject" || {
+    { [ -n "$subject" ] && git -C "$src/$project" log -n 5000 --format=%s | grep -qxF "$subject"; } ||
+      git -C "$src/$project" apply --check -R "$patch_root/$patch" 2>/dev/null || {
       printf 'missing waydroid patch: %s\n' "${patch#./}" >&2; missing=$((missing + 1)); }
   done
   [ "$missing" -eq 0 ] || die "$missing Waydroid patch(es) not applied"
