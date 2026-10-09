@@ -56,7 +56,8 @@ its paths, serials or MACs.
   coldplug; `ferrix.modules_skip` only filters the initramfs lists). The CSF
   firmware is staged from the factory image (`gpu-mali` in the firmware
   allowlist). Product rendering is still software. GPU work is tracked in
-  issues #4 and #19; read `targets/boards/…/gpu-research.md` first.
+  issues #4 and #19; read
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/gpu-research.md` first.
 
 ## 3. Get code onto the phone
 
