@@ -548,23 +548,48 @@ mod linux {
         }
     }
 
+    /// Geometry of the built-in panel: the largest mode of a connected DSI/eDP
+    /// connector, else of any connected connector. Disconnected outputs are
+    /// ignored; the tegu DisplayPort connector advertises 4096x2160 modes even
+    /// with nothing attached, which made the panel look like a landscape screen.
     fn display_geometry() -> (u32, u32) {
-        let mut selected = (0, 0);
         let Ok(entries) = fs::read_dir("/sys/class/drm") else {
-            return selected;
+            return (0, 0);
         };
+        let mut connected = Vec::new();
         for entry in entries.flatten() {
-            let modes = entry.path().join("modes");
-            let Ok(contents) = fs::read_to_string(modes) else {
+            let path = entry.path();
+            let status = fs::read_to_string(path.join("status")).unwrap_or_default();
+            if status.trim() != "connected" {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(path.join("modes")) else {
                 continue;
             };
-            for mode in contents.lines().filter_map(parse_mode) {
-                if mode.0.saturating_mul(mode.1) > selected.0.saturating_mul(selected.1) {
-                    selected = mode;
-                }
-            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            connected.push((
+                name,
+                contents.lines().filter_map(parse_mode).collect::<Vec<_>>(),
+            ));
         }
-        selected
+        select_panel_geometry(&connected)
+    }
+
+    fn select_panel_geometry(connectors: &[(String, Vec<(u32, u32)>)]) -> (u32, u32) {
+        let internal = |name: &str| name.contains("-DSI-") || name.contains("-eDP-");
+        let largest = |modes: &mut dyn Iterator<Item = &(u32, u32)>| {
+            modes
+                .copied()
+                .max_by_key(|mode| u64::from(mode.0) * u64::from(mode.1))
+        };
+        largest(
+            &mut connectors
+                .iter()
+                .filter(|(name, _)| internal(name))
+                .flat_map(|(_, modes)| modes.iter()),
+        )
+        .or_else(|| largest(&mut connectors.iter().flat_map(|(_, modes)| modes.iter())))
+        .unwrap_or((0, 0))
     }
 
     fn parse_mode(mode: &str) -> Option<(u32, u32)> {
@@ -843,6 +868,18 @@ mod linux {
         use ferrix_hardware_api::{ModemRegistration, SimState, WifiState};
         use ferrix_network_api::{AdapterKind, AdapterPresence, ApId, ConnectionState, RadioState};
         use ferrix_telephony_api::{ModemState, Registration, SimState as RichSimState};
+
+        #[test]
+        fn panel_geometry_prefers_the_connected_internal_panel() {
+            let connectors = vec![
+                ("card0-DP-1".to_owned(), vec![(4096, 2160), (1920, 1080)]),
+                ("card0-DSI-1".to_owned(), vec![(1080, 2424)]),
+            ];
+            assert_eq!(select_panel_geometry(&connectors), (1080, 2424));
+            let external_only = vec![("card0-DP-1".to_owned(), vec![(1920, 1080)])];
+            assert_eq!(select_panel_geometry(&external_only), (1920, 1080));
+            assert_eq!(select_panel_geometry(&[]), (0, 0));
+        }
 
         #[test]
         fn rich_network_states_fold_into_coarse_wifi_states() {
