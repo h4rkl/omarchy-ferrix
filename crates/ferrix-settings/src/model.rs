@@ -535,8 +535,10 @@ impl Model {
         }
     }
 
-    /// Joinable access points, strongest first. Hidden networks (an empty
-    /// or all-NUL SSID) are left out: the network API has no join-by-name
+    /// Joinable networks, strongest first, one row per name: a network
+    /// served by several access points (bands, mesh nodes) is listed once,
+    /// through its strongest access point. Hidden networks (an empty or
+    /// all-NUL SSID) are left out: the network API has no join-by-name
     /// request, so a row could only ever fail. [`Model::hidden_count`]
     /// reports how many were omitted.
     pub fn access_points(&self) -> Vec<&AccessPoint> {
@@ -553,6 +555,8 @@ impl Model {
                 .cmp(&a.signal_percent)
                 .then_with(|| a.id.as_str().cmp(b.id.as_str()))
         });
+        let mut seen = std::collections::HashSet::new();
+        aps.retain(|ap| seen.insert(ap.ssid.as_bytes().to_vec()));
         aps
     }
 
@@ -1248,6 +1252,28 @@ mod tests {
             },
         }));
         assert_eq!(m.connection_error(), None);
+    }
+
+    #[test]
+    fn a_network_with_several_access_points_is_listed_once_by_its_strongest() {
+        let mut state = preview_network(false);
+        let first = state.access_points[0].clone();
+        let mut weaker = first.clone();
+        weaker.id = ApId::new("same-name-weaker");
+        weaker.signal_percent = first.signal_percent.saturating_sub(30);
+        state.access_points.push(weaker);
+        let mut m = Model::new();
+        m.apply_network(Feed::Snapshot {
+            state,
+            evidence: "mock".into(),
+        });
+        let rows: Vec<_> = m
+            .access_points()
+            .iter()
+            .filter(|ap| ap.ssid == first.ssid)
+            .map(|ap| ap.id.as_str().to_owned())
+            .collect();
+        assert_eq!(rows, vec![first.id.as_str().to_owned()]);
     }
 
     #[test]
