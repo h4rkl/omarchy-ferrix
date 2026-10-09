@@ -413,6 +413,8 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
     editor.put((package / "ferrix-openrc.sh").read_bytes(), "/usr/lib/ferrix/openrc.sh", 0o644)
     editor.put((package / "networkmanager-ferrix.conf").read_bytes(),
                "/etc/NetworkManager/conf.d/90-ferrix.conf", 0o644)
+    editor.put((package / "modprobe-zram-gs.conf").read_bytes(),
+               "/etc/modprobe.d/ferrix-zram-gs.conf", 0o644)
     for script in sorted(package.glob("ferrix-*.initd")):
         dest = f"/etc/init.d/{script.stem}"
         editor.put(script.read_bytes(), dest, 0o755)
@@ -427,6 +429,9 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
         else:
             editor.symlink(link, f"/etc/init.d/{service}")
             written.append(link)
+    # Nothing starts plymouthd on this route, so `plymouth quit` only fails.
+    editor.remove("/etc/runlevels/default/kill-plymouth")
+    written.append("-/etc/runlevels/default/kill-plymouth")
     for path, edit in gki_rootfs_patches().items():
         editor.patch(path, edit, 0o755 if path.startswith("/etc/init.d/") else 0o644)
         written.append(path)

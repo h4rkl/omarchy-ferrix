@@ -50,6 +50,7 @@ source="
 	ferrix-backends.env
 	ferrix-openrc.sh
 	networkmanager-ferrix.conf
+	modprobe-zram-gs.conf
 	ferrix-core.initd
 	ferrix-networkd.initd
 	ferrix-telephonyd.initd
@@ -93,6 +94,8 @@ package() {
 		"$pkgdir"/usr/lib/ferrix/openrc.sh
 	install -Dm644 "$srcdir"/networkmanager-ferrix.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/90-ferrix.conf
+	install -Dm644 "$srcdir"/modprobe-zram-gs.conf \
+		"$pkgdir"/etc/modprobe.d/ferrix-zram-gs.conf
 	install -Dm755 "$srcdir"/ferrix-core.initd \
 		"$pkgdir"/etc/init.d/ferrix-core
 	install -Dm755 "$srcdir"/ferrix-networkd.initd \
@@ -146,6 +149,7 @@ e3ae71127500de5c6e745807ef49deb6aca1d1b1718270d1e9e31035c4b72611c2f9af7531676e82
 64d8f0cfdfe042327b66a88007cc4ace5a7d39270e2d8bd6c02223b1dd2171f065a6aae4b3f82c5cbae16e39f67556a17e2bc38f8114d5ed8c0a5289c8eb417f  ferrix-backends.env
 4699a59c1a710061c0fd97f326a113461e1f5dcdaa4e8479e8d4765105232dd9712e27510d1e0b9215f486504264b6f3f5d1aa24501a917e09715fdb840fa4de  ferrix-openrc.sh
 e7b3709d984b5a4bf0dda54ea67232ca46d1b7858576722b04f26e3cb687e743cf63344f94a24f0c3eb3783f9dee8c4c7e51029384b18a04d099dc3eb93d1ed2  networkmanager-ferrix.conf
+621fcc0692bcc71967609dbf952b08550821214184d43a9e1cbb211f4ea11db681ceef700b5abdf099914b4b03c7b79e3074b2b42534332e40746f40026503ef  modprobe-zram-gs.conf
 10917331b59aed69ef56df7b8cb829736fec632cec1056dcf79f4df01059a8d49e0c0df143278e24f11635aa16569f6893d0b616a088bad27e2a38647bb293d5  ferrix-core.initd
 399be7eb464c4e9f6dc7450e887d00e9af790e5874843b0b134d831ffa4178dfa6e6032748edb295668ccb5ce0fd4f530948a5de8e6482f55bf6023969ca1fcc  ferrix-networkd.initd
 a26cd676321a658c719f9b53fcf6099031c22bbd874794f79d551966f6680683ce2f37674bbd284d769c603d335a34c65e17e30f2e9507140910008d6a11d90c  ferrix-telephonyd.initd
