@@ -149,7 +149,11 @@ release=$($bb uname -r)
 log "kernel $release checkpoint=${checkpoint_target:-none}"
 checkpoint init
 
-load_list "/lib/modules/$release/modules.load" "/lib/modules/$release"
+# Kleaf ramdisks use lib/modules/<release>/; older Pixel ramdisks are flat.
+# Android's first-stage init accepts both, and so does this one.
+first_stage=/lib/modules/$release
+[ -f "$first_stage/modules.load" ] || first_stage=/lib/modules
+load_list "$first_stage/modules.load" "$first_stage"
 checkpoint modules
 
 # The Exynos watchdog (s3c2410_wdt) arms during first-stage loading; Android's
