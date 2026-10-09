@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind, TELEPHONY_APN_ENV};
@@ -347,7 +348,37 @@ fn spawn(mut command: Command, context: &LaunchContext) -> std::io::Result<Child
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
-    command.spawn()
+    spawn_on_spawner_thread(command)
+}
+
+type SpawnRequest = (Command, mpsc::Sender<std::io::Result<Child>>);
+
+/// Spawns `command` from one thread that lives as long as the process.
+/// `ferrix-sandbox` sets a parent-death signal, and Linux delivers it when
+/// the spawning *thread* exits, not the process: a launch from a short-lived
+/// worker (a home restart, a request handler) would otherwise be SIGKILLed
+/// as soon as that worker returned.
+fn spawn_on_spawner_thread(command: Command) -> std::io::Result<Child> {
+    static SPAWNER: OnceLock<Mutex<mpsc::Sender<SpawnRequest>>> = OnceLock::new();
+    let spawner = SPAWNER.get_or_init(|| {
+        let (requests, incoming) = mpsc::channel::<SpawnRequest>();
+        let _ = std::thread::Builder::new()
+            .name("ferrix-runtime-spawner".to_owned())
+            .spawn(move || {
+                for (mut command, reply) in incoming {
+                    let _ = reply.send(command.spawn());
+                }
+            });
+        Mutex::new(requests)
+    });
+    let (reply, result) = mpsc::channel();
+    let unavailable = || std::io::Error::other("the runtime spawner thread is unavailable");
+    spawner
+        .lock()
+        .map_err(|_| unavailable())?
+        .send((command, reply))
+        .map_err(|_| unavailable())?;
+    result.recv().map_err(|_| unavailable())?
 }
 
 /// One supervised native process (the sandbox stage 1, or the program itself).

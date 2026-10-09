@@ -64,6 +64,9 @@ start() {
 
 	wait_for_socket "$core_socket" ferrix-core || { eend 1; return 1; }
 	checkpath -f -m 0640 -o user:user /var/log/ferrix-shell.log /var/log/ferrix-appd.log
+	# A socket left by a previous shell would satisfy the wait below before
+	# the new compositor listens.
+	rm -f "$wayland_socket" "$wayland_socket.lock"
 	start-stop-daemon --start --background --make-pidfile --pidfile "$shell_pidfile" \
 		--chuid user:user --env HOME=/home/user --env USER=user \
 		--env XDG_RUNTIME_DIR=/run/user/1000 --env WAYLAND_DISPLAY=wayland-0 \
