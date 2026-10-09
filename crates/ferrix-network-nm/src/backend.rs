@@ -13,7 +13,8 @@
 //! type outside this module ever holds it.
 
 use std::collections::HashMap;
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
@@ -501,7 +502,18 @@ impl NetworkManagerBackend {
         }
     }
 
+    /// Watches NetworkManager's signals and owner changes.
+    ///
+    /// The draining threads never call D-Bus: zbus's socket reader waits for
+    /// room in a match rule's queue, so a consumer that blocked on a method
+    /// call over the same connection while signals piled up would starve the
+    /// reader of the very reply it is waiting for (a deadlock seen on
+    /// hardware during a Wi-Fi join). They only mark the state dirty; one
+    /// refresher thread coalesces the marks and does the D-Bus work.
     fn spawn_watchers(self: &Arc<Self>) -> Result<(), BackendError> {
+        let (wake, woken) = mpsc::sync_channel::<()>(1);
+        let full_refresh = Arc::new(AtomicBool::new(false));
+
         let changes = MatchRule::builder()
             .msg_type(MessageType::Signal)
             .sender(NM_SERVICE)
@@ -509,18 +521,15 @@ impl NetworkManagerBackend {
             .build();
         let changes = MessageIterator::for_match_rule(changes, &self.connection, Some(64))
             .map_err(bus_error)?;
-        let backend = Arc::clone(self);
+        let signal_wake = wake.clone();
         thread::Builder::new()
             .name("ferrix-network-nm-signals".to_owned())
             .spawn(move || {
                 for message in changes {
-                    if message.is_err() {
-                        continue;
+                    if message.is_ok() {
+                        // A pending wake already covers this change.
+                        let _ = signal_wake.try_send(());
                     }
-                    // Coalesce bursts: NetworkManager emits many property
-                    // changes per transition.
-                    thread::sleep(Duration::from_millis(50));
-                    backend.refresh(false);
                 }
             })
             .map_err(|e| BackendError::unavailable(e.to_string()))?;
@@ -539,6 +548,7 @@ impl NetworkManagerBackend {
         let owner =
             MessageIterator::for_match_rule(owner, &self.connection, Some(8)).map_err(bus_error)?;
         let backend = Arc::clone(self);
+        let owner_full = Arc::clone(&full_refresh);
         thread::Builder::new()
             .name("ferrix-network-nm-owner".to_owned())
             .spawn(move || {
@@ -556,10 +566,27 @@ impl NetworkManagerBackend {
                             reason: "NetworkManager left the bus".to_owned(),
                         });
                     } else {
-                        // Give the new instance a moment to export its objects.
-                        thread::sleep(Duration::from_millis(500));
-                        backend.refresh(true);
+                        owner_full.store(true, Ordering::SeqCst);
+                        let _ = wake.try_send(());
                     }
+                }
+            })
+            .map_err(|e| BackendError::unavailable(e.to_string()))?;
+
+        let backend = Arc::clone(self);
+        thread::Builder::new()
+            .name("ferrix-network-nm-refresh".to_owned())
+            .spawn(move || {
+                while woken.recv().is_ok() {
+                    // Coalesce bursts: NetworkManager emits many property
+                    // changes per transition.
+                    thread::sleep(Duration::from_millis(50));
+                    let full = full_refresh.swap(false, Ordering::SeqCst);
+                    if full {
+                        // Give a new instance a moment to export its objects.
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                    backend.refresh(full);
                 }
             })
             .map_err(|e| BackendError::unavailable(e.to_string()))?;
