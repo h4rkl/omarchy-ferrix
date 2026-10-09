@@ -52,8 +52,19 @@ fn compose_backend(args: &Args) -> Result<Composed, String> {
 
 #[cfg(feature = "production")]
 fn compose_production() -> Result<Composed, String> {
-    let backend = ferrix_network_nm::NetworkManagerBackend::connect()
-        .map_err(|e| format!("networkmanager: {e}"))?;
+    // NetworkManager's init script returns before the daemon owns its bus
+    // name; keep asking for a bounded time instead of failing the boot.
+    const STARTUP_WAIT: Duration = Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + STARTUP_WAIT;
+    let backend = loop {
+        match ferrix_network_nm::NetworkManagerBackend::connect() {
+            Ok(backend) => break backend,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err(e) => return Err(format!("networkmanager: {e}")),
+        }
+    };
     Ok(Composed {
         backend,
         control: None,

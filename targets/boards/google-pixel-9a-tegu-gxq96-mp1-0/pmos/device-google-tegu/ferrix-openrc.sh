@@ -12,7 +12,7 @@ ferrix_user_runtime_dir() {
 # the unprivileged `user` session (ferrix-shell and apps) that connects to it.
 ferrix_grant_socket() {
 	tries=0
-	while [ ! -S "$1" ] && [ "$tries" -lt 10 ]; do
+	while [ ! -S "$1" ] && [ "$tries" -lt 40 ]; do
 		sleep 1
 		tries=$((tries + 1))
 	done

@@ -199,7 +199,19 @@ fn build_backend(args: &Args) -> Result<(Arc<dyn ModemBackend>, Option<MockContr
 
 #[cfg(feature = "production")]
 fn build_modemmanager() -> Result<(Arc<dyn ModemBackend>, Option<MockControl>), String> {
-    let backend = ferrix_telephony_mm::ModemManagerBackend::connect()?;
+    // ModemManager's init script returns before the daemon owns its bus
+    // name; keep asking for a bounded time instead of failing the boot.
+    const STARTUP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + STARTUP_WAIT;
+    let backend = loop {
+        match ferrix_telephony_mm::ModemManagerBackend::connect() {
+            Ok(backend) => break backend,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => return Err(e),
+        }
+    };
     Ok((Arc::new(backend), None))
 }
 
