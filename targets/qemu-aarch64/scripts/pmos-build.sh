@@ -37,6 +37,8 @@ if [ "$android" = 1 ]; then
   sh "$root/tools/android/fulguris-verify.sh" "$fulguris_apk" --pins "$fulguris_pins" >/dev/null \
     || { echo "pinned Fulguris APK failed verification: $fulguris_apk" >&2; exit 2; }
   android_mounts="$android_mounts -v $fulguris_apk:/android/fulguris.apk:ro"
+  # Guest bootstrap shared with the Pixel 9a dev route (single implementation).
+  android_mounts="$android_mounts -v $root/tools/android/guest/ferrix-waydroid.sh:/android/ferrix-waydroid.sh:ro"
   printf 'fulguris apk: %s (verified)\n' "$fulguris_apk"
 fi
 cache=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}

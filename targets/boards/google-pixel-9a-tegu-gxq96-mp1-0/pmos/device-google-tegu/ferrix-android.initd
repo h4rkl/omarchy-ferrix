@@ -1,0 +1,72 @@
+#!/sbin/openrc-run
+# OPT-IN Android compatibility runtime (Waydroid + Fulguris, ADR-005/ADR-007)
+# for the Pixel 9a development route. Installed by the package but linked
+# into the default runlevel only by tools/pixel-9a/dev-compose.py --android,
+# which also stages the pinned Waydroid images, the verified Fulguris APK,
+# and /usr/lib/ferrix/ferrix-waydroid.sh (shared with the QEMU route).
+#
+# The bootstrap runs in the background so the product shell is never delayed:
+# offline `waydroid init` and container start, then (once ferrix-shell's
+# Wayland socket exists) the session as `user`, the Fulguris install, and the
+# default browser role. Records go to /var/log/ferrix-android.log with the
+# physical evidence label; none of them claims a rendered frame.
+
+[ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
+
+name="Ferrix Android runtime"
+description="Initializes Waydroid and provisions the Browser (Fulguris) for user"
+
+helper=/usr/lib/ferrix/ferrix-waydroid.sh
+pidfile=/run/ferrix-android.pid
+logfile=/var/log/ferrix-android.log
+
+export FERRIX_ANDROID_EVIDENCE="${FERRIX_EVIDENCE:-physical:google-pixel-9a-tegu-gxq96-mp1-0}"
+export FERRIX_ANDROID_SESSION_USER=user
+export FERRIX_ANDROID_XDG_RUNTIME_DIR=/run/user/1000
+export FERRIX_ANDROID_WAYLAND_DISPLAY=wayland-0
+# ferrix-product.initd hands the same address to ferrix-appd.
+export FERRIX_ANDROID_SESSION_BUS=unix:path=/run/user/1000/bus
+export FERRIX_ANDROID_PULSE=pipewire
+export FERRIX_ANDROID_CONSOLE="$logfile"
+export FERRIX_ANDROID_RUN_DIR=/run/ferrix-android
+# Waydroid's Python tooling must not write bytecode into the rootfs at runtime.
+export PYTHONDONTWRITEBYTECODE=1
+
+depend() {
+	need dbus
+	use cgroups ferrix-audio
+	after udev networkmanager ferrix-audio
+	before ferrix-product
+}
+
+start_pre() {
+	[ -f "$helper" ] || {
+		eerror "Android runtime helper is missing: $helper"
+		return 1
+	}
+	command -v waydroid >/dev/null 2>&1 || {
+		eerror "waydroid is not installed (base rootfs built without FERRIX_PIXEL9A_ANDROID=1)"
+		return 1
+	}
+	. /usr/lib/ferrix/openrc.sh
+	ferrix_user_runtime_dir || return 1
+	checkpath -d -m 0755 "$FERRIX_ANDROID_RUN_DIR"
+	checkpath -f -m 0644 "$logfile"
+}
+
+start() {
+	ebegin "Starting Ferrix Android runtime bootstrap"
+	start-stop-daemon --start --background --make-pidfile --pidfile "$pidfile" \
+		--stdout "$logfile" --stderr "$logfile" \
+		--exec /bin/sh -- "$helper" run
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping Ferrix Android runtime"
+	start-stop-daemon --stop --pidfile "$pidfile" --retry TERM/5/KILL/5 2>/dev/null || true
+	rm -f "$pidfile"
+	waydroid session stop >/dev/null 2>&1 || true
+	rc-service waydroid-container stop >/dev/null 2>&1 || true
+	eend 0
+}

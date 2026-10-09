@@ -1,0 +1,14 @@
+# OPT-IN Android compatibility runtime package set for the Pixel 9a dev
+# route (owner request 2026-10-09; ADR-005/ADR-007). tools/pixel-9a/rootfs.sh
+# appends these to pmbootstrap's extra_packages only when
+# FERRIX_PIXEL9A_ANDROID=1. One Alpine package name per line.
+#
+# Deliberately absent: nftables and waydroid-nftrules. The pinned GKI has no
+# CONFIG_NF_TABLES, so waydroid-net.sh must take its iptables(-legacy) path;
+# rootfs.sh refuses a built rootfs that contains either package.
+waydroid
+waydroid-openrc
+lxc
+dnsmasq
+iptables
+pipewire-pulse

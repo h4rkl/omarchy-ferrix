@@ -55,6 +55,7 @@ source="
 	ferrix-telephonyd.initd
 	ferrix-audio.initd
 	ferrix-product.initd
+	ferrix-android.initd
 	ferrix-s5300-mounts.initd
 	ferrix-radio-firmware.initd
 	exynos-modem.initd
@@ -100,6 +101,10 @@ package() {
 		"$pkgdir"/etc/init.d/ferrix-audio
 	install -Dm755 "$srcdir"/ferrix-product.initd \
 		"$pkgdir"/etc/init.d/ferrix-product
+	# Opt-in Android runtime bootstrap; linked into a runlevel only by the
+	# dev composer's --android mode, never by this package.
+	install -Dm755 "$srcdir"/ferrix-android.initd \
+		"$pkgdir"/etc/init.d/ferrix-android
 	install -Dm755 "$srcdir"/ferrix-s5300-mounts.initd \
 		"$pkgdir"/etc/init.d/ferrix-s5300-mounts
 	install -Dm755 "$srcdir"/ferrix-radio-firmware.initd \
@@ -139,7 +144,8 @@ e7b3709d984b5a4bf0dda54ea67232ca46d1b7858576722b04f26e3cb687e743cf63344f94a24f0c
 399be7eb464c4e9f6dc7450e887d00e9af790e5874843b0b134d831ffa4178dfa6e6032748edb295668ccb5ce0fd4f530948a5de8e6482f55bf6023969ca1fcc  ferrix-networkd.initd
 a26cd676321a658c719f9b53fcf6099031c22bbd874794f79d551966f6680683ce2f37674bbd284d769c603d335a34c65e17e30f2e9507140910008d6a11d90c  ferrix-telephonyd.initd
 4d3d90b85c71e7333b41feb766cf87659885672ff126261fc8679db217d15f95aa9810a67adee37dff63acd56b1a162f45904892aeec6e47ab4bf34f62ec768b  ferrix-audio.initd
-1ba7312ad9283ce2a7d7c3205409f80f56eb2e70dde814c3e4dac8e9d19cc74b5708ba5dd8a308aab7aeaa115515a3e343f2c098a50de2364956c095c9a1c52a  ferrix-product.initd
+9c51a1663f529221f55cc7911c4bba0705b4e72fdfeb6f7a74e6b8d842f663f69f9666635d9415d1006cc87a78981eb1bc9a241188d111e710dd8ea6de15a910  ferrix-product.initd
+516825bd7c65586fcacb496f1724456f11cf0c087876b5abb93336d8899db4d94be317ca0aa1fb12110f6dc8d9cc5f07a344046c70f318932cbb65ad0eff837f  ferrix-android.initd
 62ee79f318bc06fe3a6b9bbe2d564577c92754f828030415c309a7dfb512efdd80f71e7df8a0e5dc210c3086620a270be4c4ad4b878d4f3b2a89f09f3d87774b  ferrix-s5300-mounts.initd
 c4e81f9a0e463d25fdcd69ab635838e29f5a95f389ef52bb978864daeeeabd220e4fafccf9ff85149e38d2166530881cc24eb3bc2d21c7293c52febe5c4df36a  ferrix-radio-firmware.initd
 391987e6cd7692efe7440bcadb7089f71b3edb0dd4c3c23c72986ea214aa9deb607055d23f84a97db59265bdcf9025be2f4af18faf6599b63349deb844ed35fe  exynos-modem.initd

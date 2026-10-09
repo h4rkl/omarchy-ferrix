@@ -2,8 +2,10 @@
 set -eu
 
 # Device-free native Linux/postmarketOS rootfs workflow for the exact Pixel 9a
-# target. It deliberately has no adb, fastboot, flashing, booting, firmware
-# extraction, or Android route.
+# target. It deliberately has no adb, fastboot, flashing, booting, or firmware
+# extraction. FERRIX_PIXEL9A_ANDROID=1 opts into the Waydroid package set in
+# pmos/android/packages (owner request 2026-10-09, dev route only); the
+# Android images and APK are staged later by tools/pixel-9a/dev-compose.py.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 target="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
@@ -33,6 +35,8 @@ build_token=I-understand-this-runs-pmbootstrap
 rootfs_image_size_mib=${FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB:-2048}
 rootfs_uuid=${FERRIX_PIXEL9A_ROOTFS_UUID:-9a9a9a9a-9a9a-49a9-9a9a-9a9a9a9a9a9a}
 rootfs_password=${FERRIX_PIXEL9A_ROOTFS_PASSWORD:-}
+android=${FERRIX_PIXEL9A_ANDROID:-0}
+android_packages="$pmos_dir/android/packages"
 manifest_status=''
 tab=$(printf '\t')
 
@@ -135,7 +139,44 @@ pinned_pmaports_branch() {
 		"$pmaports_pins"
 }
 
+# android_package_list: the opt-in Waydroid package set as one comma list.
+# Refuses packages that need nftables, which the pinned GKI does not have.
+android_package_list() {
+	required_file "$android_packages"
+	list=$(awk '$0 !~ /^[[:space:]]*(#|$)/ { gsub(/[[:space:]]/, ""); printf "%s%s", (n++ ? "," : ""), $0 }' "$android_packages")
+	[ -n "$list" ] || die "Android package set is empty: $android_packages"
+	case ",$list," in
+		*,nftables,*|*,waydroid-nftrules,*) die 'Android package set must not contain nftables or waydroid-nftrules (the GKI has no nftables)' ;;
+		*[!a-z0-9,.+_-]*) die "Android package set has an invalid package name: $list" ;;
+	esac
+	case ",$list," in
+		*,waydroid,*) ;;
+		*) die 'Android package set must contain waydroid' ;;
+	esac
+	printf '%s\n' "$list"
+}
+
+# verify_android_rootfs DB: the installed rootfs carries the Android package
+# set and none of the nftables packages (fail closed rather than shipping a
+# container network the kernel cannot provide).
+verify_android_rootfs() {
+	installed=$(cat "$1" 2>/dev/null || sudo -n cat "$1" 2>/dev/null) ||
+		die "built rootfs has no readable apk database: $1"
+	for package in $(android_package_list | tr ',' ' '); do
+		printf '%s\n' "$installed" | grep -qx "P:$package" || die "built rootfs is missing Android package: $package"
+	done
+	for package in nftables waydroid-nftrules; do
+		if printf '%s\n' "$installed" | grep -qx "P:$package"; then
+			die "built rootfs contains $package, which the GKI cannot use"
+		fi
+	done
+}
+
 check_static_inputs() {
+	case "$android" in
+		0|1) ;;
+		*) die "FERRIX_PIXEL9A_ANDROID must be 0 or 1: $android" ;;
+	esac
 	for file in pmbootstrap.cfg channels.cfg; do
 		required_file "$pmos_dir/$file"
 	done
@@ -233,6 +274,10 @@ preflight() {
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
 	manifest_artifact profile.toml "$profile_path"
 	manifest_finish
+	if [ "$android" = 1 ]; then
+		android_package_list >/dev/null
+		manifest_artifact android/packages "$android_packages"
+	fi
 	printf '%s\n' 'PASS pixel-9a-rootfs static package and manifest checks'
 }
 
@@ -815,6 +860,12 @@ write_built_manifest() {
 	[ -f "$rootfs_out/radio-firmware-manifest.tsv" ] ||
 		die "rootfs radio firmware manifest is missing: $rootfs_out/radio-firmware-manifest.tsv"
 	manifest_begin built-substrate-only
+	if [ "$android" = 1 ]; then
+		printf 'android_runtime\twaydroid-packages\t%s\n' "$(android_package_list)" >>"$manifest_tmp"
+		manifest_artifact android/packages "$android_packages"
+	else
+		printf 'android_runtime\tnone\n' >>"$manifest_tmp"
+	fi
 	manifest_input product_manifest "$product/manifest.tsv"
 	manifest_artifact deviceinfo "$package_dir/deviceinfo"
 	manifest_artifact kernel-cmdline.conf "$package_dir/kernel-cmdline.conf"
@@ -954,6 +1005,14 @@ build_rootfs() {
 	pmb_work="$build_dir/pmbootstrap"
 	config="$build_dir/pmbootstrap.cfg"
 	sed -e "s#^work = .*#work = $pmb_work#" -e "s#^aports = .*#aports = $aports#" "$pmos_dir/pmbootstrap.cfg" >"$config"
+	if [ "$android" = 1 ]; then
+		android_list=$(android_package_list)
+		config_tmp="$config.tmp.$$"
+		awk -v extra="$android_list" '/^extra_packages = / { $0 = $0 "," extra; found=1 } { print } END { exit(found ? 0 : 1) }' \
+			"$config" >"$config_tmp" || die 'target pmbootstrap.cfg has no extra_packages line for the Android package set'
+		mv "$config_tmp" "$config"
+		printf '%s\n' "opt-in Android runtime packages: $android_list"
+	fi
 	printf '%s\n' "running pmbootstrap rootfs build with config $config"
 	# The target package set includes two local, source-pinned aports. Keep
 	# local package installation enabled so pmbootstrap builds and installs
@@ -993,6 +1052,7 @@ build_rootfs() {
 		find "$pmb_work" -maxdepth 2 -print >&2 2>/dev/null || true
 		die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
 	fi
+	[ "$android" != 1 ] || verify_android_rootfs "$rootfs_dir/lib/apk/db/installed"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
 		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do

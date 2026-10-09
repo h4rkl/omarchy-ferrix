@@ -219,6 +219,11 @@ pixel-9a-boot-test:
 pixel-9a-dev-compose *args:
     @python3 "{{root}}/tools/pixel-9a/dev-compose.py" "$@"
 
+# Offline contract for dev-compose's opt-in Android (Waydroid + Fulguris)
+# staging; on a host with e2fsprogs it also stages into a scratch ext4 image.
+pixel-9a-dev-compose-test:
+    @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/dev-compose-android-contract.py"
+
 # Device-free boot composition for the independent radio-first kernel route.
 # Its output directory is separate from the canonical Google Kleaf route and
 # is rejected by the canonical boot contract.

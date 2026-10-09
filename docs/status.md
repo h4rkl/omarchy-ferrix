@@ -1,5 +1,52 @@
 # Status
 
+## 2026-10-09 (Pixel 9a opt-in Android runtime for the Browser tile; composed, not booted)
+
+- Owner request (2026-10-09): the Browser tile (Fulguris in Waydroid, ADR-005
+  and ADR-007) should work on the Pixel 9a development route. The board
+  boundary docs now say the dev route *optionally* carries Waydroid as an app
+  runtime. It is still never the operating environment
+  (`targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/README.md`,
+  `linux-plan.md`, ADR-007 amendment).
+- Packages: `FERRIX_PIXEL9A_ANDROID=1 tools/pixel-9a/rootfs.sh build` appends
+  `pmos/android/packages` (waydroid, waydroid-openrc, lxc, dnsmasq, iptables,
+  pipewire-pulse) to pmbootstrap. It refuses nftables and waydroid-nftrules
+  because the GKI has no nftables, so waydroid-net.sh takes its
+  iptables-legacy path. The manifest records `android_runtime`.
+- Staging: `dev-compose.py --android` checks that the base rootfs has the
+  package set. It verifies the QEMU route's pinned Waydroid zips, the unpacked
+  images (via `images.json`) and the Fulguris APK against `tools/android/*.pins`
+  (size and SHA-256; the signer was checked by `fulguris-fetch.sh` at fetch
+  time). It then grows the ext4 rootfs (e2fsck, then resize2fs; default
+  8 GiB), writes everything with debugfs, links `ferrix-android` into the
+  default runlevel, and records each staged file's size and hash in
+  `manifest.tsv`.
+- Boot glue (shared, not copied): `tools/android/guest/ferrix-waydroid.sh` is
+  now the single implementation for QEMU (`00-ferrix-android.start` and
+  `00-ferrix-product.start` call it) and for the Pixel. On the Pixel, the
+  `ferrix-android` OpenRC service runs it in the background so the shell is
+  never delayed. It does offline `waydroid init`, applies properties, runs
+  `waydroid upgrade -o`, and starts the container. Once ferrix-shell's
+  socket exists it starts a session D-Bus, pipewire-pulse and
+  `waydroid session start` as `user`. It installs Fulguris as `user` and
+  sets the browser role (root `lxc-attach`). Records go to
+  `/var/log/ferrix-android.log` with the physical evidence label.
+  ferrix-appd gets `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`.
+- Evidence: host stub tests only (`android-bootstrap-test`: QEMU root
+  session, Pixel `user` session via su, missing-socket refusal; the
+  `rootfs-workflow` Android build/refusal cases;
+  `dev-compose-android-contract.py`, including real ext4 staging on the
+  Linux build host). An image was composed on the build host, but the
+  route has **no boot, container, or framebuffer evidence** on the Pixel.
+  The QEMU Android route was not re-run after the helper extraction.
+- Unverified risks: Waydroid/LXC on GKI 6.1 with SELinux enabled but no
+  loaded policy; the CHECKSUM mangle rule is missing
+  (`NETFILTER_XT_TARGET_CHECKSUM`, non-fatal); pipewire-pulse in place of
+  PulseAudio; SwiftShader frame rate; rc-status shows the one-shot
+  bootstrap as stopped or crashed after it exits; a Browser tap before
+  provisioning finishes on first boot fails with `not-installed` or a
+  session error, and a retry is needed.
+
 ## 2026-10-09 (Phone, Settings, Contacts user-visible fixes; host previews only)
 
 - Phone: call duration counts from when the app saw the call become active
@@ -133,8 +180,9 @@ Images and logs stay under ignored `out/`; serials are redacted.
   - Without PID namespaces the best-effort sandbox loses track of the app
     process (appd reports `signal 9` while the app keeps running).
   - Bluetooth: the chip powers via rfkill but no HCI is attached (UART HCI
-    attach not implemented). Browser: the Android runtime needs Waydroid,
-    which is not in the rootfs. Mali GPU modules are skipped (pixman only).
+    attach not implemented). Browser: the default rootfs has no Waydroid;
+    the opt-in Android dev image (2026-10-09 entry) is composed but not yet
+    booted. Mali GPU modules are skipped (pixman only).
     WPA3/SAE association failed; WPA2-PSK works. Home still labels state
     `mock` and the clock is not network-synced.
   - The radio-route S5300 WWAN/SIT services fail on this kernel by design.

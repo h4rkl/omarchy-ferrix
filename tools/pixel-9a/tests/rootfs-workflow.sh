@@ -531,7 +531,9 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'grep -q "634e8eb404c3fcf959dce6a0b0d97b33ba0fc346" "$aports/device/testing/exynos-modem/APKBUILD"' \
 		'grep -q "14a0013a28e5d5eec513c65e75d7549678ecc61e" "$aports/device/testing/modemmanager-samsung-sit/APKBUILD"' \
 		'grep -q "^build_pkgs_on_install = True$" "$config"' \
-		'mkdir -p "$build_work/chroot_rootfs_test"'
+		'mkdir -p "$build_work/chroot_rootfs_test/lib/apk/db"' \
+		'extra=$(sed -n "s/^extra_packages = //p" "$config")${FAKE_EXTRA_INSTALLED:+,$FAKE_EXTRA_INSTALLED}' \
+		'for package in $(printf "%s" "$extra" | tr , " "); do printf "P:%s\\nV:1-r0\\n\\n" "$package"; done >"$build_work/chroot_rootfs_test/lib/apk/db/installed"'
 } >"$fake_bin/pmbootstrap"
 {
 	printf '%s\n' '#!/bin/sh' 'set -eu' 'while [ "$#" -gt 0 ]; do' \
@@ -646,6 +648,42 @@ awk -F "$tab" -v bytes="$product_manifest_bytes" -v hash="$product_manifest_hash
 awk -F "$tab" '$1 == "split_artifact_contract" && $2 == "radio-split-artifact-contract.toml" && $3 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' "$manifest"
 awk -F "$tab" '$1 == "artifact" && $2 == "rootfs.tar" && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' "$manifest"
 awk -F "$tab" '$1 == "artifact" && $2 == "rootfs.img" && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' "$manifest"
+awk -F "$tab" '$1 == "android_runtime" && $2 == "none" { found=1 } END { exit(found ? 0 : 1) }' "$manifest" ||
+	fail 'default rootfs manifest does not record android_runtime none'
+
+# Opt-in Android package set (owner request 2026-10-09): appended to the
+# staged pmbootstrap config, verified in the built apk database, recorded in
+# the manifest; nftables in the result is refused because the GKI lacks it.
+android_build() {
+	PATH="$fake_bin:$PATH" FERRIX_OUT_DIR="$1" FERRIX_PIXEL9A_PINS="$pins_fixture" \
+	FERRIX_CACHE_DIR="$work/cache" FERRIX_PIXEL9A_RADIO_KERNEL_DIST="$radio_kernel" \
+	FERRIX_PIXEL9A_RADIO_KERNEL_MANIFEST="$radio_kernel/build-manifest.tsv" \
+	FERRIX_PIXEL9A_PRODUCT_DIR="$product" FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
+	FERRIX_PIXEL9A_PROFILE="$product/profile.toml" \
+	FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap \
+	FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
+	FERRIX_PIXEL9A_PMAPORTS_DIR="$pmaports" FERRIX_PIXEL9A_PMAPORTS_COMMIT="$pmaports_commit" \
+	FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB=256 FERRIX_PIXEL9A_ANDROID=1 "$script" build
+}
+android_build "$work/android-out" >"$work/android.out" 2>"$work/android.err" ||
+	{ cat "$work/android.err" >&2; fail 'opt-in Android rootfs build failed'; }
+android_manifest="$work/android-out/pixel-9a/rootfs/tegu/manifest.tsv"
+awk -F "$tab" '$1 == "android_runtime" && $2 == "waydroid-packages" && $3 ~ /(^|,)waydroid(,|$)/ { found=1 } END { exit(found ? 0 : 1) }' \
+	"$android_manifest" || fail 'Android rootfs manifest does not record the package set'
+awk -F "$tab" '$1 == "artifact" && $2 == "android/packages" && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' \
+	"$android_manifest" || fail 'Android rootfs manifest does not hash the package set'
+grep -q 'opt-in Android runtime packages: waydroid,' "$work/android.out" || fail 'Android packages were not appended'
+if FAKE_EXTRA_INSTALLED=nftables android_build "$work/android-nft-out" >/dev/null 2>"$work/android-nft.err"; then
+	fail 'Android rootfs with nftables installed was accepted'
+fi
+grep -q 'contains nftables, which the GKI cannot use' "$work/android-nft.err" || fail 'nftables refusal reason'
+if grep -Eqx '(nftables|waydroid-nftrules)' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/android/packages"; then
+	fail 'Android package set lists an nftables package'
+fi
+if FERRIX_OUT_DIR="$work/android-bad" FERRIX_PIXEL9A_ANDROID=yes "$script" preflight >/dev/null 2>"$work/android-bad.err"; then
+	fail 'invalid FERRIX_PIXEL9A_ANDROID was accepted'
+fi
+grep -q 'FERRIX_PIXEL9A_ANDROID must be 0 or 1' "$work/android-bad.err" || fail 'invalid Android flag reason'
 
 # Read-only status checks must not clobber a completed built handoff. They
 # write status-named diagnostics beside the canonical manifest instead.

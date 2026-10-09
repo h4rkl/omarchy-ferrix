@@ -118,6 +118,8 @@ persist.waydroid.multi_windows=false
 ro.sf.lcd_density=400
 INI
   install -Dm755 "$project/local.d/00-ferrix-android.start" "$mnt/etc/local.d/00-ferrix-android.start"
+  [ -f /android/ferrix-waydroid.sh ] || fail "android-helper-missing" "/android/ferrix-waydroid.sh not mounted"
+  install -Dm755 /android/ferrix-waydroid.sh "$mnt/usr/lib/ferrix/ferrix-waydroid.sh"
   mkdir -p "$mnt/var/lib/waydroid" "$mnt/etc/nftables.d"
   nft_rule=false
   if [ -f "$mnt/usr/share/nftables.avail/51_waydroid.nft" ]; then
@@ -138,7 +140,7 @@ INI
   fi
   waydroid_pkg=$(awk '/^P:waydroid$/ { getline; sub(/^V:/, ""); print; exit }' "$mnt/lib/apk/db/installed")
   [ -n "$waydroid_pkg" ] || fail "waydroid-not-installed" "package waydroid missing from the rootfs apk database"
-  android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"fulguris_apk_sha256\": \"$fulguris_sha\", \"init_mode\": \"first-boot\""
+  android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"helper_sha256\": \"$(sha256sum "$mnt/usr/lib/ferrix/ferrix-waydroid.sh" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"fulguris_apk_sha256\": \"$fulguris_sha\", \"init_mode\": \"first-boot\""
   android_facts="\"density_dpi\": $android_density_dpi, $android_facts"
   log "android runtime staged (waydroid $waydroid_pkg, density ${android_density_dpi}dpi)"
 fi

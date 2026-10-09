@@ -5,64 +5,8 @@
 # so the container service is up before ferrix-appd composes the Android
 # runtime. The Waydroid *session* is started by the post-compositor product
 # bootstrap, where the Wayland socket exists; ferrix-appd only launches apps.
+# The implementation is shared with the Pixel 9a dev route:
+# tools/android/guest/ferrix-waydroid.sh, installed by finalize-in-container.sh.
 # Evidence label QEMU; claim level none until a rendered frame is inspected.
-props=${FERRIX_ANDROID_PROPS:-/etc/ferrix/waydroid-properties.ini}
-images=${FERRIX_ANDROID_IMAGES:-/etc/waydroid-extra/images}
-cfg=${FERRIX_ANDROID_CONFIG:-/var/lib/waydroid/waydroid.cfg}
-base_props=${FERRIX_ANDROID_BASE_PROPS:-${cfg%/*}/waydroid_base.prop}
-fulguris_apk=${FERRIX_ANDROID_FULGURIS_APK:-/usr/share/ferrix/android/fulguris.apk}
-console=${FERRIX_ANDROID_CONSOLE:-/dev/console}
-run_dir=${FERRIX_ANDROID_RUN_DIR:-/run/ferrix}
-density_dpi=400
-rec() { printf '%s\n' "$1" >> "$console"; logger -t ferrix "$1" 2>/dev/null || true; }
-dev_state() { if [ -e "$1" ]; then ls -l "$1" 2>/dev/null | awk '{print $1" "$5" "$6}' | tr ',' ' '; else printf 'absent'; fi; }
-mkdir -p "$run_dir"
-rec "{\"evidence\":\"QEMU\",\"event\":\"android-binder-devices\",\"binder\":\"$(dev_state /dev/binder)\",\"hwbinder\":\"$(dev_state /dev/hwbinder)\",\"vndbinder\":\"$(dev_state /dev/vndbinder)\",\"psi\":\"$( [ -r /proc/pressure/cpu ] && echo present || echo absent)\"}"
-if ! command -v waydroid >/dev/null 2>&1; then
-  rec '{"evidence":"QEMU","event":"waydroid-init","status":"failed","reason":"waydroid-not-installed"}'
-  exit 0
-fi
-rc-service dbus start >/dev/null 2>&1 || true
-rc-service cgroups start >/dev/null 2>&1 || true
-if [ -f "$cfg" ] && grep -q '^images_path' "$cfg"; then
-  rec '{"evidence":"QEMU","event":"waydroid-init","status":"already-initialized"}'
-else
-  if [ -f "$images/system.img" ] && [ -f "$images/vendor.img" ]; then
-    if timeout 300 waydroid init -f -i "$images" >"$run_dir/waydroid-init.log" 2>&1; then
-      rec '{"evidence":"QEMU","event":"waydroid-init","status":"ok","images":"/etc/waydroid-extra/images","source":"offline"}'
-    else
-      rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-init\",\"status\":\"failed\",\"reason\":\"waydroid-init-exit-$?\",\"log\":\"$run_dir/waydroid-init.log\"}"
-      tail -n 20 "$run_dir/waydroid-init.log" > "$console" 2>/dev/null || true
-    fi
-  else
-    rec '{"evidence":"QEMU","event":"waydroid-init","status":"failed","reason":"images-missing"}'
-  fi
-fi
-# Software-rendering properties (docs/android-runtime.md section 6.3), added
-# once; waydroid init rewrites the file without them.
-if [ -f "$cfg" ] && [ -f "$props" ] && { ! grep -q '^ro.hardware.egl' "$cfg" \
-  || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$cfg"; }; then
-  { grep -q '^\[properties\]' "$cfg" || printf '\n[properties]\n'; grep -v '^\[' "$props"; } >> "$cfg"
-  rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-properties\",\"status\":\"applied\",\"density_dpi\":${density_dpi},\"path\":\"/var/lib/waydroid/waydroid.cfg\"}"
-fi
-# `waydroid init` creates waydroid_base.prop before the overrides above exist.
-# A plain container start reuses that file, silently selecting Mesa/GBM from
-# QEMU's render node; SurfaceFlinger then aborts because the virtio buffer is
-# not GPU-writeable. Regenerate the offline container configuration whenever
-# its effective renderer does not match the product configuration.
-if [ -f "$cfg" ] && { ! grep -q '^ro.hardware.gralloc=default$' "$base_props" 2>/dev/null \
-  || ! grep -q '^ro.hardware.egl=swiftshader$' "$base_props" 2>/dev/null \
-  || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null; }; then
-  if timeout 300 waydroid upgrade -o >"$run_dir/waydroid-upgrade.log" 2>&1; then
-    rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-properties\",\"status\":\"materialized\",\"renderer\":\"swiftshader\",\"density_dpi\":${density_dpi}}"
-  else
-    rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-properties\",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\"}"
-  fi
-fi
-if [ -f "$cfg" ] && rc-service waydroid-container start >"$run_dir/waydroid-container.log" 2>&1; then
-  rec '{"evidence":"QEMU","event":"waydroid-container","status":"started"}'
-else
-  rec "{\"evidence\":\"QEMU\",\"event\":\"waydroid-container\",\"status\":\"failed\",\"log\":\"$run_dir/waydroid-container.log\"}"
-fi
-[ ! -f "$fulguris_apk" ] || rec "{\"evidence\":\"QEMU\",\"event\":\"android-app-staged\",\"app\":\"org.ferrix.browser\",\"path\":\"$fulguris_apk\"}"
-exit 0
+export FERRIX_ANDROID_EVIDENCE=QEMU
+exec sh "${FERRIX_ANDROID_HELPER:-/usr/lib/ferrix/ferrix-waydroid.sh}" prepare
