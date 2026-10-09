@@ -108,7 +108,8 @@ Bluetooth discovery and pairing on the mock controller (devices come from
 `[[bluetooth.discoverable]]` in `profile.toml`, each with a fixed pairing
 method and outcome; ids are `mock-bt-found-N` in profile order). The
 `bluetooth-*` verbs are the same product requests Settings sends;
-`bluetooth-tick` and `set-bluetooth-pairing-outcome` are mock-only. The
+`bluetooth-tick`, `bluetooth-incoming`, and `set-bluetooth-pairing-outcome`
+are mock-only. The
 discovery bound (30 s), remote pairing steps (1 s, 3 s typing, 30 s silent
 remote), and the 30 s prompt timeout advance only on `bluetooth-tick`:
 
@@ -121,7 +122,16 @@ just qemu-mock bluetooth-disconnect device=mock-bt-found-0
 just qemu-mock bluetooth-forget device=mock-bt-found-0
 just qemu-mock set-bluetooth-pairing-outcome outcome=rejected   # success|rejected|timeout; omit to reset
 just qemu-mock bluetooth-cancel                     # cancel, or dismiss a finished outcome
+just qemu-mock bluetooth-pair device=mock-bt-found-4  # legacy headset: PIN card in Settings
+just qemu-mock bluetooth-reply-pin pin=0000          # or type it on the card (profile pin; others are rejected)
+just qemu-mock bluetooth-incoming device=mock-bt-found-2  # a remote pairs to us: Settings is raised over any app
 ```
+
+`bluetooth-incoming` models a remote-initiated request: the session marks it
+`incoming`, `ferrix-core` opens the system `show-bluetooth-pairing` intent
+through `ferrix-appd` (record `bluetooth-attention`), and Settings is launched
+or raised over the foreground app with the request's card. The PIN is never
+echoed: `mock-command` records name the command only.
 
 Invalid or unknown commands are rejected with `"status":"error"`; they never
 succeed silently. The client is `scripts/mock_control.py` (python3 standard
@@ -310,7 +320,7 @@ no network. CI runs it as the third job (`qemu-scenario-check`) on pushes
 and manual dispatch, and on pull requests only when the PR carries the
 `scenarios` label; `qemu-check` itself is unchanged in cost.
 
-The checked-in set is ADR-006's required list (25 files) plus three Bluetooth
+The checked-in set is ADR-006's required list (25 files) plus five Bluetooth
 files: `no-modem`,
 `modem-init-failure-recovery`, `sim-absent`, `sim-pin-locked-unlock`,
 `sim-ready`, `registration-search-deny-register-roam-loss-recover`,
@@ -323,8 +333,13 @@ files: `no-modem`,
 `wifi-captive`, `wifi-offline-recovered`, `service-crash-restart-reconcile`,
 plus the Bluetooth set on the core channel: `bluetooth-discovery-bounded`,
 `bluetooth-pair-confirm-success`, `bluetooth-pair-failures` (declined,
-rejected, prompt and remote timeouts, PIN refused, one attempt at a time).
-`ferrix-core`'s unit tests replay the same three files in-process (`mock`).
+rejected, prompt and remote timeouts, a declined PIN request, one attempt at
+a time), `bluetooth-pair-pin` (legacy PIN: plain accept and malformed PIN
+refused, wrong PIN rejected, profile PIN bonds), and
+`bluetooth-incoming-request` (remote-initiated request raises Settings
+through `ferrix-appd`; an unanswered one is declined after 30 s).
+`ferrix-core`'s unit tests replay the same files in-process (`mock`; the
+`app-intent` and `bluetooth-attention` records exist only in the guest).
 Scenarios that need a *local* action (dial, answer, hangup, send an SMS,
 enter a PIN, change the audio route, scan, connect) express it as a
 mock-control command of that name (`note = "client-side ... emulated over

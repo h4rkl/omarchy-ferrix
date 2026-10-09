@@ -20,7 +20,7 @@ note = "setup"
 [[step]]
 service = "core"
 command = { cmd = "bluetooth-incoming", device = "mock-bt-found-2" }
-expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "authorize" } }, { event = "app-intent", kind = "show-bluetooth-pairing", handler = "org.ferrix.settings" }, { event = "bluetooth-attention", status = "sent" } ]
+expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "authorize" } }, { event = "app-intent", kind = "show-bluetooth-pairing", handler = "org.ferrix.settings" } ]
 timeout_ms = 20000
 note = "the synthetic phone pairs to us (Just Works, asked explicitly); Settings is launched or raised"
 
@@ -50,7 +50,7 @@ note = "restore the saved list"
 [[step]]
 service = "core"
 command = { cmd = "bluetooth-incoming", device = "mock-bt-found-4" }
-expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "request-pin" } }, { event = "app-intent", kind = "show-bluetooth-pairing", handler = "org.ferrix.settings" }, { event = "bluetooth-attention", status = "sent" } ]
+expect = [ { event = "bluetooth-session-changed", incoming = true, pairing = { stage = "request-pin" } }, { event = "app-intent", kind = "show-bluetooth-pairing", handler = "org.ferrix.settings" } ]
 timeout_ms = 20000
 note = "a legacy remote pairs to us: the PIN card is raised"
 

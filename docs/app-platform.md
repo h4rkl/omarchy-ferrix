@@ -299,14 +299,14 @@ then gates by the verified role:
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
 | `Open` with `dial` / `compose` | `application`, `home`, `tool` |
-| `Open` with `show-call` | `service`, `tool` |
+| `Open` with `show-call` or `show-bluetooth-pairing` | `service`, `tool` |
 | `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
 
 A `service` resolves identities and observes lifecycle events; it never
 launches, activates, or terminates a named application, returns home, or
-sends reports. The one thing it may raise is the handler of the system
-`show-call` intent. Malformed
+sends reports. The one thing it may raise is the handler of a system
+intent (`show-call`, `show-bluetooth-pairing`). Malformed
 lines get `Reply::ProtocolError`; failures are typed `AppError`s. A schema
 mismatch is rejected at `Hello`. Compositor, tool, and service authentication
 is still a bootstrap trust boundary because those processes are not launched
@@ -323,7 +323,9 @@ An application never launches another application by id. It asks
 order, whose descriptor lists the kind in `intents`. Kinds: `dial` (Phone
 opens the dialer with the number in the buffer), `compose` (Messages opens a
 new message addressed to the number), and `show-call` (Phone shows the
-ringing or live call). A number is validated (at most 32 characters, digits,
+ringing or live call), and `show-bluetooth-pairing` (Settings shows the
+pairing request a remote started; it carries nothing, the handler reads the
+request from `ferrix-core`). A number is validated (at most 32 characters, digits,
 a leading `+`, and ` -()*#`). Intents only prefill or reveal UI: nothing is
 dialed or sent until the user presses Call or Send, so opening one needs no
 grant beyond the role rule above.
@@ -342,6 +344,15 @@ Contacts uses `dial` and `compose` from a contact's detail page.
 `ferrix-telephonyd` opens `show-call` when a new incoming call starts
 ringing (from a worker thread, never the event loop), so Phone comes to the
 foreground over whatever was in front, whether or not it was running.
+`ferrix-core` does the same for Bluetooth: when a remote-initiated pairing
+request starts waiting on the user (the session summary's `incoming` flag
+with a prompt stage), its attention thread opens `show-bluetooth-pairing`
+with role `service`, so Settings is launched or raised over the foreground
+app on its Bluetooth page with the request's card. The adapter's 30 s prompt
+timeout still declines an unanswered request. This is the interim system
+prompt: a shell-owned notification surface (issue #12) does not exist yet,
+and when it does the request should be offered there instead of taking the
+foreground.
 
 ## Evidence
 
@@ -358,7 +369,8 @@ pid), `app-intent` (`kind`, `handler`, `delivery`: `launch` | `running` |
 `home-crash-notice`, `ferrix-appd-unavailable` (home surface); `app-context`,
 `terminal-frame` (Terminal); `app-intent-received` (`kind`, `delivery`) and
 `app-intents-unavailable` (intent handlers); `telephony-attention`
-(`status`: `sent` | `failed` | `disabled`) from `ferrix-telephonyd`. `just qemu-check` is unchanged. Graphical
+(`status`: `sent` | `failed` | `disabled`) from `ferrix-telephonyd`;
+`bluetooth-attention` (same statuses) from `ferrix-core`. `just qemu-check` is unchanged. Graphical
 evidence for this slice is recorded in `docs/status.md`.
 
 ## Remaining platform work
