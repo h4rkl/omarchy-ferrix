@@ -18,7 +18,7 @@ evidence = "synaptics_tcm_touch and uinput test touch/keyboard devices reach fer
 
 [network]
 status = "supported"
-evidence = "bcm4383 Wi-Fi scans and joins a WPA2/WPA3 transition AP as WPA2-PSK through NetworkManager and ferrix-networkd (DHCP, ping). WPA3-SAE association fails on this driver. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
+evidence = "bcm4383 Wi-Fi scans and joins a WPA2/WPA3 transition AP with WPA3-SAE (driver patched for NL80211 WPA version 3) and WPA2-PSK through NetworkManager and ferrix-networkd (DHCP, ping). 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
 
 [bluetooth]
 status = "supported"

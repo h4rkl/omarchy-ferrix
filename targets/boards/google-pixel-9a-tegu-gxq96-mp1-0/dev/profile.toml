@@ -35,10 +35,8 @@ wifi = "disconnected"
 bluetooth_present = true
 modem = "unregistered"
 sim = "absent"
-# The bcm4383 DHD driver fails SAE association with the host wpa_supplicant
-# (single-AKM SAE with PMF required too), while WPA2-PSK joins the same
-# WPA2/WPA3 transition AP. SAE-only networks still use SAE.
-wifi_transition_key_mgmt = "psk"
+# Transition-mode APs join with SAE (the default): the bcm4383 driver accepts
+# NL80211_WPA_VERSION_3 with kernel-patches/.../0002 (verified 2026-10-09).
 
 [audio]
 route = "speaker"

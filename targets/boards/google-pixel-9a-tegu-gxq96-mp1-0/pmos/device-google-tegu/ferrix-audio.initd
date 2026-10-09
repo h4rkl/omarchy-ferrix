@@ -3,33 +3,38 @@
 [ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
 export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_NETWORK_BACKEND FERRIX_TELEPHONY_BACKEND FERRIX_BLUETOOTH_BACKEND FERRIX_AUDIO_BACKEND FERRIX_POWER_BACKEND
 
+# WirePlumber for the PipeWire session (ferrix-pipewire). Both daemons run in
+# the foreground and neither accepts --no-daemon; supervise-daemon restarts
+# either one if it dies (bounded) instead of leaving the session silent
+# until the next boot.
 name="Ferrix PipeWire/WirePlumber session"
-description="Starts the native PipeWire and WirePlumber user session"
-command="/bin/true"
-command_background="no"
+description="Starts WirePlumber for the native PipeWire user session"
 
 runtime_dir=/run/user/1000
-pipewire_pid=/run/ferrix-pipewire.pid
-wireplumber_pid=/run/ferrix-wireplumber.pid
+command=/usr/bin/wireplumber
+command_user="user:user"
+supervisor=supervise-daemon
+supervise_daemon_args="--env XDG_RUNTIME_DIR=$runtime_dir"
+respawn_delay=2
+respawn_max=5
+respawn_period=60
+pidfile=/run/ferrix-wireplumber.pid
 
 depend() {
-	need dbus seatd ferrix-radio-firmware
+	need ferrix-pipewire
 	after bluetooth
 }
 
 start_pre() {
-	for binary in pipewire wireplumber wpctl; do
+	for binary in wireplumber wpctl; do
 		command -v "$binary" >/dev/null 2>&1 || {
 			eerror "$binary is not installed"
 			return 1
 		}
 	done
-	. /usr/lib/ferrix/openrc.sh
-	ferrix_user_runtime_dir || return 1
-	checkpath -d -m 0755 /run
 }
 
-wait_for_wireplumber() {
+start_post() {
 	# OpenRC can start ferrix-core immediately after this script returns.  Wait
 	# until the user PipeWire session answers a harmless status query so the
 	# target adapter does not lose its first connection to WirePlumber.
@@ -41,24 +46,4 @@ wait_for_wireplumber() {
 	done
 	eerror "WirePlumber did not answer within 10 seconds"
 	return 1
-}
-
-start() {
-	# Both daemons run in the foreground by default; neither accepts
-	# --no-daemon (they exit on the unknown option).
-	ebegin "Starting PipeWire/WirePlumber"
-	start-stop-daemon --start --background --make-pidfile --pidfile "$pipewire_pid" \
-		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/pipewire
-	start-stop-daemon --start --background --make-pidfile --pidfile "$wireplumber_pid" \
-		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/wireplumber
-	wait_for_wireplumber
-	eend $?
-}
-
-stop() {
-	ebegin "Stopping PipeWire/WirePlumber"
-	start-stop-daemon --stop --pidfile "$wireplumber_pid" --retry TERM/5/KILL/5 2>/dev/null || true
-	start-stop-daemon --stop --pidfile "$pipewire_pid" --retry TERM/5/KILL/5 2>/dev/null || true
-	rm -f "$wireplumber_pid" "$pipewire_pid"
-	eend 0
 }

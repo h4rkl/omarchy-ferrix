@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+
+name="Ferrix PipeWire"
+description="The user session's PipeWire daemon, restarted if it dies"
+
+command=/usr/bin/pipewire
+command_user="user:user"
+supervisor=supervise-daemon
+supervise_daemon_args="--env XDG_RUNTIME_DIR=/run/user/1000"
+respawn_delay=2
+respawn_max=5
+respawn_period=60
+pidfile=/run/ferrix-pipewire.pid
+
+depend() {
+	need dbus seatd ferrix-radio-firmware
+	after bluetooth
+}
+
+start_pre() {
+	command -v pipewire >/dev/null 2>&1 || {
+		eerror "pipewire is not installed"
+		return 1
+	}
+	. /usr/lib/ferrix/openrc.sh
+	ferrix_user_runtime_dir
+}

@@ -137,7 +137,7 @@ touchscreen through libinput. Identifiers are not recorded.
   boots in the container, Fulguris installs as the default browser, the
   Browser tile opens Fulguris through ferrix-shell (framebuffer capture), and
   the container reaches the network and DNS. Fulguris's first-run terms are
-  left for the owner to accept. Android audio is silent (no PipeWire bridge).
+  left for the owner to accept.
 - **Bluetooth pairing UI on hardware:** Settings > Bluetooth > Pair new
   device runs a bounded BlueZ discovery and lists nearby named devices with
   signal bars (unnamed beacons are counted, not offered). Pairing with a
@@ -149,8 +149,19 @@ touchscreen through libinput. Identifiers are not recorded.
   capability. Settings Wi-Fi lists each SSID once.
 - **Boot hygiene:** zram swap works (tegu's `zram_gs` aliased for
   zramstart); `kill-plymouth` is unlinked; `rc-status` is clean.
-- **Not yet working on hardware:** WPA3-SAE-only networks, cellular (SIT
-  modem route is off on Kleaf), camera, Android audio, Mali GPU (software
+- **WPA3-SAE on hardware:** root cause was bcm4383 treating
+  `NL80211_WPA_VERSION_3` (sent by upstream wpa_supplicant for SAE; AOSP's
+  Broadcom build never sends it) as unsupported, leaving the firmware with
+  `wpa_auth` 0. With `0002-treat-nl80211-wpa-version-3-as-rsn.patch` an SAE
+  profile joins the transition AP (external auth status 0, DHCP, ping), so
+  the Pixel profile no longer overrides `wifi_transition_key_mgmt`.
+- **Audio supervision:** PipeWire (`ferrix-pipewire`) and WirePlumber
+  (`ferrix-audio`) run under supervise-daemon with bounded respawn
+  (verified: a killed WirePlumber returns). Android audio is routed through
+  pipewire-pulse (PipeWire audio backend selected via pmbootstrap
+  providers).
+- **Not yet working on hardware:** cellular (SIT
+  modem route is off on Kleaf), camera, Mali GPU (software
   rendering only).
 
 ## 2026-10-09 (Files app: home-confined file browser; QEMU framebuffer, shared with Pixel 9a)
