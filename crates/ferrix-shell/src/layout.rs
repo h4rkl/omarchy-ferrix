@@ -111,6 +111,51 @@ impl OutputLayout {
             h.saturating_sub(top + bottom),
         )
     }
+
+    /// The compositor's home indicator for clients that draw none (Android
+    /// windows): the rows of a rounded pill, as `(x, y, w, h)` rectangles,
+    /// centred in the bottom safe-area inset of the rotated output. It has
+    /// the proportions of `ferrix_ui::widgets::gesture_pill` (320x12 at a
+    /// 1080 px basis). Empty when the inset cannot hold it.
+    pub fn system_pill_rows(&self, safe: SafeArea) -> Vec<(i32, i32, u32, u32)> {
+        let bottom = match self.rotation {
+            Rotation::Normal => safe.bottom,
+            Rotation::Rotate90 => safe.right,
+            Rotation::Rotate180 => safe.top,
+            Rotation::Rotate270 => safe.left,
+        };
+        let (w, h) = self.logical_size();
+        let basis = w.min(h);
+        let pill_w = 320 * basis / 1080;
+        let pill_h = (12 * basis / 1080).max(2);
+        if bottom < pill_h * 2 || pill_w == 0 {
+            return Vec::new();
+        }
+        let x0 = (w - pill_w) as i32 / 2;
+        let y0 = (h - bottom / 2 - pill_h / 2) as i32;
+        // Round the caps: each row is inset by the circle of radius pill_h/2;
+        // equal neighbouring rows merge into one rectangle.
+        let r = f64::from(pill_h) / 2.0;
+        let mut rows: Vec<(i32, i32, u32, u32)> = Vec::new();
+        for row in 0..pill_h {
+            let dy = f64::from(row) + 0.5 - r;
+            let inset = (r - (r * r - dy * dy).max(0.0).sqrt()).round() as u32;
+            let (x, width) = (x0 + inset as i32, pill_w - 2 * inset);
+            match rows.last_mut() {
+                Some(last) if last.0 == x && last.2 == width => last.3 += 1,
+                _ => rows.push((x, y0 + row as i32, width, 1)),
+            }
+        }
+        rows
+    }
+}
+
+/// Whether a toplevel draws Ferrix's own gesture pill. Native Ferrix surfaces
+/// (`org.ferrix.*`) draw it themselves; anything else (Waydroid's Android
+/// window) gets the compositor's indicator in the bottom inset. The app_id is
+/// client-claimed, which is fine here: it only decides decoration.
+pub fn draws_own_pill(app_id: Option<&str>) -> bool {
+    app_id.is_some_and(|id| id.starts_with("org.ferrix."))
 }
 
 /// Fullscreen-only toplevel stack. Newest mapped window is focused and drawn;
@@ -484,6 +529,37 @@ mod tests {
         assert_eq!(stack.oldest_mapped(), None);
         stack.mark_mapped(&1);
         assert_eq!(stack.oldest_mapped(), Some(&1));
+    }
+
+    #[test]
+    fn system_pill_sits_centred_in_the_bottom_inset_with_round_caps() {
+        let safe = SafeArea {
+            top: 137,
+            bottom: 72,
+            left: 0,
+            right: 0,
+        };
+        let portrait = OutputLayout::plan(1080, 2424, Orientation::Portrait);
+        let rows = portrait.system_pill_rows(safe);
+        let top = rows.iter().map(|r| r.1).min().unwrap();
+        let bottom = rows.iter().map(|r| r.1 + r.3 as i32).max().unwrap();
+        assert_eq!((top, bottom), (2424 - 36 - 6, 2424 - 36 + 6));
+        // Widest row is the full pill, centred; the caps are narrower.
+        let widest = rows.iter().max_by_key(|r| r.2).unwrap();
+        assert_eq!((widest.0, widest.2), (380, 320));
+        assert!(rows.first().unwrap().2 < 320 && rows.last().unwrap().2 < 320);
+        // Rows tile the pill height exactly.
+        assert_eq!(rows.iter().map(|r| r.3).sum::<u32>(), 12);
+        // No inset, no pill.
+        assert!(portrait.system_pill_rows(SafeArea::default()).is_empty());
+    }
+
+    #[test]
+    fn only_native_ferrix_surfaces_draw_their_own_pill() {
+        assert!(draws_own_pill(Some("org.ferrix.home")));
+        assert!(draws_own_pill(Some("org.ferrix.files")));
+        assert!(!draws_own_pill(Some("Waydroid")));
+        assert!(!draws_own_pill(None));
     }
 
     #[test]

@@ -5,8 +5,8 @@ use smithay::{
     backend::renderer::{
         Color32F, ImportAll, ImportMem, Renderer,
         element::{
-            AsRenderElements, Kind, surface::WaylandSurfaceRenderElement,
-            surface::render_elements_from_surface_tree,
+            AsRenderElements, Kind, solid::SolidColorRenderElement,
+            surface::WaylandSurfaceRenderElement, surface::render_elements_from_surface_tree,
         },
     },
     desktop::layer_map_for_output,
@@ -30,12 +30,14 @@ pub fn clear_color() -> Color32F {
 smithay::backend::renderer::element::render_elements! {
     pub ShellRenderElement<R> where R: ImportAll + ImportMem;
     Surface = WaylandSurfaceRenderElement<R>,
+    Solid = SolidColorRenderElement,
 }
 
 impl<R: Renderer> std::fmt::Debug for ShellRenderElement<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Surface(e) => f.debug_tuple("Surface").field(e).finish(),
+            Self::Solid(e) => f.debug_tuple("Solid").field(e).finish(),
             Self::_GenericCatcher(e) => f.debug_tuple("_GenericCatcher").field(e).finish(),
         }
     }
@@ -90,6 +92,19 @@ where
             }
         };
     push_layers(&[Layer::Overlay, Layer::Top], &mut elements, renderer);
+
+    // The compositor home indicator sits in the bottom inset, outside every
+    // client, for windows that draw no Ferrix pill (Android).
+    let [r, g, b] = crate::color::pill_rgb();
+    for (row, id) in shell.system_pill().into_iter().zip(&shell.pill_ids) {
+        elements.push(ShellRenderElement::Solid(SolidColorRenderElement::new(
+            id.clone(),
+            row.to_physical_precise_round(scale),
+            0usize,
+            Color32F::new(r, g, b, 1.0),
+            Kind::Unspecified,
+        )));
+    }
 
     if let Some(window) = shell.windows.focused() {
         // The toplevel fills the client area (output minus the safe area);

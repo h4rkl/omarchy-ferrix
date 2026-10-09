@@ -1,5 +1,6 @@
-//! The one color the compositor paints itself: the output clear color under
-//! every client surface. It comes from the shared Ferrix theme
+//! The colors the compositor paints itself: the output clear color under
+//! every client surface, and the home indicator in the bottom inset for
+//! windows that draw no Ferrix pill. It comes from the shared Ferrix theme
 //! (`ferrix_ui::theme`, loaded from `colors.toml` at startup), so the
 //! compositor background and the surfaces drawn on it are one palette.
 //! Everything else on screen belongs to clients.
@@ -11,6 +12,12 @@
 /// `colors.toml` says otherwise.
 pub fn clear_rgb() -> [f32; 3] {
     rgb_channels(ferrix_ui::theme::get().bg)
+}
+
+/// The home indicator colour the compositor draws for windows without a
+/// Ferrix pill: the theme's `fg_dim`, as `ferrix_ui::widgets::gesture_pill`.
+pub fn pill_rgb() -> [f32; 3] {
+    rgb_channels(ferrix_ui::theme::get().fg_dim)
 }
 
 /// Splits a `0xRRGGBB` theme value into unit-range channels, without gamma

@@ -205,6 +205,9 @@ pub struct Shell {
     pub gesture_source: Option<GestureSource>,
 
     pub windows: WindowStack<Window>,
+    /// Stable damage-tracking ids for the rows of the compositor's home
+    /// indicator (`OutputLayout::system_pill_rows`).
+    pub pill_ids: Vec<smithay::backend::renderer::element::Id>,
     pub popups: PopupManager,
     pub cursor_status: CursorImageStatus,
     pub pointer_location: Point<f64, Logical>,
@@ -333,6 +336,11 @@ impl Shell {
             gesture: EdgeGesture::new(),
             gesture_source: None,
             windows: WindowStack::new(),
+            // One id per merged pill row: 32 covers a 1080 px basis (about a
+            // dozen rows) with room to spare; rows past the last id are not drawn.
+            pill_ids: (0..32)
+                .map(|_| smithay::backend::renderer::element::Id::new())
+                .collect(),
             popups: PopupManager::default(),
             cursor_status: CursorImageStatus::default_named(),
             pointer_location: Point::from((0.0, 0.0)),
@@ -395,6 +403,21 @@ impl Shell {
     pub fn client_area(&self) -> Rectangle<i32, Logical> {
         let (x, y, w, h) = self.plan.client_rect(self.config.safe_area);
         Rectangle::new((x, y).into(), (w as i32, h as i32).into())
+    }
+
+    /// Rows of the compositor home indicator, when the focused window does
+    /// not draw Ferrix's pill itself (see `layout::draws_own_pill`).
+    pub fn system_pill(&self) -> Vec<Rectangle<i32, Logical>> {
+        let focused = self.windows.focused();
+        let own = focused.is_some_and(|w| crate::layout::draws_own_pill(self.windows.app_id_of(w)));
+        if focused.is_none() || own {
+            return Vec::new();
+        }
+        self.plan
+            .system_pill_rows(self.config.safe_area)
+            .into_iter()
+            .map(|(x, y, w, h)| Rectangle::new((x, y).into(), (w as i32, h as i32).into()))
+            .collect()
     }
 
     /// Apply a (possibly new) output plan: mode is owned by the backend, this
