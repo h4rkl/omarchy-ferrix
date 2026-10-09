@@ -17,3 +17,6 @@ waydroid-openrc
 lxc
 dnsmasq
 iptables
+# Alpine's iptables is nft-backed (xtables-nft-multi) and fails without
+# nf_tables; waydroid-net.sh prefers iptables-legacy when it exists.
+iptables-legacy

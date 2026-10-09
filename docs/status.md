@@ -9,7 +9,8 @@
   (`targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/README.md`,
   `linux-plan.md`, ADR-007 amendment).
 - Packages: `FERRIX_PIXEL9A_ANDROID=1 tools/pixel-9a/rootfs.sh build` appends
-  `pmos/android/packages` (waydroid, waydroid-openrc, lxc, dnsmasq, iptables)
+  `pmos/android/packages` (waydroid, waydroid-openrc, lxc, dnsmasq, iptables,
+  iptables-legacy; Alpine's `iptables` is nft-backed)
   to pmbootstrap. pipewire-pulse is left out because apk refuses it
   alongside pmOS's `postmarketos-base-ui-audio-backend-pulseaudio`. It refuses waydroid-nftrules because the GKI has no
   nftables. postmarketos-base installs nftables itself, but `nft list
