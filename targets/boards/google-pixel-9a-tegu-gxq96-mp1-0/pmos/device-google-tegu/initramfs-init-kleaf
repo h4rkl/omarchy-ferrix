@@ -18,8 +18,8 @@
 #
 # Automated bisection: with ferrix.checkpoint=STAGE on the kernel command line
 # (dev-compose --checkpoint), /init reboots straight to bootloader Fastboot
-# when it reaches STAGE (early, init, modules, gadget, root, mounted, dlkm,
-# switch), so
+# when it reaches STAGE (early, watchdog, init, modules, gadget, root, mounted,
+# dlkm, switch), so
 # a host sees how far boot got with nothing but `fastboot devices`.
 
 bb=/bin/busybox
@@ -155,6 +155,12 @@ $bb mount -t sysfs sysfs /sys 2>/dev/null || :
 checkpoint_target=$($bb sed -n 's/.*ferrix\.checkpoint=\([A-Za-z0-9]*\).*/\1/p' /proc/cmdline)
 checkpoint_action=$($bb sed -n 's/.*ferrix\.checkpoint_action=\([A-Za-z0-9]*\).*/\1/p' /proc/cmdline)
 checkpoint early
+# The bootloader leaves the Exynos watchdog running; stock first-stage init
+# loads s3c2410_wdt within a second or two, after which the watchdog core
+# (CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED) keeps it fed until userspace opens it.
+# Load it (and its four dependencies) before the long module list.
+/system/bin/modprobe -q -- s3c2410_wdt || log 's3c2410_wdt did not load'
+checkpoint watchdog
 # GKI has no devtmpfs (Android's ueventd populates a tmpfs /dev), so do the
 # same with busybox mdev on a tmpfs /dev. GKI also lacks CONFIG_UEVENT_HELPER,
 # so there is no hotplug callback: rescan with `mdev -s` wherever this script
