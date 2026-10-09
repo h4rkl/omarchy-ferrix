@@ -468,7 +468,9 @@ def install_firmware(image, work, firmware_dir, allowlist):
         fields = line.split("\t")
         if line.strip() and not line.lstrip().startswith("#") and len(fields) >= 4:
             allowed.add(fields[3])
-    editor = RootfsEditor(image, work)
+    firmware_work = work / "firmware"
+    firmware_work.mkdir()
+    editor = RootfsEditor(image, firmware_work)
     rows = []
     for line in manifest.read_text().splitlines():
         fields = line.split("\t")

@@ -29,6 +29,8 @@ export FERRIX_PIXEL9A_DEV_MODULES_SKIP=\${FERRIX_PIXEL9A_DEV_MODULES_SKIP:-}
 export FERRIX_PIXEL9A_DEV_OUT=out/pixel-9a/images/tegu-kleaf-dev-\$a
 # Re-stage firmware from the pinned factory image so allowlist additions
 # (e.g. the Mali CSF firmware) reach the image without a base-rootfs rebuild.
+f=out/pixel-9a/firmware/tegu
+[ ! -d \$f/staged ] || mv \$f/staged \$f/staged.prev-\$a
 FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware \
   tools/pixel-9a/native-builder.sh run firmware stage 2>&1 | grep -E 'PASS|FAIL' | tail -2 >&2
 export FERRIX_PIXEL9A_DEV_FIRMWARE_DIR=\${FERRIX_PIXEL9A_FIRMWARE_DIR:-out/pixel-9a/firmware/tegu/staged}
