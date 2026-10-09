@@ -1,0 +1,24 @@
+# Pinned inputs for building Waydroid's LineageOS 23.2 (Android 16 QPR2)
+# arm64_only system/vendor images from source. Read by
+# tools/android/waydroid-lineage-build.sh; never sourced as shell. Moving to
+# new revisions means editing these values together. The full synced tree
+# is recorded as a `repo manifest -r` snapshot next to the build output.
+#
+# Why build at all: the Pixel 9a's stock Mali stack (stable-C mapper, AIDL
+# allocator V2) needs Android 14+ libui; the published Waydroid images are
+# LineageOS 20 (Android 13) only. See
+# targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/gpu-research.md and #19.
+REPO_URL=https://gerrit.googlesource.com/git-repo
+REPO_TAG=v2.68.1
+REPO_COMMIT=e1e215a14ea5373419acb8753b6865de19d1f122
+GIT_LFS_VERSION=v3.8.0
+GIT_LFS_URL=https://github.com/git-lfs/git-lfs/releases/download/v3.8.0/git-lfs-linux-amd64-v3.8.0.tar.gz
+GIT_LFS_SHA256=e455e00f15d9b95661b8d53498ffb0c3367962cf1ec73c31ab7369516cd6ab8d
+LINEAGE_MANIFEST_URL=https://github.com/LineageOS/android.git
+LINEAGE_BRANCH=lineage-23.2
+WAYDROID_VENDOR_URL=https://github.com/waydroid/android_vendor_waydroid
+WAYDROID_VENDOR_BRANCH=dev/lineage-23.2
+WAYDROID_VENDOR_COMMIT=2bfe8853e88181d65c28a76d5da291e3cbc32e4c
+WAYDROID_PATCH_SDK=36
+LUNCH_PRODUCT=lineage_waydroid_arm64_only
+LUNCH_VARIANT=userdebug
