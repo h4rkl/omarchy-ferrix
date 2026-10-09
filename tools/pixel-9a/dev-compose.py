@@ -260,6 +260,9 @@ def main():
     parser.add_argument("--out", type=Path, default=env("FERRIX_PIXEL9A_DEV_OUT"))
     parser.add_argument("--checkpoint", default=env("FERRIX_PIXEL9A_DEV_CHECKPOINT", ""),
                         help="initramfs stage at which /init reboots to bootloader Fastboot")
+    parser.add_argument("--checkpoint-action", choices=["fastboot", "delay"],
+                        default=env("FERRIX_PIXEL9A_DEV_CHECKPOINT_ACTION", "fastboot"),
+                        help="reboot to Fastboot at the checkpoint, or delay 30s (timing signal)")
     args = parser.parse_args()
     if args.base_rootfs is None or args.out is None:
         die("--base-rootfs/FERRIX_PIXEL9A_DEV_BASE_ROOTFS and --out/FERRIX_PIXEL9A_DEV_OUT are required")
@@ -320,6 +323,8 @@ def main():
                            if line.strip() and not line.lstrip().startswith("#"))
         if args.checkpoint:
             cmdline += f" ferrix.checkpoint={args.checkpoint}"
+            if args.checkpoint_action != "fastboot":
+                cmdline += f" ferrix.checkpoint_action={args.checkpoint_action}"
         empty = work / "vendor-ramdisk.cpio"
         empty.write_bytes(Cpio().finish())
         empty = lz4_legacy(empty)
@@ -355,7 +360,7 @@ def main():
             f"input\tinitramfs_init\t{init_script}\t{sha256(init_script)}",
             f"input\tinitramfs_modprobe\t{modprobe_script}\t{sha256(modprobe_script)}",
             f"input\treboot_helper\t{reboot_source}\t{sha256(reboot_source)}",
-            f"checkpoint\t{args.checkpoint or 'none'}",
+            f"checkpoint\t{args.checkpoint or 'none'}\t{args.checkpoint_action}",
             f"input\tvendor_cmdline\t{cmdline}",
             f"input\tvendor_bootconfig\t{bootconfig}\t{sha256(bootconfig)}",
         ]

@@ -18,7 +18,8 @@
 #
 # Automated bisection: with ferrix.checkpoint=STAGE on the kernel command line
 # (dev-compose --checkpoint), /init reboots straight to bootloader Fastboot
-# when it reaches STAGE (init, modules, gadget, root, mounted, dlkm, switch), so
+# when it reaches STAGE (early, init, modules, gadget, root, mounted, dlkm,
+# switch), so
 # a host sees how far boot got with nothing but `fastboot devices`.
 
 bb=/bin/busybox
@@ -85,6 +86,7 @@ start_usb_debug() {
 	}
 	log "debug gadget bound to $udc"
 	$bb sleep 1
+	$bb mdev -s 2>/dev/null || :
 	# ttyGS0 = log, ttyGS1 = shell (function creation order).
 	(
 		while :; do
@@ -107,6 +109,14 @@ start_usb_debug() {
 
 checkpoint() {
 	[ -n "$checkpoint_target" ] && [ "$1" = "$checkpoint_target" ] || return 0
+	# ferrix.checkpoint_action=delay is a driver-free timing signal: each slot
+	# attempt lasts ~30s longer when /init reaches STAGE. Fastboot reboots need
+	# pixel-reboot (a first-stage module), so they only work after "modules".
+	if [ "$checkpoint_action" = delay ]; then
+		log "checkpoint $1 reached; delaying 30s, then rebooting"
+		$bb sleep 30
+		$bb reboot -f
+	fi
 	log "checkpoint $1 reached; rebooting to bootloader Fastboot"
 	$bb sleep 1
 	/bin/reboot-bootloader
@@ -140,11 +150,21 @@ find_root_device() {
 	return 1
 }
 
-$bb mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
 $bb mount -t proc proc /proc 2>/dev/null || :
 $bb mount -t sysfs sysfs /sys 2>/dev/null || :
-$bb mount -t pstore pstore /sys/fs/pstore 2>/dev/null || :
 checkpoint_target=$($bb sed -n 's/.*ferrix\.checkpoint=\([A-Za-z0-9]*\).*/\1/p' /proc/cmdline)
+checkpoint_action=$($bb sed -n 's/.*ferrix\.checkpoint_action=\([A-Za-z0-9]*\).*/\1/p' /proc/cmdline)
+checkpoint early
+# GKI has no devtmpfs (Android's ueventd populates a tmpfs /dev), so do the
+# same with busybox mdev on a tmpfs /dev. GKI also lacks CONFIG_UEVENT_HELPER,
+# so there is no hotplug callback: rescan with `mdev -s` wherever this script
+# waits for a device that a module creates.
+$bb mount -t tmpfs -o mode=0755,size=64k tmpfs /dev 2>/dev/null || :
+$bb mknod -m 600 /dev/console c 5 1 2>/dev/null || :
+$bb mknod -m 644 /dev/kmsg c 1 11 2>/dev/null || :
+$bb mknod -m 666 /dev/null c 1 3 2>/dev/null || :
+$bb mdev -s 2>/dev/null || :
+$bb mount -t pstore pstore /sys/fs/pstore 2>/dev/null || :
 release=$($bb uname -r)
 log "kernel $release checkpoint=${checkpoint_target:-none}"
 checkpoint init
@@ -154,6 +174,7 @@ checkpoint init
 first_stage=/lib/modules/$release
 [ -f "$first_stage/modules.load" ] || first_stage=/lib/modules
 load_list "$first_stage/modules.load" "$first_stage"
+$bb mdev -s 2>/dev/null || :
 checkpoint modules
 
 # The Exynos watchdog (s3c2410_wdt) arms during first-stage loading; Android's
@@ -173,6 +194,7 @@ $bb mkdir -p /newroot
 root_device=
 attempt=0
 while [ "$attempt" -lt 60 ]; do
+	$bb mdev -s 2>/dev/null || :
 	root_device=$(find_root_device) && break
 	attempt=$((attempt + 1))
 	$bb sleep 1
@@ -194,6 +216,7 @@ fi
 modules="/newroot/lib/modules/$release"
 load_list "$modules/system_dlkm.modules.load" "$modules"
 load_list "$modules/vendor_dlkm.modules.load" "$modules"
+$bb mdev -s 2>/dev/null || :
 checkpoint dlkm
 
 [ -e /newroot/sbin/init ] || [ -L /newroot/sbin/init ] || hold_then_reboot '/sbin/init missing from the rootfs'
