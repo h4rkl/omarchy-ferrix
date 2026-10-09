@@ -16,6 +16,7 @@ use ferrix_telephony_protocol::{
     Request as TeleRequest, Update,
 };
 use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrix_ui::clock::MinuteClock;
 use ferrix_ui::draw::{Canvas, Type};
 use ferrix_ui::evidence::{emit, json_escape, json_opt_str};
 use ferrix_ui::keymap::{self, Modifiers};
@@ -28,7 +29,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 
 struct Settings {
     ty: Type,
-    minute: u32,
+    clock: MinuteClock,
     model: Model,
     input: Input,
     network: Receiver<Feed>,
@@ -44,16 +45,19 @@ struct Settings {
     last_links: (Link, Link),
 }
 
-pub fn run(initial_size: (u32, u32), minute: u32, target: String) -> Result<(), String> {
+pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
     let config = ClientConfig {
         app_id: APP_ID.to_owned(),
         title: "Settings".to_owned(),
         initial_size,
-        evidence: EVIDENCE.to_owned(),
+        evidence: EVIDENCE.to_string(),
         first_frame_event: "settings-frame".to_owned(),
         first_frame_extra: vec![("target".to_owned(), target.clone())],
     };
     ferrix_ui::client::run(config, move |wake: Wake| {
+        // Redraw the status-bar clock at each local minute boundary.
+        let tick = Arc::clone(&wake);
+        ferrix_ui::clock::spawn_minute_ticker(move || tick());
         let network_socket = ferrix_network_protocol::socket_path();
         let network = NetReconnector::new(network_socket.clone(), NetKind::Application)
             .with_timeout(TIMEOUT)
@@ -68,7 +72,7 @@ pub fn run(initial_size: (u32, u32), minute: u32, target: String) -> Result<(), 
         model.target = target;
         Ok(Settings {
             ty: Type::load()?,
-            minute,
+            clock: MinuteClock::now(),
             model,
             input: Input::default(),
             network,
@@ -266,7 +270,13 @@ impl Settings {
 
 impl ClientHandler for Settings {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
-        screen::compose(&self.ty, size, self.minute, &self.model, &self.input)
+        screen::compose(
+            &self.ty,
+            size,
+            self.clock.minute(),
+            &self.model,
+            &self.input,
+        )
     }
 
     fn pointer_down(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
@@ -329,7 +339,7 @@ impl ClientHandler for Settings {
         if changed {
             self.report_ui_state();
         }
-        changed
+        self.clock.refresh() || changed
     }
 
     fn page_name(&self) -> String {

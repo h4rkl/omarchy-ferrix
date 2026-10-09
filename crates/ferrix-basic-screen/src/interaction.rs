@@ -2,6 +2,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_app_api::AppId;
+use ferrix_hardware_api::{CapabilityMatrix, CapabilityStatus};
 use ferrix_ui::draw::Rect;
 
 use crate::catalog::Tile;
@@ -113,9 +114,14 @@ pub struct UiState {
     pub bluetooth_on: bool,
     pub brightness: u8,
     pub notification_visible: bool,
-    /// The line under the clock (`ferrix · <target> · mock`); the session
-    /// owner sets the target it actually connected to.
+    /// The line under the clock (`ferrix · <target> · <source>`); derived
+    /// from [`UiState::set_session`], never set directly.
     pub identity: String,
+    /// The hardware target id the session actually connected to.
+    pub target: String,
+    /// The connected target's capability matrix; user-facing copy names a
+    /// capability's status from here instead of assuming a target.
+    pub capabilities: CapabilityMatrix,
     pub tiles: Vec<Tile>,
     /// Status-bar summaries with their source (service or hardware-api).
     pub tele: TelephonySummary,
@@ -129,22 +135,39 @@ pub struct UiState {
 }
 
 impl UiState {
+    /// A state for the default (mock) target until the session owner calls
+    /// [`UiState::set_session`] with the target it connected to.
     pub fn new(wifi_on: bool, bluetooth_on: bool, tiles: Vec<Tile>) -> Self {
-        Self {
+        let mut state = Self {
             page: Page::Launcher,
             pressed: None,
             wifi_on,
             bluetooth_on,
             brightness: 72,
             notification_visible: true,
-            identity: crate::screen::identity_line(ferrix_session::DEFAULT_TARGET_ID),
+            identity: String::new(),
+            target: String::new(),
+            capabilities: CapabilityMatrix::default(),
             tiles,
             tele: TelephonySummary::default(),
             net: NetworkSummary::default(),
             pending_launch: Vec::new(),
             pending_system: Vec::new(),
             crash_notice: None,
-        }
+        };
+        state.set_session(
+            ferrix_session::DEFAULT_TARGET_ID,
+            CapabilityMatrix::uniform(CapabilityStatus::Mocked),
+        );
+        state
+    }
+
+    /// Records the connected target and its capability matrix, and derives
+    /// the identity line from them.
+    pub fn set_session(&mut self, target: &str, capabilities: CapabilityMatrix) {
+        self.identity = crate::screen::identity_line(target, &capabilities);
+        self.target = target.to_owned();
+        self.capabilities = capabilities;
     }
 
     /// Replaces the catalog, keeping the current page valid.

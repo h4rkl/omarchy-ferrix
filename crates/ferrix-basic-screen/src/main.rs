@@ -44,55 +44,24 @@ mod status;
 #[cfg(target_os = "linux")]
 mod app;
 
-use std::ops::Deref;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::OnceLock;
+use std::str;
 use std::time::Duration;
-use std::{fmt, str};
 
 use ferrix_hardware_api::{HardwareState, WifiState};
 use ferrix_session::{BootstrapOptions, bootstrap};
 use ferrix_target_profile::Profile;
 use ferrix_ui::draw::Type;
-use ferrix_ui::evidence::{emit, json_escape};
+use ferrix_ui::evidence::{SessionEvidence, emit, json_escape};
 use ferrix_ui::theme;
 
 use crate::interaction::Page;
 
-/// Runtime evidence label for every record this binary emits in a session.
-///
-/// A zero-sized displayable value lets the existing event templates remain
-/// compact while resolving the exact physical-target label from bootstrap
-/// environment at runtime. Preview mode still supplies its explicit `mock`
-/// records below.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct EvidenceLabel;
-
-pub(crate) const EVIDENCE: EvidenceLabel = EvidenceLabel;
-
-static EVIDENCE_VALUE: OnceLock<String> = OnceLock::new();
-
-impl Deref for EvidenceLabel {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        EVIDENCE_VALUE
-            .get_or_init(|| {
-                std::env::var("FERRIX_EVIDENCE")
-                    .ok()
-                    .filter(|label| !label.is_empty())
-                    .unwrap_or_else(|| "QEMU".to_owned())
-            })
-            .as_str()
-    }
-}
-
-impl fmt::Display for EvidenceLabel {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self)
-    }
-}
+/// Runtime evidence label for every record this binary emits in a session,
+/// resolved from `FERRIX_EVIDENCE` by the shared toolkit. Preview mode still
+/// supplies its explicit `mock` records below.
+pub(crate) const EVIDENCE: SessionEvidence = SessionEvidence;
 
 /// Initial quick-settings toggles derived from live hardware state.
 fn ui_toggles(hw: &HardwareState) -> (bool, bool) {
@@ -225,9 +194,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
 
 fn run() -> Result<(), String> {
     let args = parse_args(std::env::args().skip(1))?;
-    let minute = utc_minute_of_day();
 
     if let Some(path) = args.preview {
+        let minute = ferrix_ui::clock::local_minute_of_day();
         // Host render: the theme is mock evidence like the frame it colors.
         theme::init("mock", None);
         // No daemons on the host: bootstrap the same session the core would
@@ -241,7 +210,7 @@ fn run() -> Result<(), String> {
         let (app_dir, tiles) = catalog::load_descriptor_tiles()?;
         let mut state = interaction::UiState::new(wifi_on, bt_on, tiles);
         state.brightness = hw.display.brightness_percent;
-        state.identity = screen::identity_line(&session.target_id);
+        state.set_session(&session.target_id, session.capabilities.clone());
         // No daemons on the host: the status bar shows the hardware-api summary.
         state.tele = status::telephony_summary(None, &hw);
         state.net = status::network_summary(None, &hw);
@@ -278,21 +247,13 @@ fn run() -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        app::run(&profile, core, &args.appd_socket, minute)
+        app::run(&profile, core, &args.appd_socket)
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (profile, core, args.appd_socket);
         Err("the Wayland session is guest-only on this host; use --preview <out.ppm>".to_owned())
     }
-}
-
-fn utc_minute_of_day() -> u32 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    ((secs % 86_400) / 60) as u32
 }
 
 #[cfg(test)]

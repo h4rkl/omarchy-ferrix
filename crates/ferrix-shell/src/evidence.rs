@@ -1,9 +1,10 @@
 //! Machine-readable readiness and failure records.
 //!
 //! Every record is a single JSON line on stdout so the guest init script and
-//! host agents can grep for it. The `evidence` label is `QEMU` for the guest
-//! DRM backend and `mock` for the nested host backend; neither is a
-//! physical-device claim.
+//! host agents can grep for it. The `evidence` label for the DRM backend is
+//! the session label shared by every Ferrix surface
+//! ([`ferrix_ui::evidence::label`]): `FERRIX_EVIDENCE` from the target
+//! bootstrap, else `QEMU`. The nested host backend is always `mock`.
 
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
@@ -12,24 +13,19 @@ use std::fmt::Write as _;
 /// Where the compositor is running; controls the `evidence` label.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Evidence {
-    /// Running inside the generic AArch64 QEMU `virt` guest.
-    Qemu,
+    /// Running on the target's DRM/libinput backend (the QEMU guest or an
+    /// admitted physical target). The label comes from `FERRIX_EVIDENCE` so
+    /// the compositor does not encode a board name.
+    Session,
     /// Running nested on a development host from the mock profile.
     Mock,
-    /// Running on an admitted physical Linux target. The exact label comes
-    /// from `FERRIX_EVIDENCE` so the compositor does not encode a board name.
-    Physical,
 }
 
 impl Evidence {
-    pub fn label(self) -> String {
+    pub fn label(self) -> &'static str {
         match self {
-            Evidence::Qemu => "QEMU".to_owned(),
-            Evidence::Mock => "mock".to_owned(),
-            Evidence::Physical => std::env::var("FERRIX_EVIDENCE")
-                .ok()
-                .filter(|label| !label.is_empty())
-                .unwrap_or_else(|| "physical".to_owned()),
+            Evidence::Session => ferrix_ui::evidence::label(),
+            Evidence::Mock => ferrix_ui::evidence::EVIDENCE_MOCK,
         }
     }
 }
@@ -111,7 +107,7 @@ pub fn record(evidence: Evidence, event: &str, fields: &[(&str, Value)]) -> Stri
     let _ = write!(
         out,
         "{{\"evidence\":\"{}\",\"event\":\"{}\",\"compositor\":\"ferrix-shell\"",
-        escape(&label),
+        escape(label),
         escape(event)
     );
     for (key, value) in fields {
@@ -253,7 +249,7 @@ mod tests {
 
     #[test]
     fn ready_record_matches_contract() {
-        let line = compositor_ready(Evidence::Qemu, "wayland-0", 1080, 2340);
+        let line = compositor_ready(Evidence::Session, "wayland-0", 1080, 2340);
         assert_eq!(
             line,
             "{\"evidence\":\"QEMU\",\"event\":\"compositor-ready\",\"compositor\":\"ferrix-shell\",\"socket\":\"wayland-0\",\"width\":1080,\"height\":2340}"
@@ -269,14 +265,14 @@ mod tests {
     #[test]
     fn escapes_quotes_and_control_characters() {
         assert_eq!(escape("a\"b\\c\nd\u{1}"), "a\\\"b\\\\c\\nd\\u0001");
-        let line = compositor_failed(Evidence::Qemu, "drm", "no \"card\"");
+        let line = compositor_failed(Evidence::Session, "drm", "no \"card\"");
         assert!(line.contains("\"detail\":\"no \\\"card\\\"\""));
     }
 
     #[test]
     fn client_mapped_carries_geometry_and_count() {
         let line = client_mapped(
-            Evidence::Qemu,
+            Evidence::Session,
             Some(321),
             "ferrix-basic-screen",
             "",
@@ -287,18 +283,18 @@ mod tests {
         assert!(line.contains("\"event\":\"client-mapped\""));
         assert!(line.contains("\"pid\":321,\"app_id\":\"ferrix-basic-screen\""));
         assert!(line.contains("\"width\":1080,\"height\":2340,\"toplevels\":1}"));
-        let line = client_mapped(Evidence::Qemu, None, "", "", 1, 1, 1);
+        let line = client_mapped(Evidence::Session, None, "", "", 1, 1, 1);
         assert!(line.contains("\"pid\":null"), "{line}");
     }
 
     #[test]
     fn app_platform_records_match_contract() {
         assert_eq!(
-            client_gone(Evidence::Qemu, Some(42), "org.ferrix.terminal", 1),
+            client_gone(Evidence::Session, Some(42), "org.ferrix.terminal", 1),
             "{\"evidence\":\"QEMU\",\"event\":\"client-gone\",\"compositor\":\"ferrix-shell\",\"pid\":42,\"app_id\":\"org.ferrix.terminal\",\"toplevels\":1}"
         );
         assert_eq!(
-            client_activated(Evidence::Qemu, 7, "org.ferrix.home", true),
+            client_activated(Evidence::Session, 7, "org.ferrix.home", true),
             "{\"evidence\":\"QEMU\",\"event\":\"client-activated\",\"compositor\":\"ferrix-shell\",\"pid\":7,\"app_id\":\"org.ferrix.home\",\"raised\":true}"
         );
         assert_eq!(
@@ -311,7 +307,7 @@ mod tests {
         );
         assert_eq!(
             appd_link(
-                Evidence::Qemu,
+                Evidence::Session,
                 "/run/ferrix/ferrix-appd.sock",
                 "connected",
                 None
@@ -319,7 +315,7 @@ mod tests {
             "{\"evidence\":\"QEMU\",\"event\":\"ferrix-appd-link\",\"compositor\":\"ferrix-shell\",\"socket\":\"/run/ferrix/ferrix-appd.sock\",\"status\":\"connected\"}"
         );
         let line = appd_link(
-            Evidence::Qemu,
+            Evidence::Session,
             "/run/x.sock",
             "retrying",
             Some("no such file"),

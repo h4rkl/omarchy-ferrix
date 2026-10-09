@@ -32,7 +32,7 @@ pub fn compose(
 ) -> Canvas {
     let t = theme::get();
     let mut c = Canvas::new(size.0 as i32, size.1 as i32, t.bg);
-    let clock = format!("{:02}:{:02}", minute_of_day / 60, minute_of_day % 60);
+    let clock = ferrix_ui::clock::hhmm(minute_of_day);
     clock_strip(&mut c, ty, &clock, Some(&status_label(model)));
     let l = Layout::new(size);
     let back = input.pressed == Some(Target::Back);

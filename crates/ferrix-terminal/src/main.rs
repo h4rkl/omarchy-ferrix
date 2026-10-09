@@ -25,11 +25,11 @@ mod app;
 use std::process::ExitCode;
 
 use ferrix_ui::draw::Type;
-use ferrix_ui::evidence::{emit, json_escape, json_opt_str};
+use ferrix_ui::evidence::{SessionEvidence, emit, json_escape, json_opt_str};
 use ferrix_ui::theme;
 
 /// Evidence label for every record this binary emits.
-const EVIDENCE: &str = "QEMU";
+const EVIDENCE: SessionEvidence = SessionEvidence;
 /// Default preview geometry: the checked-in portrait mock panel.
 const PREVIEW_SIZE: (u32, u32) = (1080, 2340);
 
@@ -138,7 +138,7 @@ fn run() -> Result<(), String> {
             &ty,
             size.0,
             size.1,
-            utc_minute_of_day(),
+            ferrix_ui::clock::local_minute_of_day(),
             &state,
             Some(&snapshot),
         );
@@ -156,25 +156,17 @@ fn run() -> Result<(), String> {
 
     // Guest: load `colors.toml` (or the built-in Ferrix palette) once, before
     // any frame is composed.
-    theme::init(EVIDENCE, None);
+    theme::init(&EVIDENCE, None);
 
     #[cfg(target_os = "linux")]
     {
-        app::run(size, utc_minute_of_day(), shell_program())
+        app::run(size, shell_program())
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = shell_program();
         Err("the Wayland session is Linux-only on this host; use --preview <out.ppm>".to_owned())
     }
-}
-
-fn utc_minute_of_day() -> u32 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    ((secs % 86_400) / 60) as u32
 }
 
 #[cfg(test)]

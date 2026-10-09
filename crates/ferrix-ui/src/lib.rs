@@ -8,7 +8,10 @@
 //!   shared by hit testing, rendering, and terminal input.
 //! - [`widgets`] and [`gesture`]: shared chips, rows, fields, keypad, and
 //!   keyboard drawing plus the touch tracker every app surface reuses.
-//! - [`evidence`]: single-line JSON evidence records on stdout.
+//! - [`evidence`]: single-line JSON evidence records on stdout and the
+//!   session evidence label.
+//! - [`clock`]: the local wall-clock minute every status bar shows and a
+//!   ticker that wakes a surface at each minute boundary.
 //! - [`client`] (Linux only): a fullscreen `smithay-client-toolkit` runner
 //!   that owns the Wayland boilerplate so each surface only implements
 //!   [`client::ClientHandler`].
@@ -16,6 +19,7 @@
 //! Software rendering is intentional: acceleration is never required for
 //! correctness. Nothing here knows about QEMU, kernels, or boards.
 
+pub mod clock;
 pub mod draw;
 pub mod evidence;
 pub mod gesture;

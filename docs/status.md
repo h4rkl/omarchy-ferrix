@@ -1,5 +1,39 @@
 # Status
 
+## 2026-10-09 (target-neutral evidence labels, home copy, and local ticking clock)
+
+- Evidence labels: `ferrix_ui::evidence::{label, SessionEvidence}` resolves
+  `FERRIX_EVIDENCE` once per process (unset or empty: `QEMU`). Settings,
+  Terminal, Phone, Messages, Contacts, the home surface, and `ferrix-shell`
+  use it instead of hard-coded `"QEMU"`, so the Pixel 9a bootstrap's
+  `physical:<target-id>` label reaches every app record. QEMU output is
+  unchanged because the guest does not set the variable. Host previews and
+  `--nested` still emit `mock`. (`ferrix-shell` previously labelled an empty
+  `FERRIX_EVIDENCE` as `physical`; that case is now `QEMU` like everywhere
+  else.)
+- Home copy: the notification is now `Session ready` with the connected
+  target id in its body. The brightness caption names the display
+  capability's status from the connected target's matrix and the target id
+  (`display brightness · mock · qemu-aarch64`). The identity line's source
+  word comes from the matrix too (`mock`, `supported`, or `unadmitted`). The
+  Camera and Files pages say the hardware API has no camera or storage
+  capability on any target, rather than naming QEMU or host paths. None of
+  this checks which target is running.
+- Clock: `ferrix_ui::clock` gives the local minute of day (via `jiff`, which
+  honours `TZ` and `/etc/localtime` and falls back to UTC) and a ticker that
+  calls a surface's wake handle just after each minute boundary. The home
+  surface and all five apps now redraw when the minute changes. Before this,
+  every status bar showed the UTC minute from launch and never updated.
+- Evidence: `mock` only. Host `--preview` renders of the notifications,
+  quick-settings, camera, and files pages were inspected and show the new
+  copy and the host's local time. The macOS-host
+  `cargo fmt/clippy/test` runs passed, and so did a cross `cargo clippy
+  --target aarch64-unknown-linux-gnu` of the app crates (Linux `app.rs` paths).
+  `ferrix-shell`'s Linux compositor modules, `just linux-check`, and
+  `just qemu-check` were not run (no container engine on this host). The
+  ticking clock has not been observed in a guest framebuffer, and nothing was
+  run on a physical device.
+
 ## 2026-10-09 (Pixel 9a recovery-invariant development flash route; device-free)
 
 - Owner policy: for `google-pixel-9a-tegu-gxq96-mp1-0` the only hard gate is

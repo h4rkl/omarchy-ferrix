@@ -33,6 +33,7 @@ use ferrix_target_profile::Profile;
 use ferrix_telephony_api::RedactedTelephonyState;
 use ferrix_telephony_protocol::{ClientKind as TeleKind, Reconnector as TeleReconnector, Update};
 use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
+use ferrix_ui::clock::MinuteClock;
 use ferrix_ui::draw::{Canvas, Type};
 use ferrix_ui::evidence::{emit, json_escape};
 use ferrix_ui::keymap::Modifiers;
@@ -58,7 +59,7 @@ enum AppdLink {
 
 struct Home {
     ty: Type,
-    minute: u32,
+    clock: MinuteClock,
     hw: HardwareState,
     hw_events: Receiver<HardwareEvent>,
     core_socket: PathBuf,
@@ -113,7 +114,6 @@ pub fn run(
     profile: &Profile,
     core: ferrix_protocol::Subscription,
     appd_socket: &Path,
-    minute: u32,
 ) -> Result<(), String> {
     let config = ClientConfig {
         app_id: APP_ID.to_owned(),
@@ -125,9 +125,13 @@ pub fn run(
     };
     let appd_socket = appd_socket.to_path_buf();
     ferrix_ui::client::run(config, move |wake| {
+        // Redraw the status-bar clock at each local minute boundary.
+        let tick = Arc::clone(&wake);
+        ferrix_ui::clock::spawn_minute_ticker(move || tick());
         let ty = Type::load()?;
         let core_socket = core.socket().to_owned();
         let target = core.target.clone();
+        let capabilities = core.capabilities.clone();
         let hw = core.state;
         let hw_events = core.spawn(Arc::clone(&wake));
         let (wifi_on, bt_on) = crate::ui_toggles(&hw);
@@ -171,7 +175,7 @@ pub fn run(
         };
         let mut ui = UiState::new(wifi_on, bt_on, tiles);
         ui.brightness = hw.display.brightness_percent;
-        ui.identity = screen::identity_line(&target);
+        ui.set_session(&target, capabilities);
         ui.tele = status::telephony_summary(None, &hw);
         ui.net = status::network_summary(None, &hw);
 
@@ -188,7 +192,7 @@ pub fn run(
 
         Ok(Home {
             ty,
-            minute,
+            clock: MinuteClock::now(),
             hw,
             hw_events,
             core_socket,
@@ -632,7 +636,14 @@ impl Home {
 
 impl ClientHandler for Home {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
-        let frame = screen::compose(&self.hw, self.minute, &self.ty, size.0, size.1, &self.ui);
+        let frame = screen::compose(
+            &self.hw,
+            self.clock.minute(),
+            &self.ty,
+            size.0,
+            size.1,
+            &self.ui,
+        );
         // The launcher is hit-testable once a frame with the catalog is
         // composed; the runner's `basic-screen-frame` follows the commit.
         if !self.ready_reported && !self.ui.tiles.is_empty() {
@@ -717,7 +728,8 @@ impl ClientHandler for Home {
         let hardware = self.hardware_wake();
         let ferrix_appd = self.appd_wake();
         let services = self.services_wake();
-        hardware || ferrix_appd || services
+        let clock = self.clock.refresh();
+        hardware || ferrix_appd || services || clock
     }
 
     fn page_name(&self) -> String {
