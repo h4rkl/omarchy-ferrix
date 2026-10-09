@@ -80,13 +80,49 @@ pub struct HardwareBundle {
     pub events: Arc<dyn EventSource>,
 }
 
-/// Returns the conservative admission matrix for this composition seam.
+/// The board's checked-in admission matrix (`capabilities.toml`).
 ///
-/// Building the composition is not physical-device evidence. The checked-in
-/// board matrix therefore remains unsupported until the exact target has
-/// target-specific Linux evidence for each capability.
+/// Building the composition is not physical-device evidence: a capability is
+/// `supported` only where that file records exact-target Linux evidence, and
+/// anything it does not name stays unsupported.
 pub fn capability_matrix() -> CapabilityMatrix {
-    CapabilityMatrix::uniform(CapabilityStatus::Unsupported)
+    parse_capability_matrix(include_str!("../../capabilities.toml"))
+}
+
+/// Reads the `[section]` / `status = "..."` rows of a board matrix. The file
+/// is a flat, checked-in table, so a line reader suffices.
+fn parse_capability_matrix(text: &str) -> CapabilityMatrix {
+    let mut matrix = CapabilityMatrix::uniform(CapabilityStatus::Unsupported);
+    let mut section: Option<Capability> = None;
+    for line in text.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = Capability::ALL
+                .into_iter()
+                .find(|c| capability_key(*c) == name);
+        } else if let (Some(capability), Some(value)) = (section, line.strip_prefix("status")) {
+            let status = match value.trim_start_matches([' ', '=']).trim_matches('"') {
+                "supported" => CapabilityStatus::Supported,
+                "mocked" => CapabilityStatus::Mocked,
+                _ => CapabilityStatus::Unsupported,
+            };
+            matrix = matrix.with(capability, status);
+        }
+    }
+    matrix
+}
+
+fn capability_key(capability: Capability) -> &'static str {
+    match capability {
+        Capability::Power => "power",
+        Capability::Display => "display",
+        Capability::Input => "input",
+        Capability::Network => "network",
+        Capability::Bluetooth => "bluetooth",
+        Capability::Audio => "audio",
+        Capability::Telephony => "telephony",
+        Capability::Lifecycle => "lifecycle",
+        Capability::MockControl => "mock-control",
+    }
 }
 
 /// Connects the target's Linux services and returns a target-neutral bundle.
@@ -966,6 +1002,21 @@ mod tests {
     #[test]
     fn target_id_is_the_admitted_exact_target() {
         assert_eq!(TARGET_ID, "google-pixel-9a-tegu-gxq96-mp1-0");
+    }
+
+    #[test]
+    fn capability_matrix_follows_the_board_file() {
+        let m = parse_capability_matrix(
+            "[power]\nstatus = \"supported\"\nevidence = \"x\"\n[audio]\nstatus = \"unsupported\"\n",
+        );
+        assert_eq!(m.status(Capability::Power), CapabilityStatus::Supported);
+        assert_eq!(m.status(Capability::Audio), CapabilityStatus::Unsupported);
+        assert_eq!(m.status(Capability::Display), CapabilityStatus::Unsupported);
+        // A physical target never claims the mock test seam.
+        assert_eq!(
+            capability_matrix().status(Capability::MockControl),
+            CapabilityStatus::Unsupported
+        );
     }
 
     #[cfg(not(target_os = "linux"))]

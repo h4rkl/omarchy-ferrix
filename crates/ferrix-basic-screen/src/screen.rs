@@ -45,6 +45,27 @@ pub fn identity_line(target: &str, capabilities: &CapabilityMatrix) -> String {
     )
 }
 
+/// `text` at `size`, shrunk towards `min` until it fits `max_width`, and
+/// ellipsized only if it still does not fit at `min`.
+fn fit_line(
+    ty: &Type,
+    text: &str,
+    size: i32,
+    min: i32,
+    max_width: i32,
+    color: u32,
+) -> (Style, String) {
+    let mut px = size;
+    while px > min && ty.width(Style::regular(px as f32, color), text) > max_width {
+        px -= 1;
+    }
+    let style = Style::regular(px as f32, color);
+    (
+        style,
+        ferrix_ui::widgets::ellipsize(ty, style, text, max_width),
+    )
+}
+
 /// The user-facing word for one capability's status. `Unsupported` reads as
 /// "unadmitted": a value may still be shown, but the target's checked-in
 /// matrix does not claim the capability.
@@ -108,9 +129,10 @@ pub fn compose(
     let clock_style = Style::bold(s(170) as f32, t.fg);
     let cw = ty.width(clock_style, &clock);
     ty.text(&mut c, clock_style, &clock, (w - cw) / 2, s(430));
-    let ident_style = Style::regular(s(34) as f32, t.fg_dim);
-    let iw = ty.width(ident_style, &state.identity);
-    ty.text(&mut c, ident_style, &state.identity, (w - iw) / 2, s(520));
+    let (ident_style, identity) =
+        fit_line(ty, &state.identity, s(34), s(24), w - 2 * s(48), t.fg_dim);
+    let iw = ty.width(ident_style, &identity);
+    ty.text(&mut c, ident_style, &identity, (w - iw) / 2, s(520));
 
     // Battery and network cards from the mock profile.
     let margin = s(48);
@@ -129,6 +151,7 @@ pub fn compose(
             h: card_h,
         },
         state.pressed == Some(Target::Battery),
+        capability_word(state.capabilities.status(Capability::Power)),
     );
     network_card(
         &mut c,
@@ -200,6 +223,7 @@ fn launcher_landscape(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str,
             h: card_height,
         },
         state.pressed == Some(Target::Battery),
+        capability_word(state.capabilities.status(Capability::Power)),
     );
     network_card(
         c,
@@ -463,7 +487,14 @@ fn card(c: &mut Canvas, ty: &Type, r: Rect, title: &str, pressed: bool) {
     );
 }
 
-fn battery_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: bool) {
+fn battery_card(
+    c: &mut Canvas,
+    p: &HardwareState,
+    ty: &Type,
+    r: Rect,
+    pressed: bool,
+    source: &str,
+) {
     let t = theme::get();
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
@@ -508,15 +539,18 @@ fn battery_card(c: &mut Canvas, p: &HardwareState, ty: &Type, r: Rect, pressed: 
             color,
         );
     }
-    let status = if p.power.charging {
-        "charging \u{b7} mock"
-    } else {
-        "discharging \u{b7} mock"
-    };
+    let status = format!(
+        "{} \u{b7} {source}",
+        if p.power.charging {
+            "charging"
+        } else {
+            "discharging"
+        }
+    );
     ty.text(
         c,
         Style::regular(s(26) as f32, t.fg_dim),
-        status,
+        &status,
         r.x + s(32),
         r.y + s(258),
     );

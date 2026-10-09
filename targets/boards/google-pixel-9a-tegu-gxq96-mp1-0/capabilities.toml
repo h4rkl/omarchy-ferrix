@@ -3,21 +3,22 @@ target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
 
 # These are deliberately conservative: read-only Android identity discovery is
 # not Ferrix Linux hardware evidence. No QEMU/mock result is reused here.
+# ferrix-target-pixel9a compiles this file into its capability matrix.
 [power]
-status = "unsupported"
-evidence = "No Ferrix adapter or physical Linux evidence."
+status = "supported"
+evidence = "UPower battery and charger state through ferrix-power-upower reached ferrix-core and the home surface. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
 
 [display]
-status = "unsupported"
-evidence = "No Ferrix adapter or physical Linux evidence."
+status = "supported"
+evidence = "ferrix-shell scans out 1080x2424 portrait on the DSI panel with profile byte order and safe area; scanout read back via DRM GETFB2 and checked on camera. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
 
 [input]
-status = "unsupported"
-evidence = "No Ferrix adapter or physical Linux evidence."
+status = "supported"
+evidence = "synaptics_tcm_touch and uinput test touch/keyboard devices reach ferrix-shell through libinput; taps launch apps and drive the on-screen keyboard. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
 
 [network]
-status = "unsupported"
-evidence = "No Ferrix adapter or physical Linux evidence."
+status = "supported"
+evidence = "bcm4383 Wi-Fi scans and joins a WPA2/WPA3 transition AP as WPA2-PSK through NetworkManager and ferrix-networkd (DHCP, ping). WPA3-SAE association fails on this driver. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
 
 [bluetooth]
 status = "unsupported"
