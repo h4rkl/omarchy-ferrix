@@ -214,11 +214,15 @@ running_slot() {
 }
 
 start_flash_logger() {
+	# This init_boot is only ever flashed to slot b; refuse anyway whenever the
+	# bootloader reports slot a, so the stock recovery slot is never written.
 	slot=$(running_slot)
-	[ "$slot" = _b ] || {
-		log "flash logger disabled on slot '${slot:-unknown}'"
-		return 0
-	}
+	case "$slot" in
+		*a*)
+			log "flash logger disabled on slot '$slot'"
+			return 0
+			;;
+	esac
 	(
 		device=
 		while [ -z "$device" ]; do
