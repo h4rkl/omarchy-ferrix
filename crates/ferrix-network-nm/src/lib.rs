@@ -18,6 +18,7 @@ pub mod map {
     //! NetworkManager enum and flag tables (values from `NetworkManager.h`,
     //! stable across the 1.x series).
 
+    use super::TransitionKeyMgmt;
     use ferrix_network_api::{
         AdapterKind, ConnectionState, Connectivity, NetworkError, SecurityType,
     };
@@ -90,6 +91,25 @@ pub mod map {
         } else {
             SecurityType::Unknown
         }
+    }
+
+    /// `key-mgmt` for an access point, honouring the transition-mode policy:
+    /// an SAE access point that also advertises PSK may be joined with
+    /// `wpa-psk` when the target's driver cannot complete SAE.
+    pub fn join_key_mgmt(
+        security: SecurityType,
+        rsn_flags: u32,
+        transition: TransitionKeyMgmt,
+    ) -> Option<&'static str> {
+        let transition_ap = rsn_flags & NM_802_11_AP_SEC_KEY_MGMT_SAE != 0
+            && rsn_flags & NM_802_11_AP_SEC_KEY_MGMT_PSK != 0;
+        if security == SecurityType::Wpa3Sae
+            && transition_ap
+            && transition == TransitionKeyMgmt::Psk
+        {
+            return Some("wpa-psk");
+        }
+        key_mgmt(security)
     }
 
     /// NetworkManager's `key-mgmt` setting for joining a network of this
@@ -217,6 +237,15 @@ pub mod diff {
     }
 }
 
+/// How a WPA2/WPA3 transition-mode access point is joined (the target
+/// profile's `network.transition_key_mgmt`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TransitionKeyMgmt {
+    #[default]
+    Sae,
+    Psk,
+}
+
 #[cfg(feature = "production")]
 mod backend;
 #[cfg(feature = "production")]
@@ -291,6 +320,29 @@ mod tests {
         assert_eq!(key_mgmt(SecurityType::Open), Some("none"));
         assert_eq!(key_mgmt(SecurityType::Enterprise), None);
         assert_eq!(key_mgmt(SecurityType::Wep), None);
+    }
+
+    #[test]
+    fn transition_policy_only_changes_mixed_sae_psk_access_points() {
+        use super::TransitionKeyMgmt::{Psk, Sae};
+        let mixed = NM_802_11_AP_SEC_KEY_MGMT_SAE | NM_802_11_AP_SEC_KEY_MGMT_PSK;
+        let sae_only = NM_802_11_AP_SEC_KEY_MGMT_SAE;
+        assert_eq!(
+            join_key_mgmt(SecurityType::Wpa3Sae, mixed, Psk),
+            Some("wpa-psk")
+        );
+        assert_eq!(
+            join_key_mgmt(SecurityType::Wpa3Sae, mixed, Sae),
+            Some("sae")
+        );
+        assert_eq!(
+            join_key_mgmt(SecurityType::Wpa3Sae, sae_only, Psk),
+            Some("sae")
+        );
+        assert_eq!(
+            join_key_mgmt(SecurityType::Wpa2Psk, NM_802_11_AP_SEC_KEY_MGMT_PSK, Psk),
+            Some("wpa-psk")
+        );
     }
 
     #[test]

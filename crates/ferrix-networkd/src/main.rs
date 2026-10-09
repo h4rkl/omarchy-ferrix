@@ -46,18 +46,39 @@ fn compose_backend(args: &Args) -> Result<Composed, String> {
                 control: Some(mock),
             })
         }
-        BackendKind::NetworkManager => compose_production(),
+        BackendKind::NetworkManager => {
+            let transition = match &args.profile {
+                Some(path) => {
+                    ferrix_target_profile::Profile::load(path)
+                        .map_err(|e| format!("profile: {e}"))?
+                        .network_section()
+                        .transition_key_mgmt
+                }
+                None => Default::default(),
+            };
+            compose_production(transition)
+        }
     }
 }
 
 #[cfg(feature = "production")]
-fn compose_production() -> Result<Composed, String> {
+fn compose_production(
+    transition: ferrix_target_profile::ProfileTransitionKeyMgmt,
+) -> Result<Composed, String> {
+    let transition = match transition {
+        ferrix_target_profile::ProfileTransitionKeyMgmt::Sae => {
+            ferrix_network_nm::TransitionKeyMgmt::Sae
+        }
+        ferrix_target_profile::ProfileTransitionKeyMgmt::Psk => {
+            ferrix_network_nm::TransitionKeyMgmt::Psk
+        }
+    };
     // NetworkManager's init script returns before the daemon owns its bus
     // name; keep asking for a bounded time instead of failing the boot.
     const STARTUP_WAIT: Duration = Duration::from_secs(30);
     let deadline = std::time::Instant::now() + STARTUP_WAIT;
     let backend = loop {
-        match ferrix_network_nm::NetworkManagerBackend::connect() {
+        match ferrix_network_nm::NetworkManagerBackend::connect_with(transition) {
             Ok(backend) => break backend,
             Err(_) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(500));
@@ -72,7 +93,9 @@ fn compose_production() -> Result<Composed, String> {
 }
 
 #[cfg(not(feature = "production"))]
-fn compose_production() -> Result<Composed, String> {
+fn compose_production(
+    _transition: ferrix_target_profile::ProfileTransitionKeyMgmt,
+) -> Result<Composed, String> {
     Err(
         "the networkmanager backend is not compiled in (build with --features production)"
             .to_owned(),

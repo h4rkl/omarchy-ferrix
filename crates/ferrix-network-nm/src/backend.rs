@@ -28,7 +28,7 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::{MatchRule, message::Type as MessageType};
 
 use crate::diff::diff;
-use crate::map;
+use crate::{TransitionKeyMgmt, map};
 
 const NM_SERVICE: &str = "org.freedesktop.NetworkManager";
 const ROOT_PATH: &str = "/";
@@ -211,11 +211,17 @@ pub struct NetworkManagerBackend {
     sinks: Mutex<Vec<Sender<BackendEvent>>>,
     /// Access-point ids we handed out, so `connect` can resolve the path.
     aps: Mutex<HashMap<ApId, OwnedObjectPath>>,
+    transition: TransitionKeyMgmt,
 }
 
 impl NetworkManagerBackend {
     /// Connects to the system bus and starts the change watcher.
     pub fn connect() -> Result<Arc<Self>, BackendError> {
+        Self::connect_with(TransitionKeyMgmt::default())
+    }
+
+    /// [`connect`](Self::connect) with the target's transition-mode policy.
+    pub fn connect_with(transition: TransitionKeyMgmt) -> Result<Arc<Self>, BackendError> {
         let connection = Connection::system().map_err(bus_error)?;
         let backend = Arc::new(Self {
             connection,
@@ -226,6 +232,7 @@ impl NetworkManagerBackend {
             }),
             sinks: Mutex::new(Vec::new()),
             aps: Mutex::new(HashMap::new()),
+            transition,
         });
         let first = backend.enumerate()?;
         lock(&backend.watch).last = first;
@@ -625,9 +632,17 @@ impl NetworkBackend for NetworkManagerBackend {
                 id: ap.as_str().to_owned(),
             })?;
         let point = self.access_point(&path)?;
-        let key_mgmt = map::key_mgmt(point.security).ok_or_else(|| {
-            BackendError::unsupported(format!("joining {} networks", point.security))
-        })?;
+        let rsn_flags = AccessPointIfaceProxyBlocking::builder(&self.connection)
+            .path(path.clone())
+            .map_err(bus_error)?
+            .build()
+            .map_err(bus_error)?
+            .rsn_flags()
+            .map_err(bus_error)?;
+        let key_mgmt =
+            map::join_key_mgmt(point.security, rsn_flags, self.transition).ok_or_else(|| {
+                BackendError::unsupported(format!("joining {} networks", point.security))
+            })?;
         let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
         let mut connection = HashMap::new();
         connection.insert("type", Value::from("802-11-wireless"));
