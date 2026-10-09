@@ -158,7 +158,12 @@ check_required_modules() {
     awk -F "$tab" -v module="$module" '
       $1 == "artifact" && ($2 == module ".ko" || $2 ~ ("/" module "\\.ko$")) { found=1 }
       END { exit(found ? 0 : 1) }
-    ' "$kernel_manifest" || die "kernel manifest is missing required tegu module: $module.ko"
+    ' "$kernel_manifest" && continue
+    # GKI built-ins (dm, ext4, UFS) appear only in the hash-recorded
+    # modules.builtin list rather than as .ko artifacts.
+    builtin_list=$(verify_manifest_artifact "$kernel_manifest" "$kernel_dist" modules.builtin 2>/dev/null | awk -F "$tab" '{ print $4 }')
+    [ -n "$builtin_list" ] && tr '-' '_' <"$builtin_list" | grep -q "/$(printf '%s' "$module" | tr '-' '_')\\.ko$" ||
+      die "kernel manifest is missing required tegu module: $module.ko"
   done < "$module_list"
 }
 

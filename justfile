@@ -209,6 +209,13 @@ pixel-9a-boot-build:
 pixel-9a-boot-test:
     @sh "{{root}}/tools/pixel-9a/tests/boot-workflow.sh"
 
+# Development image set for the Google Kleaf GKI route: Kleaf boot,
+# vendor_kernel_boot, and dtbo plus a Ferrix init_boot, vendor_boot, unsigned
+# vbmeta, and a userdata rootfs carrying the dlkm modules. Flash the result
+# with pixel-9a-dev-flash. Runs on the Linux build host.
+pixel-9a-dev-compose base_rootfs out:
+    @python3 "{{root}}/tools/pixel-9a/dev-compose.py" --kernel-dist "${FERRIX_PIXEL9A_KERNEL_OUT:-{{root}}/out/pixel-9a/kernel/tegu}/dist" --kernel-manifest "${FERRIX_PIXEL9A_KERNEL_OUT:-{{root}}/out/pixel-9a/kernel/tegu}/build-manifest.tsv" --kernel-source "${FERRIX_PIXEL9A_KERNEL_SOURCE:-{{root}}/.cache/ferrix/pixel-9a/kernel/source}" --target-dir "{{root}}/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0" --base-rootfs "{{base_rootfs}}" --out "{{out}}"
+
 # Device-free boot composition for the independent radio-first kernel route.
 # Its output directory is separate from the canonical Google Kleaf route and
 # is rejected by the canonical boot contract.

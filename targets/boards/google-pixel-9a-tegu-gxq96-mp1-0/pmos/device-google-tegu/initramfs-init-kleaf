@@ -1,0 +1,114 @@
+#!/bin/busybox sh
+
+# Ferrix initramfs entrypoint for the Google Kleaf (GKI 6.1) development
+# route on the exact tegu MP1.0 target. On GKI the UFS, clock, pinctrl, and
+# watchdog drivers are vendor modules: the bootloader concatenates the
+# source-built vendor_kernel_boot ramdisk (lib/modules/<release>/modules.load)
+# ahead of this init_boot ramdisk, so load that list in Android's order first.
+# Then mount the Linux userdata filesystem, load the system_dlkm and vendor_dlkm
+# lists that tools/pixel-9a/dev-compose.py installed in the rootfs, and hand
+# control to the postmarketOS init. No
+# Android init, property service, framework, or HAL is used.
+
+bb=/bin/busybox
+root_partlabel=userdata
+
+log() {
+	$bb printf 'ferrix-init: %s\n' "$*" >/dev/kmsg 2>/dev/null ||
+		$bb printf 'ferrix-init: %s\n' "$*" >/dev/console 2>/dev/null || :
+}
+
+# Insert every module named in a Kleaf modules.load list (paths relative to
+# the release directory). Lists are dependency-ordered; a second and third pass
+# pick up anything that raced a dependency.
+load_list() {
+	list=$1
+	directory=$2
+	[ -f "$list" ] || {
+		log "$list: missing"
+		return 0
+	}
+	pending=$($bb sed -e '/^#/d' -e '/^$/d' "$list")
+	total=$(printf '%s\n' "$pending" | $bb wc -l)
+	pass=0
+	while [ -n "$pending" ] && [ "$pass" -lt 3 ]; do
+		retry=
+		for module in $pending; do
+			$bb insmod "$directory/$module" 2>/dev/null || retry="$retry $module"
+		done
+		pending=$retry
+		pass=$((pass + 1))
+	done
+	failed=$(printf '%s' "$pending" | $bb wc -w)
+	log "$list: total=$total failed=$failed"
+	for module in $pending; do log "  not loaded: ${module##*/}"; done
+}
+
+find_root_device() {
+	for candidate in /dev/disk/by-partlabel/$root_partlabel /dev/block/by-name/$root_partlabel; do
+		[ -b "$candidate" ] && {
+			printf '%s\n' "$candidate"
+			return 0
+		}
+	done
+	for uevent in /sys/class/block/*/uevent; do
+		[ -f "$uevent" ] || continue
+		partname=$($bb sed -n 's/^PARTNAME=//p' "$uevent")
+		[ "$partname" = "$root_partlabel" ] || continue
+		name=${uevent%/uevent}
+		name=${name##*/}
+		[ -b "/dev/$name" ] || continue
+		printf '%s\n' "/dev/$name"
+		return 0
+	done
+	return 1
+}
+
+$bb mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
+$bb mount -t proc proc /proc 2>/dev/null || :
+$bb mount -t sysfs sysfs /sys 2>/dev/null || :
+release=$($bb uname -r)
+log "kernel $release"
+
+load_list "/lib/modules/$release/modules.load" "/lib/modules/$release"
+
+# The Exynos watchdog (s3c2410_wdt) arms during first-stage loading; Android's
+# watchdogd normally pets it. Keep it fed so a quiet userspace is observable
+# instead of a silent reset. The daemon survives switch_root.
+for dog in /dev/watchdog0 /dev/watchdog; do
+	[ -c "$dog" ] && {
+		$bb watchdog -t 10 -T 30 "$dog" && log "feeding $dog"
+		break
+	}
+done
+
+$bb mkdir -p /newroot
+root_device=
+attempt=0
+while [ "$attempt" -lt 60 ]; do
+	root_device=$(find_root_device) && break
+	attempt=$((attempt + 1))
+	$bb sleep 1
+done
+[ -n "$root_device" ] || {
+	log "PARTLABEL=$root_partlabel not found; rebooting to the bootloader"
+	$bb sleep 5
+	$bb reboot -f
+}
+
+log "mounting $root_device"
+$bb mount -t ext4 -o rw "$root_device" /newroot || {
+	log "cannot mount $root_device; rebooting"
+	$bb sleep 5
+	$bb reboot -f
+}
+
+modules="/newroot/lib/modules/$release"
+load_list "$modules/system_dlkm.modules.load" "$modules"
+load_list "$modules/vendor_dlkm.modules.load" "$modules"
+
+$bb mount -o move /dev /newroot/dev 2>/dev/null || :
+$bb mount -o move /proc /newroot/proc 2>/dev/null || :
+$bb mount -o move /sys /newroot/sys 2>/dev/null || :
+log 'switching to postmarketOS init'
+exec $bb switch_root /newroot /sbin/init

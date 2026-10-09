@@ -201,13 +201,21 @@ verify_sources() {
   printf '%s\n' "PASS pixel-9a-kernel sources: manifest, superproject, and $count components verified"
 }
 
+builtin_module() {
+  [ -f "$2" ] || return 1
+  tr '-' '_' <"$2" | grep -q "/$(printf '%s' "$1" | tr '-' '_')\\.ko$"
+}
+
 verify_required_modules() {
   [ -f "$module_list" ] || die "target initfs module list is missing: $module_list"
   while IFS= read -r module; do
     case "$module" in
       ''|'#'*) continue ;;
     esac
-    find "$dist" -type f -name "$module.ko" -print -quit | grep -q . ||
+    find "$dist" -type f -name "$module.ko" -print -quit | grep -q . && continue
+    # GKI compiles core storage/filesystem drivers (dm, ext4, UFS) into the
+    # kernel; Kleaf lists those in modules.builtin instead of emitting a .ko.
+    builtin_module "$module" "$dist/modules.builtin" ||
       die "Kleaf dist is missing required tegu module: $module.ko"
   done < "$module_list"
 }
