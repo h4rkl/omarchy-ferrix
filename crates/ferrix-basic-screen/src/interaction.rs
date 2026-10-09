@@ -358,8 +358,11 @@ fn scale(v: i32, basis: i32) -> i32 {
 
 /// Launcher tile rectangles, shared by rendering and hit testing. Three
 /// columns; rows grow with the catalog. Portrait keeps the original geometry
-/// (48px margin, 24px gap, grid top at one panel width); landscape places
-/// the grid right of the cards and fits the rows into the free height.
+/// (48px margin, 24px gap, grid top at one panel width) when it fits, then
+/// lifts the grid, and finally shrinks the tiles, so the last row always
+/// ends above the footer caption and gesture pill (a short client area such
+/// as the Pixel 9a's 1080x2215). Landscape places the grid right of the
+/// cards and fits the rows into the free height.
 pub fn tile_rects(size: (u32, u32), count: usize) -> Vec<Rect> {
     let (w, h) = (size.0 as i32, size.1 as i32);
     let basis = w.min(h);
@@ -374,7 +377,17 @@ pub fn tile_rects(size: (u32, u32), count: usize) -> Vec<Rect> {
         (left, top, tile)
     } else {
         let margin = s(48);
-        (margin, w, (w - 2 * margin - 2 * gap) / 3)
+        let mut tile = (w - 2 * margin - 2 * gap) / 3;
+        // Keep the caption (baseline h - 150) and the pill clear, and never
+        // rise into the battery/network cards and crash banner (end at 1056).
+        let bottom = h - s(200);
+        let lowest_top = s(1056);
+        let mut top = w.min(bottom - rows * tile - (rows - 1) * gap);
+        if top < lowest_top {
+            top = lowest_top;
+            tile = tile.min((bottom - top - (rows - 1) * gap) / rows).max(1);
+        }
+        ((w - 3 * tile - 2 * gap) / 2, top, tile)
     };
     (0..count)
         .map(|index| {
@@ -527,6 +540,22 @@ mod tests {
         assert_eq!(rects[6].x, rects[0].x);
         assert!(rects[6].y + rects[6].h < 2340 - 150, "{:?}", rects[6]);
         assert!(tile_rects(SIZE, 0).is_empty());
+    }
+
+    #[test]
+    fn a_short_client_area_lifts_the_grid_clear_of_the_footer() {
+        // The Pixel 9a client area after its 137/72 safe area.
+        let (w, h) = (1080, 2215);
+        let rects = tile_rects((w, h), 8);
+        let last = rects[7];
+        assert!(last.y + last.h <= h as i32 - 200, "{last:?}");
+        assert!(rects[0].y >= 1056, "{:?}", rects[0]);
+        // Still square, still centred (within integer rounding).
+        assert_eq!(rects[0].w, rects[0].h);
+        assert!((rects[0].x - (w as i32 - (rects[2].x + rects[2].w))).abs() <= 1);
+        // Rows that cannot fit shrink instead of overlapping the footer.
+        let rects = tile_rects((w, 1900), 12);
+        assert!(rects[11].y + rects[11].h <= 1900 - 200, "{:?}", rects[11]);
     }
 
     #[test]
