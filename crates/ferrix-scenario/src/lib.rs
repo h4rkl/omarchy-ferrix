@@ -41,6 +41,9 @@ pub const REQUIRED_SCENARIOS: &[&str] = &[
     "wifi-captive",
     "wifi-offline-recovered",
     "service-crash-restart-reconcile",
+    "bluetooth-discovery-bounded",
+    "bluetooth-pair-confirm-success",
+    "bluetooth-pair-failures",
 ];
 
 #[cfg(test)]

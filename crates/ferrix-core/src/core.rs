@@ -31,12 +31,21 @@ fn mock(
     Ok(())
 }
 
-pub fn apply(services: &HardwareServices, command: ControlCommand) -> Result<Applied, String> {
+pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Applied, String> {
     let mut events = Vec::new();
     let mut outcome = None;
     let mut shutdown = false;
     let result: Result<(), HardwareError> = (|| {
-        match command {
+        if let Some(request) = command.bluetooth_command() {
+            // A real capability call: the adapter publishes the session
+            // events itself; the ack names the resulting summary.
+            request.apply(&*services.bluetooth)?;
+            events.push(HardwareEvent::BluetoothSessionChanged(
+                services.bluetooth.bluetooth_session()?.summary(),
+            ));
+            return Ok(());
+        }
+        match command.clone() {
             ControlCommand::State => {}
             ControlCommand::SetPower {
                 charging,
@@ -115,6 +124,22 @@ pub fn apply(services: &HardwareServices, command: ControlCommand) -> Result<App
                 }
                 outcome = Some(reported);
             }
+            ControlCommand::SetBluetoothPairingOutcome { outcome } => mock(
+                services,
+                MockCommand::SetBluetoothPairingOutcome { outcome },
+                &mut events,
+            )?,
+            ControlCommand::BluetoothTick { ms } => {
+                mock(services, MockCommand::BluetoothTick { ms }, &mut events)?
+            }
+            // Routed above through `bluetooth_command`.
+            ControlCommand::BluetoothDiscovery { .. }
+            | ControlCommand::BluetoothPair { .. }
+            | ControlCommand::BluetoothReply { .. }
+            | ControlCommand::BluetoothCancel
+            | ControlCommand::BluetoothConnect { .. }
+            | ControlCommand::BluetoothDisconnect { .. }
+            | ControlCommand::BluetoothForget { .. } => {}
             ControlCommand::Shutdown => shutdown = true,
         }
         Ok(())
@@ -185,7 +210,7 @@ mod tests {
         let s = services();
         let applied = apply(
             &s,
-            ControlCommand::SetPower {
+            &ControlCommand::SetPower {
                 charging: Some(true),
                 battery_percent: Some(40),
             },
@@ -207,7 +232,7 @@ mod tests {
         assert!(
             apply(
                 &s,
-                ControlCommand::SetPower {
+                &ControlCommand::SetPower {
                     charging: None,
                     battery_percent: None
                 }
@@ -217,7 +242,7 @@ mod tests {
         assert!(
             apply(
                 &s,
-                ControlCommand::SetPower {
+                &ControlCommand::SetPower {
                     charging: None,
                     battery_percent: Some(120)
                 }
@@ -231,35 +256,35 @@ mod tests {
         let s = services();
         apply(
             &s,
-            ControlCommand::SetWifi {
+            &ControlCommand::SetWifi {
                 state: WifiState::Disabled,
             },
         )
         .unwrap();
         apply(
             &s,
-            ControlCommand::SetOrientation {
+            &ControlCommand::SetOrientation {
                 orientation: Orientation::Landscape,
             },
         )
         .unwrap();
         apply(
             &s,
-            ControlCommand::SetAudio {
+            &ControlCommand::SetAudio {
                 route: AudioRoute::Headphones,
             },
         )
         .unwrap();
-        apply(&s, ControlCommand::SetBrightness { percent: 10 }).unwrap();
+        apply(&s, &ControlCommand::SetBrightness { percent: 10 }).unwrap();
         let applied = apply(
             &s,
-            ControlCommand::Suspend {
+            &ControlCommand::Suspend {
                 outcome: Some(SuspendOutcome::Failed),
             },
         )
         .unwrap();
         assert_eq!(applied.outcome, Some(SuspendOutcome::Failed));
-        assert!(apply(&s, ControlCommand::Shutdown).unwrap().shutdown);
+        assert!(apply(&s, &ControlCommand::Shutdown).unwrap().shutdown);
         let state = s.snapshot();
         assert_eq!(state.network.wifi, WifiState::Disabled);
         assert_eq!(state.display.orientation, Orientation::Landscape);
@@ -286,7 +311,7 @@ mod tests {
         apply_product(&s, HardwareCommand::SetRotationLock { locked: true }).unwrap();
         apply(
             &s,
-            ControlCommand::SetOrientation {
+            &ControlCommand::SetOrientation {
                 orientation: Orientation::Landscape,
             },
         )
@@ -296,6 +321,92 @@ mod tests {
         assert_eq!(display.orientation, Orientation::Portrait, "lock holds");
         apply_product(&s, HardwareCommand::SetRotationLock { locked: false }).unwrap();
         assert_eq!(s.snapshot().display.orientation, Orientation::Landscape);
+    }
+
+    #[test]
+    fn bluetooth_verbs_run_the_product_capability_and_report_the_session() {
+        let s = services();
+        let applied = apply(&s, &ControlCommand::BluetoothDiscovery { active: true }).unwrap();
+        assert_eq!(applied.events.len(), 1);
+        let session = s.bluetooth.bluetooth_session().unwrap();
+        assert!(session.discovery.active);
+        let headphones = session
+            .devices
+            .iter()
+            .find(|d| d.name.as_deref() == Some("Ferrix Mock Headphones"))
+            .unwrap()
+            .id
+            .clone();
+        apply(
+            &s,
+            &ControlCommand::BluetoothPair {
+                device: headphones.clone(),
+            },
+        )
+        .unwrap();
+        apply(&s, &ControlCommand::BluetoothReply { accept: true }).unwrap();
+        apply(&s, &ControlCommand::BluetoothTick { ms: 1_000 }).unwrap();
+        let session = s.bluetooth.bluetooth_session().unwrap();
+        assert!(session.device(&headphones).unwrap().paired);
+        assert!(
+            apply(&s, &ControlCommand::BluetoothReply { accept: true }).is_err(),
+            "no prompt is waiting"
+        );
+    }
+
+    /// Replays every checked-in `bluetooth-*` scenario against the core's
+    /// command handler and the mock controller in-process (`mock`
+    /// evidence; `just qemu-scenario-check` runs the same files in QEMU).
+    #[test]
+    fn bluetooth_scenarios_replay_against_the_mock_core() {
+        use ferrix_scenario::{Scenario, Service, is_subset, match_in_order};
+        use serde_json::{Value, json};
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../targets/qemu-aarch64/scenarios"
+        );
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("bluetooth-") && n.ends_with(".toml"))
+            })
+            .collect();
+        files.sort();
+        assert!(files.len() >= 3, "bluetooth scenarios are checked in");
+        let s = services();
+        let events = s.subscribe();
+        for file in files {
+            let scenario = Scenario::parse(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            for (index, step) in scenario.steps.iter().enumerate() {
+                let at = format!("{} step {index}", scenario.name);
+                assert_eq!(step.service, Service::Core, "{at}");
+                let command: ControlCommand = serde_json::from_value(step.command.clone()).unwrap();
+                let result = apply(&s, &command);
+                let ack = match &result {
+                    Ok(applied) => serde_json::to_value(ack_for(&s, &command, applied)).unwrap(),
+                    Err(reason) => json!({"status": "error", "reason": reason}),
+                };
+                assert_eq!(result.is_err(), step.expect_ack_error, "{at}: {ack}");
+                if let Some(expected) = &step.ack {
+                    assert!(is_subset(expected, &ack), "{at}: ack {ack}");
+                }
+                let records: Vec<Value> = events
+                    .try_iter()
+                    .map(|event| {
+                        let mut record = serde_json::to_value(event).unwrap();
+                        record["evidence"] = json!("mock");
+                        record
+                    })
+                    .collect();
+                if let Err(missing) = match_in_order(&records, &step.expect) {
+                    panic!("{at}: missing {} in {records:?}", step.expect[missing]);
+                }
+            }
+        }
     }
 
     #[test]

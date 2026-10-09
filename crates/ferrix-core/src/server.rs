@@ -58,6 +58,16 @@ impl Server {
         }
     }
 
+    fn bluetooth_session_reply(&self) -> Reply {
+        match self.session.services.bluetooth.bluetooth_session() {
+            Ok(session) => Reply::BluetoothSession {
+                schema_version: SCHEMA_VERSION,
+                session,
+            },
+            Err(error) => Reply::Error { error },
+        }
+    }
+
     /// Accept loop; one thread per connection.
     pub fn serve(self: Arc<Self>, listener: UnixListener) {
         for stream in listener.incoming() {
@@ -111,6 +121,21 @@ impl Server {
                             schema_version: SCHEMA_VERSION,
                             devices,
                         },
+                        Err(error) => Reply::Error { error },
+                    };
+                    if write_json(&mut writer, &reply).is_err() {
+                        return;
+                    }
+                }
+                Ok(Request::BluetoothSession) => {
+                    let reply = self.bluetooth_session_reply();
+                    if write_json(&mut writer, &reply).is_err() {
+                        return;
+                    }
+                }
+                Ok(Request::Bluetooth { command }) => {
+                    let reply = match command.apply(&*self.session.services.bluetooth) {
+                        Ok(()) => self.bluetooth_session_reply(),
                         Err(error) => Reply::Error { error },
                     };
                     if write_json(&mut writer, &reply).is_err() {

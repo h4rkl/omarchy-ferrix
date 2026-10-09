@@ -9,12 +9,16 @@
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod bluetooth;
+
+pub use bluetooth::{MOCK_PAIR_STEP_MS, MOCK_REMOTE_TIMEOUT_MS, MOCK_REMOTE_TYPING_MS};
+
 use ferrix_hardware_api::{
-    Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothState, Capability, CapabilityMatrix,
-    CapabilityStatus, Display, DisplayState, EventSource, HardwareError, HardwareEvent,
-    HardwareState, Input, InputState, Lifecycle, LifecycleState, MockCommand, MockControl,
-    ModemRegistration, Network, NetworkState, Orientation, Power, PowerState, SimState,
-    SuspendOutcome, Telephony, TelephonyState, WifiState,
+    Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothSession, BluetoothState, Capability,
+    CapabilityMatrix, CapabilityStatus, Display, DisplayState, EventSource, HardwareError,
+    HardwareEvent, HardwareState, Input, InputState, Lifecycle, LifecycleState, MockCommand,
+    MockControl, MockPairingOutcome, ModemRegistration, Network, NetworkState, Orientation, Power,
+    PowerState, SimState, SuspendOutcome, Telephony, TelephonyState, WifiState,
 };
 use ferrix_target_profile::Profile;
 
@@ -31,8 +35,8 @@ struct Inner {
     /// What the (mock) rotation sensor reports. The applied
     /// `state.display.orientation` follows it unless rotation is locked.
     sensor_orientation: Orientation,
-    /// Remembered devices from the profile's `[bluetooth]` section.
-    devices: Vec<BluetoothDevice>,
+    /// The mock controller's devices, discovery, and pairing.
+    bt: bluetooth::MockBluetooth,
     next_suspend: SuspendOutcome,
     subscribers: Vec<Sender<HardwareEvent>>,
 }
@@ -80,24 +84,11 @@ impl Emulator {
             },
             lifecycle: LifecycleState::default(),
         };
-        let mut devices: Vec<BluetoothDevice> = profile
-            .bluetooth
-            .iter()
-            .flat_map(|section| section.devices.iter())
-            .enumerate()
-            .map(|(index, device)| BluetoothDevice {
-                id: format!("mock-bt-{index}"),
-                name: (!device.name.is_empty()).then(|| device.name.clone()),
-                paired: device.paired,
-                connected: device.connected,
-            })
-            .collect();
-        ferrix_hardware_api::sort_bluetooth_devices(&mut devices);
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 state,
                 sensor_orientation: profile.display.orientation,
-                devices,
+                bt: bluetooth::MockBluetooth::from_profile(profile),
                 next_suspend: SuspendOutcome::Resumed,
                 subscribers: Vec::new(),
             })),
@@ -165,10 +156,60 @@ impl Emulator {
     pub fn set_bluetooth_present(&self, present: bool) -> HardwareEvent {
         let mut inner = self.lock();
         let enabled = present && inner.state.bluetooth.enabled;
-        Self::publish(
+        let event = Self::publish(
             &mut inner,
             HardwareEvent::BluetoothChanged(BluetoothState { present, enabled }),
-        )
+        );
+        if !present && inner.bt.power_lost() {
+            Self::publish_session(&mut inner);
+        }
+        event
+    }
+
+    fn publish_session(inner: &mut Inner) -> HardwareEvent {
+        let enabled = inner.state.bluetooth.enabled;
+        let summary = inner.bt.session(enabled).summary();
+        Self::publish(inner, HardwareEvent::BluetoothSessionChanged(summary))
+    }
+
+    /// Runs one product Bluetooth operation on a present, powered
+    /// controller and publishes one session event when it changed state.
+    fn bt_operation(
+        &self,
+        run: impl FnOnce(&mut bluetooth::MockBluetooth) -> Result<bool, HardwareError>,
+    ) -> Result<(), HardwareError> {
+        let mut inner = self.lock();
+        let bluetooth = inner.state.bluetooth;
+        if !bluetooth.present {
+            return Err(HardwareError::unsupported(Capability::Bluetooth));
+        }
+        if !bluetooth.enabled {
+            return Err(HardwareError::failed(
+                Capability::Bluetooth,
+                "bluetooth is off",
+            ));
+        }
+        if run(&mut inner.bt)? {
+            Self::publish_session(&mut inner);
+        }
+        Ok(())
+    }
+
+    /// Advances the mock Bluetooth clock (discovery deadline, remote
+    /// pairing steps, prompt timeouts). Emits at most one session event.
+    pub fn bluetooth_tick(&self, ms: u32) -> Option<HardwareEvent> {
+        let mut inner = self.lock();
+        inner.bt.tick(ms).then(|| Self::publish_session(&mut inner))
+    }
+
+    /// The mock Bluetooth clock in milliseconds.
+    pub fn bluetooth_clock_ms(&self) -> u64 {
+        self.lock().bt.clock_ms()
+    }
+
+    /// Overrides how every following mock pairing ends.
+    pub fn set_bluetooth_pairing_outcome(&self, outcome: Option<MockPairingOutcome>) {
+        self.lock().bt.set_outcome_override(outcome);
     }
 
     pub fn set_modem_registration(&self, registration: ModemRegistration) -> HardwareEvent {
@@ -278,6 +319,8 @@ impl Bluetooth for Emulator {
         self.lock().state.bluetooth
     }
 
+    /// Turning the controller off also stops discovery and cancels a
+    /// running pairing attempt (one `bluetooth-session-changed` follows).
     fn set_bluetooth_enabled(&self, enabled: bool) -> Result<BluetoothState, HardwareError> {
         let mut inner = self.lock();
         if !inner.state.bluetooth.present {
@@ -288,23 +331,63 @@ impl Bluetooth for Emulator {
             enabled,
         };
         Self::publish(&mut inner, HardwareEvent::BluetoothChanged(bluetooth));
+        if !enabled && inner.bt.power_lost() {
+            Self::publish_session(&mut inner);
+        }
         Ok(bluetooth)
     }
 
-    /// The profile's remembered devices; nothing is connected while the
-    /// controller is off, and an absent controller lists none.
+    /// Remembered devices plus the ones discovery found; nothing is
+    /// connected while the controller is off, and an absent controller
+    /// lists none.
     fn bluetooth_devices(&self) -> Result<Vec<BluetoothDevice>, HardwareError> {
         let inner = self.lock();
         let bluetooth = inner.state.bluetooth;
         if !bluetooth.present {
             return Ok(Vec::new());
         }
-        let mut devices = inner.devices.clone();
-        for device in &mut devices {
-            device.connected &= bluetooth.enabled;
+        Ok(inner.bt.devices(bluetooth.enabled))
+    }
+
+    fn bluetooth_session(&self) -> Result<BluetoothSession, HardwareError> {
+        let inner = self.lock();
+        let bluetooth = inner.state.bluetooth;
+        if !bluetooth.present {
+            return Ok(BluetoothSession::default());
         }
-        ferrix_hardware_api::sort_bluetooth_devices(&mut devices);
-        Ok(devices)
+        Ok(inner.bt.session(bluetooth.enabled))
+    }
+
+    fn start_bluetooth_discovery(&self) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| Ok(bt.start_discovery()))
+    }
+
+    fn stop_bluetooth_discovery(&self) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| Ok(bt.stop_discovery()))
+    }
+
+    fn pair_bluetooth_device(&self, device: &str) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| bt.pair(device))
+    }
+
+    fn cancel_bluetooth_pairing(&self) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| Ok(bt.cancel()))
+    }
+
+    fn reply_bluetooth_pairing(&self, accept: bool) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| bt.reply(accept))
+    }
+
+    fn connect_bluetooth_device(&self, device: &str) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| bt.connect(device, true))
+    }
+
+    fn disconnect_bluetooth_device(&self, device: &str) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| bt.connect(device, false))
+    }
+
+    fn forget_bluetooth_device(&self, device: &str) -> Result<(), HardwareError> {
+        self.bt_operation(|bt| bt.forget(device))
     }
 }
 
@@ -385,6 +468,11 @@ impl MockControl for Emulator {
                 self.set_suspend_outcome(outcome);
                 None
             }
+            MockCommand::SetBluetoothPairingOutcome { outcome } => {
+                self.set_bluetooth_pairing_outcome(outcome);
+                None
+            }
+            MockCommand::BluetoothTick { ms } => self.bluetooth_tick(ms),
         })
     }
 }
@@ -392,6 +480,7 @@ impl MockControl for Emulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ferrix_hardware_api::PairingPhase;
     use std::sync::mpsc;
 
     const FIXTURE: &str = r#"
@@ -496,6 +585,233 @@ route = "speaker"
         assert!(e.bluetooth_devices().unwrap().iter().all(|d| !d.connected));
         e.set_bluetooth_present(false);
         assert!(e.bluetooth_devices().unwrap().is_empty());
+    }
+
+    const DISCOVERABLE: &str = r#"
+[[bluetooth.devices]]
+name = "Buds"
+kind = "audio"
+paired = true
+
+[[bluetooth.discoverable]]
+name = "Headphones"
+kind = "audio"
+rssi = -48
+pairing = "confirm"
+passkey = 482913
+
+[[bluetooth.discoverable]]
+name = "Watch"
+rssi = -74
+pairing = "confirm"
+outcome = "rejected"
+passkey = 731064
+
+[[bluetooth.discoverable]]
+name = "Car"
+rssi = -88
+outcome = "timeout"
+
+[[bluetooth.discoverable]]
+name = "Legacy"
+pairing = "pin"
+
+[[bluetooth.discoverable]]
+name = "Keyboard"
+pairing = "display-passkey"
+passkey = 205718
+"#;
+
+    fn discoverable() -> (Emulator, mpsc::Receiver<HardwareEvent>) {
+        let e =
+            Emulator::from_profile(&Profile::parse(&format!("{FIXTURE}{DISCOVERABLE}")).unwrap());
+        let (tx, rx) = mpsc::channel();
+        e.subscribe(tx);
+        (e, rx)
+    }
+
+    fn found_id(e: &Emulator, name: &str) -> String {
+        e.bluetooth_session()
+            .unwrap()
+            .devices
+            .into_iter()
+            .find(|d| d.name.as_deref() == Some(name))
+            .unwrap()
+            .id
+    }
+
+    fn phase(e: &Emulator) -> Option<PairingPhase> {
+        e.bluetooth_session().unwrap().pairing.map(|p| p.phase)
+    }
+
+    fn summaries(
+        rx: &mpsc::Receiver<HardwareEvent>,
+    ) -> Vec<ferrix_hardware_api::BluetoothSessionSummary> {
+        rx.try_iter()
+            .filter_map(|event| match event {
+                HardwareEvent::BluetoothSessionChanged(summary) => Some(summary),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn discovery_reveals_profile_devices_and_stops_on_the_mock_clock() {
+        let (e, rx) = discoverable();
+        assert_eq!(e.bluetooth_devices().unwrap().len(), 1, "only remembered");
+        e.start_bluetooth_discovery().unwrap();
+        let session = e.bluetooth_session().unwrap();
+        assert!(session.discovery.active);
+        assert_eq!(session.discovery.remaining_ms, Some(30_000));
+        assert_eq!(session.devices.len(), 6);
+        let headphones = session
+            .devices
+            .iter()
+            .find(|d| d.name.as_deref() == Some("Headphones"))
+            .unwrap();
+        assert_eq!(headphones.signal_bars, Some(4));
+        assert!(headphones.id.starts_with("mock-bt-found-"));
+        assert_eq!(summaries(&rx).len(), 1, "one event per operation");
+        e.bluetooth_tick(29_999);
+        assert!(e.bluetooth_session().unwrap().discovery.active);
+        assert_eq!(
+            summaries(&rx).len(),
+            1,
+            "the remaining time moved: one event"
+        );
+        assert_eq!(
+            e.bluetooth_session().unwrap().discovery.remaining_ms,
+            Some(1)
+        );
+        assert!(e.bluetooth_tick(0).is_some(), "still scanning");
+        e.stop_bluetooth_discovery().unwrap();
+        assert!(
+            e.bluetooth_tick(1).is_none(),
+            "idle: nothing changed, no event"
+        );
+        e.start_bluetooth_discovery().unwrap();
+        e.bluetooth_tick(29_999);
+        let _ = summaries(&rx);
+        e.bluetooth_tick(1);
+        let session = e.bluetooth_session().unwrap();
+        assert!(!session.discovery.active, "auto-stopped at 30 s");
+        assert_eq!(session.devices.len(), 6, "found devices stay cached");
+        assert_eq!(summaries(&rx).last().unwrap().available, 5);
+        // Off: discovery refused with a typed reason.
+        e.set_bluetooth_enabled(false).unwrap();
+        assert!(matches!(
+            e.start_bluetooth_discovery(),
+            Err(HardwareError::Failed { .. })
+        ));
+    }
+
+    #[test]
+    fn numeric_comparison_success_bonds_and_connects() {
+        let (e, rx) = discoverable();
+        e.start_bluetooth_discovery().unwrap();
+        let id = found_id(&e, "Headphones");
+        e.pair_bluetooth_device(&id).unwrap();
+        assert_eq!(
+            phase(&e),
+            Some(PairingPhase::ConfirmPasskey { passkey: 482_913 })
+        );
+        assert!(
+            e.pair_bluetooth_device(&id).is_err(),
+            "one attempt at a time"
+        );
+        e.reply_bluetooth_pairing(true).unwrap();
+        assert_eq!(phase(&e), Some(PairingPhase::Pairing));
+        e.bluetooth_tick(MOCK_PAIR_STEP_MS as u32);
+        assert_eq!(phase(&e), Some(PairingPhase::Paired));
+        let device = e.bluetooth_session().unwrap().device(&id).cloned().unwrap();
+        assert!(device.paired && device.connected);
+        let stages: Vec<_> = summaries(&rx)
+            .into_iter()
+            .filter_map(|s| s.pairing.map(|p| p.name()))
+            .collect();
+        assert_eq!(stages, ["confirm-passkey", "pairing", "paired"]);
+        // Disconnect, connect, forget (stays cached, unpaired).
+        e.disconnect_bluetooth_device(&id).unwrap();
+        assert!(
+            !e.bluetooth_session()
+                .unwrap()
+                .device(&id)
+                .unwrap()
+                .connected
+        );
+        e.connect_bluetooth_device(&id).unwrap();
+        assert!(
+            e.bluetooth_session()
+                .unwrap()
+                .device(&id)
+                .unwrap()
+                .connected
+        );
+        e.forget_bluetooth_device(&id).unwrap();
+        let device = e.bluetooth_session().unwrap().device(&id).cloned().unwrap();
+        assert!(!device.paired && !device.connected);
+        assert!(e.connect_bluetooth_device(&id).is_err(), "unpaired");
+        assert!(e.bluetooth_session().unwrap().pairing.is_none());
+        // A remembered device is removed outright.
+        let buds = found_id(&e, "Buds");
+        e.forget_bluetooth_device(&buds).unwrap();
+        assert!(e.bluetooth_session().unwrap().device(&buds).is_none());
+    }
+
+    #[test]
+    fn pairing_failures_are_typed() {
+        use ferrix_hardware_api::PairingFailure as F;
+        let failed = |reason| Some(PairingPhase::Failed { reason });
+        let (e, _rx) = discoverable();
+        e.start_bluetooth_discovery().unwrap();
+        // Remote rejects after the user accepted.
+        e.pair_bluetooth_device(&found_id(&e, "Watch")).unwrap();
+        e.reply_bluetooth_pairing(true).unwrap();
+        e.bluetooth_tick(1_000);
+        assert_eq!(phase(&e), failed(F::Rejected));
+        // The user declines.
+        e.pair_bluetooth_device(&found_id(&e, "Headphones"))
+            .unwrap();
+        e.reply_bluetooth_pairing(false).unwrap();
+        assert_eq!(phase(&e), failed(F::Declined));
+        assert!(e.reply_bluetooth_pairing(true).is_err(), "no prompt left");
+        // Nobody answers the prompt.
+        e.pair_bluetooth_device(&found_id(&e, "Headphones"))
+            .unwrap();
+        e.bluetooth_tick(ferrix_hardware_api::BLUETOOTH_PROMPT_TIMEOUT_MS);
+        assert_eq!(phase(&e), failed(F::TimedOut));
+        // A silent remote (just works) times out on the mock clock.
+        e.pair_bluetooth_device(&found_id(&e, "Car")).unwrap();
+        assert_eq!(phase(&e), Some(PairingPhase::Pairing));
+        e.bluetooth_tick(1_000);
+        assert_eq!(phase(&e), Some(PairingPhase::Pairing));
+        e.bluetooth_tick(MOCK_REMOTE_TIMEOUT_MS as u32);
+        assert_eq!(phase(&e), failed(F::TimedOut));
+        // Legacy PIN is refused with its own reason.
+        e.pair_bluetooth_device(&found_id(&e, "Legacy")).unwrap();
+        assert_eq!(phase(&e), failed(F::PinRequired));
+        // Display passkey: the remote types it, then the bond completes.
+        e.pair_bluetooth_device(&found_id(&e, "Keyboard")).unwrap();
+        assert_eq!(
+            phase(&e),
+            Some(PairingPhase::DisplayPasskey { passkey: 205_718 })
+        );
+        e.bluetooth_tick(MOCK_REMOTE_TYPING_MS as u32);
+        assert_eq!(phase(&e), Some(PairingPhase::Paired));
+        // The control override wins over the profile outcome.
+        e.set_bluetooth_pairing_outcome(Some(MockPairingOutcome::Rejected));
+        e.pair_bluetooth_device(&found_id(&e, "Headphones"))
+            .unwrap();
+        e.reply_bluetooth_pairing(true).unwrap();
+        e.bluetooth_tick(1_000);
+        assert_eq!(phase(&e), failed(F::Rejected));
+        // Turning Bluetooth off cancels a running attempt.
+        e.set_bluetooth_pairing_outcome(None);
+        e.pair_bluetooth_device(&found_id(&e, "Headphones"))
+            .unwrap();
+        e.set_bluetooth_enabled(false).unwrap();
+        assert_eq!(phase(&e), failed(F::Canceled));
+        assert!(!e.bluetooth_session().unwrap().discovery.active);
     }
 
     #[test]

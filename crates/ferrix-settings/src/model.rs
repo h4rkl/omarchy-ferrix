@@ -5,7 +5,7 @@
 //! Pure state.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use ferrix_hardware_api::{CapabilityMatrix, HardwareState};
+use ferrix_hardware_api::{BluetoothCommand, CapabilityMatrix, HardwareState};
 use ferrix_network_api::{
     AccessPoint, AdapterPresence, ApId, ConnectionState, Connectivity, NetworkError, NetworkEvent,
     NetworkState, ProfileId, RadioState, SavedProfile, ScanState, SecurityType,
@@ -114,8 +114,10 @@ pub enum Action {
     SetCellularData(bool),
     /// Bluetooth controller power through `ferrix-core`.
     SetBluetooth(bool),
-    /// Re-query the Bluetooth device list from `ferrix-core`.
+    /// Re-query the Bluetooth session from `ferrix-core`.
     RefreshBluetoothDevices,
+    /// A product Bluetooth request (discovery, pairing, connections).
+    Bluetooth(BluetoothCommand),
     SetBrightness(u8),
     /// Auto-rotate off (`true`, pinned portrait) or on.
     SetRotationLock(bool),
@@ -158,7 +160,12 @@ pub struct Model {
     pub hw_capabilities: CapabilityMatrix,
     /// Target id the core reported.
     pub hw_target: Option<String>,
-    pub bt_devices: crate::system::DeviceList,
+    pub bt_devices: crate::bluetooth::DeviceList,
+    /// The shown session is older than the core's last Bluetooth event.
+    pub bt_stale: bool,
+    pub bt_view: crate::bluetooth::BtView,
+    /// The detail view's Forget awaits confirmation.
+    pub bt_forget_confirm: bool,
     /// Brightness preview while the rail is dragged.
     pub brightness_drag: Option<u8>,
     pub(crate) core_lost_once: bool,
@@ -219,7 +226,10 @@ impl Model {
             hw: None,
             hw_capabilities: CapabilityMatrix::default(),
             hw_target: None,
-            bt_devices: crate::system::DeviceList::Unknown,
+            bt_devices: crate::bluetooth::DeviceList::Unknown,
+            bt_stale: false,
+            bt_view: crate::bluetooth::BtView::Main,
+            bt_forget_confirm: false,
             brightness_drag: None,
             core_lost_once: false,
             net_lost_once: false,
@@ -239,7 +249,9 @@ impl Model {
     pub fn state_name(&self) -> String {
         match self.page {
             Page::Root => "root".to_owned(),
-            Page::Bluetooth => self.bluetooth_state_name(),
+            Page::Bluetooth => self
+                .bluetooth_flow_state()
+                .unwrap_or_else(|| self.bluetooth_state_name()),
             Page::Mobile => self.mobile_state_name(),
             Page::Display => self.display_state_name(),
             Page::Network if self.forget_confirm.is_some() => "confirm-forget".to_owned(),
@@ -628,6 +640,10 @@ impl Model {
     // -- intents -------------------------------------------------------------
 
     pub fn show(&mut self, page: Page) {
+        if page != self.page {
+            self.bt_view = crate::bluetooth::BtView::Main;
+            self.bt_forget_confirm = false;
+        }
         self.page = page;
         self.last_error = None;
         self.forget_confirm = None;
@@ -820,6 +836,8 @@ impl Model {
             self.cancel_forget();
         } else if self.passphrase_for.is_some() {
             self.cancel_passphrase();
+        } else if self.page == Page::Bluetooth && self.bluetooth_back() {
+            // Handled inside the Bluetooth flows (prompt, Pair, Device).
         } else if self.page != Page::Root {
             self.show(Page::Root);
         } else {

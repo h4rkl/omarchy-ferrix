@@ -1,5 +1,80 @@
 # Status
 
+## 2026-10-10 (Bluetooth discovery, pairing, connect/disconnect, forget; QEMU/mock only)
+
+- **Contract:** `ferrix-hardware-api` adds `BluetoothSession` (bounded
+  discovery with `remaining_ms`, devices with `kind` and `signal_bars`, the
+  pairing attempt's `PairingPhase`, a running or failed connect/disconnect
+  `operation`), `BluetoothCommand` (start/stop discovery, pair, cancel,
+  reply to the prompt, connect, disconnect, forget), trait methods
+  defaulting to `Unsupported`, and the event `bluetooth-session-changed`
+  whose payload is counts and stages only (never names, ids, or passkeys).
+  Bounds: discovery stops itself after 30 s; an unanswered prompt is
+  declined after 30 s (`timed-out`). Failures are typed: `declined`,
+  `rejected`, `timed-out`, `canceled`, `pin-required`, `unreachable`,
+  `failed`. `ferrix-protocol`/`ferrix-core` serve `bluetooth-session` and
+  `bluetooth {command}` (grant `core-control`, unchanged).
+- **BlueZ adapter** (`ferrix-bluetooth-bluez`, zbus blocking): Adapter1
+  `SetDiscoveryFilter`/`StartDiscovery`/`StopDiscovery` with its own 30 s
+  timer, Device1 `Pair` (then `Trusted` and `Connect`), `CancelPairing`,
+  `Connect`/`Disconnect`, Adapter1 `RemoveDevice`, and an exported
+  `org.bluez.Agent1` registered with `RegisterAgent(.., "DisplayYesNo")` and
+  `RequestDefaultAgent` (re-registered after a BlueZ restart). Numeric
+  comparison and Just Works authorization become Settings prompts;
+  `DisplayPasskey` shows the code to type; legacy `RequestPinCode` is
+  refused as `pin-required` (documented choice); services are authorized
+  for bonded devices only. Deadlock rules from the NetworkManager fix:
+  signal consumers only forward over an unbounded channel (the old 25 ms
+  per-message sleep is gone), no lock is held across a D-Bus call, and agent
+  methods await the answer on an `async-channel` instead of blocking zbus's
+  executor. Device ids are now a per-process keyed hash (was an unkeyed FNV
+  hash of the path); error texts are address-redacted. Mocked-bus unit tests
+  cover the prompt flow, timeouts, typed failures, and redaction. **Not run
+  on the Pixel 9a or any physical controller.**
+- **Emulator:** `[[bluetooth.discoverable]]` in the QEMU profile (six
+  synthetic devices, each with a pairing method and outcome: confirm/success,
+  display-passkey, authorize, confirm/rejected, legacy PIN, silent remote).
+  Discovery deadline, remote steps, and prompt timeout advance only on the
+  mock clock (`bluetooth-tick`); `set-bluetooth-pairing-outcome` overrides
+  outcomes. Pairing stops discovery, as the BlueZ adapter does.
+- **Settings:** the Bluetooth page lists saved (paired) devices and a "Pair
+  new device" row. Pair new device starts a scan with a remaining-time rail
+  and lists available devices (named first, strongest first, kind and signal
+  bars); tapping one pairs it. A focused card shows the six-digit code with
+  Pair/Cancel (or Pair/Cancel for Just Works, the code to type for
+  keyboards, "Pairing…" with Cancel), then "Paired with …" with Done or the
+  typed failure sentence with Try again/Done. Back answers a prompt with
+  Cancel and leaving the screen stops the scan. A saved device opens a
+  detail with Connect/Disconnect and Forget behind a confirmation. Adapters
+  without a session fall back to the plain list with "cannot pair"; the
+  no-controller/unsupported states are unchanged. `ui-state` names stages
+  (`pair-scanning-7`, `confirm-passkey`, `pair-failed-rejected`,
+  `device-disconnected`, `confirm-forget-device`).
+- **Evidence (QEMU, Alpine smoke guest, TCG agent session, 1080x2340,
+  `FERRIX_OUT_DIR=/tmp/fbt` for the Unix-socket path limit):** `just
+  qemu-check` passed (`unplugged-to-charging`); `just qemu-scenario-check`
+  passed 29/29 including `bluetooth-discovery-bounded`,
+  `bluetooth-pair-confirm-success`, `bluetooth-pair-failures` (two earlier
+  runs failed to start the agent session on `cursor-ready`, and one run had
+  `in-call-mic-mute` fail because an `input-ready` line interleaved into a
+  telephony record on serial, cascading into the next call scenario; both
+  are pre-existing harness flakes unrelated to Bluetooth). `ferrix-core`
+  unit tests replay the three Bluetooth scenarios in-process (`mock`).
+  Inspected frames, driven by `qemu-tap` and `qemu-mock bluetooth-tick`:
+  saved list (2 devices), scan at 30 s and 18 s left with 7 available,
+  confirm card with the profile passkey `482 913`, "Pairing…", "Paired with
+  Ferrix Mock Headphones", saved list with 3 devices, the watch's
+  "rejected the pairing" card, device detail connected and disconnected,
+  the forget confirmation, the list after forgetting, and the
+  no-controller state after `set-bluetooth present=false`. The serial log
+  carried no device name, passkey, or object path.
+- **Limitations:** physical BlueZ behaviour (agent calls, real error names,
+  RSSI churn during discovery) is unverified; no PIN entry; an incoming
+  pairing request is shown only while Settings is on its Bluetooth page
+  (no system notification yet); the scan countdown refreshes on session
+  events, not on a UI timer; in QEMU nothing progresses without
+  `bluetooth-tick`.
+
 ## 2026-10-09 (Pixel 9a: product reaches home unattended under required isolation; physical `google-pixel-9a-tegu-gxq96-mp1-0`)
 
 Evidence: exact target, slot b, Kleaf GKI `6.1.124-android14-11-ga4662a84a15f`

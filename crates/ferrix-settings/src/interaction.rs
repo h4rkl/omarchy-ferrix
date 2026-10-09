@@ -9,6 +9,7 @@ use ferrix_ui::widgets::{
     Edit, back_rect, basis, contains, edit_text, list_rects, scale, slider_value,
 };
 
+use crate::bluetooth::{BtView, Card};
 use crate::model::{Model, Page};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +40,24 @@ pub enum Target {
     CellularData,
     /// Bluetooth controller power.
     BluetoothPower,
+    /// "Pair new device" on the saved-devices screen.
+    BtPairNew,
+    /// A saved device row: opens its detail.
+    BtSaved(usize),
+    /// The scan row of Pair new device (scan again when idle).
+    BtScan,
+    /// An available device row: pair it.
+    BtAvailable(usize),
+    /// Pairing card: Pair (accept), Cancel (decline/cancel), Done, Try again.
+    BtAccept,
+    BtDecline,
+    BtDone,
+    BtRetry,
+    /// Device detail: Connect/Disconnect, Forget, and its confirmation.
+    BtConnect,
+    BtForget,
+    BtForgetConfirm,
+    BtForgetCancel,
     /// The brightness rail (dragged, committed on release).
     Brightness,
     AutoRotate,
@@ -88,8 +107,80 @@ impl Layout {
         self.row_rect(300)
     }
 
-    pub fn device_rects(&self, count: usize) -> Vec<Rect> {
-        list_rects(self.size, self.s(600), count.min(6), 120)
+    /// "Pair new device" under the power row.
+    pub fn bt_pair_row_rect(&self) -> Rect {
+        self.row_rect(470)
+    }
+
+    /// Saved-device rows (at most six).
+    pub fn saved_rects(&self, count: usize) -> Vec<Rect> {
+        list_rects(self.size, self.s(710), count.min(6), 120)
+    }
+
+    /// The scan row of Pair new device.
+    pub fn bt_scan_rect(&self) -> Rect {
+        self.row_rect(300)
+    }
+
+    /// The scan's remaining-time rail under the scan row.
+    pub fn bt_progress_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(64),
+            y: s(468),
+            w: self.w() - s(128),
+            h: s(8),
+        }
+    }
+
+    /// Available-device rows (at most eight).
+    pub fn available_rects(&self, count: usize) -> Vec<Rect> {
+        list_rects(self.size, self.s(590), count.min(8), 120)
+    }
+
+    /// The left (primary) and right buttons of a pairing card.
+    pub fn bt_card_left_rect(&self) -> Rect {
+        self.pass_connect_rect()
+    }
+
+    pub fn bt_card_right_rect(&self) -> Rect {
+        self.pass_cancel_rect()
+    }
+
+    /// The detail view's device row.
+    pub fn bt_device_rect(&self) -> Rect {
+        self.row_rect(300)
+    }
+
+    pub fn bt_connect_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(96),
+            y: s(640),
+            w: s(420),
+            h: s(120),
+        }
+    }
+
+    pub fn bt_forget_rect(&self) -> Rect {
+        Rect {
+            x: self.s(564),
+            ..self.bt_connect_rect()
+        }
+    }
+
+    pub fn bt_forget_confirm_rect(&self) -> Rect {
+        Rect {
+            y: self.s(940),
+            ..self.bt_connect_rect()
+        }
+    }
+
+    pub fn bt_forget_cancel_rect(&self) -> Rect {
+        Rect {
+            y: self.s(940),
+            ..self.bt_forget_rect()
+        }
     }
 
     /// Mobile page info rows: SIM, operator, signal.
@@ -294,9 +385,7 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
             .into_iter()
             .find(|(r, _)| contains(*r, position))
             .map(|(_, page)| Target::Section(page)),
-        Page::Bluetooth => {
-            contains(l.bluetooth_power_rect(), position).then_some(Target::BluetoothPower)
-        }
+        Page::Bluetooth => bluetooth_hit(model, &l, position),
         Page::Mobile => contains(l.mobile_data_rect(), position).then_some(Target::CellularData),
         Page::Display => {
             if contains(l.brightness_hit_rect(), position) {
@@ -357,6 +446,71 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
     }
 }
 
+/// The buttons a pairing card shows, left to right.
+pub fn card_buttons(card: Card) -> (Option<Target>, Option<Target>) {
+    match card {
+        Card::Confirm { .. } | Card::Authorize => (Some(Target::BtAccept), Some(Target::BtDecline)),
+        Card::Display { .. } | Card::Pairing => (None, Some(Target::BtDecline)),
+        Card::Paired => (Some(Target::BtDone), None),
+        Card::Failed(_) => (Some(Target::BtRetry), Some(Target::BtDone)),
+    }
+}
+
+fn bluetooth_hit(model: &Model, l: &Layout, position: (f64, f64)) -> Option<Target> {
+    if let Some(card) = model.bt_card() {
+        // The card replaces the lists; only its buttons (and, on the saved
+        // screen, the power row) answer.
+        let (left, right) = card_buttons(card);
+        if left.is_some() && contains(l.bt_card_left_rect(), position) {
+            return left;
+        }
+        if right.is_some() && contains(l.bt_card_right_rect(), position) {
+            return right;
+        }
+        return (model.bt_view == BtView::Main && contains(l.bluetooth_power_rect(), position))
+            .then_some(Target::BluetoothPower);
+    }
+    match &model.bt_view {
+        BtView::Main => {
+            if contains(l.bluetooth_power_rect(), position) {
+                return Some(Target::BluetoothPower);
+            }
+            if model.bluetooth_block().is_err() {
+                return None;
+            }
+            if contains(l.bt_pair_row_rect(), position) {
+                return Some(Target::BtPairNew);
+            }
+            l.saved_rects(model.saved_devices().len())
+                .into_iter()
+                .position(|r| contains(r, position))
+                .map(Target::BtSaved)
+        }
+        BtView::Pair => {
+            if contains(l.bt_scan_rect(), position) {
+                return Some(Target::BtScan);
+            }
+            l.available_rects(model.available_devices().len())
+                .into_iter()
+                .position(|r| contains(r, position))
+                .map(Target::BtAvailable)
+        }
+        BtView::Device(_) => {
+            if model.bt_forget_confirm {
+                if contains(l.bt_forget_confirm_rect(), position) {
+                    return Some(Target::BtForgetConfirm);
+                }
+                return contains(l.bt_forget_cancel_rect(), position)
+                    .then_some(Target::BtForgetCancel);
+            }
+            if contains(l.bt_connect_rect(), position) {
+                return Some(Target::BtConnect);
+            }
+            contains(l.bt_forget_rect(), position).then_some(Target::BtForget)
+        }
+    }
+}
+
 pub fn activate(model: &mut Model, target: Target) {
     match target {
         Target::Back => model.back(),
@@ -392,6 +546,25 @@ pub fn activate(model: &mut Model, target: Target) {
         Target::Cellular => model.toggle_cellular(),
         Target::CellularData => model.toggle_cellular_data(),
         Target::BluetoothPower => model.toggle_bluetooth(),
+        Target::BtPairNew => model.open_pair_page(),
+        Target::BtSaved(i) => model.open_saved(i),
+        Target::BtScan => {
+            if !model.discovery().active {
+                model.rescan();
+            }
+        }
+        Target::BtAvailable(i) => model.pair_available(i),
+        Target::BtAccept => model.reply_pairing(true),
+        Target::BtDecline => match model.bt_card() {
+            Some(card) if card.asks() => model.reply_pairing(false),
+            _ => model.dismiss_pairing(),
+        },
+        Target::BtDone => model.finish_pairing(),
+        Target::BtRetry => model.retry_pairing(),
+        Target::BtConnect => model.toggle_connection(),
+        Target::BtForget => model.ask_forget_device(),
+        Target::BtForgetConfirm => model.confirm_forget_device(),
+        Target::BtForgetCancel => model.cancel_forget_device(),
         // The rail acts on drag and release (see `Input`), a tap included.
         Target::Brightness => model.commit_brightness(),
         Target::AutoRotate => model.toggle_auto_rotate(),
@@ -702,6 +875,93 @@ mod tests {
         for r in l.mobile_rects() {
             assert_eq!(hit_test(&m, center(r), SIZE), None, "info rows are inert");
         }
+    }
+
+    #[test]
+    fn bluetooth_pairing_flow_routes_taps_to_core_requests() {
+        use crate::bluetooth::preview_session;
+        use ferrix_hardware_api::{BluetoothCommand as B, PairingPhase};
+        let mut m = with_core();
+        m.show(Page::Bluetooth);
+        m.pending.clear();
+        let mut session = preview_session(None);
+        session.discovery = Default::default();
+        m.set_bluetooth_session(Ok(session));
+        let mut input = Input::default();
+        let l = Layout::new(SIZE);
+        tap(&mut input, &mut m, center(l.bt_pair_row_rect()));
+        assert_eq!(m.pending, vec![Action::Bluetooth(B::StartDiscovery)]);
+        m.pending.clear();
+        m.set_bluetooth_session(Ok(preview_session(None)));
+        assert_eq!(
+            hit_test(&m, center(l.bt_scan_rect()), SIZE),
+            Some(Target::BtScan)
+        );
+        tap(&mut input, &mut m, center(l.bt_scan_rect()));
+        assert!(m.pending.is_empty(), "no restart while scanning");
+        tap(&mut input, &mut m, center(l.available_rects(4)[1]));
+        assert_eq!(
+            m.pending,
+            vec![Action::Bluetooth(B::Pair {
+                device: "mock-bt-found-1".into()
+            })]
+        );
+        m.pending.clear();
+        m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::ConfirmPasskey {
+            passkey: 1,
+        }))));
+        assert_eq!(
+            hit_test(&m, center(l.available_rects(4)[1]), SIZE),
+            None,
+            "the list is hidden behind the card"
+        );
+        tap(&mut input, &mut m, center(l.bt_card_left_rect()));
+        assert_eq!(
+            m.pending,
+            vec![Action::Bluetooth(B::ReplyPairing { accept: true })]
+        );
+        m.pending.clear();
+        tap(&mut input, &mut m, center(l.bt_card_right_rect()));
+        assert_eq!(
+            m.pending,
+            vec![Action::Bluetooth(B::ReplyPairing { accept: false })]
+        );
+        m.pending.clear();
+        m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::Pairing))));
+        assert_eq!(
+            hit_test(&m, center(l.bt_card_left_rect()), SIZE),
+            None,
+            "no Pair button while bonding"
+        );
+        tap(&mut input, &mut m, center(l.bt_card_right_rect()));
+        assert_eq!(m.pending, vec![Action::Bluetooth(B::CancelPairing)]);
+        m.pending.clear();
+        m.set_bluetooth_session(Ok(preview_session(Some(PairingPhase::Paired))));
+        tap(&mut input, &mut m, center(l.bt_card_left_rect()));
+        assert_eq!(m.bt_view, crate::bluetooth::BtView::Main);
+        assert!(m.pending.contains(&Action::Bluetooth(B::CancelPairing)));
+        m.pending.clear();
+        // Saved device detail: Disconnect, then Forget behind a confirmation.
+        m.set_bluetooth_session(Ok(preview_session(None)));
+        tap(&mut input, &mut m, center(l.saved_rects(2)[0]));
+        assert!(matches!(m.bt_view, crate::bluetooth::BtView::Device(_)));
+        tap(&mut input, &mut m, center(l.bt_connect_rect()));
+        assert_eq!(
+            m.pending,
+            vec![Action::Bluetooth(B::Disconnect {
+                device: "mock-bt-0".into()
+            })]
+        );
+        m.pending.clear();
+        tap(&mut input, &mut m, center(l.bt_forget_rect()));
+        assert!(m.pending.is_empty());
+        tap(&mut input, &mut m, center(l.bt_forget_confirm_rect()));
+        assert_eq!(
+            m.pending,
+            vec![Action::Bluetooth(B::Forget {
+                device: "mock-bt-0".into()
+            })]
+        );
     }
 
     #[test]

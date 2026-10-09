@@ -114,7 +114,7 @@ impl control::Handler for Controller {
                 return Ack::Error { ack: None, reason };
             }
         };
-        match core::apply(&self.session.services, command) {
+        match core::apply(&self.session.services, &command) {
             Ok(applied) => {
                 emit(json!({
                     "evidence": evidence_label(),
