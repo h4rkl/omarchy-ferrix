@@ -437,6 +437,10 @@ fn scanout_formats() -> Vec<Fourcc> {
             "AR24" => Some(Fourcc::Argb8888),
             "XB24" => Some(Fourcc::Xbgr8888),
             "AB24" => Some(Fourcc::Abgr8888),
+            "RX24" => Some(Fourcc::Rgbx8888),
+            "BX24" => Some(Fourcc::Bgrx8888),
+            "RA24" => Some(Fourcc::Rgba8888),
+            "BA24" => Some(Fourcc::Bgra8888),
             _ => None,
         })
         .collect();
