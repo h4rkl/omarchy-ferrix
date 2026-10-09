@@ -302,15 +302,15 @@ build_kernel() {
   cp "$gki_fragment" "$source_root/ferrix/ferrix_gki_defconfig"
   printf '%s\n' 'exports_files(["ferrix_gki_defconfig"])' >"$source_root/ferrix/BUILD.bazel"
   # Overrides follow the --config expansions (device.bazelrc sets
-  # --use_prebuilt_gki); Bazel keeps the last value. Use the negated form:
-  # Kleaf's wrapper reads --use_prebuilt_gki=VALUE as a build number to
-  # download, so =false would still fetch a prebuilt.
+  # --use_prebuilt_gki); Bazel keeps the last value. Negate the underlying
+  # labels: Kleaf's wrapper reads --use_prebuilt_gki=VALUE as a build number
+  # to download, and Bazel cannot negate the flag aliases themselves.
   set -- --output_user_root="$bazel_cache" run \
     --kernel_package=@//aosp \
     --config=stamp \
     --config=tegu \
-    --nouse_prebuilt_gki \
-    --nouse_signed_prebuilts \
+    --no//build/kernel/kleaf:use_prebuilt_gki \
+    --no//build/kernel/kleaf:use_signed_prebuilts \
     --defconfig_fragment=//ferrix:ferrix_gki_defconfig \
     //private/devices/google/tegu:zumapro_tegu_dist \
     -- --destdir="$dist"
