@@ -10,16 +10,16 @@
 # control to the postmarketOS init. No Android init, property service,
 # framework, or HAL is used.
 #
-# Bring-up visibility: once the first-stage modules are in, a USB CDC-ACM
-# gadget exposes two serial ports to the host. The first streams the previous
+# Bring-up visibility: right after the watchdog, a USB CDC-ACM gadget exposes
+# two serial ports to the host. The first streams the previous
 # boot's pstore (ramoops) and the live kernel log; the second is a root shell.
 # Failure paths hold for $hold_seconds before rebooting, so the bootloader's
 # slot retry/fallback to the stock slot still applies.
 #
 # Automated bisection: with ferrix.checkpoint=STAGE on the kernel command line
 # (dev-compose --checkpoint), /init reboots straight to bootloader Fastboot
-# when it reaches STAGE (early, watchdog, init, modules, gadget, root, mounted,
-# dlkm, switch), so
+# when it reaches STAGE (early, watchdog, gadget, modules, root, mounted, dlkm,
+# switch), so
 # a host sees how far boot got with nothing but `fastboot devices`.
 
 bb=/bin/busybox
@@ -59,6 +59,15 @@ load_list() {
 }
 
 start_usb_debug() {
+	# Only the USB device path, ahead of the full module list, so a module that
+	# takes the SoC down later cannot hide the previous boot's pstore. The shim
+	# pulls in each module's modules.dep dependencies.
+	for module in exynos-pd_hsi0 eusb_repeater phy-exynos-usbdrd-eusb-super \
+		dwc3-exynos-usb usb_psy max77759_helper bc_max77759 google_tcpci_shim \
+		tcpci_max77759; do
+		/system/bin/modprobe -q -- "$module" || log "usb debug: $module did not load"
+	done
+	$bb mdev -s 2>/dev/null || :
 	$bb mount -t configfs configfs /sys/kernel/config 2>/dev/null || :
 	waited=0
 	while [ -z "$($bb ls /sys/class/udc 2>/dev/null)" ] && [ "$waited" -lt 15 ]; do
@@ -74,6 +83,11 @@ start_usb_debug() {
 		"$gadget/functions/acm.log" "$gadget/functions/acm.shell" || return 0
 	echo 0x1d6b >"$gadget/idVendor"
 	echo 0x0104 >"$gadget/idProduct"
+	echo 0x0200 >"$gadget/bcdUSB"
+	# Interface Association class: macOS binds CDC-ACM in a composite gadget.
+	echo 0xEF >"$gadget/bDeviceClass"
+	echo 0x02 >"$gadget/bDeviceSubClass"
+	echo 0x01 >"$gadget/bDeviceProtocol"
 	echo Ferrix >"$gadget/strings/0x409/manufacturer"
 	echo 'Ferrix tegu bring-up' >"$gadget/strings/0x409/product"
 	echo ferrix-tegu >"$gadget/strings/0x409/serialnumber"
@@ -117,6 +131,8 @@ checkpoint() {
 		$bb sleep 30
 		$bb reboot -f
 	fi
+	# hold: stay at STAGE with the USB debug console up (end it from the shell).
+	[ "$checkpoint_action" = hold ] && hold_then_reboot "checkpoint $1 reached"
 	log "checkpoint $1 reached; rebooting to bootloader Fastboot"
 	/system/bin/modprobe -q -- pixel-reboot || log 'pixel-reboot did not load'
 	$bb sleep 1
@@ -176,6 +192,9 @@ release=$($bb uname -r)
 log "kernel $release checkpoint=${checkpoint_target:-none}"
 checkpoint init
 
+start_usb_debug
+checkpoint gadget
+
 # Kleaf ramdisks use lib/modules/<release>/; older Pixel ramdisks are flat.
 # Android's first-stage init accepts both, and so does this one.
 first_stage=/lib/modules/$release
@@ -193,9 +212,6 @@ for dog in /dev/watchdog0 /dev/watchdog; do
 		break
 	}
 done
-
-start_usb_debug
-checkpoint gadget
 
 $bb mkdir -p /newroot
 root_device=

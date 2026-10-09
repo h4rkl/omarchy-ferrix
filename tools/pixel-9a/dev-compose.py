@@ -261,9 +261,10 @@ def main():
     parser.add_argument("--out", type=Path, default=env("FERRIX_PIXEL9A_DEV_OUT"))
     parser.add_argument("--checkpoint", default=env("FERRIX_PIXEL9A_DEV_CHECKPOINT", ""),
                         help="initramfs stage at which /init reboots to bootloader Fastboot")
-    parser.add_argument("--checkpoint-action", choices=["fastboot", "delay"],
+    parser.add_argument("--checkpoint-action", choices=["fastboot", "delay", "hold"],
                         default=env("FERRIX_PIXEL9A_DEV_CHECKPOINT_ACTION", "fastboot"),
-                        help="reboot to Fastboot at the checkpoint, or delay 30s (timing signal)")
+                        help="reboot to Fastboot at the checkpoint, delay 30s (timing signal), "
+                             "or hold with the USB debug console up")
     args = parser.parse_args()
     if args.base_rootfs is None or args.out is None:
         die("--base-rootfs/FERRIX_PIXEL9A_DEV_BASE_ROOTFS and --out/FERRIX_PIXEL9A_DEV_OUT are required")
