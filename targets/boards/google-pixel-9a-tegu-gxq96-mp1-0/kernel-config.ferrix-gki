@@ -11,3 +11,9 @@ CONFIG_DEVTMPFS=y
 # Waydroid's container network (waydroid-net.sh) adds a mangle CHECKSUM rule
 # for DHCP replies and aborts when the target is missing.
 CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y
+# IPC namespaces exist only with SysV IPC or POSIX message queues, and GKI has
+# neither. Waydroid's LXC container clones CLONE_NEWIPC and fails without it;
+# ferrix-sandbox then also gets a real IPC namespace. POSIX mqueue is the
+# smaller of the two (bionic has no SysV IPC).
+CONFIG_POSIX_MQUEUE=y
+CONFIG_IPC_NS=y
