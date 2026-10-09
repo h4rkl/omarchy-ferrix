@@ -9,14 +9,14 @@
 
 use smithay::{
     backend::{
-        allocator::{Buffer, Fourcc, Modifier, dumb::DumbBuffer, format::Format},
+        allocator::{Buffer, Format, Fourcc, Modifier, dumb::DumbBuffer},
         drm::{
             DrmDeviceFd, Framebuffer,
             exporter::{ExportBuffer, ExportFramebuffer},
         },
     },
     reexports::drm::{
-        buffer::{Handle as BufferHandle, PlanarBuffer},
+        buffer::{Buffer as _, Handle as BufferHandle, PlanarBuffer},
         control::{Device as ControlDevice, FbCmd2Flags, framebuffer},
     },
 };
