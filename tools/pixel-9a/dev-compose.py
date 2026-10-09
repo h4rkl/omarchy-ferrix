@@ -409,6 +409,18 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
             editor.put(descriptor.read_bytes(), f"/usr/share/ferrix/apps/{descriptor.name}", 0o644)
         written += ["/etc/ferrix/colors.toml", "/usr/share/ferrix/apps/*.json"]
     editor.put(profile.read_bytes(), "/etc/ferrix/profile.toml", 0o644)
+    # Third-party notices for material compiled into the ferrix-ui binaries,
+    # the same set targets/qemu-aarch64/scripts/qemu-build.sh installs.
+    repo = Path(__file__).resolve().parents[2]
+    assets = repo / "crates/ferrix-ui/assets"
+    for name, notice in (("material-symbols", assets / "icons/material-symbols/LICENSE"),
+                         ("material-symbols", assets / "icons/material-symbols/README.md"),
+                         ("jetbrains-mono", assets / "OFL.txt")):
+        if not notice.is_file():
+            die(f"missing third-party notice {notice}")
+        dest = f"/usr/share/licenses/ferrix/{name}/{notice.name}"
+        editor.put(notice.read_bytes(), dest, 0o644)
+        written.append(dest)
     # Device-package files, at the paths the APKBUILD installs them to.
     editor.put((package / "ferrix-openrc.sh").read_bytes(), "/usr/lib/ferrix/openrc.sh", 0o644)
     editor.put((package / "networkmanager-ferrix.conf").read_bytes(),
