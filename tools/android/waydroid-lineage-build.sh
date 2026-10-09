@@ -29,6 +29,7 @@ tools="$cache/android/tools"
 src=${FERRIX_WAYDROID_LINEAGE_SRC:-"$cache/android/lineage-23.2"}
 out_root=${FERRIX_OUT_DIR:-"$root/out"}/android/waydroid-lineage-23.2
 jobs=${FERRIX_WAYDROID_LINEAGE_JOBS:-10}
+sync_jobs=${FERRIX_WAYDROID_LINEAGE_SYNC_JOBS:-4}
 ack=I-understand-this-syncs-and-builds-lineageos
 
 die() { printf 'FAIL waydroid-lineage-build: %s\n' "$*" >&2; exit 1; }
@@ -101,7 +102,15 @@ do_sync() {
   # local manifests come from the pinned commit, not from the network.
   TERM=${TERM:-dumb} WAYDROID_PATCH_SDK=$(pin WAYDROID_PATCH_SDK) \
     bash "$vendor/manifest_scripts/generate-manifest.sh"
-  repo sync -c --no-tags --fail-fast -j"$jobs" --optimized-fetch
+  # googlesource answers HTTP 429 to aggressive parallel fetches; keep the
+  # fetch fan-out small, let repo retry, and resume whole passes.
+  pass=1
+  until repo sync -c --no-tags -j"$sync_jobs" --optimized-fetch --retry-fetches=8; do
+    [ "$pass" -lt 4 ] || die "repo sync failed after $pass passes"
+    pass=$((pass + 1))
+    printf 'repo sync pass %s after a failure; waiting 120s\n' "$pass" >&2
+    sleep 120
+  done
   printf 'PASS waydroid-lineage sync: %s\n' "$src"
 }
 
