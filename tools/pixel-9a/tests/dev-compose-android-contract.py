@@ -65,7 +65,9 @@ compose.check_android_rootfs(set(packages) | {"busybox"}, packages)
 with tempfile.TemporaryDirectory() as tmp:
     tmp = Path(tmp)
     fake_repo = tmp / "repo"
-    (fake_repo / "tools/android").mkdir(parents=True)
+    (fake_repo / "tools/android/guest").mkdir(parents=True)
+    shutil.copyfile(repo / "tools/android/guest/ferrix-waydroid.sh",
+                    fake_repo / "tools/android/guest/ferrix-waydroid.sh")
     build = tmp / "out/android/waydroid/20260403"
     build.mkdir(parents=True)
     (tmp / "out/android/waydroid/current").symlink_to("20260403")

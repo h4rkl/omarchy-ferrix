@@ -127,8 +127,14 @@ Build steps on the Linux build host. Each output directory must be new:
    SHA-256 against `tools/android/*.pins`.
 2. Base rootfs with the package set:
    `FERRIX_PIXEL9A_ANDROID=1 FERRIX_PIXEL9A_ROOTFS_BUILD=… tools/pixel-9a/native-builder.sh run rootfs build`,
-   with the usual kernel-radio, product, firmware and pmaports inputs and a
-   fresh `FERRIX_PIXEL9A_ROOTFS_OUT`. The manifest records
+   with the usual product, firmware and pmaports inputs and a fresh
+   `FERRIX_PIXEL9A_ROOTFS_OUT`. The rootfs is composed with the Kleaf GKI,
+   so select that kernel explicitly: `FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE=kleaf-dev`
+   plus `FERRIX_PIXEL9A_KERNEL_DIST=<kleaf dist>`. Without it, the default
+   `radio-first` route needs a radio kernel built against the current split
+   contract, and that kernel currently refuses to build because there is no
+   MP1.0 overlay source. The manifest records `route_id
+   development-google-kleaf-gki`, the hashed Kleaf kernel manifest, and
    `android_runtime waydroid-packages …`.
 3. Image: `FERRIX_PIXEL9A_DEV_ANDROID=1 FERRIX_PIXEL9A_DEV_BASE_ROOTFS=<that rootfs.img>
    FERRIX_PIXEL9A_KERNEL_OUT=… FERRIX_PIXEL9A_DEV_PRODUCT_DIR=… FERRIX_PIXEL9A_DEV_OUT=<new dir>

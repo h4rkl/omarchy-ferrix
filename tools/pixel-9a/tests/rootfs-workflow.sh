@@ -663,9 +663,11 @@ android_build() {
 	FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap \
 	FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
 	FERRIX_PIXEL9A_PMAPORTS_DIR="$pmaports" FERRIX_PIXEL9A_PMAPORTS_COMMIT="$pmaports_commit" \
-	FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB=256 FERRIX_PIXEL9A_ANDROID=1 "$script" build
+	FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB=256 FERRIX_PIXEL9A_ANDROID=1 \
+	FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE="${ROUTE:-radio-first}" FERRIX_PIXEL9A_KERNEL_DIST="$kernel" "$script" build
 }
-android_build "$work/android-out" >"$work/android.out" 2>"$work/android.err" ||
+# The development flash route composes with the Kleaf GKI, selected explicitly.
+ROUTE=kleaf-dev android_build "$work/android-out" >"$work/android.out" 2>"$work/android.err" ||
 	{ cat "$work/android.err" >&2; fail 'opt-in Android rootfs build failed'; }
 android_manifest="$work/android-out/pixel-9a/rootfs/tegu/manifest.tsv"
 awk -F "$tab" '$1 == "android_runtime" && $2 == "waydroid-packages" && $3 ~ /(^|,)waydroid(,|$)/ { found=1 } END { exit(found ? 0 : 1) }' \
@@ -673,10 +675,19 @@ awk -F "$tab" '$1 == "android_runtime" && $2 == "waydroid-packages" && $3 ~ /(^|
 awk -F "$tab" '$1 == "artifact" && $2 == "android/packages" && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' \
 	"$android_manifest" || fail 'Android rootfs manifest does not hash the package set'
 grep -q 'opt-in Android runtime packages: waydroid,' "$work/android.out" || fail 'Android packages were not appended'
-if FAKE_EXTRA_INSTALLED=nftables android_build "$work/android-nft-out" >/dev/null 2>"$work/android-nft.err"; then
+awk -F "$tab" '$1 == "route_id" && $2 == "development-google-kleaf-gki" { found=1 } END { exit(found ? 0 : 1) }' \
+	"$android_manifest" || fail 'kleaf-dev rootfs manifest does not record the development route'
+awk -F "$tab" '$1 == "input" && $2 == "kleaf_kernel_manifest" && $4 ~ /^[0-9a-f]{64}$/ { found=1 } END { exit(found ? 0 : 1) }' \
+	"$android_manifest" || fail 'kleaf-dev rootfs manifest does not hash the Kleaf kernel manifest'
+if ROUTE=guess android_build "$work/android-route-out" >/dev/null 2>"$work/android-route.err"; then
+	fail 'unknown rootfs kernel route was accepted'
+fi
+grep -q 'FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE must be radio-first or kleaf-dev' "$work/android-route.err" ||
+	fail 'unknown kernel route reason'
+if FAKE_EXTRA_INSTALLED=nftables ROUTE=kleaf-dev android_build "$work/android-nft-out" >/dev/null 2>"$work/android-nft.err"; then
 	fail 'Android rootfs with nftables installed was accepted'
 fi
-grep -q 'contains nftables, which the GKI cannot use' "$work/android-nft.err" || fail 'nftables refusal reason'
+grep -q 'contains nftables, which the GKI cannot use' "$work/android-nft.err" || { cat "$work/android-nft.err" >&2; fail 'nftables refusal reason'; }
 if grep -Eqx '(nftables|waydroid-nftrules)' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/android/packages"; then
 	fail 'Android package set lists an nftables package'
 fi

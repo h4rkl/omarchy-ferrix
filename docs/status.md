@@ -12,7 +12,13 @@
   `pmos/android/packages` (waydroid, waydroid-openrc, lxc, dnsmasq, iptables,
   pipewire-pulse) to pmbootstrap. It refuses nftables and waydroid-nftrules
   because the GKI has no nftables, so waydroid-net.sh takes its
-  iptables-legacy path. The manifest records `android_runtime`.
+  iptables-legacy path. The manifest records `android_runtime`. A new,
+  explicit `FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE=kleaf-dev` validates the
+  rootfs against the Kleaf GKI dist that dev-compose actually uses, and
+  records `route_id development-google-kleaf-gki`. The radio-first kernel
+  currently cannot be rebuilt against the current split contract ("no tegu
+  MP1.0 overlay source"), so the default radio-first rootfs build is blocked
+  at HEAD.
 - Staging: `dev-compose.py --android` checks that the base rootfs has the
   package set. It verifies the QEMU route's pinned Waydroid zips, the unpacked
   images (via `images.json`) and the Fulguris APK against `tools/android/*.pins`

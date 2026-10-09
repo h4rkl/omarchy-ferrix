@@ -37,6 +37,11 @@ rootfs_uuid=${FERRIX_PIXEL9A_ROOTFS_UUID:-9a9a9a9a-9a9a-49a9-9a9a-9a9a9a9a9a9a}
 rootfs_password=${FERRIX_PIXEL9A_ROOTFS_PASSWORD:-}
 android=${FERRIX_PIXEL9A_ANDROID:-0}
 android_packages="$pmos_dir/android/packages"
+# The kernel the rootfs will be composed with. radio-first (default) is the
+# selected WWAN/SIT route; kleaf-dev explicitly pairs the rootfs with the
+# Google Kleaf GKI dist that tools/pixel-9a/dev-compose.py composes (the
+# development flash route). Never an implicit fallback.
+kernel_route=${FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE:-radio-first}
 manifest_status=''
 tab=$(printf '\t')
 
@@ -73,8 +78,13 @@ manifest_begin() {
 		printf 'codename\ttegu\n'
 		printf 'hardware_revision\tMP1.0\n'
 		printf 'substrate\tpostmarketos\n'
-		printf 'route_id\texperimental-linux-google-tegu-s5300-wwan\n'
-		printf 'kernel_backend\tlinux-google-tegu-wwan\n'
+		if [ "$kernel_route" = kleaf-dev ]; then
+			printf 'route_id\tdevelopment-google-kleaf-gki\n'
+			printf 'kernel_backend\tgoogle-kleaf-cpif\n'
+		else
+			printf 'route_id\texperimental-linux-google-tegu-s5300-wwan\n'
+			printf 'kernel_backend\tlinux-google-tegu-wwan\n'
+		fi
 		printf 'pmaports_commit\t%s\n' "${FERRIX_PIXEL9A_PMAPORTS_COMMIT:-$(pinned_pmaports_commit)}"
 		printf 'pmaports_channel\t%s\n' "$(pinned_pmaports_channel)"
 		printf 'pmaports_branch\t%s\n' "$(pinned_pmaports_branch)"
@@ -176,6 +186,10 @@ check_static_inputs() {
 	case "$android" in
 		0|1) ;;
 		*) die "FERRIX_PIXEL9A_ANDROID must be 0 or 1: $android" ;;
+	esac
+	case "$kernel_route" in
+		radio-first|kleaf-dev) ;;
+		*) die "FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE must be radio-first or kleaf-dev: $kernel_route" ;;
 	esac
 	for file in pmbootstrap.cfg channels.cfg; do
 		required_file "$pmos_dir/$file"
@@ -431,9 +445,12 @@ validate_radio_kernel_dist() {
 
 validate_kernel_dist() {
 	# The selected target package is paired with the radio-first WWAN/SIT
-	# backend. Keep the Google Kleaf/cpif validator available only for the
-	# independent legacy workflow, never as an implicit fallback here.
-	validate_radio_kernel_dist
+	# backend. The Google Kleaf/cpif validator is used only when the caller
+	# explicitly selects the development route's kernel, never as a fallback.
+	case "$kernel_route" in
+		radio-first) validate_radio_kernel_dist ;;
+		kleaf-dev) validate_google_kernel_dist ;;
+	esac
 }
 
 validate_product_dir() {
@@ -867,6 +884,10 @@ write_built_manifest() {
 		printf 'android_runtime\tnone\n' >>"$manifest_tmp"
 	fi
 	manifest_input product_manifest "$product/manifest.tsv"
+	if [ "$kernel_route" = kleaf-dev ]; then
+		manifest_input kleaf_kernel_manifest \
+			"$(kernel_manifest_path "${FERRIX_PIXEL9A_KERNEL_DIST:-"$out_root/pixel-9a/kernel/tegu/dist"}")"
+	fi
 	manifest_artifact deviceinfo "$package_dir/deviceinfo"
 	manifest_artifact kernel-cmdline.conf "$package_dir/kernel-cmdline.conf"
 	manifest_artifact modules-initfs "$package_dir/modules-initfs"
