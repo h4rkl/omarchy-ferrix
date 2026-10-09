@@ -67,6 +67,21 @@ export FERRIX_APPD_SOCKET=/run/ferrix/ferrix-appd.sock
 # E.164 normalization region for the synthetic fixtures and the target id.
 export FERRIX_DEFAULT_REGION=US
 export FERRIX_TARGET=qemu-aarch64
+# relay_log FILE all|json: follow FILE from its first line onto the serial
+# console, one whole line per write(2). Several processes share the console,
+# and busybox `tail -f` copies whatever each read returns, so a record could
+# leave in two pieces with another writer's line landing between them (seen
+# as `"event":"home-ready/bin/sh: ","tiles":8` and as an `input-ready` line
+# inside a telephony record). `read` waits for the newline and busybox
+# `echo` writes its whole output at once. `json` keeps only JSON records (the
+# compositor's tracing lines stay in its log file).
+relay_log() {
+  tail -n +1 -f "$1" 2>/dev/null | while IFS= read -r line; do
+    case "$2:$line" in
+      json:'{'*|all:*) echo "$line" ;;
+    esac
+  done >/dev/console 2>&1 &
+}
 # supervise NAME CMD...: restart the daemon on a non-zero exit with a small
 # backoff (1,2,4,8 s), recording every restart. A clean exit ends supervision.
 supervise() {
@@ -137,7 +152,7 @@ if ! grep -q 'ferrix.graphics=on' /proc/cmdline; then
       sleep 0.1
     done
     # One reader from the start of the log so no record is skipped.
-    tail -n +1 -f "$appd_log" >/dev/console 2>&1 &
+    relay_log "$appd_log" all
     if [ "$appd_ready" = true ]; then
       printf '{"evidence":"QEMU","event":"appd-headless","status":"ok","autostart":false,"socket":"%s"}\n' "$FERRIX_APPD_SOCKET"
     else
@@ -266,14 +281,12 @@ EOF
     if [ "$client_ready" = true ] && kill -0 "$appd_pid" 2>/dev/null; then
       # One reader from the start of the log so no record between the
       # readiness check and the follow is skipped.
-      tail -n +1 -f "$appd_log" >/dev/console 2>&1 &
+      relay_log "$appd_log" all
       if [ "$shell" = ferrix-shell ]; then
         # Replay the compositor's JSON evidence records and follow new ones
         # (one reader from the start of the log, so nothing is skipped; the
         # tracing lines stay in the log file only).
-        tail -n +1 -f "$comp_log" 2>/dev/null | while read -r line; do
-          case "$line" in '{'*) printf '%s\n' "$line" ;; esac
-        done >/dev/console 2>&1 &
+        relay_log "$comp_log" json
       else
         grep -i 'input\|libinput' /run/weston.log || true
         grep -E 'video modes|preferred|current' /run/weston.log || true

@@ -132,9 +132,14 @@ pub fn record(evidence: Evidence, event: &str, fields: &[(&str, Value)]) -> Stri
 /// Print a record on stdout and flush so init sees it immediately.
 pub fn emit(line: &str) {
     use std::io::Write;
-    let stdout = std::io::stdout();
-    let mut lock = stdout.lock();
-    let _ = writeln!(lock, "{line}");
+    // One write(2) for the whole line: the log is replayed onto a serial
+    // console other processes also write to.
+    let mut whole = String::with_capacity(line.len() + 1);
+    whole.push_str(line);
+    whole.push('\n');
+    let mut lock = std::io::stdout().lock();
+    let _ = lock.flush();
+    let _ = lock.write_all(whole.as_bytes());
     let _ = lock.flush();
 }
 

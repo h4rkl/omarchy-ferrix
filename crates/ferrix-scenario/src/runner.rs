@@ -16,6 +16,7 @@ use ferrix_mock_control::Ack;
 use serde_json::{Value, json};
 
 use crate::matcher::{is_subset, match_in_order};
+use crate::records::RecordParser;
 use crate::scenario::{Scenario, Service, Step};
 
 /// Where the session lives and which log carries its records.
@@ -122,14 +123,6 @@ impl LogTail {
     }
 }
 
-fn parse_record(line: &str) -> Option<Value> {
-    // Serial lines may carry a kernel/console prefix before the JSON record.
-    let start = line.find('{')?;
-    serde_json::from_str::<Value>(&line[start..])
-        .ok()
-        .filter(Value::is_object)
-}
-
 fn send_with_retry(socket: &Path, command: &Value, timeout: Duration) -> Result<Ack, String> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -225,12 +218,13 @@ fn run_step(
         ));
     }
     let mut records: Vec<Value> = Vec::new();
+    // Tolerant of console noise and of a record split by another writer's
+    // line (see records.rs); fresh per step, like the records themselves.
+    let mut parser = RecordParser::new();
     let deadline = started + timeout;
     loop {
         for line in tail.new_lines()? {
-            if let Some(record) = parse_record(&line) {
-                records.push(record);
-            }
+            records.extend(parser.push(&line));
         }
         match match_in_order(&records, &step.expect) {
             Ok(found) => {
@@ -606,13 +600,50 @@ timeout_ms = 500
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Appends the given raw lines to the log on the first command.
+    struct Raw {
+        log: PathBuf,
+        lines: Mutex<Option<Vec<String>>>,
+    }
+
+    impl Handler for Raw {
+        fn handle(&self, _line: &str) -> Ack {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&self.log)
+                .unwrap();
+            for line in self.lines.lock().unwrap().take().unwrap_or_default() {
+                writeln!(file, "{line}").unwrap();
+            }
+            Ack::ok("incoming-call", vec![], json!({}))
+        }
+    }
+
     #[test]
-    fn serial_prefixes_are_tolerated() {
-        assert_eq!(
-            parse_record("[    1.234] {\"event\":\"x\"}").unwrap()["event"],
-            "x"
-        );
-        assert!(parse_record("plain text").is_none());
-        assert!(parse_record("[1] not json {").is_none());
+    fn a_record_split_by_another_writer_still_matches() {
+        let (dir, mode) = workspace("split");
+        let ringing =
+            json!({"evidence":"mock","event":"telephony-event","state":"ringing"}).to_string();
+        let injected = r#"{"evidence":"mock","event":"input-ready","capability":"pointer"}"#;
+        let cut = ringing.find("\"state\"").unwrap();
+        // HEAD{injected}\nTAIL\n, then the next record.
+        let raw = Raw {
+            log: mode.log().to_path_buf(),
+            lines: Mutex::new(Some(vec![
+                format!("{}{injected}", &ringing[..cut]),
+                ringing[cut..].to_owned(),
+                json!({"evidence":"mock","event":"telephony-event","state":"active"}).to_string(),
+            ])),
+        };
+        let socket = mode.socket_for(Service::Telephony);
+        let resolved = ChannelPath::Explicit(socket).resolve().unwrap();
+        ferrix_mock_control::spawn(resolved, Arc::new(raw), Arc::new(Quiet)).unwrap();
+        let first_step: Vec<&str> = SCENARIO.split("[[step]]").take(2).collect();
+        let scenario = Scenario::parse(&first_step.join("[[step]]")).unwrap();
+        let outcome = run(&scenario, &mode, &dir).unwrap();
+        assert!(outcome.passed, "{:?}", outcome.reason);
+        assert_eq!(outcome.steps[0].matched[0]["state"], "ringing");
+        assert_eq!(outcome.steps[0].matched[1]["state"], "active");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

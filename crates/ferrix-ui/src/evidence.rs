@@ -57,9 +57,69 @@ impl fmt::Display for SessionEvidence {
 }
 
 /// Prints one complete record line and flushes stdout.
+///
+/// Every record carries the emitting process's identity (see
+/// [`process_identity`]) unless it already names a `process`, so records
+/// from the many surfaces that share one log (`theme-loaded`, `input-ready`,
+/// `cursor-ready`, ...) no longer have to be attributed by log order. The
+/// line goes out in a single `write(2)`: the guest relays these logs onto a
+/// serial console that other processes write to, and a record written in
+/// pieces can have another writer's line land in the middle of it.
 pub fn emit(record: String) {
-    println!("{record}");
-    let _ = std::io::stdout().flush();
+    let mut line = with_identity(&record, process_identity());
+    line.push('\n');
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.flush();
+    let _ = stdout.write_all(line.as_bytes());
+    let _ = stdout.flush();
+}
+
+/// Identity of this process as JSON members with a leading comma:
+/// `,"process":"<argv0 basename>","pid":<pid>` plus `,"app_id":"<id>"` when
+/// `FERRIX_APP_ID` is set (as `ferrix-appd` does for every app it launches).
+/// Inside an application sandbox `pid` is the pid in the app's own PID
+/// namespace; `app_id` is the stable discriminator there.
+pub fn process_identity() -> &'static str {
+    static VALUE: OnceLock<String> = OnceLock::new();
+    VALUE.get_or_init(|| {
+        let process = std::env::args_os()
+            .next()
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_exe().ok())
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "unknown".to_owned());
+        let app_id = std::env::var("FERRIX_APP_ID")
+            .ok()
+            .filter(|id| !id.is_empty());
+        identity_members(&process, std::process::id(), app_id.as_deref())
+    })
+}
+
+fn identity_members(process: &str, pid: u32, app_id: Option<&str>) -> String {
+    let mut out = format!(",\"process\":\"{}\",\"pid\":{pid}", json_escape(process));
+    if let Some(app_id) = app_id {
+        out.push_str(&format!(",\"app_id\":\"{}\"", json_escape(app_id)));
+    }
+    out
+}
+
+/// Inserts `identity` (members with a leading comma) before the closing brace
+/// of a one-line JSON object. Records that already carry a `process` member,
+/// and anything that is not an object, pass through unchanged.
+pub fn with_identity(record: &str, identity: &str) -> String {
+    let trimmed = record.trim_end();
+    if !trimmed.starts_with('{') || !trimmed.ends_with('}') || trimmed.contains("\"process\":") {
+        return record.to_owned();
+    }
+    let body = trimmed[..trimmed.len() - 1].trim_end();
+    if body == "{" {
+        // Empty object: no member before ours, so no leading comma.
+        return format!("{{{}}}", identity.trim_start_matches(','));
+    }
+    format!("{body}{identity}}}")
 }
 
 /// Escapes a string for inclusion inside a JSON string literal.
@@ -93,6 +153,38 @@ mod tests {
         assert_eq!(json_escape("a\"b\\c\n"), "a\\\"b\\\\c\\u000a");
         assert_eq!(json_opt_str(None), "null");
         assert_eq!(json_opt_str(Some("x")), "\"x\"");
+    }
+
+    #[test]
+    fn records_gain_the_process_identity_once() {
+        let identity = identity_members("ferrix-settings", 7, Some("org.ferrix.settings"));
+        assert_eq!(
+            identity,
+            r#","process":"ferrix-settings","pid":7,"app_id":"org.ferrix.settings""#
+        );
+        assert_eq!(
+            with_identity(r#"{"evidence":"QEMU","event":"theme-loaded"}"#, &identity),
+            r#"{"evidence":"QEMU","event":"theme-loaded","process":"ferrix-settings","pid":7,"app_id":"org.ferrix.settings"}"#
+        );
+        assert_eq!(
+            with_identity("{ }", r#","process":"x","pid":1"#),
+            r#"{"process":"x","pid":1}"#
+        );
+        // Already attributed, or not an object: unchanged.
+        let attributed = r#"{"event":"x","process":"other"}"#;
+        assert_eq!(with_identity(attributed, &identity), attributed);
+        assert_eq!(with_identity("plain text", &identity), "plain text");
+        assert_eq!(
+            identity_members("ferrix-shell", 42, None),
+            r#","process":"ferrix-shell","pid":42"#
+        );
+    }
+
+    #[test]
+    fn process_identity_names_this_process() {
+        let identity = process_identity();
+        assert!(identity.starts_with(",\"process\":\""));
+        assert!(identity.contains(&format!("\"pid\":{}", std::process::id())));
     }
 
     #[test]

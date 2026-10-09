@@ -32,9 +32,14 @@ pub fn runtime_evidence(nested: bool) -> String {
 
 /// Prints one JSON record per line and flushes, so serial captures are exact.
 pub fn emit(value: &Value) {
+    // One write(2) per record: several guest processes share the serial
+    // console, and a record written in pieces can be split by another
+    // writer's line. Serialize first, then hand over the whole line.
+    let mut line = serde_json::to_vec(value).unwrap_or_default();
+    line.push(b'\n');
     let mut stdout = std::io::stdout().lock();
-    let _ = serde_json::to_writer(&mut stdout, value);
-    let _ = stdout.write_all(b"\n");
+    let _ = stdout.flush();
+    let _ = stdout.write_all(&line);
     let _ = stdout.flush();
 }
 

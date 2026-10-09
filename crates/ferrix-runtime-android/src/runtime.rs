@@ -1,6 +1,7 @@
 //! [`AndroidRuntime`]: the [`ferrix_app_runtime_api::Runtime`] for
 //! [`RuntimeKind::Android`], generic over an [`AndroidHost`].
 
+use std::io::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -90,7 +91,13 @@ impl AndroidRuntime {
                 target.insert(key.clone(), value.clone());
             }
         }
-        println!("{record}");
+        // One write(2) for the whole line so another writer sharing the log
+        // cannot land inside it.
+        let line = format!("{record}\n");
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.flush();
+        let _ = stdout.write_all(line.as_bytes());
+        let _ = stdout.flush();
     }
 
     /// Parses and validates the daemon-private `launch` object.

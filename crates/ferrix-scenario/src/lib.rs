@@ -7,6 +7,7 @@
 //! product interface or a physical-device control.
 
 pub mod matcher;
+pub mod records;
 pub mod runner;
 pub mod scenario;
 
