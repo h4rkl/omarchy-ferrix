@@ -13,6 +13,9 @@ width = 1080
 height = 2424
 scale = 1.0
 orientation = "portrait"
+# The exynos DPU reads 32-bit DRM fourccs byte-reversed (AB24 as RA24);
+# verified with libdrm modetest colour bars on this exact target.
+scanout_byte_order = "reversed"
 
 [input]
 touch = true

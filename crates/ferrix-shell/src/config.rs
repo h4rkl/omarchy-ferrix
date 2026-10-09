@@ -8,7 +8,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use ferrix_hardware_api::Orientation;
-use ferrix_target_profile::Profile;
+use ferrix_target_profile::{Profile, ScanoutByteOrder};
 
 /// Panel size in physical pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +72,8 @@ pub struct ShellConfig {
     pub orientation: Orientation,
     pub scale: f64,
     pub touch: bool,
+    /// Display controller fourcc byte order from the target profile.
+    pub scanout_byte_order: ScanoutByteOrder,
     pub socket_name: String,
     /// `ferrix_appd` socket the compositor links to (with retries); `None` disables
     /// the link and the home gesture falls back to the oldest mapped window.
@@ -105,6 +107,7 @@ impl ShellConfig {
             orientation: profile.display.orientation,
             scale: f64::from(profile.display.scale),
             touch: profile.input.touch,
+            scanout_byte_order: profile.display.scanout_byte_order,
             socket_name: socket_name.unwrap_or("wayland-0").to_owned(),
             appd_socket: None,
         }

@@ -15,6 +15,8 @@ pub mod appd_link;
 pub mod input;
 pub mod render;
 #[cfg(feature = "udev")]
+mod scanout;
+#[cfg(feature = "udev")]
 pub mod udev;
 #[cfg(feature = "nested")]
 pub mod winit;

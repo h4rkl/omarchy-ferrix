@@ -44,6 +44,29 @@ pub struct DisplaySection {
     pub height: u32,
     pub scale: f32,
     pub orientation: Orientation,
+    /// How the display controller reads 32-bit DRM fourccs. Optional; absent
+    /// means the DRM standard.
+    #[serde(default, skip_serializing_if = "ScanoutByteOrder::is_standard")]
+    pub scanout_byte_order: ScanoutByteOrder,
+}
+
+/// Byte order the display controller applies to 32-bit DRM fourccs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScanoutByteOrder {
+    /// Buffers are read as the DRM fourcc defines (little-endian packing).
+    #[default]
+    Standard,
+    /// The controller reads each 32-bit fourcc byte-reversed (AB24 as RA24),
+    /// as the Pixel 9a exynos DPU does; the compositor registers the reversed
+    /// code so the rendered bytes display correctly.
+    Reversed,
+}
+
+impl ScanoutByteOrder {
+    pub fn is_standard(&self) -> bool {
+        *self == Self::Standard
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -33,7 +33,9 @@ use smithay::{
     utils::DeviceFd,
 };
 
-use super::{Shell, init_tracing, output_mode, render, rotation_to_transform};
+use super::{
+    Shell, init_tracing, output_mode, render, rotation_to_transform, scanout::ScanoutExporter,
+};
 use crate::{
     Failure,
     config::ShellConfig,
@@ -41,7 +43,7 @@ use crate::{
     layout::OutputLayout,
 };
 
-type ShellCompositor = DrmCompositor<DumbAllocator, DrmDeviceFd, (), DrmDeviceFd>;
+type ShellCompositor = DrmCompositor<DumbAllocator, ScanoutExporter, (), DrmDeviceFd>;
 
 /// Connector, CRTC and mode chosen for the pinned geometry.
 struct Target {
@@ -226,6 +228,7 @@ pub fn run(
     // The plan was computed for the requested geometry; if the connector only
     // offered another mode, re-plan so the logical size matches scan-out.
     let plan = OutputLayout::plan(u32::from(mode_w), u32::from(mode_h), config.orientation);
+    let scanout_byte_order = config.scanout_byte_order;
     output.change_current_state(
         Some(wl_mode),
         Some(rotation_to_transform(plan.rotation)),
@@ -272,7 +275,7 @@ pub fn run(
         surface,
         Some(planes),
         DumbAllocator::new(fd.clone()),
-        fd.clone(),
+        ScanoutExporter::new(fd.clone(), scanout_byte_order),
         color_formats,
         renderer_formats,
         drm.cursor_size(),
