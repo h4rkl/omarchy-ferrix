@@ -20,6 +20,8 @@ pub enum Target {
     /// Forget the saved profile at index.
     Profile(usize),
     PassField,
+    /// Show/hide toggle beside the passphrase field.
+    PassReveal,
     PassConnect,
     PassCancel,
     Key(Key),
@@ -130,10 +132,21 @@ impl Layout {
 
     pub fn pass_field_rect(&self) -> Rect {
         let s = |v| self.s(v);
+        let reveal = self.pass_reveal_rect();
         Rect {
             x: s(48),
             y: s(900),
-            w: self.w() - s(96),
+            w: reveal.x - s(16) - s(48),
+            h: s(100),
+        }
+    }
+
+    pub fn pass_reveal_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: self.w() - s(48) - s(180),
+            y: s(900),
+            w: s(180),
             h: s(100),
         }
     }
@@ -235,6 +248,9 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
                 if contains(l.pass_field_rect(), position) {
                     return Some(Target::PassField);
                 }
+                if contains(l.pass_reveal_rect(), position) {
+                    return Some(Target::PassReveal);
+                }
                 if contains(l.pass_connect_rect(), position) {
                     return Some(Target::PassConnect);
                 }
@@ -288,6 +304,7 @@ pub fn activate(model: &mut Model, target: Target) {
             }
         }
         Target::PassField => {}
+        Target::PassReveal => model.passphrase_shown = !model.passphrase_shown,
         Target::PassConnect => {
             if let Err(reason) = model.submit_passphrase() {
                 model.last_error = Some(reason);
@@ -444,6 +461,14 @@ mod tests {
             tap(&mut input, &mut m, center(r));
         }
         assert_eq!(m.passphrase, "mockpass");
+        // Masked by default; the toggle reveals and hides it again.
+        assert!(!m.passphrase_shown);
+        tap(&mut input, &mut m, center(l.pass_reveal_rect()));
+        assert!(m.passphrase_shown);
+        assert_eq!(m.passphrase, "mockpass", "toggling does not edit");
+        tap(&mut input, &mut m, center(l.pass_reveal_rect()));
+        assert!(!m.passphrase_shown);
+        tap(&mut input, &mut m, center(l.pass_reveal_rect()));
         tap(&mut input, &mut m, center(l.pass_connect_rect()));
         assert_eq!(
             m.pending.pop(),
@@ -454,6 +479,13 @@ mod tests {
         );
         assert!(!keyboard_visible(&m));
         tap(&mut input, &mut m, center(aps[2]));
+        assert!(!m.passphrase_shown, "a new prompt starts masked");
+        // Hardware Shift/Caps Lock reach the passphrase with their case.
+        let shift = ferrix_ui::keymap::Modifiers::from_xkb(0x1, 0);
+        for (code, mods) in [(25, shift), (30, Default::default()), (2, shift)] {
+            key_press(&mut m, ferrix_ui::keymap::text_key(code, mods).unwrap());
+        }
+        assert_eq!(m.passphrase, "Pa!");
         tap(&mut input, &mut m, center(l.pass_cancel_rect()));
         assert_eq!(m.passphrase_for, None);
         tap(&mut input, &mut m, center(l.profile_rects(1)[0]));

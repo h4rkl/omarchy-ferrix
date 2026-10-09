@@ -10,7 +10,7 @@ use ferrix_ui::widgets::{
     page_header, section_label, text_field, wrap_text,
 };
 
-use crate::interaction::{Input, Layout, Target, keyboard_visible};
+use crate::interaction::{Input, Layout, Target, keyboard_state, keyboard_visible};
 use crate::model::{Focus, Link, Model, Page};
 
 pub fn compose(
@@ -55,7 +55,7 @@ pub fn compose(
             Some(Target::Key(k)) => Some(k),
             _ => None,
         };
-        keyboard(&mut c, ty, &model.osk, pressed);
+        keyboard(&mut c, ty, &keyboard_state(model), pressed);
     }
     gesture_pill(&mut c, input.pressed == Some(Target::Home));
     c

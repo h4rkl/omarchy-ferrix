@@ -291,7 +291,7 @@ impl ClientHandler for Phone {
     fn key(&mut self, code: u32, mods: Modifiers) -> bool {
         // A hardware keyboard types into the dialer: digits, `*`, `#`, `+`,
         // backspace, and Enter to call.
-        match keymap::key_for(code, mods.shift) {
+        match keymap::text_key(code, mods) {
             Some(Key::Char(ch)) if ch.is_ascii_digit() || matches!(ch, '*' | '#' | '+') => {
                 self.model.key(ch)
             }
