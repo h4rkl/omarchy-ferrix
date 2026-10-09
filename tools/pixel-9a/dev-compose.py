@@ -279,7 +279,8 @@ def main():
     mkbootimg = args.kernel_source / "tools/mkbootimg/mkbootimg.py"
     avbtool = args.kernel_source / "prebuilts/kernel-build-tools/linux-x86/bin/avbtool"
     img2simg = args.kernel_source / "prebuilts/kernel-build-tools/linux-x86/bin/img2simg"
-    for tool in (mkbootimg, avbtool, img2simg):
+    lz4 = args.kernel_source / "prebuilts/kernel-build-tools/linux-x86/bin/lz4"
+    for tool in (mkbootimg, avbtool, img2simg, lz4):
         if not tool.is_file():
             die(f"tool missing from the Kleaf source tree: {tool}")
     for tool in ("debugfs", "e2fsck", "depmod"):
@@ -298,8 +299,20 @@ def main():
             shutil.copyfile(verified(name), stage / name)
 
         reboot_helper = build_reboot_helper(reboot_source, work)
-        initramfs = make_initramfs(args.base_rootfs, init_script, modprobe_script,
-                                   reboot_helper, work)
+        # The bootloader concatenates the vendor_boot, vendor_kernel_boot, and
+        # init_boot ramdisks. Kleaf's vendor_kernel_boot ramdisk is lz4-legacy,
+        # which has no end marker: the kernel's unlz4 reads whatever follows as
+        # another chunk, so every later segment must be lz4-legacy as well or
+        # unpacking stops before /init exists (stock ramdisks are all lz4-legacy).
+        def lz4_legacy(source):
+            output = source.with_suffix(source.suffix + ".lz4")
+            run(lz4, "-l", "-12", "--favor-decSpeed", "-q", source, output)
+            if output.read_bytes()[:4] != b"\x02\x21\x4c\x18":
+                die(f"lz4 did not produce a legacy-format stream: {output}")
+            return output
+
+        initramfs = lz4_legacy(make_initramfs(args.base_rootfs, init_script, modprobe_script,
+                                              reboot_helper, work))
         run(sys.executable, mkbootimg, "--header_version", "4",
             "--ramdisk", initramfs, "--output", stage / "init_boot.img")
 
@@ -309,6 +322,7 @@ def main():
             cmdline += f" ferrix.checkpoint={args.checkpoint}"
         empty = work / "vendor-ramdisk.cpio"
         empty.write_bytes(Cpio().finish())
+        empty = lz4_legacy(empty)
         run(sys.executable, mkbootimg, "--header_version", "4", "--pagesize", "2048",
             "--vendor_cmdline", cmdline, "--vendor_ramdisk", empty,
             "--vendor_bootconfig", bootconfig, "--vendor_boot", stage / "vendor_boot.img")
