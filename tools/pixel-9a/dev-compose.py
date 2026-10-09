@@ -365,12 +365,17 @@ PRODUCT_BINARIES = (
 )
 
 
-def integrate_rootfs(image, work, package, profile, product):
+def integrate_rootfs(image, work, package, profile, product, reboot_helper):
     """Bring the base rootfs up to date with this checkout: product binaries,
-    profile and app catalog, the device package's service scripts, and the
-    GKI userland patches. Returns the files written, for the manifest."""
+    profile and app catalog, the device package's service scripts, the
+    Fastboot reboot helper, and the GKI userland patches. Returns the files
+    written, for the manifest."""
     editor = RootfsEditor(image, work)
     written = []
+    # The same helper the initramfs carries, so a booted system can return to
+    # bootloader Fastboot (busybox reboot cannot pass a reboot reason).
+    editor.put(reboot_helper.read_bytes(), "/usr/sbin/reboot-bootloader", 0o755)
+    written.append("/usr/sbin/reboot-bootloader")
     if product is not None:
         for name in PRODUCT_BINARIES:
             editor.put((product / name).read_bytes(), f"/usr/bin/{name}", 0o755)
@@ -521,7 +526,7 @@ def main():
         shutil.copyfile(args.base_rootfs, rootfs)
         install_modules(rootfs, modules, release)
         integrated = integrate_rootfs(rootfs, work, package, args.target_dir / "dev/profile.toml",
-                                      args.product_dir)
+                                      args.product_dir, reboot_helper)
         run(img2simg, rootfs, stage / "userdata.img")
         shutil.rmtree(work)
 
