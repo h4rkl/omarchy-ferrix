@@ -252,6 +252,23 @@ impl Recorder {
         );
     }
 
+    /// An intent was opened. Never carries the intent's number.
+    pub fn app_intent(
+        &self,
+        kind: ferrix_app_api::IntentKind,
+        handler: &AppId,
+        delivery: crate::service::IntentDelivery,
+    ) {
+        self.emit(
+            "app-intent",
+            [
+                ("kind", Value::from(kind.name())),
+                ("handler", Value::from(handler.as_str())),
+                ("delivery", Value::from(delivery.name())),
+            ],
+        );
+    }
+
     pub fn app_foreground(&self, app: &AppId) {
         self.emit("app-foreground", [("app", Value::from(app.as_str()))]);
     }

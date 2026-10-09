@@ -1,15 +1,19 @@
-//! Omarchy Ferrix Settings: an independent Wayland client for network and
-//! radio settings over `ferrix-networkd` and `ferrix-telephonyd`.
+//! Omarchy Ferrix Settings: an independent Wayland client for Wi-Fi,
+//! Bluetooth, mobile network, display, and radio settings over
+//! `ferrix-networkd`, `ferrix-telephonyd`, and `ferrix-core`.
 //!
 //! Usage:
 //!   ferrix-settings [--target ID]                    # guest/nested: Wayland
 //!   ferrix-settings --preview out.ppm [--page NAME] [--size WxH]
 //!
-//! Pages: `network` (default), `radios`, `about`. `--target` (or
-//! `FERRIX_TARGET`) names the target on the About page. Records:
-//! `app-context`, `settings-frame`, `ui-state {page, state}`,
-//! `settings-action {action, status}`, `network-link`, `telephony-link`;
-//! never SSIDs, passphrases, APNs, or addresses. The
+//! Pages: `root` (default, the category list), `network`, `bluetooth`,
+//! `mobile`, `display`, `radios`, `about`; previews also accept
+//! `bluetooth-absent` and `mobile-no-sim` for the honest absent states.
+//! `--target` (or `FERRIX_TARGET`) names the target on the About page.
+//! Records: `app-context`, `settings-frame`, `ui-state {page, state}`,
+//! `settings-action {action, service, status}`, `network-link`,
+//! `telephony-link`, `core-link`; never SSIDs, passphrases, APNs, device
+//! names, or addresses. The
 //! `FERRIX_TELEPHONY_APN` launch-environment contract is an optional
 //! non-secret runtime setting used when the selected modem plugin requires an
 //! explicit carrier APN.
@@ -17,6 +21,7 @@
 mod interaction;
 mod model;
 mod screen;
+mod system;
 
 #[cfg(target_os = "linux")]
 mod app;
@@ -65,22 +70,50 @@ fn target_from_env() -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-fn preview_model(page: Page, target: &str) -> Model {
+/// Preview page names: every [`Page`] plus the two absent-state variants.
+const PREVIEW_PAGES: &str =
+    "root, network, bluetooth, bluetooth-absent, mobile, mobile-no-sim, display, radios, about";
+
+fn preview_model(name: &str, target: &str) -> Option<Model> {
+    let (page, absent) = match name {
+        "bluetooth-absent" => (Page::Bluetooth, true),
+        "mobile-no-sim" => (Page::Mobile, true),
+        other => (Page::parse(other)?, false),
+    };
     let mut model = Model::new();
     model.target = target.to_owned();
     model.apply_network(Feed::Snapshot {
         state: model::preview_network(true),
         evidence: "mock".into(),
     });
-    let mut tele = ferrix_telephony_api::TelephonyState::new();
-    tele.modem = ferrix_telephony_api::ModemState::Ready;
-    tele.radio = ferrix_telephony_api::RadioPower::On;
+    let mut tele = model::preview_telephony();
+    if absent && page == Page::Mobile {
+        tele.sim = ferrix_telephony_api::SimState::Absent;
+        tele.registration = ferrix_telephony_api::Registration::Unknown;
+        tele.operator = None;
+        tele.signal = ferrix_telephony_api::Signal::bars(0);
+    }
     model.apply_telephony(ferrix_telephony_protocol::Update::Snapshot(
         ferrix_telephony_protocol::StateView::Redacted(tele.redacted()),
     ));
     model.tele_evidence = Some("mock".to_owned());
+    let mut hw = system::preview_hardware();
+    if absent && page == Page::Bluetooth {
+        hw.bluetooth.present = false;
+        hw.bluetooth.enabled = false;
+    }
+    model.apply_core(ferrix_protocol::Feed::Snapshot {
+        target: target.to_owned(),
+        profile: "preview".to_owned(),
+        capabilities: system::preview_capabilities(),
+        state: hw,
+    });
     model.show(page);
-    model
+    model.pending.clear();
+    if model.bluetooth_block().is_ok() {
+        model.set_bluetooth_devices(Ok(system::preview_devices()));
+    }
+    Some(model)
 }
 
 fn main() -> ExitCode {
@@ -98,7 +131,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mut preview = None;
-    let mut page = "network".to_owned();
+    let mut page = "root".to_owned();
     let mut size = PREVIEW_SIZE;
     let mut target = target_from_env();
     let mut it = std::env::args().skip(1);
@@ -114,10 +147,9 @@ fn run() -> Result<(), String> {
     if let Some(path) = preview {
         theme::init("mock", None);
         emit(app_context_record("mock"));
-        let page = Page::parse(&page)
-            .ok_or_else(|| format!("unknown --page {page:?}; use network, radios, about"))?;
+        let model = preview_model(&page, &target)
+            .ok_or_else(|| format!("unknown --page {page:?}; use {PREVIEW_PAGES}"))?;
         let ty = Type::load()?;
-        let model = preview_model(page, &target);
         let canvas = screen::compose(
             &ty,
             size,
@@ -131,7 +163,7 @@ fn run() -> Result<(), String> {
         std::fs::write(&path, canvas.ppm_bytes()).map_err(|e| e.to_string())?;
         emit(format!(
             "{{\"evidence\":\"mock\",\"event\":\"settings-preview\",\"page\":\"{}\",\"state\":\"{}\",\"path\":\"{}\",\"width\":{},\"height\":{}}}",
-            page.name(),
+            model.page.name(),
             json_escape(&model.state_name()),
             json_escape(&path),
             size.0,
@@ -159,10 +191,10 @@ mod tests {
     #[test]
     fn preview_pages_render_at_the_panel_size() {
         let ty = Type::load().unwrap();
-        for name in ["network", "radios", "about"] {
-            let page = Page::parse(name).unwrap();
-            let model = preview_model(page, "qemu-aarch64");
-            assert_eq!(model.page, page);
+        for name in PREVIEW_PAGES.split(", ") {
+            let model = preview_model(name, "qemu-aarch64").unwrap();
+            assert!(name.starts_with(model.page.name()), "{name}");
+            assert!(model.pending.is_empty(), "previews send nothing");
             let c = screen::compose(
                 &ty,
                 PREVIEW_SIZE,
@@ -174,5 +206,10 @@ mod tests {
             assert!(c.ppm_bytes().starts_with(b"P6\n1080 2340\n255\n"));
         }
         assert!(parse_size("10x0").is_err());
+        assert!(preview_model("bogus", "qemu-aarch64").is_none());
+        let absent = preview_model("bluetooth-absent", "x").unwrap();
+        assert_eq!(absent.state_name(), "no-controller");
+        let no_sim = preview_model("mobile-no-sim", "x").unwrap();
+        assert_eq!(no_sim.state_name(), "no-sim");
     }
 }

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ferrix_app_api::{AppError, AppIntent, IntentKind};
 use ferrix_app_protocol::{Client as AppdClient, ClientRole, Report};
 use ferrix_contacts_api::ContactsError;
 use ferrix_contacts_protocol::{Client, ClientKind, Reconnector};
@@ -118,6 +119,10 @@ impl Contacts {
         let (name, outcome): (&str, Result<(), Result<ContactsError, String>>) = match action {
             Action::Back => {
                 self.yield_foreground();
+                return;
+            }
+            Action::Open(intent) => {
+                self.open_intent(&intent);
                 return;
             }
             Action::Create(input) => (
@@ -243,6 +248,41 @@ impl Contacts {
         emit(format!(
             "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"ferrix-appd-unavailable\",\"app\":\"{APP_ID}\",\"reason\":\"{}\"}}",
             json_escape(reason)
+        ));
+    }
+
+    /// Asks `ferrix-appd` to open the dial/compose handler. The record
+    /// names the action only, never the number.
+    fn open_intent(&mut self, intent: &AppIntent) {
+        let action = match intent.kind() {
+            IntentKind::Dial => "call",
+            IntentKind::Compose => "message",
+            IntentKind::ShowCall => return,
+        };
+        let result = self.appd().map(|client| client.open(intent));
+        let (status, error) = match result {
+            Some(Ok(_)) => ("ok", None),
+            Some(Err(Ok(error))) => {
+                let text = match &error {
+                    AppError::NoHandler { .. } => "no app can open this".to_owned(),
+                    other => other.to_string(),
+                };
+                self.model.last_error = Some(text);
+                ("error", Some(error.to_string()))
+            }
+            Some(Err(Err(transport))) => {
+                self.appd = None;
+                self.model.last_error = Some("apps \u{b7} unavailable".to_owned());
+                ("unavailable", Some(transport))
+            }
+            None => {
+                self.model.last_error = Some("apps \u{b7} unavailable".to_owned());
+                ("unavailable", None)
+            }
+        };
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"contacts-action\",\"app\":\"{APP_ID}\",\"action\":\"{action}\",\"status\":\"{status}\",\"error\":{}}}",
+            json_opt_str(error.as_deref())
         ));
     }
 

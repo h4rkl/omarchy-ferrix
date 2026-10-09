@@ -30,7 +30,8 @@ note = "setup"
 [[step]]
 service = "telephony"
 command = { cmd = "incoming-call", number = "+15550100042" }
-expect = [ { event = "telephony-event", kind = "call-changed", call = { direction = "incoming", state = "ringing" } } ]
+expect = [ { event = "telephony-event", kind = "call-changed", call = { direction = "incoming", state = "ringing" } }, { event = "app-intent", kind = "show-call", handler = "org.ferrix.phone" } ]
+note = "ferrix-telephonyd asks ferrix-appd to raise the show-call handler (Phone), launched or already running"
 
 [[step]]
 service = "telephony"

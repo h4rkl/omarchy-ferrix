@@ -74,6 +74,7 @@ pub fn required_capability(request: &Request) -> &'static str {
         | Request::Resume { .. }
         | Request::Dtmf { .. }
         | Request::SetAudioRoute { .. }
+        | Request::SetMicMuted { .. }
         | Request::EnterPin { .. } => CAP_CALL,
         Request::SetRadioPower { .. } => CAP_RADIO,
         Request::SendSms { .. }
@@ -180,6 +181,7 @@ pub fn dispatch(
         Request::Resume { call_id } => call_reply(service.resume(&call_id)),
         Request::Dtmf { call_id, digit } => ok_reply(service.dtmf(&call_id, digit)),
         Request::SetAudioRoute { route } => ok_reply(service.set_audio_route(route)),
+        Request::SetMicMuted { muted } => ok_reply(service.set_mic_muted(muted)),
         Request::SetRadioPower { power } => ok_reply(service.set_radio_power(power)),
         Request::EnterPin { pin } => ok_reply(service.enter_pin(&pin)),
         Request::SendSms { to, body } => sms_reply(service.send_sms(&to, &body)),

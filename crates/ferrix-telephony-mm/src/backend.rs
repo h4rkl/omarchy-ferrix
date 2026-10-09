@@ -329,6 +329,7 @@ impl ModemManagerBackend {
                 audio: AudioRouteState {
                     active: AudioRoute::Earpiece,
                     available: Default::default(),
+                    muted: false,
                 },
                 ..BackendSnapshot::default()
             },
@@ -1289,6 +1290,13 @@ impl ModemBackend for ModemManagerBackend {
     /// here rather than imitated.
     fn set_audio_route(&self, _route: AudioRoute) -> Result<(), BackendError> {
         Err(BackendError::Unsupported(TelephonyFeature::AudioRoute))
+    }
+
+    /// Microphone mute belongs to the audio service (call uplink in the
+    /// voice path), not ModemManager; typed as unsupported here rather than
+    /// imitated until that adapter exists.
+    fn set_mic_muted(&self, _muted: bool) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported(TelephonyFeature::MicMute))
     }
 }
 

@@ -249,6 +249,15 @@ impl Recorder {
         );
     }
 
+    /// Outcome of asking `ferrix-appd` to raise the call handler.
+    pub fn attention(&self, status: &str, reason: Option<&str>) {
+        let mut fields = vec![("status", Value::from(status))];
+        if let Some(reason) = reason {
+            fields.push(("reason", Value::from(reason)));
+        }
+        self.emit("telephony-attention", fields);
+    }
+
     pub fn backend_lost(&self, reason: &str) {
         self.emit("telephony-backend-lost", [("reason", Value::from(reason))]);
     }

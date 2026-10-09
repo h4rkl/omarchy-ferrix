@@ -106,6 +106,7 @@ impl Default for MockTelephonyConfig {
                 TelephonyFeature::AudioRoute,
                 TelephonyFeature::SimPin,
                 TelephonyFeature::RadioPower,
+                TelephonyFeature::MicMute,
             ]
             .into_iter()
             .collect(),
@@ -166,6 +167,7 @@ impl MockTelephonyConfig {
                 ProfileTelephonyFeature::AudioRoute => TelephonyFeature::AudioRoute,
                 ProfileTelephonyFeature::SimPin => TelephonyFeature::SimPin,
                 ProfileTelephonyFeature::RadioPower => TelephonyFeature::RadioPower,
+                ProfileTelephonyFeature::MicMute => TelephonyFeature::MicMute,
             })
             .collect();
         // Without an explicit section the coarse summary decides whether the
@@ -310,6 +312,7 @@ impl MockModem {
                 .copied()
                 .unwrap_or_default(),
             available: config.audio_available.clone(),
+            muted: false,
         };
         let inner = Inner {
             modem: config.modem.clone(),
@@ -483,7 +486,11 @@ impl MockModem {
                 } else {
                     available.iter().next().copied().unwrap_or_default()
                 };
-                inner.audio = AudioRouteState { active, available };
+                inner.audio = AudioRouteState {
+                    active,
+                    available,
+                    muted: inner.audio.muted,
+                };
                 out.push(BackendEvent::Audio(inner.audio.clone()));
             }
             MockCommand::Tick { ms } => inner.tick(ms, &mut out),
@@ -681,6 +688,15 @@ impl Inner {
             state,
             end_reason,
         });
+        // Mute belongs to the call: it is cleared when the last live call
+        // ends so the next call starts with an open microphone.
+        if state == CallState::Ended
+            && self.audio.muted
+            && !self.calls.values().any(|c| c.state.is_live())
+        {
+            self.audio.muted = false;
+            out.push(BackendEvent::Audio(self.audio.clone()));
+        }
     }
 
     fn end_call(&mut self, handle: &CallHandle, reason: CallEndReason, out: &mut Emitter) {
@@ -1345,6 +1361,23 @@ impl ModemBackend for MockModem {
         }
         Ok(())
     }
+
+    fn set_mic_muted(&self, muted: bool) -> Result<(), BackendError> {
+        let mut inner = lock(&self.0);
+        if !inner.capabilities.contains(&TelephonyFeature::MicMute) {
+            return Err(BackendError::Unsupported(TelephonyFeature::MicMute));
+        }
+        if !inner.calls.values().any(|c| c.state.is_live()) {
+            return Err(BackendError::invalid_state("idle", "set-mic-muted"));
+        }
+        if inner.audio.muted != muted {
+            inner.audio.muted = muted;
+            let mut out = Emitter::default();
+            out.push(BackendEvent::Audio(inner.audio.clone()));
+            inner.flush(out);
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1716,7 +1749,9 @@ mod tests {
         assert_eq!(snapshot.access, AccessTechnology::Lte);
         assert_eq!(snapshot.signal.bars, 3);
         assert!(snapshot.capabilities.contains(&TelephonyFeature::Voice));
-        assert!(!snapshot.capabilities.contains(&TelephonyFeature::Data));
+        // The QEMU profile mirrors Settings' mobile-data toggle with a
+        // synthetic bearer; no carrier or device fact.
+        assert!(snapshot.capabilities.contains(&TelephonyFeature::Data));
     }
 
     #[test]
@@ -1991,6 +2026,48 @@ route = "speaker"
         // Ringing timer was cancelled by the answer: a long tick changes nothing.
         cmd(&modem, json!({"cmd":"tick","ms":RINGING_TIMEOUT_MS * 2}));
         assert!(call_states(&drain(&rx)).is_empty());
+    }
+
+    #[test]
+    fn mic_mute_is_per_call_and_clears_when_the_last_call_ends() {
+        let (modem, rx) = modem();
+        assert_eq!(
+            modem.set_mic_muted(true),
+            Err(BackendError::invalid_state("idle", "set-mic-muted"))
+        );
+        cmd(&modem, json!({"cmd":"incoming-call","number":NUMBER}));
+        modem.answer(&CallHandle::from("c1")).unwrap();
+        drain(&rx);
+        modem.set_mic_muted(true).unwrap();
+        assert!(modem.snapshot().audio.muted);
+        let audio = |events: &[BackendEvent]| -> Vec<bool> {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    BackendEvent::Audio(a) => Some(a.muted),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(audio(&drain(&rx)), [true]);
+        // Repeating the same value emits nothing.
+        modem.set_mic_muted(true).unwrap();
+        assert!(drain(&rx).is_empty());
+        // Route changes keep the mute.
+        modem.set_audio_route(AudioRoute::Speaker).unwrap();
+        assert!(modem.snapshot().audio.muted);
+        drain(&rx);
+        cmd(&modem, json!({"cmd":"remote-hangup"}));
+        assert_eq!(audio(&drain(&rx)), [false], "mute cleared at call end");
+        assert!(!modem.snapshot().audio.muted);
+
+        let mut config = MockTelephonyConfig::default();
+        config.features.remove(&TelephonyFeature::MicMute);
+        let modem = MockModem::new(config);
+        assert_eq!(
+            modem.set_mic_muted(true),
+            Err(BackendError::Unsupported(TelephonyFeature::MicMute))
+        );
     }
 
     #[test]

@@ -10,12 +10,13 @@ use zbus::MatchRule;
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::message::Type as MessageType;
 use zbus::names::OwnedInterfaceName;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 
-use super::{AdapterRecord, BluezBus, BusEvent};
+use super::{AdapterRecord, BluezBus, BusEvent, DeviceRecord};
 
 const BLUEZ_SERVICE: &str = "org.bluez";
 const ADAPTER_INTERFACE: &str = "org.bluez.Adapter1";
+const DEVICE_INTERFACE: &str = "org.bluez.Device1";
 
 type Properties = HashMap<String, OwnedValue>;
 type Interfaces = HashMap<OwnedInterfaceName, Properties>;
@@ -80,6 +81,45 @@ impl BluezBus for SystemBluezBus {
             });
         }
         Ok(adapters)
+    }
+
+    fn devices(&self) -> Result<Vec<DeviceRecord>, String> {
+        let objects = self
+            .object_manager()?
+            .get_managed_objects()
+            .map_err(|error| error.to_string())?;
+        let mut devices = Vec::new();
+        for (path, interfaces) in objects {
+            let Some(properties) = interfaces
+                .iter()
+                .find(|(name, _)| name.as_str() == DEVICE_INTERFACE)
+                .map(|(_, properties)| properties)
+            else {
+                continue;
+            };
+            let flag = |key: &str| {
+                properties
+                    .get(key)
+                    .and_then(|value| bool::try_from(value).ok())
+                    .unwrap_or(false)
+            };
+            devices.push(DeviceRecord {
+                path: path.to_string(),
+                adapter: properties
+                    .get("Adapter")
+                    .and_then(|value| <&ObjectPath<'_>>::try_from(value).ok())
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+                // `Name` only: BlueZ's `Alias` falls back to the address.
+                name: properties
+                    .get("Name")
+                    .and_then(|value| <&str>::try_from(value).ok())
+                    .map(str::to_owned),
+                paired: flag("Paired"),
+                connected: flag("Connected"),
+            });
+        }
+        Ok(devices)
     }
 
     fn set_powered(&self, path: &str, powered: bool) -> Result<(), String> {

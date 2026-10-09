@@ -826,6 +826,10 @@ pub struct AudioRouteState {
     pub active: AudioRoute,
     #[serde(default)]
     pub available: BTreeSet<AudioRoute>,
+    /// Uplink microphone mute of the live call. Backends reset it when the
+    /// last live call ends.
+    #[serde(default)]
+    pub muted: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -861,6 +865,8 @@ pub enum TelephonyFeature {
     AudioRoute,
     SimPin,
     RadioPower,
+    /// Uplink microphone mute of the live call.
+    MicMute,
     Emergency,
 }
 
@@ -877,6 +883,7 @@ impl TelephonyFeature {
             TelephonyFeature::AudioRoute => "audio-route",
             TelephonyFeature::SimPin => "sim-pin",
             TelephonyFeature::RadioPower => "radio-power",
+            TelephonyFeature::MicMute => "mic-mute",
             TelephonyFeature::Emergency => "emergency",
         }
     }
@@ -894,6 +901,7 @@ impl TelephonyFeature {
             Self::AudioRoute,
             Self::SimPin,
             Self::RadioPower,
+            Self::MicMute,
             Self::Emergency,
         ]
         .into_iter()
@@ -1639,6 +1647,7 @@ mod tests {
             audio: AudioRouteState {
                 active: AudioRoute::Speaker,
                 available: [AudioRoute::Earpiece, AudioRoute::Speaker].into(),
+                muted: true,
             },
         }
         .apply_to(&mut state);
@@ -1758,6 +1767,7 @@ mod tests {
             "audio-route",
             "sim-pin",
             "radio-power",
+            "mic-mute",
             "emergency",
         ] {
             let feature = TelephonyFeature::parse(name).expect(name);

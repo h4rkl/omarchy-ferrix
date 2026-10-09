@@ -152,6 +152,9 @@ pub fn apply_product(
         HardwareCommand::SetBrightness { percent } => {
             services.display.set_brightness(percent)?;
         }
+        HardwareCommand::SetRotationLock { locked } => {
+            services.display.set_rotation_lock(locked)?;
+        }
         HardwareCommand::SetAudioRoute { route } => {
             services.audio.set_audio_route(route)?;
         }
@@ -280,5 +283,29 @@ mod tests {
         assert_eq!(s.snapshot().network.wifi, WifiState::Disabled);
         assert_eq!(s.snapshot().display.brightness_percent, 31);
         assert_eq!(s.snapshot().audio.route, AudioRoute::Bluetooth);
+        apply_product(&s, HardwareCommand::SetRotationLock { locked: true }).unwrap();
+        apply(
+            &s,
+            ControlCommand::SetOrientation {
+                orientation: Orientation::Landscape,
+            },
+        )
+        .unwrap();
+        let display = s.snapshot().display;
+        assert!(display.rotation_locked);
+        assert_eq!(display.orientation, Orientation::Portrait, "lock holds");
+        apply_product(&s, HardwareCommand::SetRotationLock { locked: false }).unwrap();
+        assert_eq!(s.snapshot().display.orientation, Orientation::Landscape);
+    }
+
+    #[test]
+    fn bluetooth_devices_come_from_the_checked_in_profile() {
+        let s = services();
+        let devices = s.bluetooth.bluetooth_devices().unwrap();
+        assert_eq!(devices.len(), 3);
+        assert!(
+            devices[0].connected,
+            "the connected mock earbuds sort first"
+        );
     }
 }

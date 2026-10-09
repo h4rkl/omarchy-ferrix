@@ -78,6 +78,8 @@ impl Shell {
                 LinkEvent::Notification(Notification::App { event }) => {
                     tracing::debug!("ferrix-appd lifecycle event: {event:?}");
                 }
+                // Intents are addressed to their handler's own streams.
+                LinkEvent::Notification(Notification::Intent { .. }) => {}
             }
         }
     }

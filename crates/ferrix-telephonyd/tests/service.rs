@@ -387,6 +387,7 @@ fn state_grant_cannot_reach_any_control_verb() {
             },
             CAP_CALL,
         ),
+        (Request::SetMicMuted { muted: true }, CAP_CALL),
         (
             Request::SetRadioPower {
                 power: RadioPower::Off,
@@ -435,7 +436,7 @@ fn state_grant_cannot_reach_any_control_verb() {
         "no denied request reached the backend"
     );
     let denials = h.denials();
-    assert_eq!(denials.len(), 16);
+    assert_eq!(denials.len(), 17);
     assert!(denials.iter().all(|(app, _, _)| app == "org.ferrix.home"));
     assert!(
         denials
@@ -800,6 +801,72 @@ fn backend_errors_map_to_typed_replies() {
             error: TelephonyError::Unsupported { .. }
         }
     ));
+}
+
+#[test]
+fn mic_mute_needs_a_live_call_the_feature_and_telephony_call() {
+    let h = harness("mic-mute");
+    let mut phone = h.conn(PHONE_PID);
+    assert_eq!(
+        h.send(&mut phone, Request::SetMicMuted { muted: true }),
+        Reply::Error {
+            error: TelephonyError::InvalidState {
+                from: "idle".into(),
+                op: "set-mic-muted".into()
+            }
+        },
+        "mute is per call"
+    );
+    assert!(h.backend.ops().is_empty());
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("h1"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Active,
+    });
+    h.backend.emit_audio_changes();
+    let sink = MemorySink::new();
+    h.service
+        .subscribe(
+            h.identity.identify(Some(STATUS_PID)),
+            Box::new(sink.clone()),
+        )
+        .unwrap();
+    assert_eq!(
+        h.send(&mut phone, Request::SetMicMuted { muted: true }),
+        Reply::Ok
+    );
+    assert_eq!(h.backend.ops(), ["set-mic-muted true"]);
+    // A state-only subscriber (the status bar) folds the audio change too.
+    h.service
+        .handle_backend_event(BackendEvent::Audio(ferrix_telephony_api::AudioRouteState {
+            active: AudioRoute::Earpiece,
+            available: [AudioRoute::Earpiece, AudioRoute::Speaker].into(),
+            muted: true,
+        }));
+    assert!(h.service.state().audio.muted);
+    let values = sink.values();
+    assert!(
+        values
+            .iter()
+            .any(|v| v["event"] == "audio-route-changed" && v["audio"]["muted"] == true)
+    );
+    // Without telephony-call the request never reaches the backend.
+    let mut status = h.conn(STATUS_PID);
+    h.denied(&mut status, Request::SetMicMuted { muted: false }, CAP_CALL);
+    assert_eq!(h.backend.ops().len(), 1);
+    // A backend without the feature refuses it typed.
+    h.service.handle_backend_event(BackendEvent::Capabilities(
+        [TelephonyFeature::Voice].into_iter().collect(),
+    ));
+    assert_eq!(
+        h.send(&mut phone, Request::SetMicMuted { muted: false }),
+        Reply::Error {
+            error: TelephonyError::Unsupported {
+                feature: TelephonyFeature::MicMute
+            }
+        }
+    );
 }
 
 #[test]
@@ -1283,4 +1350,61 @@ fn socket_server_serves_hello_state_subscribe_and_rejects_garbage() {
     let event = events.recv_timeout(Duration::from_secs(2)).unwrap();
     assert_eq!(event.name(), "call-changed");
     let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+// ---------------------------------------------------------------------------
+// Incoming-call attention
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct CountingAttention(std::sync::atomic::AtomicUsize);
+
+impl ferrix_telephonyd::Attention for CountingAttention {
+    fn incoming_call(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn only_a_new_ringing_incoming_call_raises_attention() {
+    let h = harness("attention");
+    let attention = Arc::new(CountingAttention::default());
+    h.service.set_attention(attention.clone());
+    let count = || attention.0.load(std::sync::atomic::Ordering::SeqCst);
+    // Outgoing calls never raise anything.
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("out"),
+        direction: Direction::Outgoing,
+        number: number(),
+        state: CallState::Dialing,
+    });
+    assert_eq!(count(), 0);
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("in"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Ringing,
+    });
+    assert_eq!(count(), 1);
+    // A duplicate add and later state changes of the same call do not.
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("in"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Ringing,
+    });
+    h.service.handle_backend_event(BackendEvent::CallChanged {
+        handle: CallHandle::from("in"),
+        state: CallState::Active,
+        end_reason: None,
+    });
+    assert_eq!(count(), 1);
+    // A second incoming call rings again.
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("in2"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Ringing,
+    });
+    assert_eq!(count(), 2);
 }

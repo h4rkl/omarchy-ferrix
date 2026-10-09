@@ -528,6 +528,19 @@ impl Model {
         self.last_error = None;
     }
 
+    /// Applies a `compose` intent from `ferrix-appd`: a new message to
+    /// `number` with the body focused. Never sends; other kinds are
+    /// ignored. Returns whether anything visible changed.
+    pub fn apply_intent(&mut self, intent: &ferrix_app_api::AppIntent) -> bool {
+        let ferrix_app_api::AppIntent::Compose { number } = intent else {
+            return false;
+        };
+        self.open_compose();
+        self.compose_to = number.clone();
+        self.focus = Field::Body;
+        true
+    }
+
     /// Sends the draft in the current thread or compose form.
     pub fn send(&mut self) -> Result<(), SendBlock> {
         let to = match self.page {
@@ -750,6 +763,28 @@ mod tests {
         );
         assert_eq!(m.thread_title(), "+15550100042");
         assert_eq!(m.state_name(), "4-messages");
+    }
+
+    #[test]
+    fn compose_intent_prefills_the_recipient_and_never_sends() {
+        use ferrix_app_api::AppIntent;
+        let mut m = connected();
+        m.open_thread("+15550100042");
+        m.draft = "half written".to_owned();
+        m.pending.clear();
+        assert!(m.apply_intent(&AppIntent::Compose {
+            number: "+15550100077".to_owned()
+        }));
+        assert_eq!(m.page, Page::Compose);
+        assert_eq!(m.compose_to, "+15550100077");
+        assert_eq!(m.focus, Field::Body, "the body is ready to type");
+        assert!(m.draft.is_empty());
+        assert!(m.pending.is_empty(), "an intent never sends");
+        assert_eq!(
+            m.send_block(&m.compose_to.clone()),
+            Err(SendBlock::EmptyBody)
+        );
+        assert!(!m.apply_intent(&AppIntent::ShowCall));
     }
 
     #[test]

@@ -54,6 +54,90 @@
   inotify, so external changes appear at the next minute tick or on
   Refresh. There is no sandbox-enforced filesystem view yet.
 
+## 2026-10-09 (Settings pages, mic mute, app intents, incoming-call raise; QEMU/mock only)
+
+- **Settings structure:** Settings opens on a category list (Wi-Fi,
+  Bluetooth, Mobile network, Display, Airplane mode, About), each row with its
+  live one-line state; every category is a focused fullscreen page with Back
+  to the list (the tab strip is gone). Cellular data moved from Radios to
+  Mobile network. Settings now also follows `ferrix-core` through a new
+  reconnecting feed (`ferrix_protocol::spawn_reconnecting`, `core-link`
+  record); its existing `core-state`/`core-control` grants are unchanged.
+- **Display:** `ferrix-hardware-api` adds `DisplayState.rotation_locked`
+  (serde default false), `Display::set_rotation_lock`, and
+  `HardwareCommand::SetRotationLock`; the trait default is `Unsupported`.
+  The QEMU emulator pins portrait while locked and applies the mock sensor
+  orientation again on unlock; without profile `input.rotation` it is
+  unsupported. Settings has a brightness rail (preview while dragging, one
+  `set-brightness` on release; `ferrix-ui` gains additive `slider` /
+  `slider_value`) and an Auto-rotate toggle. Pixel `LinuxDisplay` keeps the
+  `Unsupported` default for the lock.
+- **Bluetooth:** typed `BluetoothDevice {id, name?, paired, connected}` and
+  `Bluetooth::bluetooth_devices` (default `Unsupported`), served by
+  `ferrix-core` as `{"request":"bluetooth-devices"}`. The BlueZ adapter lists
+  `org.bluez.Device1` objects of the managed controller under an FNV hash of
+  the object path (never the address; only `Name`, since BlueZ `Alias` falls
+  back to the address). The QEMU profile gains a synthetic
+  `[[bluetooth.devices]]` list. Settings shows power plus devices, and a
+  clean "no controller attached" / "not supported on this target" state with
+  a warn chip and no device query when `present=false` (the current Pixel
+  BlueZ situation; not re-verified on hardware in this slice). Pairing and
+  discovery are not implemented. Records carry device counts only.
+- **Mobile network:** SIM (ready/absent/locked/blocked/failed), operator and
+  access technology, signal bars, and the mobile-data toggle with typed
+  refusals (telephony unavailable, no modem, radio off, no SIM, SIM failed or
+  locked, backend lacks `data`); an active bearer can always be turned off.
+  The QEMU profile now lists the `data` feature (synthetic bearer only).
+- **Wi-Fi fixes reported from the Pixel:** hidden networks (empty or NUL
+  SSID) are omitted with a "N hidden · join by name not supported" note,
+  because the network API has no join-by-name request. A failed join stays
+  visible: Settings keeps the typed failure from a `failed` state even after
+  the backend settles on `disconnected`, `ui-state` reads `failed` /
+  `auth-failed`, Retry is offered for any retryable failure, and tapping a
+  saved secured network after a failure re-asks the passphrase. The
+  NetworkManager adapter maps `DISCONNECTED` with a join-failure state reason
+  (no secrets, supplicant, DHCP, SSID not found) to `Failed`; user-requested
+  disconnects stay `disconnected`. The physical failure path itself was not
+  re-run on the Pixel.
+- **Mic mute:** `TelephonyFeature::MicMute`, `AudioRouteState.muted`,
+  `set-mic-muted {muted}` (`telephony-call`), refused while idle or without
+  the feature; the mock clears mute when the last call ends; ModemManager
+  reports it unsupported. Phone's in-call row is Mute | Hold | Keypad
+  (`active-muted` ui-state). New scenario `in-call-mic-mute`.
+- **Intents:** typed `AppIntent` (`dial`, `compose`, `show-call`) opened
+  through `{"request":"open"}`; `ferrix-appd` resolves the handler from
+  descriptor `intents`, launches it with `FERRIX_APP_INTENT` or pushes
+  `Notification::Intent` only to that handler's streams; `app-intent` records
+  never carry the number (details in `docs/app-platform.md`). Contacts detail
+  has Call and Message; Phone prefills the dialer and Messages a new message,
+  never dialing or sending. `ferrix-telephonyd` opens `show-call` when a new
+  incoming call rings, so Phone is launched or raised over the foreground
+  app.
+- **Evidence (QEMU, headless TCG agent session, 1080x2340,
+  `FERRIX_OUT_DIR=/tmp/fxc` because the worktree path exceeds the 104-byte
+  Unix socket limit):** `just qemu-check` passed (`check-passed
+  unplugged-to-charging`); `just qemu-scenario-check` passed 26/26 including
+  `in-call-mic-mute` and the incoming-call scenario's `app-intent`
+  expectation. Inspected frames `settings-root`, `-bluetooth` (three mock
+  devices from the core), `-bluetooth-off`, `-bluetooth-absent` (after
+  `qemu-mock set-bluetooth present=false`), `-mobile`, `-mobile-data-on`
+  (`connect-data ok`, `data-on`), `-mobile-no-sim2` (after telephony
+  `set-sim state=absent`), `-display-locked` (rail dragged to 25%,
+  auto-rotate off; a later mock `set-orientation landscape` left the shell
+  at portrait), `-network`, `-contact-detail`, `-phone-dial-intent`
+  (`app-intent dial launch`, number prefilled), `-incoming-raised`
+  (`telephony-attention sent`, `app-intent show-call running`, Phone raised
+  over Settings), and `-in-call-muted` (`set-mic-muted ok`). A frame taken
+  about three seconds after the SIM removal still showed stale bars and data;
+  the next capture was correct (TCG redraw latency, recorded honestly).
+- **Tooling:** `qemu-agent-start.sh` alternates its pointer probe between two
+  neighbouring pixels. QEMU drops an absolute move to an unchanged position,
+  and two of three scenario-check starts had timed out waiting for
+  `cursor-ready`; after the change the run passed.
+- **Limitations:** no physical-device claim for any of this; Bluetooth
+  pairing/discovery, hidden-SSID join, real uplink mute (needs the audio
+  service adapter), and user-consented intent portals remain future work.
+
 ## 2026-10-09 (Phone, Settings, Contacts user-visible fixes; host previews only)
 
 - Phone: call duration counts from when the app saw the call become active

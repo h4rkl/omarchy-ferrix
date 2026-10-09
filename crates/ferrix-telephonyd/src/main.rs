@@ -21,8 +21,8 @@ use ferrix_telephony_adapter_api::ModemBackend;
 use ferrix_telephony_mock::{MockControl, MockModem, MockTelephonyConfig};
 use ferrix_telephony_protocol::{DEFAULT_SOCKET, SOCKET_ENV};
 use ferrix_telephonyd::{
-    AllowAll, AppdIdentity, DATA_DIR_ENV, DEFAULT_DATA_DIR, DenyAll, Identity, LocalControl,
-    Recorder, Server, Service, ServiceOptions, SmsStore,
+    AllowAll, AppdAttention, AppdIdentity, DATA_DIR_ENV, DEFAULT_DATA_DIR, DenyAll, Identity,
+    LocalControl, Recorder, Server, Service, ServiceOptions, SmsStore,
 };
 
 const USAGE: &str =
@@ -236,6 +236,15 @@ fn run(args: Args, recorder: Recorder) -> Result<(), String> {
         recorder.clone(),
         ServiceOptions::default(),
     )?;
+    // Incoming calls raise the `show-call` handler through ferrix-appd.
+    match &args.appd {
+        AppdMode::Socket(path) => service.set_attention(Arc::new(AppdAttention::spawn(
+            path.clone(),
+            Duration::from_secs(2),
+            recorder.clone(),
+        )?)),
+        AppdMode::None => recorder.attention("disabled", Some("no ferrix-appd socket")),
+    }
     service.spawn_event_loop();
 
     let listener = Server::bind(&args.socket)?;

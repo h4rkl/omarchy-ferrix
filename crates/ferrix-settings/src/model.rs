@@ -1,8 +1,11 @@
 //! Settings view model: the network snapshot from `ferrix-networkd`, the
-//! redacted telephony snapshot for the Radios page, passphrase entry, and
-//! typed reasons for everything that cannot be done. Pure state.
+//! redacted telephony snapshot for the Radios and Mobile pages, the
+//! `ferrix-core` snapshot for Display and Bluetooth (see `system.rs`),
+//! passphrase entry, and typed reasons for everything that cannot be done.
+//! Pure state.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+use ferrix_hardware_api::{CapabilityMatrix, HardwareState};
 use ferrix_network_api::{
     AccessPoint, AdapterPresence, ApId, ConnectionState, Connectivity, NetworkError, NetworkEvent,
     NetworkState, ProfileId, RadioState, SavedProfile, ScanState, SecurityType,
@@ -12,19 +15,47 @@ use ferrix_telephony_api::{DataBearer, DataProfile, RadioPower, RedactedTelephon
 use ferrix_telephony_protocol::{Event as TeleEvent, Update};
 use ferrix_ui::osk::OskState;
 
+/// The root list and one focused page per category (no tab strip: each
+/// category is a fullscreen flow with Back to the list).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
+    Root,
     Network,
+    Bluetooth,
+    Mobile,
+    Display,
     Radios,
     About,
 }
 
 impl Page {
-    pub const ALL: [Page; 3] = [Page::Network, Page::Radios, Page::About];
+    pub const ALL: [Page; 7] = [
+        Page::Root,
+        Page::Network,
+        Page::Bluetooth,
+        Page::Mobile,
+        Page::Display,
+        Page::Radios,
+        Page::About,
+    ];
+
+    /// The categories listed on the root page, in order.
+    pub const SECTIONS: [Page; 6] = [
+        Page::Network,
+        Page::Bluetooth,
+        Page::Mobile,
+        Page::Display,
+        Page::Radios,
+        Page::About,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
+            Page::Root => "root",
             Page::Network => "network",
+            Page::Bluetooth => "bluetooth",
+            Page::Mobile => "mobile",
+            Page::Display => "display",
             Page::Radios => "radios",
             Page::About => "about",
         }
@@ -32,8 +63,12 @@ impl Page {
 
     pub fn title(self) -> &'static str {
         match self {
-            Page::Network => "Network",
-            Page::Radios => "Radios",
+            Page::Root => "Settings",
+            Page::Network => "Wi-Fi",
+            Page::Bluetooth => "Bluetooth",
+            Page::Mobile => "Mobile network",
+            Page::Display => "Display",
+            Page::Radios => "Airplane mode",
             Page::About => "About",
         }
     }
@@ -77,10 +112,17 @@ pub enum Action {
     SetRadioPower(RadioPower),
     /// Cellular packet-data bearer control, independent of radio power.
     SetCellularData(bool),
+    /// Bluetooth controller power through `ferrix-core`.
+    SetBluetooth(bool),
+    /// Re-query the Bluetooth device list from `ferrix-core`.
+    RefreshBluetoothDevices,
+    SetBrightness(u8),
+    /// Auto-rotate off (`true`, pinned portrait) or on.
+    SetRotationLock(bool),
     Back,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub page: Page,
     pub net_link: Link,
@@ -110,8 +152,23 @@ pub struct Model {
     /// A typed error the connect request itself returned (the daemon may
     /// also report the failure through `ConnectionState::Failed`).
     pub connect_error: Option<NetworkError>,
+    /// Link to `ferrix-core` (Display, Bluetooth).
+    pub core_link: Link,
+    pub hw: Option<HardwareState>,
+    pub hw_capabilities: CapabilityMatrix,
+    /// Target id the core reported.
+    pub hw_target: Option<String>,
+    pub bt_devices: crate::system::DeviceList,
+    /// Brightness preview while the rail is dragged.
+    pub brightness_drag: Option<u8>,
+    pub(crate) core_lost_once: bool,
     net_lost_once: bool,
     tele_lost_once: bool,
+}
+
+/// A hidden network advertises no name (empty or NUL-padded SSID).
+fn is_hidden(ap: &AccessPoint) -> bool {
+    ap.ssid.as_bytes().iter().all(|b| *b == 0)
 }
 
 /// Shown when the backend reports `authentication-failed`.
@@ -140,7 +197,7 @@ impl Default for Model {
 impl Model {
     pub fn new() -> Self {
         Self {
-            page: Page::Network,
+            page: Page::Root,
             net_link: Link::Connecting,
             net: None,
             net_evidence: None,
@@ -158,6 +215,13 @@ impl Model {
             forget_confirm: None,
             last_connect: None,
             connect_error: None,
+            core_link: Link::Connecting,
+            hw: None,
+            hw_capabilities: CapabilityMatrix::default(),
+            hw_target: None,
+            bt_devices: crate::system::DeviceList::Unknown,
+            brightness_drag: None,
+            core_lost_once: false,
             net_lost_once: false,
             tele_lost_once: false,
         }
@@ -174,12 +238,17 @@ impl Model {
 
     pub fn state_name(&self) -> String {
         match self.page {
+            Page::Root => "root".to_owned(),
+            Page::Bluetooth => self.bluetooth_state_name(),
+            Page::Mobile => self.mobile_state_name(),
+            Page::Display => self.display_state_name(),
             Page::Network if self.forget_confirm.is_some() => "confirm-forget".to_owned(),
             Page::Network if self.auth_failed() && self.passphrase_for.is_none() => {
                 "auth-failed".to_owned()
             }
             Page::Network => match (&self.passphrase_for, &self.net) {
                 (Some(_), _) => "passphrase".to_owned(),
+                (None, Some(_)) if self.failure().is_some() => "failed".to_owned(),
                 (None, Some(net)) => net.connection.name().to_owned(),
                 (None, None) => self.net_link.name().to_owned(),
             },
@@ -220,6 +289,23 @@ impl Model {
     // -- feeds ---------------------------------------------------------------
 
     pub fn apply_network(&mut self, feed: Feed) -> bool {
+        // A failed join is often visible only for one transition: the
+        // backend settles on `disconnected` right after. Keep the typed
+        // failure until the next attempt or a connection succeeds.
+        let failed = match &feed {
+            Feed::Snapshot { state, .. }
+            | Feed::Event(NetworkEvent::ServiceRestarted { state }) => match &state.connection {
+                ConnectionState::Failed { error } => Some(error.clone()),
+                _ => None,
+            },
+            Feed::Event(NetworkEvent::ConnectionChanged {
+                connection: ConnectionState::Failed { error },
+            }) => Some(error.clone()),
+            _ => None,
+        };
+        if let Some(error) = failed {
+            self.connect_error = Some(error);
+        }
         match feed {
             Feed::Snapshot { state, evidence } => {
                 self.net_link = if self.net_lost_once {
@@ -396,9 +482,15 @@ impl Model {
     }
 
     /// The access point Retry would reconnect to, while it is still listed.
+    /// Retry is offered after any failure a new attempt can fix (not an
+    /// unsupported security type or a missing adapter).
     pub fn retry_target(&self) -> Option<&ApId> {
-        if !self.auth_failed() {
-            return None;
+        match self.failure() {
+            None
+            | Some(NetworkError::Unsupported { .. })
+            | Some(NetworkError::NoAdapter)
+            | Some(NetworkError::Unauthorized { .. }) => return None,
+            Some(_) => {}
         }
         self.last_connect.as_ref().filter(|id| {
             self.net
@@ -443,17 +535,31 @@ impl Model {
         }
     }
 
+    /// Joinable access points, strongest first. Hidden networks (an empty
+    /// or all-NUL SSID) are left out: the network API has no join-by-name
+    /// request, so a row could only ever fail. [`Model::hidden_count`]
+    /// reports how many were omitted.
     pub fn access_points(&self) -> Vec<&AccessPoint> {
         let Some(net) = &self.net else {
             return Vec::new();
         };
-        let mut aps: Vec<&AccessPoint> = net.access_points.iter().collect();
+        let mut aps: Vec<&AccessPoint> = net
+            .access_points
+            .iter()
+            .filter(|ap| !is_hidden(ap))
+            .collect();
         aps.sort_by(|a, b| {
             b.signal_percent
                 .cmp(&a.signal_percent)
                 .then_with(|| a.id.as_str().cmp(b.id.as_str()))
         });
         aps
+    }
+
+    pub fn hidden_count(&self) -> usize {
+        self.net.as_ref().map_or(0, |n| {
+            n.access_points.iter().filter(|ap| is_hidden(ap)).count()
+        })
     }
 
     pub fn profiles(&self) -> Vec<&SavedProfile> {
@@ -521,6 +627,28 @@ impl Model {
         self.page = page;
         self.last_error = None;
         self.forget_confirm = None;
+        self.brightness_drag = None;
+        self.request_devices_if_shown();
+    }
+
+    /// One-line state of a root-page category.
+    pub fn section_summary(&self, page: Page) -> String {
+        match page {
+            Page::Root => String::new(),
+            Page::Network => match self.net.as_ref() {
+                None => self.network_label(),
+                Some(_) if !self.radio_enabled() => self.radio_label(),
+                Some(_) => self.connection_label(),
+            },
+            Page::Bluetooth => self.bluetooth_summary(),
+            Page::Mobile => self.mobile_summary(),
+            Page::Display => self.display_summary(),
+            Page::Radios => format!(
+                "airplane mode {}",
+                if self.airplane() { "on" } else { "off" }
+            ),
+            Page::About => self.target.clone(),
+        }
     }
 
     pub fn toggle_radio(&mut self) {
@@ -561,7 +689,9 @@ impl Model {
             .profiles()
             .iter()
             .any(|p| p.ssid == ap.ssid && p.security == ap.security);
-        if ap.security.needs_passphrase() && !saved {
+        // After a failed join the saved secret is suspect: ask again
+        // instead of silently retrying with it.
+        if ap.security.needs_passphrase() && (!saved || self.failure().is_some()) {
             self.passphrase_for = Some(id.clone());
             self.passphrase.clear();
             self.passphrase_shown = false;
@@ -681,22 +811,41 @@ impl Model {
         self.pending.push(Action::SetRadioPower(power));
     }
 
-    pub fn toggle_cellular_data(&mut self) {
-        self.pending
-            .push(Action::SetCellularData(!self.cellular_data_on()));
-    }
-
     pub fn back(&mut self) {
         if self.forget_confirm.is_some() {
             self.cancel_forget();
         } else if self.passphrase_for.is_some() {
             self.cancel_passphrase();
-        } else if self.page != Page::Network {
-            self.show(Page::Network);
+        } else if self.page != Page::Root {
+            self.show(Page::Root);
         } else {
             self.pending.push(Action::Back);
         }
     }
+}
+
+/// Canned telephony snapshot for the host preview: a ready mock modem
+/// with a SIM, registered, data supported but not connected.
+pub fn preview_telephony() -> ferrix_telephony_api::TelephonyState {
+    use ferrix_telephony_api::{
+        AccessTechnology, ModemState, Operator, Registration, Signal, SimState, TelephonyFeature,
+    };
+    let mut tele = ferrix_telephony_api::TelephonyState::new();
+    tele.modem = ModemState::Ready;
+    tele.sim = SimState::Ready;
+    tele.registration = Registration::Registered { roaming: false };
+    tele.operator = Some(Operator {
+        name: "Ferrix Mock".to_owned(),
+        mcc_mnc: None,
+    });
+    tele.access = AccessTechnology::Lte;
+    tele.signal = Signal::bars(3);
+    tele.radio = RadioPower::On;
+    tele.data = DataBearer::Disconnected;
+    tele.capabilities = [TelephonyFeature::Data, TelephonyFeature::RadioPower]
+        .into_iter()
+        .collect();
+    tele
 }
 
 /// Canned network snapshot for the host preview.
@@ -761,6 +910,7 @@ mod tests {
 
     fn connected() -> Model {
         let mut m = Model::new();
+        m.show(Page::Network);
         m.apply_network(Feed::Snapshot {
             state: preview_network(true),
             evidence: "mock".into(),
@@ -894,7 +1044,8 @@ mod tests {
         assert_eq!(m.passphrase_for, None);
         m.show(Page::About);
         m.back();
-        assert_eq!(m.page, Page::Network);
+        assert_eq!(m.page, Page::Root, "a category returns to the list");
+        assert_eq!(m.state_name(), "root");
         m.back();
         assert_eq!(m.pending, vec![Action::Back]);
         // Unavailable network refuses control with a typed reason.
@@ -1097,6 +1248,93 @@ mod tests {
             },
         }));
         assert_eq!(m.connection_error(), None);
+    }
+
+    #[test]
+    fn hidden_networks_are_counted_not_listed() {
+        let mut state = preview_network(false);
+        for (i, ssid) in [b"".to_vec(), vec![0, 0, 0]].into_iter().enumerate() {
+            state.access_points.push(AccessPoint {
+                id: ApId::new(format!("hidden-{i}")),
+                ssid: ferrix_network_api::Ssid::new(ssid),
+                bssid_hash: "00".into(),
+                signal_percent: 99,
+                security: SecurityType::Wpa2Psk,
+                frequency_mhz: None,
+            });
+        }
+        let mut m = Model::new();
+        m.apply_network(Feed::Snapshot {
+            state,
+            evidence: "mock".into(),
+        });
+        assert_eq!(m.access_points().len(), 3, "hidden rows are not drawn");
+        assert!(
+            m.access_points()
+                .iter()
+                .all(|ap| !ap.ssid.as_bytes().is_empty())
+        );
+        assert_eq!(m.hidden_count(), 2);
+    }
+
+    #[test]
+    fn a_failed_join_stays_visible_after_the_backend_settles_on_disconnected() {
+        let mut m = connected();
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Disconnected,
+        }));
+        // Saved profile: the first attempt reuses the stored secret.
+        m.select_ap(&ApId::new("ap-0"));
+        assert!(matches!(
+            m.pending.pop(),
+            Some(Action::Connect {
+                passphrase: None,
+                ..
+            })
+        ));
+        for connection in [
+            ConnectionState::Associating,
+            ConnectionState::Failed {
+                error: NetworkError::Backend {
+                    reason: "device state reason 99".into(),
+                },
+            },
+            ConnectionState::Disconnected,
+        ] {
+            m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged { connection }));
+        }
+        assert_eq!(m.state_name(), "failed", "not a silent disconnect");
+        let text = m.connection_error().expect("failure is shown");
+        assert!(text.contains("device state reason 99"), "{text}");
+        assert_eq!(m.retry_target(), Some(&ApId::new("ap-0")));
+        // Retry, or tapping the saved network again, asks for the secret.
+        m.retry_connect();
+        assert_eq!(m.passphrase_for, Some(ApId::new("ap-0")));
+        m.cancel_passphrase();
+        m.select_ap(&ApId::new("ap-0"));
+        assert_eq!(m.passphrase_for, Some(ApId::new("ap-0")));
+        m.cancel_passphrase();
+        // A snapshot taken after the failure (app opened later) shows it too.
+        let mut fresh = Model::new();
+        fresh.show(Page::Network);
+        let mut state = preview_network(false);
+        state.connection = ConnectionState::Failed {
+            error: NetworkError::AuthenticationFailed,
+        };
+        fresh.apply_network(Feed::Snapshot {
+            state,
+            evidence: "mock".into(),
+        });
+        assert_eq!(fresh.state_name(), "auth-failed");
+        assert_eq!(fresh.connection_error().as_deref(), Some(AUTH_FAILED_TEXT));
+        // Success clears it.
+        m.apply_network(Feed::Event(NetworkEvent::ConnectionChanged {
+            connection: ConnectionState::Connected {
+                ap: ApId::new("ap-0"),
+            },
+        }));
+        assert_eq!(m.connection_error(), None);
+        assert_eq!(m.state_name(), "connected");
     }
 
     #[test]

@@ -5,7 +5,9 @@
 use ferrix_ui::draw::Rect;
 use ferrix_ui::gesture::{self, Gesture, Tracker};
 use ferrix_ui::osk::{self, Key};
-use ferrix_ui::widgets::{Edit, back_rect, basis, contains, edit_text, list_rects, scale};
+use ferrix_ui::widgets::{
+    Edit, back_rect, basis, contains, edit_text, list_rects, scale, slider_value,
+};
 
 use crate::model::{Model, Page};
 
@@ -13,7 +15,8 @@ use crate::model::{Model, Page};
 pub enum Target {
     Back,
     Home,
-    Tab(Page),
+    /// A category row on the root page.
+    Section(Page),
     Radio,
     Scan,
     Ap(usize),
@@ -34,6 +37,11 @@ pub enum Target {
     Wifi,
     Cellular,
     CellularData,
+    /// Bluetooth controller power.
+    BluetoothPower,
+    /// The brightness rail (dragged, committed on release).
+    Brightness,
+    AutoRotate,
 }
 
 pub struct Layout {
@@ -57,24 +65,68 @@ impl Layout {
         self.size.0 as i32
     }
 
-    pub fn tab_rects(&self) -> Vec<(Rect, Page)> {
-        let s = |v| self.s(v);
-        let w = (self.w() - 2 * s(96) - 2 * s(16)) / 3;
-        Page::ALL
+    /// Root-page category rows, in [`Page::SECTIONS`] order.
+    pub fn section_rects(&self) -> Vec<(Rect, Page)> {
+        list_rects(self.size, self.s(300), Page::SECTIONS.len(), 150)
             .into_iter()
-            .enumerate()
-            .map(|(i, p)| {
-                (
-                    Rect {
-                        x: s(96) + i as i32 * (w + s(16)),
-                        y: s(270),
-                        w,
-                        h: s(64),
-                    },
-                    p,
-                )
-            })
+            .zip(Page::SECTIONS)
             .collect()
+    }
+
+    /// A full-width toggle/info row at design `y` (the Radios row shape).
+    pub fn row_rect(&self, y: i32) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(48),
+            y: s(y),
+            w: self.w() - s(96),
+            h: s(150),
+        }
+    }
+
+    pub fn bluetooth_power_rect(&self) -> Rect {
+        self.row_rect(300)
+    }
+
+    pub fn device_rects(&self, count: usize) -> Vec<Rect> {
+        list_rects(self.size, self.s(600), count.min(6), 120)
+    }
+
+    /// Mobile page info rows: SIM, operator, signal.
+    pub fn mobile_rects(&self) -> [Rect; 3] {
+        [self.row_rect(300), self.row_rect(470), self.row_rect(640)]
+    }
+
+    pub fn mobile_data_rect(&self) -> Rect {
+        self.row_rect(860)
+    }
+
+    /// The visible brightness track.
+    pub fn brightness_rect(&self) -> Rect {
+        let s = |v| self.s(v);
+        Rect {
+            x: s(130),
+            y: s(470),
+            w: self.w() - s(260),
+            h: s(28),
+        }
+    }
+
+    /// The rail's touch target: the track plus a generous vertical margin
+    /// and the knob's overhang at both ends.
+    pub fn brightness_hit_rect(&self) -> Rect {
+        let r = self.brightness_rect();
+        let s = |v| self.s(v);
+        Rect {
+            x: r.x - s(40),
+            y: r.y - s(60),
+            w: r.w + s(80),
+            h: r.h + s(120),
+        }
+    }
+
+    pub fn auto_rotate_rect(&self) -> Rect {
+        self.row_rect(700)
     }
 
     pub fn radio_rect(&self) -> Rect {
@@ -205,43 +257,15 @@ impl Layout {
     }
 
     pub fn airplane_rect(&self) -> Rect {
-        let s = |v| self.s(v);
-        Rect {
-            x: s(48),
-            y: s(400),
-            w: self.w() - s(96),
-            h: s(150),
-        }
+        self.row_rect(400)
     }
 
     pub fn wifi_rect(&self) -> Rect {
-        let s = |v| self.s(v);
-        Rect {
-            x: s(48),
-            y: s(600),
-            w: self.w() - s(96),
-            h: s(150),
-        }
+        self.row_rect(600)
     }
 
     pub fn cellular_rect(&self) -> Rect {
-        let s = |v| self.s(v);
-        Rect {
-            x: s(48),
-            y: s(800),
-            w: self.w() - s(96),
-            h: s(150),
-        }
-    }
-
-    pub fn cellular_data_rect(&self) -> Rect {
-        let s = |v| self.s(v);
-        Rect {
-            x: s(48),
-            y: s(1000),
-            w: self.w() - s(96),
-            h: s(150),
-        }
+        self.row_rect(800)
     }
 }
 
@@ -264,12 +288,22 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
     {
         return Some(Target::Key(key));
     }
-    for (r, page) in l.tab_rects() {
-        if contains(r, position) {
-            return Some(Target::Tab(page));
-        }
-    }
     match model.page {
+        Page::Root => l
+            .section_rects()
+            .into_iter()
+            .find(|(r, _)| contains(*r, position))
+            .map(|(_, page)| Target::Section(page)),
+        Page::Bluetooth => {
+            contains(l.bluetooth_power_rect(), position).then_some(Target::BluetoothPower)
+        }
+        Page::Mobile => contains(l.mobile_data_rect(), position).then_some(Target::CellularData),
+        Page::Display => {
+            if contains(l.brightness_hit_rect(), position) {
+                return Some(Target::Brightness);
+            }
+            contains(l.auto_rotate_rect(), position).then_some(Target::AutoRotate)
+        }
         Page::Network => {
             if contains(l.radio_rect(), position) {
                 return Some(Target::Radio);
@@ -317,10 +351,7 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
             if contains(l.wifi_rect(), position) {
                 return Some(Target::Wifi);
             }
-            if contains(l.cellular_rect(), position) {
-                return Some(Target::Cellular);
-            }
-            contains(l.cellular_data_rect(), position).then_some(Target::CellularData)
+            contains(l.cellular_rect(), position).then_some(Target::Cellular)
         }
         Page::About => None,
     }
@@ -330,7 +361,7 @@ pub fn activate(model: &mut Model, target: Target) {
     match target {
         Target::Back => model.back(),
         Target::Home => {}
-        Target::Tab(page) => model.show(page),
+        Target::Section(page) => model.show(page),
         Target::Radio | Target::Wifi => model.toggle_radio(),
         Target::Scan => model.scan(),
         Target::Ap(i) => {
@@ -360,6 +391,10 @@ pub fn activate(model: &mut Model, target: Target) {
         Target::Airplane => model.toggle_airplane(),
         Target::Cellular => model.toggle_cellular(),
         Target::CellularData => model.toggle_cellular_data(),
+        Target::BluetoothPower => model.toggle_bluetooth(),
+        // The rail acts on drag and release (see `Input`), a tap included.
+        Target::Brightness => model.commit_brightness(),
+        Target::AutoRotate => model.toggle_auto_rotate(),
     }
 }
 
@@ -389,13 +424,21 @@ pub struct Input {
 }
 
 impl Input {
-    pub fn down(&mut self, id: i32, position: (f64, f64), model: &Model, size: (u32, u32)) -> bool {
-        match self
-            .tracker
-            .down(id, position, hit_test(model, position, size))
-        {
+    pub fn down(
+        &mut self,
+        id: i32,
+        position: (f64, f64),
+        model: &mut Model,
+        size: (u32, u32),
+    ) -> bool {
+        let target = hit_test(model, position, size);
+        match self.tracker.down(id, position, target) {
             Some(pressed) => {
                 self.pressed = pressed;
+                if pressed == Some(Target::Brightness) {
+                    let rail = Layout::new(size).brightness_rect();
+                    model.drag_brightness(slider_value(rail, position.0));
+                }
                 true
             }
             None => false,
@@ -406,9 +449,17 @@ impl Input {
         &mut self,
         id: i32,
         position: (f64, f64),
-        model: &Model,
+        model: &mut Model,
         size: (u32, u32),
     ) -> bool {
+        if self.tracker.is_tracking(id) && self.tracker.target() == Some(Target::Brightness) {
+            // Keep the contact's position current so release commits it.
+            let _ = self.tracker.motion(id, position, size, None, None);
+            let before = model.brightness();
+            let rail = Layout::new(size).brightness_rect();
+            model.drag_brightness(slider_value(rail, position.0));
+            return model.brightness() != before;
+        }
         let at = hit_test(model, position, size);
         match self.tracker.motion(id, position, size, at, self.pressed) {
             Some(pressed) => {
@@ -426,6 +477,16 @@ impl Input {
         model: &mut Model,
         size: (u32, u32),
     ) -> bool {
+        if self.tracker.is_tracking(id) && self.tracker.target() == Some(Target::Brightness) {
+            if let Some(p) = position.or_else(|| self.tracker.current(id)) {
+                let rail = Layout::new(size).brightness_rect();
+                model.drag_brightness(slider_value(rail, p.0));
+            }
+            let _ = self.tracker.up(id, size, None);
+            self.pressed = None;
+            model.commit_brightness();
+            return true;
+        }
         let at = position
             .or_else(|| self.tracker.current(id))
             .and_then(|p| hit_test(model, p, size));
@@ -459,6 +520,7 @@ mod tests {
 
     fn ready() -> Model {
         let mut m = Model::new();
+        m.show(Page::Network);
         m.apply_network(Feed::Snapshot {
             state: preview_network(false),
             evidence: "mock".into(),
@@ -546,24 +608,100 @@ mod tests {
         tap(&mut input, &mut m, center(l.profile_rects(1)[0]));
         tap(&mut input, &mut m, center(l.forget_confirm_rect()));
         assert!(matches!(m.pending.pop(), Some(Action::Forget(_))));
-        // Tabs switch pages; Back from Radios returns to Network, then yields.
-        tap(&mut input, &mut m, center(l.tab_rects()[1].0));
+        // Back returns to the category list; a row opens its page; Back
+        // from the list yields.
+        tap(&mut input, &mut m, (80.0, 160.0));
+        assert_eq!(m.page, Page::Root);
+        let rows = l.section_rects();
+        assert_eq!(rows.len(), Page::SECTIONS.len());
+        let radios = rows.iter().find(|(_, p)| *p == Page::Radios).unwrap().0;
+        tap(&mut input, &mut m, center(radios));
         assert_eq!(m.page, Page::Radios);
         tap(&mut input, &mut m, center(l.airplane_rect()));
         assert_eq!(m.pending.len(), 2);
         m.pending.clear();
         tap(&mut input, &mut m, center(l.cellular_rect()));
         assert!(matches!(m.pending.pop(), Some(Action::SetRadioPower(_))));
-        tap(&mut input, &mut m, center(l.cellular_data_rect()));
-        assert!(matches!(
-            m.pending.pop(),
-            Some(Action::SetCellularData(true))
-        ));
         tap(&mut input, &mut m, (80.0, 160.0));
-        assert_eq!(m.page, Page::Network);
+        assert_eq!(m.page, Page::Root);
         tap(&mut input, &mut m, (80.0, 160.0));
         assert_eq!(m.pending, vec![Action::Back]);
         assert_eq!(hit_test(&m, (540.0, 2290.0), SIZE), Some(Target::Home));
+    }
+
+    fn with_core() -> Model {
+        let mut m = ready();
+        m.apply_core(ferrix_protocol::Feed::Snapshot {
+            target: "qemu-aarch64".into(),
+            profile: "emulator-dev".into(),
+            capabilities: crate::system::preview_capabilities(),
+            state: crate::system::preview_hardware(),
+        });
+        m
+    }
+
+    #[test]
+    fn brightness_rail_drags_and_commits_on_release() {
+        let mut m = with_core();
+        m.show(Page::Display);
+        let l = Layout::new(SIZE);
+        let rail = l.brightness_rect();
+        let mut input = Input::default();
+        let y = f64::from(rail.y + rail.h / 2);
+        let start = (f64::from(rail.x + rail.w / 4), y);
+        assert!(input.down(0, start, &mut m, SIZE));
+        assert_eq!(m.brightness(), Some(25), "touch-down previews");
+        let end = (f64::from(rail.x + rail.w * 3 / 4), y + 40.0);
+        assert!(input.motion(0, end, &mut m, SIZE));
+        assert_eq!(m.brightness(), Some(75));
+        assert!(m.pending.is_empty(), "nothing sent while dragging");
+        assert!(input.up(0, None, &mut m, SIZE));
+        assert_eq!(m.pending, vec![Action::SetBrightness(75)]);
+        assert_eq!(input.pressed, None);
+        // Dragging off the rail's ends clamps.
+        m.pending.clear();
+        input.down(0, start, &mut m, SIZE);
+        input.motion(0, (5000.0, y), &mut m, SIZE);
+        input.up(0, Some((5000.0, y)), &mut m, SIZE);
+        assert_eq!(m.pending, vec![Action::SetBrightness(100)]);
+        m.pending.clear();
+        tap(&mut input, &mut m, center(l.auto_rotate_rect()));
+        assert_eq!(m.pending, vec![Action::SetRotationLock(true)]);
+    }
+
+    #[test]
+    fn bluetooth_and_mobile_rows_route_to_their_controls() {
+        let mut m = with_core();
+        let mut input = Input::default();
+        let l = Layout::new(SIZE);
+        let row = |page| {
+            l.section_rects()
+                .into_iter()
+                .find(|(_, p)| *p == page)
+                .unwrap()
+                .0
+        };
+        m.show(Page::Root);
+        tap(&mut input, &mut m, center(row(Page::Bluetooth)));
+        assert_eq!(m.page, Page::Bluetooth);
+        assert_eq!(m.pending, vec![Action::RefreshBluetoothDevices]);
+        m.pending.clear();
+        tap(&mut input, &mut m, center(l.bluetooth_power_rect()));
+        assert_eq!(m.pending, vec![Action::SetBluetooth(false)]);
+        m.pending.clear();
+        m.show(Page::Root);
+        tap(&mut input, &mut m, center(row(Page::Mobile)));
+        assert_eq!(m.page, Page::Mobile);
+        tap(&mut input, &mut m, center(l.mobile_data_rect()));
+        assert!(m.pending.is_empty());
+        assert_eq!(
+            m.last_error.as_deref(),
+            Some("telephony \u{b7} unavailable"),
+            "no snapshot yet: refused with the reason"
+        );
+        for r in l.mobile_rects() {
+            assert_eq!(hit_test(&m, center(r), SIZE), None, "info rows are inert");
+        }
     }
 
     #[test]
