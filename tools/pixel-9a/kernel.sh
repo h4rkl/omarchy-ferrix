@@ -12,6 +12,9 @@ source_root=${FERRIX_PIXEL9A_KERNEL_SOURCE:-"$cache_root/pixel-9a/kernel/source"
 bazel_cache=${FERRIX_PIXEL9A_KERNEL_BAZEL_CACHE:-"$cache_root/pixel-9a/kernel/bazel"}
 out_root=${FERRIX_OUT_DIR:-"$root/out"}
 kernel_out=${FERRIX_PIXEL9A_KERNEL_OUT:-"$out_root/pixel-9a/kernel/tegu"}
+# Bazel runs from the source root, so a relative output must be anchored to the
+# repository before it reaches --destdir.
+case "$kernel_out" in /*) ;; *) kernel_out="$root/$kernel_out" ;; esac
 dist="$kernel_out/dist"
 manifest="$kernel_out/build-manifest.tsv"
 module_list="$target/pmos/device-google-tegu/modules-initfs"
