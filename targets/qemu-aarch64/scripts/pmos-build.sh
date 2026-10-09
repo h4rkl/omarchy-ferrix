@@ -52,7 +52,7 @@ docker info >/dev/null 2>&1 || { echo "container engine is not running; start Or
 # daemons, the apps, and the ADR-004 grants policy (without it ferrix-appd
 # starts with an empty policy and the home surface has no capabilities).
 for file in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-    ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings \
+    ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files \
     profile.toml colors.toml apps/org.ferrix.home.json apps/grants.json; do
   [ -f "$product/$file" ] || { echo "missing product artifact $product/$file" >&2; exit 1; }
 done

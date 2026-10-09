@@ -94,7 +94,7 @@ printf '%s\n' '#!/bin/sh' \
   '[ -n "$target" ]' \
   'release="$CARGO_TARGET_DIR/$target/release"' \
   'mkdir -p "$release"' \
-  'for binary in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do' \
+  'for binary in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files; do' \
   '  printf "#!/bin/sh\n" >"$release/$binary"' \
   '  chmod 0755 "$release/$binary"' \
   'done' >"$work/bin/cargo"
@@ -145,7 +145,7 @@ product="$work/out/pixel-9a/product/tegu"
 [ -d "$product" ] || fail 'product output directory is missing'
 [ -f "$product/manifest.tsv" ] || fail 'product manifest is missing'
 
-product_bins='ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings'
+product_bins='ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files'
 for binary in $product_bins; do
   [ -x "$product/$binary" ] || fail "staged binary is not executable: $binary"
 done

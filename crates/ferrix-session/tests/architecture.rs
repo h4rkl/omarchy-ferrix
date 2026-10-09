@@ -280,6 +280,7 @@ const CONNECTIVITY_PRODUCT_CRATES: &[&str] = &[
     "ferrix-messages",
     "ferrix-contacts",
     "ferrix-settings",
+    "ferrix-files",
     "ferrix-terminal",
     "ferrix-basic-screen",
     "ferrix-shell",

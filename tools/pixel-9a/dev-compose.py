@@ -362,6 +362,7 @@ PRODUCT_BINARIES = (
     "ferrix-core", "ferrix-shell", "ferrix-basic-screen", "ferrix-appd", "ferrix-sandbox",
     "ferrix-terminal", "ferrix-telephonyd", "ferrix-networkd", "ferrix-contactsd",
     "ferrix-phone", "ferrix-messages", "ferrix-contacts", "ferrix-settings",
+    "ferrix-files",
 )
 
 

@@ -142,7 +142,7 @@ real root filesystem (`product-services-ready` reports `"persistent":true`).
 
 The guest binaries added by `qemu-build` are `ferrix-telephonyd`,
 `ferrix-networkd`, `ferrix-contactsd`, `ferrix-phone`, `ferrix-messages`,
-`ferrix-contacts`, and `ferrix-settings` (hashes `ferrix_<name>_sha256` in
+`ferrix-contacts`, `ferrix-settings`, and `ferrix-files` (hashes `ferrix_<name>_sha256` in
 `manifest.json`, plus `grants_sha256`, `contacts_fixtures_sha256` and the
 `mock_control_ports` list).
 
@@ -615,6 +615,38 @@ The physical-keyboard path is a small hand-rolled US evdev table because the
 static musl guest binary does not link libxkbcommon; the touch keyboard is the
 primary phone input.
 
+### Files app
+
+The Files tile (third launcher tile in the portrait profile, after Browser
+and Contacts) asks `ferrix-appd` to launch `ferrix-files` (crate
+`crates/ferrix-files`, app id `org.ferrix.files`). It browses `$HOME` only:
+`/root` on this smoke guest, `/home/user` on the pmOS route and the Pixel 9a
+rootfs. Folders sort first, rows show size or item count and the
+modification date, the breadcrumb chips jump back up, a vertical drag in the
+list scrolls by whole rows, a tap on a file opens it read-only, and the
+trailing `···` of a row opens its details (Open, Rename, Delete with a
+confirmation). New folder and Rename use the shared touch keyboard. A
+Contacts **Export vCard** lands in `~/Documents/contacts.vcf`, and Files picks
+it up at the next minute tick or on Refresh. It needs no daemon and no
+capability grant. See *Socket visibility* in `docs/app-platform.md` for why
+`$HOME` stays writable inside the sandbox and how confinement is enforced.
+Serial records: `app-context`, `files-frame`, `ui-state {page, state}`,
+`files-action {action, status, error}`, `files-back`. They carry depths,
+counts, and error codes, never file names.
+
+```sh
+just qemu-tap 540 1236            # Contacts tile; then tap Export vCard
+just qemu-swipe 540 2250 540 1800 # home
+just qemu-tap 876 1236            # Files tile
+just qemu-frame
+```
+
+Host preview of every page (synthetic home in a scratch folder, `mock`):
+
+```sh
+cargo run -p ferrix-files -- --preview out/files.ppm --page view
+```
+
 Inspect session state with `just qemu-agent-status`, and end it cleanly with
 `just qemu-agent-stop`. Agent artifacts are:
 
@@ -873,7 +905,7 @@ tail -n 200 out/qemu-aarch64/pmos-android/check/serial.log
 
 `finalize-in-container.sh` installs the same binaries as the smoke guest
 (`ferrix-telephonyd`, `ferrix-networkd`, `ferrix-contactsd`, `ferrix-phone`,
-`ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, the catalog with
+`ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, `ferrix-files`, the catalog with
 `grants.json`, the contacts fixtures when present) and creates
 `/var/lib/ferrix/{telephony,contacts}` on the root filesystem, so stores
 persist across guest reboots. `00-ferrix-product.start` starts the daemons

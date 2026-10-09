@@ -417,7 +417,7 @@ validate_product_dir() {
 	awk -F '\t' '$1 == "rust_linker" && $2 != "" { found=1 } END { exit(found ? 0 : 1) }' "$product_manifest" ||
 		die 'native Pixel product manifest is missing its target Rust linker'
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings \
+		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files \
 		profile.toml colors.toml; do
 		[ -f "$product/$name" ] || die "missing product input $product/$name"
 	done
@@ -426,7 +426,7 @@ validate_product_dir() {
 		[ -f "$descriptor" ] || die "missing product app descriptor under $product/apps"
 	done
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings \
+		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files \
 		profile.toml colors.toml; do
 		verify_product_artifact "$name"
 	done
@@ -995,7 +995,7 @@ build_rootfs() {
 	fi
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings; do
+		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files; do
 		stage_file "$product/$name" "$rootfs_dir/usr/bin/$name"
 		rootfs_chmod 0755 "$rootfs_dir/usr/bin/$name"
 	done

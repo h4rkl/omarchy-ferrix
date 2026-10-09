@@ -26,8 +26,8 @@
 //!
 //! `PAGE` is `launcher` (default), `quick-settings`, `notifications`,
 //! `notifications-empty`, or the kind of a non-launchable catalog entry
-//! (`camera`, `files`) for its reference page. Launchable entries (Phone,
-//! Messages, Contacts, Settings, Terminal) are real apps started by
+//! (`camera`) for its reference page. Launchable entries (Phone, Messages,
+//! Contacts, Settings, Files, Terminal) are real apps started by
 //! `ferrix-appd`, not pages of this surface. `--size` overrides the
 //! profile's panel size, e.g. `830x1800` for the narrow QEMU display window.
 //!

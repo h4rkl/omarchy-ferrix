@@ -53,7 +53,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 | `ferrix-runtime-native` | native launch configuration and isolation types (namespaces, private `/tmp`, socket-directory view); the native `Runtime` that spawns `ferrix-sandbox`, classifies exits, and terminates | internal adapter |
 | `ferrix-shell` | toplevels keyed by client pid, focus, `Activate` handling, trusted navigation/dismiss gestures, crash refocus | system |
 | `ferrix-basic-screen` | catalog-driven launcher, in-process quick settings/notifications, crash notice | privileged first-party |
-| `ferrix-terminal`, `ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings` | independent native Wayland applications | untrusted applications |
+| `ferrix-terminal`, `ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, `ferrix-files` | independent native Wayland applications | untrusted applications |
 | `ferrix-runtime-android` | private Waydroid adapter for Android descriptors; composed only by `ferrix-appd` | internal adapter |
 | `ferrix-ui` | software-rendering toolkit and the shared fullscreen Wayland client runner; a convenience library, not part of any ABI | library |
 
@@ -82,7 +82,7 @@ native adapter it contains `exec` (program resolved through `PATH`) and an
 optional isolation policy. The `launch` object is never returned by
 `ferrix-app-protocol`, so applications and shells cannot couple to another runtime's
 implementation. Non-launchable entries exist for catalog placeholders such as
-Camera and Files; the catalog, not an enum, decides what is shown. `web`
+Camera; the catalog, not an enum, decides what is shown. `web`
 remains a reserved kind and returns `AppError::RuntimeUnsupported`. Android
 descriptors are handled by the private `ferrix-runtime-android` adapter; a
 launch returns `RuntimeUnsupported` when Waydroid is absent and `LaunchFailed`
@@ -226,6 +226,19 @@ NetworkManager directly); `mode: private-run` hides it. Every checked-in
 launchable native application uses `private-run`; `private` remains available
 only as a documented compatibility mode for manifests that deliberately need
 other `/run` facilities.
+
+Files (`org.ferrix.files`) depends on exactly that boundary. It talks to no
+platform daemon, so its descriptor declares no capabilities and
+`apps/grants.json` has no row for it (zero effective capabilities; its
+`private-run` view holds only `ferrix-appd.sock` for Back). The mount
+namespace replaces only `/proc`, `/tmp`, and `/run`, so the inherited `$HOME`
+stays the shared, durable home directory Files reads and writes (and where
+Contacts writes its vCard export). Keeping Files inside `$HOME` is the
+app's job, not the sandbox's: every folder path is canonicalized and must stay
+under the canonical home, entry names are single components, and symlinks that
+leave home are listed but never followed. A sandbox-enforced filesystem view
+(bind-mounting only `$HOME`) is future isolation work, not something this
+release provides.
 
 ## Surface association and focus
 
