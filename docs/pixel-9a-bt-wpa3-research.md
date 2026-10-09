@@ -391,9 +391,13 @@ Two other suspects were checked and ruled out:
 Fix: `kernel-patches/private/google-modules/wlan/bcm4383/0002-treat-nl80211-wpa-version-3-as-rsn.patch`
 makes `wl_set_wpa_version()` treat `NL80211_WPA_VERSION_3` as RSN, the same
 as version 2. `wl_set_key_mgmt()` then maps the SAE AKM to
-`WPA3_AUTH_SAE_PSK`. The patch is compile-tested only and needs device
-evidence. Do not set `connectivity.wifi_transition_key_mgmt` back to `sae`
-until a device run shows the patched kernel associating with single-AKM SAE.
+`WPA3_AUTH_SAE_PSK`.
+
+Update (2026-10-09, physical `google-pixel-9a-tegu-gxq96-mp1-0`): with the
+patch flashed, an SAE profile joins the transition AP (external auth status 0,
+DHCP, ping), and the Pixel profile no longer overrides
+`connectivity.wifi_transition_key_mgmt`. A single-AKM SAE-only network has not
+been tested yet. See `docs/status.md`.
 
 ---
 

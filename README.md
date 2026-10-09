@@ -226,7 +226,10 @@ artifacts, boots a fresh overlay under TCG, requires `product-core-ready` before
 that the intended full guest substrate contains and starts the core; graphical
 pmOS claims are backed separately by inspected framebuffers. The normal product
 route has rendered the Ferrix launcher; the existing Android-enabled Brave
-framebuffer is historical, and Fulguris-specific rendering remains unverified.
+framebuffer is historical. Fulguris's first-run onboarding has been captured
+on QEMU, and on the Pixel 9a development route the Browser tile opens Fulguris
+(framebuffer capture, `docs/status.md`); interaction beyond onboarding is
+unverified.
 
 ## Validation before handoff
 

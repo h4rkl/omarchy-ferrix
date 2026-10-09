@@ -1,5 +1,16 @@
 # Google Pixel 9a — tegu / GXQ96 / MP1.0
 
+> **Current state (2026-10-10):** on the
+> [development flash route](#development-flash-route) Ferrix boots from slot b
+> and reaches home unattended under required app isolation. Power, display,
+> input, network (including WPA3-SAE) and Bluetooth are `supported` in
+> [`capabilities.toml`](capabilities.toml); audio, telephony and lifecycle
+> stay `unsupported`. See the newest physical entry in
+> [`docs/status.md`](../../../docs/status.md) ("Pixel 9a: product reaches home
+> unattended under required isolation"). The paragraphs below describe the
+> earlier static/split routes and the recovery history, and their
+> "unsupported"/"no Ferrix boot" statements apply to those routes only.
+
 This is an exact physical-target identity and stock-recovery package for the
 identified device. It is not a claim that Ferrix Linux boots on this phone.
 Ferrix product code remains target-neutral; the capability matrix is

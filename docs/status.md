@@ -92,27 +92,25 @@ touchscreen through libinput. Identifiers are not recorded.
   and telephonyd racing NetworkManager/ModemManager bus-name ownership
   (bounded 30 s wait), and a stale `wayland-0` satisfying the shell readiness
   wait on restart.
-- **Required isolation on GKI:** apps run in user+PID+mount+UTS namespaces
-  with private `/tmp` and `/run`, `no_new_privs`. GKI has no IPC namespace
-  (no SysV IPC/mqueue), so the sandbox drops `CLONE_NEWIPC` only when
-  `/proc/self/ns/ipc` is absent and reports the launch `degraded` with that
-  reason. An unprivileged launcher lost its namespace capabilities at the
+- **Required isolation on GKI:** apps run in user+PID+mount+UTS+IPC
+  namespaces with private `/tmp` and `/run`, `no_new_privs`, and launch
+  `degraded:false`. The first flashed GKI had no IPC namespace, so the
+  sandbox learned to drop `CLONE_NEWIPC` only when `/proc/self/ns/ipc` is
+  absent (reporting the launch `degraded` with that reason); the GKI now
+  builds `IPC_NS`/`POSIX_MQUEUE` (see the Browser bullet), so that fallback no
+  longer triggers on this target. An unprivileged launcher lost its namespace capabilities at the
   stage-2 `execve`; `CAP_SYS_ADMIN` now rides the ambient set into stage 2 and
   is cleared before the application execs. Apps launched from short-lived
   appd threads were SIGKILLed by the sandbox's parent-death signal (Linux ties
   it to the spawning thread); the native runtime now spawns from one
   process-lifetime thread.
 - **Wi-Fi:** joined through Settings > Wi-Fi with the on-screen keyboard;
-  DHCP and ping succeed. The bcm4383 driver fails SAE association with the
-  host wpa_supplicant (also single-AKM SAE with PMF required), so the Pixel
-  profile sets `connectivity.wifi_transition_key_mgmt = "psk"` and transition
-  APs are joined as WPA2-PSK; SAE-only networks remain unsupported. Source
-  analysis found the likely cause: upstream wpa_supplicant sends
-  `NL80211_WPA_VERSION_3` for SAE and bcmdhd's `wl_set_wpa_version()` only
-  knows versions 1 and 2, so it programs `wpa_auth` 0. AOSP's Broadcom build
-  never sends version 3. Kernel patch `0002-treat-nl80211-wpa-version-3-as-rsn`
-  builds but has not been tested on the device
-  (`docs/pixel-9a-bt-wpa3-research.md` B.4). A
+  DHCP and ping succeed. WPA3-SAE works with kernel patch
+  `0002-treat-nl80211-wpa-version-3-as-rsn` (see the WPA3-SAE bullet below
+  and `docs/pixel-9a-bt-wpa3-research.md` B.4), so the Pixel profile no
+  longer overrides `connectivity.wifi_transition_key_mgmt`; the earlier
+  WPA2-PSK-only workaround is gone. Only the transition AP was joined with
+  SAE; an SAE-only network was not tested. A
   networkd freeze at "associating" was a zbus deadlock (signal consumer
   blocking on calls over the same connection); fixed.
 - **Bluetooth:** `ferrix-bluetooth-uart` lifts the `nitrous_bluetooth`
@@ -121,7 +119,9 @@ touchscreen through libinput. Identifiers are not recorded.
   devices (~90 s after boot at 115200 baud). The controller keeps its chip
   default address (no bootloader BT address is exposed). ferrix-core reports
   the controller present and enabled through the BlueZ adapter, so the
-  capability is now `supported`; pairing is not built.
+  capability is now `supported`. The pairing UI is merged and discovery was
+  verified on hardware (Bluetooth pairing UI bullet below); pairing itself
+  was not exercised.
 - **Display/UI:** portrait 1080x2424, correct colours (byte-reversed scanout
   profile), safe area; the rule under the app clock strip is removed and the
   home identity line fits the panel.
@@ -483,7 +483,10 @@ Images and logs stay under ignored `out/`; serials are redacted.
   phone restored scans and the phone joined a WPA2 network (DHCP lease, 0%
   ping loss). Fixed permanently by `kernel-patches/` (applied by `kernel.sh`)
   plus `networkmanager-ferrix.conf`; the patched image is not yet flashed.
-- Not working yet / limitations:
+- Not working yet / limitations (superseded: every item below except the
+  S5300 WWAN/SIT note was resolved by the newer 2026-10-09 entry "Pixel 9a:
+  product reaches home unattended under required isolation"; kept as
+  history):
   - App isolation: the prebuilt GKI lacks `CONFIG_USER_NS`/`CONFIG_PID_NS`, so
     required isolation fails; apps were exercised only with an on-device,
     uncommitted `best-effort` manifest override. `kernel-config.ferrix-gki` +

@@ -5,6 +5,14 @@ Status: accepted and implemented for the opt-in QEMU postmarketOS route on
 the pinned inputs, measured evidence, and remaining limitations. This is not a
 physical-device or general Android compatibility claim.
 
+**Superseded in part by [ADR-007](007-fulguris-browser-input.md) (2026-09-28):**
+the Browser app is now Fulguris (`apps/org.ferrix.browser.json` launches
+`net.slions.fulguris.full.fdroid`), acquired by `tools/android/fulguris-fetch.sh`
+/ `fulguris-verify.sh` with pins in `tools/android/fulguris.pins`. The Brave
+descriptor values, `tools/android/brave-fetch.sh` and `brave.pins` described
+below no longer exist; they and the Brave runs are historical. The Waydroid
+runtime decision and the adapter boundary still stand.
+
 ## Constraints the evaluation must measure
 
 Upstream maintenance, AArch64 support, postmarketOS compatibility, Binder
