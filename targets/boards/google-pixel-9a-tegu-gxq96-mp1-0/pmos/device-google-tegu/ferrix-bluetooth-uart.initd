@@ -1,0 +1,56 @@
+#!/sbin/openrc-run
+
+# Attaches the BCM4383 Bluetooth controller to BlueZ. Android drives it from
+# userspace over raw HCI; on Linux the controller sits on serial_18 and its
+# power (BT_REG_ON and wake lines) is the `nitrous_bluetooth` rfkill switch
+# registered by nitrous.ko. hci_uart's BCM protocol downloads brcm/BCM.hcd
+# (the firmware manifest's reviewed patch) and registers hci0.
+
+name="Ferrix Pixel 9a Bluetooth UART attach"
+description="Powers the BCM4383 Bluetooth controller and attaches it as hci0"
+
+uart=${FERRIX_BLUETOOTH_UART:-/dev/ttySAC18}
+rfkill_name=nitrous_bluetooth
+command=/usr/bin/btattach
+command_args="-B $uart -P bcm"
+supervisor=supervise-daemon
+output_log="/var/log/ferrix-bluetooth-uart.log"
+error_log="/var/log/ferrix-bluetooth-uart.log"
+
+depend() {
+	need udev ferrix-radio-firmware
+	# The combo chip's Wi-Fi/BT power coordinator expects Wi-Fi up first.
+	after networkmanager
+	before bluetooth
+}
+
+rfkill_switch() {
+	for switch in /sys/class/rfkill/rfkill*; do
+		[ "$(cat "$switch/name" 2>/dev/null)" = "$rfkill_name" ] && {
+			echo "$switch"
+			return 0
+		}
+	done
+	return 1
+}
+
+start_pre() {
+	[ -c "$uart" ] || {
+		eerror "$uart is missing"
+		return 1
+	}
+	[ -x "$command" ] || {
+		eerror "$command is not installed"
+		return 1
+	}
+	switch=$(rfkill_switch) || {
+		eerror "rfkill $rfkill_name is missing (nitrous.ko not loaded)"
+		return 1
+	}
+	echo 0 > "$switch/soft"
+}
+
+stop_post() {
+	switch=$(rfkill_switch) && echo 1 > "$switch/soft"
+	return 0
+}

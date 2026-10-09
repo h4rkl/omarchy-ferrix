@@ -272,6 +272,10 @@ class RootfsEditor:
                         f"sif {dest} mode 0{0o100000 | mode:o}",
                         f"sif {dest} uid 0", f"sif {dest} gid 0"]
 
+    def symlink(self, dest, target):
+        if debugfs_type(self.image, dest) is None:
+            self.script.append(f"symlink {dest} {target}")
+
     def remove(self, path):
         if debugfs_type(self.image, path) is not None:
             self.script.append(f"rm {path}")
@@ -365,6 +369,15 @@ PRODUCT_BINARIES = (
 )
 
 
+def apkbuild_default_services(apkbuild):
+    """Services the device package links into the default runlevel."""
+    match = re.search(r"for service in ([^;]+); do\s+ln -sf /etc/init\.d/\$service "
+                      r"\"\$pkgdir\"/etc/runlevels/default/", apkbuild.read_text())
+    if match is None:
+        die(f"no default-runlevel service list in {apkbuild}")
+    return match.group(1).split()
+
+
 def integrate_rootfs(image, work, package, profile, product, reboot_helper):
     """Bring the base rootfs up to date with this checkout: product binaries,
     profile and app catalog, the device package's service scripts, the
@@ -393,9 +406,16 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
         dest = f"/etc/init.d/{script.stem}"
         editor.put(script.read_bytes(), dest, 0o755)
         written.append(dest)
-    for service in RADIO_ROUTE_SERVICES:
-        editor.remove(f"/etc/runlevels/default/{service}")
-        written.append(f"-/etc/runlevels/default/{service}")
+    # The APKBUILD's runlevel list is the source of truth; a base rootfs
+    # built before a service was added lacks its link.
+    for service in apkbuild_default_services(package / "APKBUILD"):
+        link = f"/etc/runlevels/default/{service}"
+        if service in RADIO_ROUTE_SERVICES:
+            editor.remove(link)
+            written.append(f"-{link}")
+        else:
+            editor.symlink(link, f"/etc/init.d/{service}")
+            written.append(link)
     for path, edit in gki_rootfs_patches().items():
         editor.patch(path, edit, 0o755 if path.startswith("/etc/init.d/") else 0o644)
         written.append(path)
