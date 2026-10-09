@@ -51,8 +51,8 @@ fn compose_backend(args: &Args) -> Result<Composed, String> {
                 Some(path) => {
                     ferrix_target_profile::Profile::load(path)
                         .map_err(|e| format!("profile: {e}"))?
-                        .network_section()
-                        .transition_key_mgmt
+                        .connectivity
+                        .wifi_transition_key_mgmt
                 }
                 None => Default::default(),
             };

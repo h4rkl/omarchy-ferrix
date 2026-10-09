@@ -111,6 +111,11 @@ pub struct ConnectivitySection {
     pub bluetooth_present: bool,
     pub modem: ModemRegistration,
     pub sim: SimState,
+    /// How the production Wi-Fi adapter joins a WPA2/WPA3 transition-mode
+    /// access point (one advertising both PSK and SAE): `sae` unless the
+    /// target has evidence that its driver cannot complete SAE.
+    #[serde(default)]
+    pub wifi_transition_key_mgmt: ProfileTransitionKeyMgmt,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -315,10 +320,6 @@ pub struct NetworkSection {
     /// name one of `access_points`.
     pub connected: String,
     pub access_points: Vec<ProfileAccessPoint>,
-    /// How the production adapter joins a WPA2/WPA3 transition-mode access
-    /// point (one advertising both PSK and SAE). `sae` unless the target has
-    /// evidence that its Wi-Fi driver cannot complete SAE.
-    pub transition_key_mgmt: ProfileTransitionKeyMgmt,
 }
 
 /// Key management for WPA2/WPA3 transition-mode access points.
@@ -337,7 +338,6 @@ impl Default for NetworkSection {
             radio: ProfileRadioState::Enabled,
             connected: String::new(),
             access_points: Vec::new(),
-            transition_key_mgmt: ProfileTransitionKeyMgmt::Sae,
         }
     }
 }
