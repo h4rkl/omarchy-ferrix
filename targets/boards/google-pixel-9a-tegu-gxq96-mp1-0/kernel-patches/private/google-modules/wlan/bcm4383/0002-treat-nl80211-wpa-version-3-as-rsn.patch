@@ -1,0 +1,19 @@
+diff --git a/wl_cfg80211.c b/wl_cfg80211.c
+--- a/wl_cfg80211.c
++++ b/wl_cfg80211.c
+@@ -4682,7 +4682,14 @@ wl_set_wpa_version(struct net_device *dev, struct cfg80211_connect_params *sme)
+ 	if (sme->crypto.wpa_versions & NL80211_WPA_VERSION_1) {
+ 		val = WPA_AUTH_PSK |
+ 			WPA_AUTH_UNSPECIFIED;
+-	} else if (sme->crypto.wpa_versions & NL80211_WPA_VERSION_2) {
++	} else if (sme->crypto.wpa_versions &
++		(NL80211_WPA_VERSION_2 | NL80211_WPA_VERSION_3)) {
++		/* Ferrix: upstream wpa_supplicant sends NL80211_WPA_VERSION_3 for
++		 * SAE connects (AOSP's CONFIG_DRIVER_NL80211_BRCM build never does).
++		 * It is still RSN; without this the firmware gets wpa_auth 0 and
++		 * wl_set_key_mgmt() never selects WPA3_AUTH_SAE_PSK, so the
++		 * WPA3-SAE association times out.
++		 */
+ 		val = WPA2_AUTH_PSK|
+ 			WPA2_AUTH_UNSPECIFIED;
+ 	} else {

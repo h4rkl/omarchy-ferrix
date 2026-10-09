@@ -106,7 +106,13 @@ touchscreen through libinput. Identifiers are not recorded.
   DHCP and ping succeed. The bcm4383 driver fails SAE association with the
   host wpa_supplicant (also single-AKM SAE with PMF required), so the Pixel
   profile sets `connectivity.wifi_transition_key_mgmt = "psk"` and transition
-  APs are joined as WPA2-PSK; SAE-only networks remain unsupported. A
+  APs are joined as WPA2-PSK; SAE-only networks remain unsupported. Source
+  analysis found the likely cause: upstream wpa_supplicant sends
+  `NL80211_WPA_VERSION_3` for SAE and bcmdhd's `wl_set_wpa_version()` only
+  knows versions 1 and 2, so it programs `wpa_auth` 0. AOSP's Broadcom build
+  never sends version 3. Kernel patch `0002-treat-nl80211-wpa-version-3-as-rsn`
+  builds but has not been tested on the device
+  (`docs/pixel-9a-bt-wpa3-research.md` B.4). A
   networkd freeze at "associating" was a zbus deadlock (signal consumer
   blocking on calls over the same connection); fixed.
 - **Bluetooth:** `ferrix-bluetooth-uart` lifts the `nitrous_bluetooth`
