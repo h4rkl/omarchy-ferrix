@@ -331,10 +331,23 @@ def gki_rootfs_patches():
     def modemmanager(text):
         # The SIT ModemManager chain belongs to the radio-first WWAN kernel; on
         # the Kleaf/cpif route ModemManager runs without it (no modem yet).
-        return re.sub(r"^\s*need ferrix-s5300-mounts exynos-modem sit-proxy\n", "", text,
+        text = re.sub(r"^\s*need ferrix-s5300-mounts exynos-modem sit-proxy\n", "", text,
                       flags=re.M)
+        # Same as the package's modemmanager.initd: drop the conf.d option this
+        # ModemManager build does not have (catch-up for older base rootfs).
+        return text.replace(
+            'command_args="${modemmanager_opts}"',
+            "command_args=\"$(printf '%s' \"${modemmanager_opts}\" | "
+            "sed 's/--test-quick-suspend-resume//')\"")
 
-    return {"/etc/init.d/udev": udev, "/etc/conf.d/seatd": seatd,
+    def modemmanager_dbus(text):
+        # Catch-up for base rootfs images built before the package fix:
+        # OpenRC supervises ModemManager; D-Bus must not auto-start it.
+        return re.sub(r"^Exec=.*$", "Exec=/bin/false", text, flags=re.M)
+
+    return {"/usr/share/dbus-1/system-services/org.freedesktop.ModemManager1.service":
+            modemmanager_dbus,
+            "/etc/init.d/udev": udev, "/etc/conf.d/seatd": seatd,
             "/etc/group": group, "/etc/inittab": inittab,
             "/etc/init.d/modemmanager": modemmanager}
 

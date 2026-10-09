@@ -43,11 +43,13 @@ wait_for_wireplumber() {
 }
 
 start() {
+	# Both daemons run in the foreground by default; neither accepts
+	# --no-daemon (they exit on the unknown option).
 	ebegin "Starting PipeWire/WirePlumber"
 	start-stop-daemon --start --background --make-pidfile --pidfile "$pipewire_pid" \
-		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/pipewire -- --no-daemon
+		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/pipewire
 	start-stop-daemon --start --background --make-pidfile --pidfile "$wireplumber_pid" \
-		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/wireplumber -- --no-daemon
+		--chuid user:user --env XDG_RUNTIME_DIR="$runtime_dir" --exec /usr/bin/wireplumber
 	wait_for_wireplumber
 	eend $?
 }

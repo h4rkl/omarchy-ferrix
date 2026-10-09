@@ -2,7 +2,10 @@
 
 supervisor=supervise-daemon
 command=/usr/sbin/ModemManager
-command_args="${modemmanager_opts}"
+# postmarketOS's conf.d passes --test-quick-suspend-resume, which only exists
+# when ModemManager is built with suspend/resume support; this build is not
+# (-Dsystemd_suspend_resume=false) and exits on the unknown option.
+command_args="$(printf '%s' "${modemmanager_opts}" | sed 's/--test-quick-suspend-resume//')"
 description="ModemManager Samsung SIT daemon"
 
 depend() {

@@ -15,7 +15,8 @@ appd_pidfile=/run/ferrix/ferrix-appd.pid
 shell_pidfile=/run/ferrix/ferrix-shell.pid
 
 depend() {
-	need ferrix-core ferrix-networkd ferrix-telephonyd ferrix-audio ferrix-radio-firmware seatd
+	need ferrix-core ferrix-networkd ferrix-telephonyd ferrix-radio-firmware seatd
+	use ferrix-audio
 	after dbus udev networkmanager modemmanager bluetooth ferrix-s5300-mounts exynos-modem sit-proxy
 }
 
@@ -62,10 +63,12 @@ start() {
 	export FERRIX_APPD_SOCKET=$appd_socket
 
 	wait_for_socket "$core_socket" ferrix-core || { eend 1; return 1; }
+	checkpath -f -m 0640 -o user:user /var/log/ferrix-shell.log /var/log/ferrix-appd.log
 	start-stop-daemon --start --background --make-pidfile --pidfile "$shell_pidfile" \
 		--chuid user:user --env HOME=/home/user --env USER=user \
 		--env XDG_RUNTIME_DIR=/run/user/1000 --env WAYLAND_DISPLAY=wayland-0 \
 		--env FERRIX_CORE_SOCKET="$core_socket" --env FERRIX_APPD_SOCKET="$appd_socket" \
+		--stdout /var/log/ferrix-shell.log --stderr /var/log/ferrix-shell.log \
 		--exec /usr/bin/ferrix-shell -- --core "$core_socket" \
 		--ferrix-appd "$appd_socket" /etc/ferrix/profile.toml
 	wait_for_socket "$wayland_socket" ferrix-shell || { eend 1; return 1; }
@@ -75,6 +78,7 @@ start() {
 		--env XDG_RUNTIME_DIR=/run/user/1000 --env WAYLAND_DISPLAY=wayland-0 \
 		--env FERRIX_EVIDENCE="$FERRIX_EVIDENCE" --env FERRIX_TARGET="$FERRIX_TARGET" \
 		--env FERRIX_TELEPHONY_APN="${FERRIX_TELEPHONY_APN:-}" \
+		--stdout /var/log/ferrix-appd.log --stderr /var/log/ferrix-appd.log \
 		--exec /usr/bin/ferrix-appd -- --socket "$appd_socket" \
 		--app-dir /usr/share/ferrix/apps --grants /usr/share/ferrix/apps/grants.json \
 		--sandbox /usr/bin/ferrix-sandbox

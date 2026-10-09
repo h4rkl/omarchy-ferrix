@@ -20,8 +20,12 @@ depend() {
 	# daemons expose. Start those providers first so a real OpenRC boot does
 	# not race NetworkManager, ModemManager, BlueZ, UPower, or WirePlumber.
 	# UPower is activated on demand over the system D-Bus; Alpine has no
-	# upower OpenRC service to order here.
-	need dbus networkmanager modemmanager bluetooth ferrix-radio-firmware ferrix-networkd ferrix-telephonyd ferrix-audio
+	# upower OpenRC service to order here. Audio and the ModemManager process
+	# are capabilities ferrix-core composes; when either is unavailable (for
+	# example no sound card yet) the capability degrades instead of keeping
+	# the shell from starting. The radio firmware gate stays mandatory.
+	need dbus networkmanager bluetooth ferrix-radio-firmware ferrix-networkd ferrix-telephonyd
+	use modemmanager ferrix-audio
 	after udev ferrix-s5300-mounts exynos-modem sit-proxy
 }
 

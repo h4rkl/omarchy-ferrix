@@ -240,6 +240,15 @@ mod linux {
         let mut wanted = select_namespaces(policy, identity.uid == 0);
         let mut notes = Vec::new();
         let before = NsLinks::read();
+        // CONFIG_IPC_NS exists only with SysV IPC or POSIX mqueue; a kernel
+        // without it (Android GKI) has no IPC objects to share, and asking for
+        // CLONE_NEWIPC fails the whole unshare with EINVAL.
+        if wanted.ipc && !Path::new("/proc/self/ns/ipc").exists() {
+            wanted.ipc = false;
+            notes.push(
+                "kernel has no IPC namespace (no SysV IPC or POSIX mqueue to isolate)".to_owned(),
+            );
+        }
         if !wanted.any() {
             return Ok(Unshared {
                 wanted,
