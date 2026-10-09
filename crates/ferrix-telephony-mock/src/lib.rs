@@ -1749,7 +1749,9 @@ mod tests {
         assert_eq!(snapshot.access, AccessTechnology::Lte);
         assert_eq!(snapshot.signal.bars, 3);
         assert!(snapshot.capabilities.contains(&TelephonyFeature::Voice));
-        assert!(!snapshot.capabilities.contains(&TelephonyFeature::Data));
+        // The QEMU profile mirrors Settings' mobile-data toggle with a
+        // synthetic bearer; no carrier or device fact.
+        assert!(snapshot.capabilities.contains(&TelephonyFeature::Data));
     }
 
     #[test]

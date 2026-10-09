@@ -35,7 +35,7 @@ operator = "Ferrix Mock"
 access = "lte"
 signal_bars = 3
 roaming = false
-features = ["voice", "sms", "multipart-sms", "delivery-reports", "dtmf", "hold", "audio-route", "sim-pin", "radio-power", "mic-mute"]
+features = ["voice", "sms", "multipart-sms", "delivery-reports", "dtmf", "hold", "audio-route", "sim-pin", "radio-power", "mic-mute", "data"]
 
 # Detailed mock network state (ADR-006). Synthetic access points for the mock
 # adapter in ferrix-networkd; `connected` names the one joined at boot.
