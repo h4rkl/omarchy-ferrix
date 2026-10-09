@@ -326,6 +326,7 @@ impl Service {
             "signal_bars": t.signal.bars,
             "radio": t.radio.name(),
             "audio": t.audio.active.name(),
+            "muted": t.audio.muted,
             "calls": t.calls.values().map(|c| serde_json::json!({
                 "call_id": c.id,
                 "direction": c.direction.name(),
@@ -681,6 +682,17 @@ impl Service {
     pub fn set_audio_route(&self, route: AudioRoute) -> Result<(), TelephonyError> {
         self.require_feature(TelephonyFeature::AudioRoute)?;
         self.backend.set_audio_route(route)?;
+        Ok(())
+    }
+
+    /// Mutes or unmutes the live call's microphone. Refused while no call
+    /// is live: mute is per call, never a standing setting.
+    pub fn set_mic_muted(&self, muted: bool) -> Result<(), TelephonyError> {
+        self.require_feature(TelephonyFeature::MicMute)?;
+        if lock(&self.state).telephony.live_calls().next().is_none() {
+            return Err(TelephonyError::invalid_state("idle", "set-mic-muted"));
+        }
+        self.backend.set_mic_muted(muted)?;
         Ok(())
     }
 

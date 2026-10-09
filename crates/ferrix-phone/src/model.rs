@@ -128,6 +128,8 @@ pub enum Action {
     Resume(CallId),
     Dtmf(CallId, char),
     SetRoute(AudioRoute),
+    /// Mute or unmute the live call's microphone.
+    SetMuted(bool),
     /// Yield the foreground to the home surface.
     Back,
 }
@@ -229,10 +231,14 @@ impl Model {
             },
             Page::Recent => format!("{}-calls", self.recent().len()),
             Page::Incoming => "ringing".to_owned(),
-            Page::InCall => self
-                .focused()
-                .map_or("none", |c| c.call.state.name())
-                .to_owned(),
+            Page::InCall => {
+                let state = self.focused().map_or("none", |c| c.call.state.name());
+                if self.muted() {
+                    format!("{state}-muted")
+                } else {
+                    state.to_owned()
+                }
+            }
             Page::Ended => self
                 .focused()
                 .and_then(|c| c.call.end_reason.as_ref())
@@ -549,6 +555,19 @@ impl Model {
         self.state.as_ref().map(|s| s.audio.active)
     }
 
+    /// Whether the call microphone is muted, as the daemon reports it.
+    pub fn muted(&self) -> bool {
+        self.state.as_ref().is_some_and(|s| s.audio.muted)
+    }
+
+    /// Mute needs the backend feature and a connected focused call.
+    pub fn can_mute(&self) -> bool {
+        self.supports(TelephonyFeature::MicMute)
+            && self
+                .focused()
+                .is_some_and(|c| matches!(c.call.state, CallState::Active | CallState::Held))
+    }
+
     pub fn supports(&self, feature: TelephonyFeature) -> bool {
         self.state
             .as_ref()
@@ -621,6 +640,12 @@ impl Model {
             && view.call.state == CallState::Active
         {
             self.pending.push(Action::Dtmf(view.call.id.clone(), ch));
+        }
+    }
+
+    pub fn toggle_mute(&mut self) {
+        if self.can_mute() {
+            self.pending.push(Action::SetMuted(!self.muted()));
         }
     }
 
@@ -704,12 +729,14 @@ pub fn preview_state(
         ]
         .into_iter()
         .collect(),
+        muted: false,
     };
     state.capabilities = [
         TelephonyFeature::Voice,
         TelephonyFeature::Dtmf,
         TelephonyFeature::Hold,
         TelephonyFeature::AudioRoute,
+        TelephonyFeature::MicMute,
     ]
     .into_iter()
     .collect();

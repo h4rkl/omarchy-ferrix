@@ -1,0 +1,61 @@
+schema_version = 1
+name = "in-call-mic-mute"
+description = "An answered call mutes and unmutes its microphone through the client verb; mute clears when the remote party hangs up."
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-radio", power = "on" }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-modem", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-sim", state = "ready" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-registration", registration = "registered", roaming = false, operator = "Ferrix Mock", access = "lte" }
+note = "setup"
+
+[[step]]
+service = "telephony"
+command = { cmd = "incoming-call", number = "+15550100042" }
+expect = [ { event = "telephony-event", kind = "call-changed", call = { direction = "incoming", state = "ringing" } } ]
+
+[[step]]
+service = "telephony"
+command = { cmd = "answer" }
+expect = [ { event = "telephony-event", kind = "call-changed", call = { state = "active" } } ]
+note = "client verb through the normal service path"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-mic-muted", muted = true }
+expect = [ { event = "telephony-event", kind = "audio-route-changed", audio = { muted = true } } ]
+note = "client verb (telephony-call)"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-mic-muted", muted = false }
+expect = [ { event = "telephony-event", kind = "audio-route-changed", audio = { muted = false } } ]
+note = "client verb"
+
+[[step]]
+service = "telephony"
+command = { cmd = "set-mic-muted", muted = true }
+expect = [ { event = "telephony-event", kind = "audio-route-changed", audio = { muted = true } } ]
+note = "muted again before the remote hangs up"
+
+[[step]]
+service = "telephony"
+command = { cmd = "remote-hangup" }
+expect = [
+  { event = "telephony-event", kind = "call-changed", call = { state = "ended", end_reason = { kind = "remote-hangup" } } },
+  { event = "telephony-event", kind = "audio-route-changed", audio = { muted = false } },
+]
+note = "mute is per call: the mock clears it with the last live call"

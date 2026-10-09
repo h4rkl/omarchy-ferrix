@@ -161,6 +161,7 @@ impl Phone {
             Action::Resume(_) => "resume",
             Action::Dtmf(..) => "dtmf",
             Action::SetRoute(_) => "set-audio-route",
+            Action::SetMuted(_) => "set-mic-muted",
             Action::Back => "back",
         };
         let outcome: Result<(), Result<TelephonyError, String>> = match action {
@@ -182,6 +183,7 @@ impl Phone {
             Action::Hold(call_id) => self.expect_ok(Request::Hold { call_id }),
             Action::Resume(call_id) => self.expect_ok(Request::Resume { call_id }),
             Action::SetRoute(route) => self.expect_ok(Request::SetAudioRoute { route }),
+            Action::SetMuted(muted) => self.expect_ok(Request::SetMicMuted { muted }),
         };
         let (status, error) = match outcome {
             Ok(()) => ("ok", None),
