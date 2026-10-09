@@ -129,10 +129,15 @@ impl Selection {
         }
     }
 
-    /// Extends the head while a long-press drag continues (the anchor stays
-    /// where the press began).
-    pub fn extend(&mut self, to: Point) {
-        self.head = to;
+    /// The selection a long-press drag makes: the pressed `word` stays
+    /// selected and grows toward `to` in either direction.
+    pub fn extended(word: Selection, to: Point) -> Selection {
+        let (first, last) = word.range();
+        if to < first {
+            Self::new(last, to)
+        } else {
+            Self::new(first, to.max(last))
+        }
     }
 
     /// Follows text that scrolled `lines` further into history.
@@ -193,10 +198,14 @@ mod tests {
         // Dragging the start past the end: the finger now holds the end.
         assert_eq!(s.drag(Handle::Start, Point::new(4, 0)), Handle::End);
         assert_eq!(s.range(), (Point::new(2, 3), Point::new(4, 0)));
-        // A long-press drag extends from the anchor in either direction.
-        let mut s = Selection::new(Point::new(5, 5), Point::new(5, 5));
-        s.extend(Point::new(4, 2));
-        assert_eq!(s.range(), (Point::new(4, 2), Point::new(5, 5)));
+        // A long-press drag keeps the pressed word and grows either way.
+        let word = Selection::new(Point::new(5, 5), Point::new(5, 9));
+        let up = Selection::extended(word, Point::new(4, 2));
+        assert_eq!(up.range(), (Point::new(4, 2), Point::new(5, 9)));
+        let inside = Selection::extended(word, Point::new(5, 7));
+        assert_eq!(inside.range(), word.range(), "lifting inside the word");
+        let down = Selection::extended(word, Point::new(6, 1));
+        assert_eq!(down.range(), (Point::new(5, 5), Point::new(6, 1)));
     }
 
     #[test]

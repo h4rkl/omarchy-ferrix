@@ -442,8 +442,8 @@ struct Contact {
     target: Option<Target>,
     /// When a still touch on the grid becomes a selection.
     long_press_at: Option<Instant>,
-    /// The long press fired: motion extends the selection.
-    selecting: bool,
+    /// The word the long press selected: motion extends from it.
+    word: Option<Selection>,
     /// The handle being dragged (it can swap ends mid-drag).
     handle: Option<Handle>,
     /// Finger offset from the thumb's top while dragging the scrollbar.
@@ -475,7 +475,7 @@ impl Input {
             anchor: position,
             target,
             long_press_at: None,
-            selecting: false,
+            word: None,
             handle: None,
             grab: 0.0,
         };
@@ -548,13 +548,12 @@ impl Input {
                 }
                 return false;
             }
-            Some(Target::TermArea) if contact.selecting => {
-                if let (Some(selection), Some(point)) =
-                    (state.selection.as_mut(), state.view.point_at(position))
-                {
-                    let before = *selection;
-                    selection.extend(point);
-                    return *selection != before;
+            Some(Target::TermArea) if contact.word.is_some() => {
+                if let (Some(word), Some(point)) = (contact.word, state.view.point_at(position)) {
+                    let next = Some(Selection::extended(word, point));
+                    let changed = state.selection != next;
+                    state.selection = next;
+                    return changed;
                 }
                 return false;
             }
@@ -605,7 +604,7 @@ impl Input {
                 return true;
             }
             Some(Target::Handle(_)) => return true,
-            Some(Target::TermArea) if contact.selecting => return true,
+            Some(Target::TermArea) if contact.word.is_some() => return true,
             _ => {}
         }
         let (w, h) = (f64::from(size.0), f64::from(size.1));
@@ -672,8 +671,9 @@ impl Input {
             if let Some((row, col)) = state.view.cell_at(contact.current) {
                 let line = snapshot.map(|s| s.row_chars(row)).unwrap_or_default();
                 let at = Point::from_viewport(row, col, state.view.offset);
-                state.selection = Some(Selection::word(&line, at));
-                contact.selecting = true;
+                let word = Selection::word(&line, at);
+                state.selection = Some(word);
+                contact.word = Some(word);
                 redraw = true;
             }
         }
@@ -857,6 +857,9 @@ mod tests {
         assert!(input.timer(&mut state, Some(&snap), ms(t0, 500)));
         let selection = state.selection.expect("selected");
         assert_eq!(selection.range(), (Point::new(0, 19), Point::new(0, 31)));
+        // A pointer release re-reports its position: still the whole word.
+        input.motion(0, on, &mut state, SIZE, ms(t0, 550));
+        assert_eq!(state.selection, Some(selection));
         // Keep dragging: the selection extends to the next line.
         input.motion(0, mid(v.cell_rect(1, 3)), &mut state, SIZE, ms(t0, 600));
         assert_eq!(

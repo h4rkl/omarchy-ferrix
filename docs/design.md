@@ -320,6 +320,21 @@ The keyboard is an instrument bed: `bg_dark` well, `surface` character keys,
 darker function keys, and rust only for pressed or latched state. Key geometry
 and hit-test geometry are the same data.
 
+Letter rows are data (`crates/ferrix-ui/layouts/*.toml`); a layout wider than
+ten letters narrows every letter key evenly rather than shrinking one row.
+Held backspace, arrows, and space repeat; letters do not (a held letter is
+not a request for `aaaa`).
+
+### Terminal selection, scrollbar, and bell
+
+Selection is passive state, so it is teal: selected cells take a `steel`
+wash over the grid well, the two drag handles are `steel` drops, and the
+transient scrollbar thumb is `steel` on a `surface_hi` track. While a
+selection exists the block cursor drops to `fg_dim` and the Copy action
+carries the region's one rust cue. The visual bell is a brief `warn` outline
+of the grid well (the shell asked for attention), never a full-screen flash.
+A program's OSC 0/2 title is the header's status line, not the page title.
+
 ### Interaction state matrix
 
 | State | Surface | Outline / rail | Content |
