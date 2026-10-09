@@ -258,8 +258,10 @@ pub fn run(
     // Dumb buffers are linear. Drivers without IN_FORMATS (e.g. the Pixel 9a
     // exynos DPU) advertise plane formats with the implicit modifier, so offer
     // both or the format negotiation finds no common plane format.
-    let renderer_formats: FormatSet = [Fourcc::Xrgb8888, Fourcc::Argb8888]
-        .into_iter()
+    let color_formats = scanout_formats();
+    let renderer_formats: FormatSet = color_formats
+        .iter()
+        .copied()
         .flat_map(|code| {
             [Modifier::Linear, Modifier::Invalid]
                 .map(|modifier| smithay::backend::allocator::Format { code, modifier })
@@ -271,7 +273,7 @@ pub fn run(
         Some(planes),
         DumbAllocator::new(fd.clone()),
         fd.clone(),
-        [Fourcc::Xrgb8888, Fourcc::Argb8888],
+        color_formats,
         renderer_formats,
         drm.cursor_size(),
         None::<GbmDevice<DrmDeviceFd>>,
@@ -417,4 +419,26 @@ pub fn run(
         &[("frames", Value::Int(frames_presented as i64))],
     );
     Ok(())
+}
+
+/// Scan-out formats in preference order. `FERRIX_SHELL_SCANOUT_FORMATS`
+/// (comma-separated fourcc codes such as `XB24,AB24`) is a hardware bring-up
+/// diagnostic for display controllers whose byte order or alpha handling
+/// differs from what their format list implies.
+fn scanout_formats() -> Vec<Fourcc> {
+    let default = vec![Fourcc::Xrgb8888, Fourcc::Argb8888];
+    let Ok(value) = std::env::var("FERRIX_SHELL_SCANOUT_FORMATS") else {
+        return default;
+    };
+    let parsed: Vec<Fourcc> = value
+        .split(',')
+        .filter_map(|code| match code.trim() {
+            "XR24" => Some(Fourcc::Xrgb8888),
+            "AR24" => Some(Fourcc::Argb8888),
+            "XB24" => Some(Fourcc::Xbgr8888),
+            "AB24" => Some(Fourcc::Abgr8888),
+            _ => None,
+        })
+        .collect();
+    if parsed.is_empty() { default } else { parsed }
 }
