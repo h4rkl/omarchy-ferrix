@@ -380,8 +380,15 @@ required_kernel_modules() {
 		case "$module" in
 			''|'#'*) continue ;;
 		esac
-		find "$1" -type f -name "$module.ko" -print -quit | grep -q . ||
-			die "kernel dist is missing required tegu module: $module.ko"
+		find "$1" -type f -name "$module.ko" -print -quit | grep -q . && continue
+		# A GKI dist records built-in drivers in modules.builtin (kbuild names
+		# use '-' where module names use '_'); those need no .ko file.
+		if [ -f "$1/modules.builtin" ] && awk -v want="$(printf '%s' "$module" | tr '-' '_').ko" '
+			{ name = $0; sub(/.*\//, "", name); gsub(/-/, "_", name); if (name == want) { found = 1; exit } }
+			END { exit(found ? 0 : 1) }' "$1/modules.builtin"; then
+			continue
+		fi
+		die "kernel dist is missing required tegu module: $module.ko"
 	done < "$package_dir/modules-initfs"
 }
 

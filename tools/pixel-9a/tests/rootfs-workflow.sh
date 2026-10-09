@@ -667,6 +667,9 @@ android_build() {
 	FERRIX_PIXEL9A_ROOTFS_KERNEL_ROUTE="${ROUTE:-radio-first}" FERRIX_PIXEL9A_KERNEL_DIST="$kernel" "$script" build
 }
 # The development flash route composes with the Kleaf GKI, selected explicitly.
+# GKI builds dm_mod in; modules.builtin (kbuild '-' names) satisfies the list.
+rm -f "$kernel/dm_mod.ko"
+printf '%s\n' kernel/drivers/md/dm-mod.ko >"$kernel/modules.builtin"
 ROUTE=kleaf-dev android_build "$work/android-out" >"$work/android.out" 2>"$work/android.err" ||
 	{ cat "$work/android.err" >&2; fail 'opt-in Android rootfs build failed'; }
 android_manifest="$work/android-out/pixel-9a/rootfs/tegu/manifest.tsv"
