@@ -100,7 +100,7 @@ mod linux {
         waitpid,
     };
     use rustix::thread::{
-        Capability, CapabilitySet, UnshareFlags, capabilities, clear_ambient_capability_set,
+        CapabilitySet, UnshareFlags, capabilities, clear_ambient_capability_set,
         configure_capability_in_ambient_set, set_capabilities, set_no_new_privs,
     };
     use serde_json::json;
@@ -223,6 +223,25 @@ mod linux {
         flags
     }
 
+    /// [`select_namespaces`] narrowed to what this kernel can create, with a
+    /// note for anything dropped. `CONFIG_IPC_NS` exists only with SysV IPC or
+    /// POSIX mqueue; a kernel without it (Android GKI) has no IPC objects to
+    /// share, and asking for `CLONE_NEWIPC` fails the whole unshare (EINVAL).
+    fn kernel_namespaces(
+        policy: &IsolationPolicy,
+        is_root: bool,
+    ) -> (NamespaceSet, Option<&'static str>) {
+        let mut wanted = select_namespaces(policy, is_root);
+        if wanted.ipc && !Path::new("/proc/self/ns/ipc").exists() {
+            wanted.ipc = false;
+            return (
+                wanted,
+                Some("kernel has no IPC namespace (no SysV IPC or POSIX mqueue to isolate)"),
+            );
+        }
+        (wanted, None)
+    }
+
     /// Outcome of the namespace step.
     struct Unshared {
         wanted: NamespaceSet,
@@ -240,18 +259,9 @@ mod linux {
     /// gets one retry with a user namespace.
     fn unshare_for(policy: &IsolationPolicy) -> Result<Unshared, (NamespaceSet, String)> {
         let identity = Identity::current();
-        let mut wanted = select_namespaces(policy, identity.uid == 0);
-        let mut notes = Vec::new();
+        let (mut wanted, kernel_note) = kernel_namespaces(policy, identity.uid == 0);
+        let mut notes: Vec<String> = kernel_note.into_iter().map(str::to_owned).collect();
         let before = NsLinks::read();
-        // CONFIG_IPC_NS exists only with SysV IPC or POSIX mqueue; a kernel
-        // without it (Android GKI) has no IPC objects to share, and asking for
-        // CLONE_NEWIPC fails the whole unshare with EINVAL.
-        if wanted.ipc && !Path::new("/proc/self/ns/ipc").exists() {
-            wanted.ipc = false;
-            notes.push(
-                "kernel has no IPC namespace (no SysV IPC or POSIX mqueue to isolate)".to_owned(),
-            );
-        }
         if !wanted.any() {
             return Ok(Unshared {
                 wanted,
@@ -814,7 +824,7 @@ mod linux {
         let mut sets = capabilities(None)?;
         sets.inheritable |= CapabilitySet::SYS_ADMIN;
         set_capabilities(None, sets)?;
-        configure_capability_in_ambient_set(Capability::SystemAdmin, true)
+        configure_capability_in_ambient_set(CapabilitySet::SYS_ADMIN, true)
     }
 
     /// Empties the ambient and inheritable sets so the application's `execve`
@@ -891,7 +901,7 @@ mod linux {
             args.policy.no_new_privs && apply_no_new_privs(evidence, app, &mut reasons);
 
         if args.policy.mode == IsolationMode::Required {
-            let wanted = select_namespaces(&args.policy, geteuid().is_root());
+            let (wanted, _) = kernel_namespaces(&args.policy, geteuid().is_root());
             let mut unmet = applied.missing_from(wanted);
             if args.policy.pid_namespace && std::process::id() != 1 {
                 unmet.push("pid");
