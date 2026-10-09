@@ -104,6 +104,25 @@ just qemu-mock '{"cmd":"state"}'
 just qemu-mock shutdown
 ```
 
+Bluetooth discovery and pairing on the mock controller (devices come from
+`[[bluetooth.discoverable]]` in `profile.toml`, each with a fixed pairing
+method and outcome; ids are `mock-bt-found-N` in profile order). The
+`bluetooth-*` verbs are the same product requests Settings sends;
+`bluetooth-tick` and `set-bluetooth-pairing-outcome` are mock-only. The
+discovery bound (30 s), remote pairing steps (1 s, 3 s typing, 30 s silent
+remote), and the 30 s prompt timeout advance only on `bluetooth-tick`:
+
+```sh
+just qemu-mock bluetooth-discovery active=true      # scan; ends after bluetooth-tick ms=30000
+just qemu-mock bluetooth-pair device=mock-bt-found-0  # headphones: passkey prompt in Settings
+just qemu-mock bluetooth-reply accept=true          # or tap Pair in Settings
+just qemu-mock bluetooth-tick ms=1000               # the remote finishes the bond
+just qemu-mock bluetooth-disconnect device=mock-bt-found-0
+just qemu-mock bluetooth-forget device=mock-bt-found-0
+just qemu-mock set-bluetooth-pairing-outcome outcome=rejected   # success|rejected|timeout; omit to reset
+just qemu-mock bluetooth-cancel                     # cancel, or dismiss a finished outcome
+```
+
 Invalid or unknown commands are rejected with `"status":"error"`; they never
 succeed silently. The client is `scripts/mock_control.py` (python3 standard
 library only). This drives *mock* state in the virtual phone and is never a
@@ -291,7 +310,8 @@ no network. CI runs it as the third job (`qemu-scenario-check`) on pushes
 and manual dispatch, and on pull requests only when the PR carries the
 `scenarios` label; `qemu-check` itself is unchanged in cost.
 
-The checked-in set is ADR-006's required list (25 files): `no-modem`,
+The checked-in set is ADR-006's required list (25 files) plus three Bluetooth
+files: `no-modem`,
 `modem-init-failure-recovery`, `sim-absent`, `sim-pin-locked-unlock`,
 `sim-ready`, `registration-search-deny-register-roam-loss-recover`,
 `incoming-call-answer-route-remote-hangup`, `outgoing-call-connected`,
@@ -300,7 +320,11 @@ The checked-in set is ADR-006's required list (25 files): `no-modem`,
 `sms-incoming-single`, `sms-incoming-multipart`, `sms-outgoing-success`,
 `sms-outgoing-failed`, `sms-delayed-delivery-report`, `radios-disabled`,
 `wifi-disabled-scan-connect`, `wifi-auth-failed`, `wifi-dhcp-failed`,
-`wifi-captive`, `wifi-offline-recovered`, `service-crash-restart-reconcile`.
+`wifi-captive`, `wifi-offline-recovered`, `service-crash-restart-reconcile`,
+plus the Bluetooth set on the core channel: `bluetooth-discovery-bounded`,
+`bluetooth-pair-confirm-success`, `bluetooth-pair-failures` (declined,
+rejected, prompt and remote timeouts, PIN refused, one attempt at a time).
+`ferrix-core`'s unit tests replay the same three files in-process (`mock`).
 Scenarios that need a *local* action (dial, answer, hangup, send an SMS,
 enter a PIN, change the audio route, scan, connect) express it as a
 mock-control command of that name (`note = "client-side ... emulated over

@@ -833,6 +833,7 @@ impl Model {
         } else if self.passphrase_for.is_some() {
             self.cancel_passphrase();
         } else if self.page == Page::Bluetooth && self.bluetooth_back() {
+            // Handled inside the Bluetooth flows (prompt, Pair, Device).
         } else if self.page != Page::Root {
             self.show(Page::Root);
         } else {

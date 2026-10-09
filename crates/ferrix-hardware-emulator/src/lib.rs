@@ -674,7 +674,24 @@ passkey = 205718
         assert_eq!(summaries(&rx).len(), 1, "one event per operation");
         e.bluetooth_tick(29_999);
         assert!(e.bluetooth_session().unwrap().discovery.active);
-        assert!(summaries(&rx).is_empty(), "nothing changed, no event");
+        assert_eq!(
+            summaries(&rx).len(),
+            1,
+            "the remaining time moved: one event"
+        );
+        assert_eq!(
+            e.bluetooth_session().unwrap().discovery.remaining_ms,
+            Some(1)
+        );
+        assert!(e.bluetooth_tick(0).is_some(), "still scanning");
+        e.stop_bluetooth_discovery().unwrap();
+        assert!(
+            e.bluetooth_tick(1).is_none(),
+            "idle: nothing changed, no event"
+        );
+        e.start_bluetooth_discovery().unwrap();
+        e.bluetooth_tick(29_999);
+        let _ = summaries(&rx);
         e.bluetooth_tick(1);
         let session = e.bluetooth_session().unwrap();
         assert!(!session.discovery.active, "auto-stopped at 30 s");

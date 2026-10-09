@@ -234,6 +234,9 @@ impl MockBluetooth {
             phase,
             due,
         });
+        // As the BlueZ adapter does: discovery competes with paging the
+        // remote, so pairing stops it.
+        self.discovery_until = None;
         Ok(true)
     }
 
@@ -323,13 +326,13 @@ impl MockBluetooth {
     /// Advances the mock clock; returns whether the session changed.
     pub fn tick(&mut self, ms: u32) -> bool {
         self.clock_ms = self.clock_ms.saturating_add(u64::from(ms));
-        let mut changed = false;
+        // A running discovery's remaining time moved: clients re-query.
+        let mut changed = self.discovery_until.is_some();
         if self
             .discovery_until
             .is_some_and(|until| until <= self.clock_ms)
         {
             self.discovery_until = None;
-            changed = true;
         }
         // A resolve can schedule a remote timeout, which may also be due.
         while let Some((due, step)) = self.due_step() {
