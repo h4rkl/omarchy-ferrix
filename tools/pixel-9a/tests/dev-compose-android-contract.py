@@ -51,9 +51,14 @@ product = (target / "pmos/device-google-tegu/ferrix-product.initd").read_text()
 assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" in product
 assert "FERRIX_ANDROID_SESSION_BUS=unix:path=/run/user/1000/bus" in service
 apkbuild = (target / "pmos/device-google-tegu/APKBUILD").read_text()
-for name in ("ferrix-android.initd", "ferrix-product.initd"):
+# Every APKBUILD checksum must match: pmbootstrap refuses the package
+# otherwise, which blocks the opt-in Android base rootfs build.
+sums = apkbuild.split('sha512sums="\n', 1)[1].split('\n"', 1)[0]
+assert "ferrix-android.initd" in sums
+for line in sums.splitlines():
+    expected, name = line.split("  ", 1)
     data = (target / "pmos/device-google-tegu" / name).read_bytes()
-    assert f"{hashlib.sha512(data).hexdigest()}  {name}" in apkbuild, f"stale APKBUILD sha512: {name}"
+    assert hashlib.sha512(data).hexdigest() == expected, f"stale APKBUILD sha512: {name}"
 # The package never links the opt-in service into a runlevel itself.
 runlevel_line = next(line for line in apkbuild.splitlines() if line.strip().startswith("for service in"))
 assert "ferrix-android" not in runlevel_line
