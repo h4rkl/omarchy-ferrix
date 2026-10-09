@@ -365,6 +365,11 @@ if [ -n "$($bb ls /sys/fs/pstore 2>/dev/null)" ]; then
 	$bb mkdir -p "$saved" && $bb cp /sys/fs/pstore/* "$saved/" 2>/dev/null && log "saved pstore to ${saved#/newroot}"
 fi
 
+# These modules (cfg80211, Wi-Fi, audio, ...) request firmware while the
+# initramfs is still the root, so point the loader at the rootfs firmware
+# (regulatory.db, fw_bcmdhd*) for now and back to /lib/firmware at handoff.
+firmware_path=/sys/module/firmware_class/parameters/path
+echo /newroot/lib/firmware >"$firmware_path" 2>/dev/null || :
 modules="/newroot/lib/modules/$release"
 load_list "$modules/system_dlkm.modules.load" "$modules"
 load_list "$modules/vendor_dlkm.modules.load" "$modules"
@@ -374,6 +379,7 @@ checkpoint dlkm
 [ -e /newroot/sbin/init ] || [ -L /newroot/sbin/init ] || hold_then_reboot '/sbin/init missing from the rootfs'
 
 handoff_usb_console
+echo /lib/firmware >"$firmware_path" 2>/dev/null || :
 $bb mount -o move /dev /newroot/dev 2>/dev/null || :
 $bb mount -o move /proc /newroot/proc 2>/dev/null || :
 $bb mount -o move /sys /newroot/sys 2>/dev/null || :
