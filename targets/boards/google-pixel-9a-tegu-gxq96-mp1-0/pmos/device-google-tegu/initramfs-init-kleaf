@@ -190,8 +190,16 @@ find_root_device() {
 # verification is disabled). 48 MiB: the previous boot's pstore, written once.
 # 56 MiB: this boot's dmesg, rewritten every two seconds. Never on slot a,
 # which is the stock recovery slot.
+# The bootloader passes the booted slot in bootconfig; fall back to the last
+# androidboot.slot_suffix on the kernel command line.
+running_slot() {
+	value=$($bb sed -n 's/^[[:space:]]*androidboot\.slot_suffix[[:space:]]*=[[:space:]]*"*\([_ab]*\)"*[[:space:]]*$/\1/p' /proc/bootconfig 2>/dev/null | $bb tail -n 1)
+	[ -n "$value" ] || value=$($bb tr ' ' '\n' </proc/cmdline | $bb sed -n 's/^androidboot\.slot_suffix=//p' | $bb tail -n 1)
+	printf '%s\n' "$value"
+}
+
 start_flash_logger() {
-	slot=$($bb sed -n 's/^androidboot\.slot_suffix = "\(.*\)"$/\1/p' /proc/bootconfig 2>/dev/null)
+	slot=$(running_slot)
 	[ "$slot" = _b ] || {
 		log "flash logger disabled on slot '${slot:-unknown}'"
 		return 0
