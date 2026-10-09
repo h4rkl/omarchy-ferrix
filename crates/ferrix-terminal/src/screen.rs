@@ -292,7 +292,8 @@ fn keyboard(c: &mut Canvas, ty: &Type, state: &UiState) {
     );
     for (r, key) in osk::keys(size, &state.osk) {
         let pressed = state.pressed == Some(Target::Key(key));
-        let active = (key == Key::Shift && state.osk.shift) || (key == Key::Ctrl && state.osk.ctrl);
+        let active =
+            (key == Key::Shift && state.osk.shift_active()) || (key == Key::Ctrl && state.osk.ctrl);
         let function = osk::is_function(key);
         let fill = if pressed {
             t.surface_hi

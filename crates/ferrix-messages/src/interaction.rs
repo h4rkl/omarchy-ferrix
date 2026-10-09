@@ -5,7 +5,7 @@
 
 use ferrix_ui::draw::Rect;
 use ferrix_ui::gesture::{self, Gesture, Tracker};
-use ferrix_ui::osk::{self, Key};
+use ferrix_ui::osk::{self, Key, OskState};
 use ferrix_ui::widgets::{Edit, back_rect, basis, contains, edit_text, list_rects, scale};
 
 use crate::model::{Field, Model, Page};
@@ -153,8 +153,22 @@ impl Layout {
     }
 }
 
+/// The keyboard layout the focused field declares: the recipient takes the
+/// dial pad, message bodies take the text keyboard.
+pub fn field_layout(model: &Model) -> osk::Layout {
+    match (model.page, model.focus) {
+        (Page::Compose, Field::To) => osk::Layout::Phone,
+        _ => osk::Layout::Text,
+    }
+}
+
+/// Keyboard state shown, hit-tested, and edited for the focused field.
+pub fn keyboard_state(model: &Model) -> OskState {
+    model.osk.with_layout(field_layout(model))
+}
+
 fn osk_hit(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option<Target> {
-    osk::keys(size, &model.osk)
+    osk::keys(size, &keyboard_state(model))
         .into_iter()
         .find(|(r, _)| osk::contains(*r, position))
         .map(|(_, k)| Target::Key(k))
@@ -243,7 +257,7 @@ pub fn activate(model: &mut Model, target: Target) {
 
 /// Feeds one keyboard key to the focused field.
 pub fn key_press(model: &mut Model, key: Key) {
-    let mut osk = model.osk;
+    let mut osk = keyboard_state(model);
     let outcome = edit_text(model.focused_text(), key, &mut osk);
     model.osk = osk;
     match outcome {
@@ -350,7 +364,7 @@ mod tests {
     fn type_text(input: &mut Input, model: &mut Model, text: &str) {
         for ch in text.chars() {
             let key = if ch == ' ' { Key::Space } else { Key::Char(ch) };
-            let (r, _) = osk::keys(SIZE, &model.osk)
+            let (r, _) = osk::keys(SIZE, &keyboard_state(model))
                 .into_iter()
                 .find(|(_, k)| *k == key)
                 .unwrap();
@@ -414,19 +428,21 @@ mod tests {
         let l = Layout::new(SIZE);
         tap(&mut input, &mut m, center(l.new_rect()));
         assert_eq!((m.page, m.focus), (Page::Compose, Field::To));
-        // Digits live on the symbol layer.
-        let (layer, _) = osk::keys(SIZE, &m.osk)
-            .into_iter()
-            .find(|(_, k)| *k == Key::Layer)
-            .unwrap();
-        tap(&mut input, &mut m, center(layer));
+        // The recipient field declares the dial pad: digits without a layer.
+        assert_eq!(keyboard_state(&m).layout, osk::Layout::Phone);
         type_text(&mut input, &mut m, "5550100077");
         assert_eq!(m.compose_to, "5550100077");
         tap(&mut input, &mut m, center(l.body_rect()));
         assert_eq!(m.focus, Field::Body);
-        tap(&mut input, &mut m, center(layer));
+        assert_eq!(keyboard_state(&m).layout, osk::Layout::Text);
+        // Shift capitalises the next letter only.
+        let (shift, _) = osk::keys(SIZE, &keyboard_state(&m))
+            .into_iter()
+            .find(|(_, k)| *k == Key::Shift)
+            .unwrap();
+        tap(&mut input, &mut m, center(shift));
         type_text(&mut input, &mut m, "hi there");
-        assert_eq!(m.draft, "hi there");
+        assert_eq!(m.draft, "Hi there");
         assert_eq!(
             hit_test(&m, center(l.compose_send_rect()), SIZE),
             Some(Target::Send)
@@ -436,7 +452,7 @@ mod tests {
             m.pending,
             vec![Action::SendSms {
                 to: "+15550100077".into(),
-                body: "hi there".into()
+                body: "Hi there".into()
             }]
         );
         assert_eq!(m.page, Page::Thread);

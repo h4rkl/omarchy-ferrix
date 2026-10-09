@@ -4,7 +4,7 @@
 
 use ferrix_ui::draw::Rect;
 use ferrix_ui::gesture::{self, Gesture, Tracker};
-use ferrix_ui::osk::{self, Key};
+use ferrix_ui::osk::{self, Key, OskState};
 use ferrix_ui::widgets::{Edit, back_rect, basis, contains, edit_text, list_rects, scale};
 
 use crate::model::{FORM_NUMBERS, Focus, Model, Page};
@@ -197,8 +197,22 @@ impl Layout {
     }
 }
 
+/// The keyboard layout the focused field declares: phone numbers take the
+/// dial pad; the name and search fields take the text keyboard.
+pub fn field_layout(model: &Model) -> osk::Layout {
+    match model.focus {
+        Some(Focus::Number(_)) => osk::Layout::Phone,
+        Some(Focus::Name | Focus::Search) | None => osk::Layout::Text,
+    }
+}
+
+/// Keyboard state shown, hit-tested, and edited for the focused field.
+pub fn keyboard_state(model: &Model) -> OskState {
+    model.osk.with_layout(field_layout(model))
+}
+
 fn osk_hit(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option<Target> {
-    osk::keys(size, &model.osk)
+    osk::keys(size, &keyboard_state(model))
         .into_iter()
         .find(|(r, _)| osk::contains(*r, position))
         .map(|(_, k)| Target::Key(k))
@@ -310,7 +324,7 @@ pub fn activate(model: &mut Model, target: Target) {
 }
 
 pub fn key_press(model: &mut Model, key: Key) {
-    let mut osk = model.osk;
+    let mut osk = keyboard_state(model);
     let Some(text) = model.focused_text() else {
         return;
     };
@@ -426,7 +440,7 @@ mod tests {
     fn type_text(input: &mut Input, model: &mut Model, text: &str) {
         for ch in text.chars() {
             let key = if ch == ' ' { Key::Space } else { Key::Char(ch) };
-            let (r, _) = osk::keys(SIZE, &model.osk)
+            let (r, _) = osk::keys(SIZE, &keyboard_state(model))
                 .into_iter()
                 .find(|(_, k)| *k == key)
                 .unwrap();
@@ -444,7 +458,7 @@ mod tests {
         assert_eq!(m.focus, Some(Focus::Search));
         assert!(keyboard_visible(&m));
         assert!(l.row_rects(8, true).len() < 8, "keyboard shortens the list");
-        let (layer, _) = osk::keys(SIZE, &m.osk)
+        let (layer, _) = osk::keys(SIZE, &keyboard_state(&m))
             .into_iter()
             .find(|(_, k)| *k == Key::Layer)
             .unwrap();
@@ -479,25 +493,36 @@ mod tests {
         let l = Layout::new(SIZE);
         tap(&mut input, &mut m, center(l.new_rect()));
         assert_eq!(m.page, Page::Edit);
-        type_text(&mut input, &mut m, "new one");
-        assert_eq!(m.form.name, "new one");
+        assert_eq!(keyboard_state(&m).layout, osk::Layout::Text);
+        // Shift once per word: "Audit Person" keeps its capitals.
+        let shift = |m: &Model| {
+            osk::keys(SIZE, &keyboard_state(m))
+                .into_iter()
+                .find(|(_, k)| *k == Key::Shift)
+                .unwrap()
+                .0
+        };
+        let at = center(shift(&m));
+        tap(&mut input, &mut m, at);
+        type_text(&mut input, &mut m, "audit ");
+        let at = center(shift(&m));
+        tap(&mut input, &mut m, at);
+        type_text(&mut input, &mut m, "person");
+        assert_eq!(m.form.name, "Audit Person");
         let (label, field) = l.number_rows(1)[0];
         tap(&mut input, &mut m, center(label));
         assert_eq!(m.form.numbers[0].0, ferrix_contacts_api::NumberLabel::Home);
         tap(&mut input, &mut m, center(field));
         assert_eq!(m.focus, Some(Focus::Number(0)));
-        let (layer, _) = osk::keys(SIZE, &m.osk)
-            .into_iter()
-            .find(|(_, k)| *k == Key::Layer)
-            .unwrap();
-        tap(&mut input, &mut m, center(layer));
+        // The number field declares the dial pad: digits without a layer.
+        assert_eq!(keyboard_state(&m).layout, osk::Layout::Phone);
         type_text(&mut input, &mut m, "5550100123");
         tap(&mut input, &mut m, center(l.add_number_rect(1)));
         assert_eq!(m.form.numbers.len(), 2);
         assert_eq!(m.focus, Some(Focus::Number(1)));
         tap(&mut input, &mut m, center(l.save_rect()));
         assert!(
-            matches!(&m.pending[0], Action::Create(input) if input.numbers.len() == 1 && input.numbers[0].raw == "5550100123")
+            matches!(&m.pending[0], Action::Create(input) if input.display_name == "Audit Person" && input.numbers.len() == 1 && input.numbers[0].raw == "5550100123")
         );
         assert_eq!(m.page, Page::List);
         // Export from the list; Back from the list yields.

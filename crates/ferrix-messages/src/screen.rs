@@ -11,7 +11,7 @@ use ferrix_ui::widgets::{
     page_header, text_field,
 };
 
-use crate::interaction::{Input, Layout, Target};
+use crate::interaction::{Input, Layout, Target, keyboard_state};
 use crate::model::{ChipTone, Field, Link, Model, Page};
 
 fn tone(t: ChipTone) -> Tone {
@@ -297,7 +297,7 @@ fn thread(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         Some(Target::Key(k)) => Some(k),
         _ => None,
     };
-    keyboard(c, ty, &model.osk, pressed_key);
+    keyboard(c, ty, &keyboard_state(model), pressed_key);
 }
 
 fn compose_page(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
@@ -352,7 +352,7 @@ fn compose_page(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &In
         Some(Target::Key(k)) => Some(k),
         _ => None,
     };
-    keyboard(c, ty, &model.osk, pressed_key);
+    keyboard(c, ty, &keyboard_state(model), pressed_key);
 }
 
 #[cfg(test)]

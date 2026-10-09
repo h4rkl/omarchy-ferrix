@@ -48,7 +48,7 @@ impl UiState {
     pub fn new() -> Self {
         Self {
             pressed: None,
-            osk: OskState::default(),
+            osk: OskState::new(osk::Layout::Terminal),
             pending: Vec::new(),
             pending_back: 0,
             term_app_cursor: false,

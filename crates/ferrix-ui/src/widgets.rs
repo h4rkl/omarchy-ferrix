@@ -568,7 +568,8 @@ pub fn keypad(c: &mut Canvas, ty: &Type, keys: &[(Rect, char)], pressed: Option<
 
 /// The shared touch keyboard tray (`osk` geometry) in the system look:
 /// `bg_dark` well, character keys on `surface`, function keys on `bg`,
-/// sticky modifiers in rust.
+/// sticky modifiers in rust. Caps lock adds a short bar under the shift
+/// glyph; the layout (`state.layout`) comes from the focused field.
 pub fn keyboard(c: &mut Canvas, ty: &Type, state: &OskState, pressed: Option<Key>) {
     let t = theme::get();
     let size = (c.width() as u32, c.height() as u32);
@@ -597,7 +598,8 @@ pub fn keyboard(c: &mut Canvas, ty: &Type, state: &OskState, pressed: Option<Key
     );
     for (r, key) in osk::keys(size, state) {
         let is_pressed = pressed == Some(key);
-        let active = (key == Key::Shift && state.shift) || (key == Key::Ctrl && state.ctrl);
+        let active =
+            (key == Key::Shift && state.shift_active()) || (key == Key::Ctrl && state.ctrl);
         let function = osk::is_function(key);
         let fill = if is_pressed {
             t.surface_hi
@@ -626,7 +628,24 @@ pub fn keyboard(c: &mut Canvas, ty: &Type, state: &OskState, pressed: Option<Key
         } else {
             t.fg
         };
-        let px = s(if label.chars().count() > 1 { 24 } else { 40 }) as f32;
+        let px = s(if label.chars().count() > 1 {
+            24
+        } else if state.layout == osk::Layout::Phone && !function {
+            48
+        } else {
+            40
+        }) as f32;
+        if key == Key::Shift && state.caps_lock && !state.symbols {
+            c.fill_rect(
+                Rect {
+                    x: r.x + r.w / 2 - s(18),
+                    y: r.y + r.h / 2 + (px * 0.36) as i32 + s(10),
+                    w: s(36),
+                    h: s(4),
+                },
+                color,
+            );
+        }
         let style = if function {
             Style::bold(px, color)
         } else {
@@ -682,11 +701,7 @@ pub fn edit_text(text: &mut String, key: Key, osk: &mut OskState) -> Edit {
             Edit::Changed
         }
         Key::Char(ch) => {
-            let upper = osk.shift && !osk.symbols;
-            osk.ctrl = false;
-            if !osk.symbols {
-                osk.shift = false;
-            }
+            let upper = osk.take_char_case();
             text.push(if upper { ch.to_ascii_uppercase() } else { ch });
             Edit::Changed
         }
@@ -842,6 +857,37 @@ mod tests {
         assert_eq!(c.get(q.x + 6, q.y + 6), t.surface);
         let (enter, _) = keys.iter().find(|(_, k)| *k == Key::Enter).unwrap();
         assert_eq!(c.get(enter.x + 6, enter.y + 6), t.bg);
+
+        // Caps lock fills shift in rust; the dial pad draws digits on surface.
+        let locked = OskState {
+            caps_lock: true,
+            ..osk
+        };
+        keyboard(&mut c, &ty, &locked, None);
+        let (shift, _) = osk::keys(SIZE, &locked)
+            .into_iter()
+            .find(|(_, k)| *k == Key::Shift)
+            .unwrap();
+        assert_eq!(c.get(shift.x + 6, shift.y + 6), t.rust);
+        let phone = OskState::new(osk::Layout::Phone);
+        keyboard(&mut c, &ty, &phone, None);
+        let (five, _) = osk::keys(SIZE, &phone)
+            .into_iter()
+            .find(|(_, k)| *k == Key::Char('5'))
+            .unwrap();
+        assert_eq!(c.get(five.x + 6, five.y + 6), t.surface);
+        let mut digits = String::new();
+        let mut phone_state = phone;
+        edit_text(&mut digits, Key::Char('5'), &mut phone_state);
+        edit_text(&mut digits, Key::Char('+'), &mut phone_state);
+        assert_eq!(digits, "5+");
+
+        let mut caps = locked;
+        let mut word = String::new();
+        for ch in "ok".chars() {
+            edit_text(&mut word, Key::Char(ch), &mut caps);
+        }
+        assert_eq!(word, "OK", "caps lock persists across letters");
 
         let mut text = String::new();
         assert_eq!(edit_text(&mut text, Key::Shift, &mut osk), Edit::Unchanged);
