@@ -132,7 +132,19 @@ apply_ferrix_patches() {
 do_patch() {
   cd "$src"
   [ -f build/envsetup.sh ] || die "run sync first"
-  bash -c '. build/envsetup.sh >/dev/null && apply-waydroid-patches'
+  # apply-waydroid-patches reports a conflict when a project already carries
+  # a patch (Waydroid's forks of system/core do). Judge by content instead:
+  # every patch subject must be in its project's history afterwards.
+  bash -c '. build/envsetup.sh >/dev/null && apply-waydroid-patches' || true
+  missing=0
+  patch_root="$src/vendor/extra/waydroid-patches/base-patches-$(pin WAYDROID_PATCH_SDK)"
+  for patch in $(cd "$patch_root" && find . -name '*.patch' | LC_ALL=C sort); do
+    project=$(dirname "${patch#./}")
+    subject=$(sed -n 's/^Subject: \[PATCH[^]]*\] //p' "$patch_root/$patch" | head -n 1)
+    git -C "$src/$project" log -n 5000 --format=%s | grep -qxF "$subject" || {
+      printf 'missing waydroid patch: %s\n' "${patch#./}" >&2; missing=$((missing + 1)); }
+  done
+  [ "$missing" -eq 0 ] || die "$missing Waydroid patch(es) not applied"
   apply_ferrix_patches
   printf 'PASS waydroid-lineage patch\n'
 }
