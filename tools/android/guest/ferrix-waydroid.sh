@@ -30,6 +30,12 @@
 #   FERRIX_ANDROID_PULSE           system | pipewire (falls back to null) | null | none (system)
 #   FERRIX_ANDROID_PROPS, _IMAGES, _CONFIG, _BASE_PROPS, _FULGURIS_APK,
 #   _CONSOLE, _RUN_DIR, _LXC_PATH, _BOOT_TICKS, _WAYLAND_TICKS  paths/bounds
+#   FERRIX_ANDROID_RENDERER        swiftshader (default) | mali; else read from
+#                                  /etc/ferrix/waydroid-renderer
+#   FERRIX_ANDROID_MALI_DIR        extracted stock Mali overlay
+#                                  (tools/pixel-9a/waydroid-mali-overlay.sh):
+#                                  overlay/vendor/... and waydroid-mali.prop
+#   FERRIX_ANDROID_OVERLAY         Waydroid vendor overlay (/var/lib/waydroid/overlay/vendor)
 set -u
 evidence=${FERRIX_ANDROID_EVIDENCE:-QEMU}
 props=${FERRIX_ANDROID_PROPS:-/etc/ferrix/waydroid-properties.ini}
@@ -52,6 +58,46 @@ wayland_ticks=${FERRIX_ANDROID_WAYLAND_TICKS:-3000}
 # properties file; the default matches the QEMU route.
 density_dpi=$(sed -n 's/^ro\.sf\.lcd_density=\([0-9][0-9]*\)$/\1/p' "$props" 2>/dev/null | head -n 1)
 [ -n "$density_dpi" ] || density_dpi=400
+mali_dir=${FERRIX_ANDROID_MALI_DIR:-/usr/share/ferrix/android/mali}
+vendor_overlay=${FERRIX_ANDROID_OVERLAY:-/var/lib/waydroid/overlay/vendor}
+renderer=${FERRIX_ANDROID_RENDERER:-$(cat /etc/ferrix/waydroid-renderer 2>/dev/null || echo swiftshader)}
+
+# select_renderer: for `mali`, install the stock Mali overlay and layer its
+# properties over the target's; otherwise remove a previously installed
+# overlay. Falls back to the software renderer whenever the overlay is absent.
+select_renderer() {
+  installed="$vendor_overlay/.ferrix-mali-files"
+  if [ "$renderer" = mali ] && [ -d "$mali_dir/overlay/vendor" ] && [ -f "$mali_dir/waydroid-mali.prop" ]; then
+    mkdir -p "$vendor_overlay"
+    (cd "$mali_dir/overlay/vendor" && find . -type f) > "$installed.new"
+    cp -a "$mali_dir/overlay/vendor/." "$vendor_overlay/"
+    mv "$installed.new" "$installed"
+    effective="$run_dir/waydroid-properties.effective.ini"
+    awk -v over="$mali_dir/waydroid-mali.prop" '
+      BEGIN { while ((getline line < over) > 0) if (line ~ /=/) { k = line; sub(/=.*/, "", k); o[k] = 1 } }
+      /=/ { k = $0; sub(/=.*/, "", k); if (k in o) next } { print }
+    ' "$props" > "$effective"
+    grep '=' "$mali_dir/waydroid-mali.prop" >> "$effective"
+    props=$effective
+  else
+    if [ -f "$installed" ]; then
+      while IFS= read -r f; do rm -f "$vendor_overlay/${f#./}"; done < "$installed"
+      rm -f "$installed"
+      # Drop Mali-only keys the software properties do not override.
+      if [ -f "$cfg" ] && [ -f "$mali_dir/waydroid-mali.prop" ]; then
+        awk -v over="$mali_dir/waydroid-mali.prop" -v keep="$props" '
+          BEGIN { while ((getline l < over) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); o[k] = 1 }
+                  while ((getline l < keep) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); delete o[k] } }
+          { k = $0; sub(/[ \t]*=.*/, "", k); if (!($0 ~ /=/ && k in o)) print }
+        ' "$cfg" > "$cfg.ferrix" && mv "$cfg.ferrix" "$cfg"
+      fi
+    fi
+    renderer=swiftshader
+  fi
+  egl=$(sed -n 's/^ro\.hardware\.egl=//p' "$props" | head -n 1)
+  gralloc=$(sed -n 's/^ro\.hardware\.gralloc=//p' "$props" | head -n 1)
+  ev waydroid-renderer ",\"renderer\":\"$renderer\",\"egl\":\"${egl:-unset}\",\"gralloc\":\"${gralloc:-unset}\""
+}
 
 # props_applied: every managed property appears in the config exactly once
 # with its value, ignoring Waydroid's `key = value` spacing.
@@ -113,7 +159,8 @@ prepare() {
   else
     ev waydroid-init ',"status":"failed","reason":"images-missing"'
   fi
-  # Software-rendering properties. waydroid init rewrites the file without
+  select_renderer
+  # Renderer properties. waydroid init rewrites the file without
   # them, and Waydroid itself rewrites it as `key = value`; merge by key so a
   # rerun never leaves a duplicate option (configparser refuses those).
   if [ -f "$cfg" ] && [ -f "$props" ] && ! props_applied; then
@@ -131,11 +178,11 @@ prepare() {
   # exist. A plain container start reuses that file and may select a GPU
   # renderer the target cannot provide; regenerate the offline container
   # configuration whenever its effective renderer differs.
-  if [ -f "$cfg" ] && { ! grep -q '^ro.hardware.gralloc=default$' "$base_props" 2>/dev/null \
-    || ! grep -q '^ro.hardware.egl=swiftshader$' "$base_props" 2>/dev/null \
+  if [ -f "$cfg" ] && { ! grep -q "^ro.hardware.gralloc=${gralloc:-default}$" "$base_props" 2>/dev/null \
+    || ! grep -q "^ro.hardware.egl=${egl:-swiftshader}$" "$base_props" 2>/dev/null \
     || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null; }; then
     if timeout 300 waydroid upgrade -o >"$run_dir/waydroid-upgrade.log" 2>&1; then
-      ev waydroid-properties ",\"status\":\"materialized\",\"renderer\":\"swiftshader\",\"density_dpi\":${density_dpi}"
+      ev waydroid-properties ",\"status\":\"materialized\",\"renderer\":\"$renderer\",\"density_dpi\":${density_dpi}"
     else
       ev waydroid-properties ",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\""
     fi

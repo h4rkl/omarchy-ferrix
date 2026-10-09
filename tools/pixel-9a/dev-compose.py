@@ -557,6 +557,50 @@ def verify_android_inputs(repo, images_dir, apk):
             "fulguris_version": fpins["FULGURIS_VERSION"]}
 
 
+
+def read_manifest_rows(path, kind):
+    if path.is_symlink() or not path.is_file():
+        die(f"manifest missing: {path}")
+    return [line.split("\t") for line in path.read_text().splitlines() if line.startswith(kind + "\t")]
+
+
+def verify_built_waydroid(built_dir):
+    """A tools/android/waydroid-lineage-build.sh output: system/vendor images
+    whose sizes and hashes match its manifest.tsv."""
+    manifest = built_dir / "manifest.tsv"
+    rows = {row[1]: row for row in read_manifest_rows(manifest, "artifact")}
+    images = {}
+    for kind in ("system", "vendor"):
+        row = rows.get(f"{kind}.img")
+        if row is None or len(row) != 4:
+            die(f"built Waydroid manifest lacks {kind}.img: {manifest}")
+        verify_pinned_file(built_dir / f"{kind}.img", row[2], row[3], f"built Waydroid {kind}.img")
+        images[kind] = built_dir / f"{kind}.img"
+    combo = next((line.split("\t")[1] for line in manifest.read_text().splitlines()
+                  if line.startswith("combo\t")), "unknown")
+    return images, manifest, combo
+
+
+def verify_mali_overlay(overlay_dir):
+    """A tools/pixel-9a/waydroid-mali-overlay.sh output: every overlay file and
+    the property file match its manifest.tsv; returns (source, dest) pairs."""
+    manifest = overlay_dir / "manifest.tsv"
+    files = []
+    for row in read_manifest_rows(manifest, "file"):
+        if len(row) != 4 or not row[1].startswith("vendor/") or ".." in row[1].split("/"):
+            die(f"malformed Mali overlay row: {row}")
+        verify_pinned_file(overlay_dir / "overlay" / row[1], row[2], row[3], f"Mali overlay {row[1]}")
+        files.append((overlay_dir / "overlay" / row[1], f"/usr/share/ferrix/android/mali/overlay/{row[1]}"))
+    prop = overlay_dir / "waydroid-mali.prop"
+    prop_rows = read_manifest_rows(manifest, "prop")
+    if len(prop_rows) != 1 or sha256(prop) != prop_rows[0][2]:
+        die(f"Mali overlay property file differs from its manifest: {prop}")
+    files.append((prop, "/usr/share/ferrix/android/mali/waydroid-mali.prop"))
+    files.append((manifest, "/usr/share/ferrix/android/mali/manifest.tsv"))
+    if not files[:-2]:
+        die(f"Mali overlay is empty: {overlay_dir}")
+    return files
+
 def installed_packages(image, work):
     """Package names and apk provides from the rootfs database (merged /usr aware)."""
     dest = work / "apk-installed"
@@ -611,11 +655,14 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
     staged = [
         (inputs["images"]["system"], "/etc/waydroid-extra/images/system.img", 0o644),
         (inputs["images"]["vendor"], "/etc/waydroid-extra/images/vendor.img", 0o644),
-        (inputs["meta"], "/etc/waydroid-extra/images.json", 0o644),
+        (inputs["meta"], "/etc/waydroid-extra/images.json"
+         if inputs["meta"].name == "images.json" else "/etc/waydroid-extra/ferrix-build-manifest.tsv", 0o644),
         (inputs["apk"], "/usr/share/ferrix/android/fulguris.apk", 0o644),
         (props, "/etc/ferrix/waydroid-properties.ini", 0o644),
         (helper, "/usr/lib/ferrix/ferrix-waydroid.sh", 0o755),
     ]
+    staged += [(source, dest, 0o755 if "/bin/" in dest else 0o644)
+               for source, dest in inputs.get("mali", [])]
     needed = sum(source.stat().st_size for source, _, _ in staged)
     # Keep at least 1 GiB for Android /data, logs, and the dalvik cache.
     if free_bytes(image) < needed + (1 << 30):
@@ -625,6 +672,7 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
     for source, dest, mode in staged:
         editor.put_file(source, dest, mode)
     editor.mkdir_p("/var/lib/waydroid")
+    editor.put(f"{inputs.get('renderer', 'swiftshader')}\n".encode(), "/etc/ferrix/waydroid-renderer", 0o644)
     if debugfs_type(image, f"/etc/init.d/{ANDROID_SERVICE}") != "regular":
         die(f"/etc/init.d/{ANDROID_SERVICE} is missing from the integrated rootfs")
     editor.symlink(f"/etc/runlevels/default/{ANDROID_SERVICE}", f"/etc/init.d/{ANDROID_SERVICE}")
@@ -637,6 +685,7 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
         die("ferrix-android runlevel link did not land in the rootfs")
     run("e2fsck", "-fn", image, capture=True)
     rows = [f"android\twaydroid\t{inputs['channel']}\t{inputs['build']}",
+            f"android_renderer\t{inputs.get('renderer', 'swiftshader')}",
             f"rootfs_size_mib\t{size_mib}"]
     for source, dest, _ in staged:
         rows.append(f"android_file\t{dest}\t{source.stat().st_size}\t{sha256(source)}")
@@ -691,6 +740,14 @@ def main():
     parser.add_argument("--firmware-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_FIRMWARE_DIR"),
                         help="verified firmware stage (firmware.sh stage output) to install "
                              "over the base rootfs firmware")
+    parser.add_argument("--waydroid-built", type=Path, default=env("FERRIX_PIXEL9A_DEV_WAYDROID_BUILT_DIR"),
+                        help="tools/android/waydroid-lineage-build.sh output to use instead of the "
+                             "pinned Waydroid images")
+    parser.add_argument("--mali-overlay", type=Path, default=env("FERRIX_PIXEL9A_DEV_MALI_OVERLAY_DIR"),
+                        help="tools/pixel-9a/waydroid-mali-overlay.sh output to stage")
+    parser.add_argument("--renderer", choices=["swiftshader", "mali"],
+                        default=env("FERRIX_PIXEL9A_DEV_RENDERER", "swiftshader"),
+                        help="Waydroid renderer written to /etc/ferrix/waydroid-renderer")
     parser.add_argument("--rootfs-size-mib", type=int,
                         default=int(env("FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB", "0") or 0),
                         help=f"grow the rootfs image to this size (--android default "
@@ -741,7 +798,21 @@ def main():
         for tool in ("dumpe2fs", "resize2fs"):
             if shutil.which(tool) is None:
                 die(f"host tool missing: {tool}")
-        android_inputs = verify_android_inputs(repo, args.waydroid_images, args.fulguris_apk)
+        if args.waydroid_built is not None:
+            fpins = read_pins(repo / "tools/android/fulguris.pins")
+            verify_pinned_file(args.fulguris_apk, fpins["FULGURIS_SIZE"], fpins["FULGURIS_SHA256"],
+                               "Fulguris APK")
+            images, built_manifest, combo = verify_built_waydroid(args.waydroid_built)
+            android_inputs = {"build": args.waydroid_built.name, "channel": combo, "images": images,
+                              "meta": built_manifest, "apk": args.fulguris_apk,
+                              "fulguris_version": fpins["FULGURIS_VERSION"]}
+        else:
+            android_inputs = verify_android_inputs(repo, args.waydroid_images, args.fulguris_apk)
+        if args.mali_overlay is not None:
+            android_inputs["mali"] = verify_mali_overlay(args.mali_overlay)
+        if args.renderer == "mali" and "mali" not in android_inputs:
+            die("--renderer mali needs --mali-overlay")
+        android_inputs["renderer"] = args.renderer
     args.out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".tegu-dev.", dir=args.out.parent))
     try:

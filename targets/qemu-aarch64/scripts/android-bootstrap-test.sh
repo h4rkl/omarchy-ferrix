@@ -70,11 +70,10 @@ set -eu
 case "$*" in
   'init -f'*) printf '[waydroid]\nimages_path = %s\n' "$4" > "${FERRIX_ANDROID_CONFIG:?}" ;;
   'upgrade -o')
-    cat > "${FERRIX_ANDROID_BASE_PROPS:?}" <<'PROPS'
-ro.hardware.gralloc=default
-ro.hardware.egl=swiftshader
-ro.sf.lcd_density=400
-PROPS
+    # Like Waydroid: the renderer comes from waydroid.cfg [properties].
+    v() { sed -n "s/^$1[ ]*=[ ]*//p" "${FERRIX_ANDROID_CONFIG:?}" | tail -n 1; }
+    printf 'ro.hardware.gralloc=%s\nro.hardware.egl=%s\nro.sf.lcd_density=400\n' \
+      "$(v ro.hardware.gralloc)" "$(v ro.hardware.egl)" > "${FERRIX_ANDROID_BASE_PROPS:?}"
     ;;
   'session start')
     printf 'session-start user=%s bus=%s wayland=%s\n' "${FAKE_USER:-root}" "$DBUS_SESSION_BUS_ADDRESS" "$WAYLAND_DISPLAY" >> "$FAKE_STATE/calls" ;;
@@ -205,5 +204,36 @@ check '"event":"android-pulse","mode":"null"' "$work/console"
 common_env FERRIX_ANDROID_SESSION_USER=user sh "$helper" run
 check '"event":"android-app-provision".*"reason":"no-wayland-socket"' "$work/console"
 refute '^session-start' "$work/state/calls"
+
+# Opt-in stock Mali renderer (Pixel 9a route): the extracted overlay lands in
+# Waydroid's vendor overlay, its properties override the software ones and
+# are materialized; switching back removes exactly those files and keys.
+mali="$work/mali"
+mkdir -p "$mali/overlay/vendor/lib64/egl" "$work/overlay/vendor/lib64"
+: > "$mali/overlay/vendor/lib64/egl/libGLES_mali.so"
+: > "$work/overlay/vendor/lib64/keep.so"
+printf '[properties]\nro.hardware.egl=mali\nro.hardware.gralloc=pixel\nvendor.mali.base_protected_tls_max=67108864\n' > "$mali/waydroid-mali.prop"
+: > "$work/console"
+common_env FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_MALI_DIR="$mali" \
+  FERRIX_ANDROID_OVERLAY="$work/overlay/vendor" sh "$helper" prepare
+check '"event":"waydroid-renderer","renderer":"mali","egl":"mali","gralloc":"pixel"' "$work/console"
+check '"event":"waydroid-properties".*"status":"materialized".*"renderer":"mali"' "$work/console"
+[ -f "$work/overlay/vendor/lib64/egl/libGLES_mali.so" ] || { echo 'FAIL android-bootstrap-test: mali overlay not installed' >&2; exit 1; }
+check '^ro.hardware.egl=mali$' "$cfg"
+check '^vendor.mali.base_protected_tls_max=67108864$' "$cfg"
+check '^ro.hardware.egl=mali$' "$work/var/lib/waydroid/waydroid_base.prop"
+: > "$work/console"
+common_env FERRIX_ANDROID_RENDERER=swiftshader FERRIX_ANDROID_MALI_DIR="$mali" \
+  FERRIX_ANDROID_OVERLAY="$work/overlay/vendor" sh "$helper" prepare
+check '"event":"waydroid-renderer","renderer":"swiftshader","egl":"swiftshader","gralloc":"default"' "$work/console"
+[ ! -e "$work/overlay/vendor/lib64/egl/libGLES_mali.so" ] || { echo 'FAIL android-bootstrap-test: mali overlay not removed' >&2; exit 1; }
+[ -f "$work/overlay/vendor/lib64/keep.so" ] || { echo 'FAIL android-bootstrap-test: unrelated overlay file removed' >&2; exit 1; }
+refute '^vendor.mali' "$cfg"
+check '^ro.hardware.egl=swiftshader$' "$work/var/lib/waydroid/waydroid_base.prop"
+# A requested Mali renderer without an extracted overlay stays in software.
+: > "$work/console"
+common_env FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_MALI_DIR="$work/absent" \
+  FERRIX_ANDROID_OVERLAY="$work/overlay/vendor" sh "$helper" prepare
+check '"event":"waydroid-renderer","renderer":"swiftshader"' "$work/console"
 
 printf '{"evidence":"host","event":"android-bootstrap-tests","passed":%s,"failed":0}\n' "$passed"
