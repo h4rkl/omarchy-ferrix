@@ -40,14 +40,6 @@ impl PinDraft {
         &self.0
     }
 
-    pub fn len(&self) -> usize {
-        self.0.chars().count()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
     pub fn clear(&mut self) {
         self.0.clear();
     }
@@ -55,7 +47,7 @@ impl PinDraft {
 
 impl std::fmt::Debug for PinDraft {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PinDraft(<{} chars>)", self.len())
+        write!(f, "PinDraft(<{} chars>)", self.0.chars().count())
     }
 }
 
@@ -897,7 +889,10 @@ mod tests {
                 pin: BluetoothPin::new("0000").unwrap()
             }]
         );
-        assert!(m.bt_pin.is_empty(), "the draft is dropped once sent");
+        assert!(
+            m.bt_pin.as_str().is_empty(),
+            "the draft is dropped once sent"
+        );
         // A fresh request starts empty; Back declines it.
         with_phase(&mut m, PairingPhase::Pairing);
         with_phase(&mut m, PairingPhase::RequestPin);
@@ -907,7 +902,7 @@ mod tests {
             requests(&mut m),
             [BluetoothCommand::ReplyPairing { accept: false }]
         );
-        assert!(m.bt_pin.is_empty());
+        assert!(m.bt_pin.as_str().is_empty());
     }
 
     #[test]
