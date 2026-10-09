@@ -56,6 +56,10 @@ do_tools() {
   if [ ! -d "$tools/git-repo/.git" ]; then
     git clone -q --depth 1 -b "$tag" "$(pin REPO_URL)" "$tools/git-repo"
   fi
+  # repo init resolves --repo-rev as a ref, so keep the tag ref locally.
+  git -C "$tools/git-repo" fetch -q --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
+  [ "$(git -C "$tools/git-repo" rev-parse "$tag^{commit}")" = "$commit" ] ||
+    die "repo tag $tag is not the pinned commit $commit"
   [ "$(git -C "$tools/git-repo" rev-parse HEAD)" = "$commit" ] ||
     die "repo checkout is not the pinned commit $commit"
   ln -sf "$tools/git-repo/repo" "$tools/bin/repo"
