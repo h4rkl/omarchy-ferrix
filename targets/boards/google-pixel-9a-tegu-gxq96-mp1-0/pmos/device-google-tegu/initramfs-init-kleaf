@@ -24,7 +24,7 @@
 
 bb=/bin/busybox
 root_partlabel=userdata
-hold_seconds=600
+hold_seconds=900
 gadget=/sys/kernel/config/usb_gadget/ferrix
 
 log() {
@@ -43,6 +43,8 @@ load_list() {
 		return 0
 	}
 	pending=$($bb sed -e '/^#/d' -e '/^$/d' "$list")
+	# ferrix.modules_limit=N (bisection) loads only the first N entries.
+	[ -n "${3:-}" ] && pending=$(printf '%s\n' "$pending" | $bb head -n "$3")
 	total=$(printf '%s\n' "$pending" | $bb wc -l)
 	pass=0
 	while [ -n "$pending" ] && [ "$pass" -lt 3 ]; do
@@ -58,7 +60,10 @@ load_list() {
 	for module in $pending; do log "  not loaded: ${module##*/}"; done
 }
 
+gadget_bound=
+
 start_usb_debug() {
+	[ -z "$gadget_bound" ] || return 0
 	# Only the USB device path, ahead of the full module list, so a module that
 	# takes the SoC down later cannot hide the previous boot's pstore. The shim
 	# pulls in each module's modules.dep dependencies.
@@ -98,6 +103,7 @@ start_usb_debug() {
 		log "cannot bind debug gadget to $udc"
 		return 0
 	}
+	gadget_bound=$udc
 	log "debug gadget bound to $udc"
 	$bb sleep 1
 	$bb mdev -s 2>/dev/null || :
@@ -132,7 +138,13 @@ checkpoint() {
 		$bb reboot -f
 	fi
 	# hold: stay at STAGE with the USB debug console up (end it from the shell).
-	[ "$checkpoint_action" = hold ] && hold_then_reboot "checkpoint $1 reached"
+	# Without a bound gadget nobody can use the hold, so reboot promptly instead.
+	if [ "$checkpoint_action" = hold ]; then
+		[ -n "$gadget_bound" ] && hold_then_reboot "checkpoint $1 reached"
+		log "checkpoint $1 reached without a USB console; rebooting"
+		$bb sleep 2
+		$bb reboot -f
+	fi
 	log "checkpoint $1 reached; rebooting to bootloader Fastboot"
 	/system/bin/modprobe -q -- pixel-reboot || log 'pixel-reboot did not load'
 	$bb sleep 1
@@ -199,8 +211,11 @@ checkpoint gadget
 # Android's first-stage init accepts both, and so does this one.
 first_stage=/lib/modules/$release
 [ -f "$first_stage/modules.load" ] || first_stage=/lib/modules
-load_list "$first_stage/modules.load" "$first_stage"
+modules_limit=$($bb sed -n 's/.*ferrix\.modules_limit=\([0-9]*\).*/\1/p' /proc/cmdline)
+load_list "$first_stage/modules.load" "$first_stage" "$modules_limit"
 $bb mdev -s 2>/dev/null || :
+# Retry the console now that the clock/power/pinctrl providers are in.
+start_usb_debug
 checkpoint modules
 
 # The Exynos watchdog (s3c2410_wdt) arms during first-stage loading; Android's

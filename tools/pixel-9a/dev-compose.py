@@ -265,7 +265,11 @@ def main():
                         default=env("FERRIX_PIXEL9A_DEV_CHECKPOINT_ACTION", "fastboot"),
                         help="reboot to Fastboot at the checkpoint, delay 30s (timing signal), "
                              "or hold with the USB debug console up")
+    parser.add_argument("--modules-limit", default=env("FERRIX_PIXEL9A_DEV_MODULES_LIMIT", ""),
+                        help="load only the first N first-stage modules (bisection)")
     args = parser.parse_args()
+    if args.modules_limit and not args.modules_limit.isdigit():
+        die(f"modules limit must be a number: {args.modules_limit}")
     if args.base_rootfs is None or args.out is None:
         die("--base-rootfs/FERRIX_PIXEL9A_DEV_BASE_ROOTFS and --out/FERRIX_PIXEL9A_DEV_OUT are required")
     if args.checkpoint and not args.checkpoint.isalnum():
@@ -327,6 +331,8 @@ def main():
             cmdline += f" ferrix.checkpoint={args.checkpoint}"
             if args.checkpoint_action != "fastboot":
                 cmdline += f" ferrix.checkpoint_action={args.checkpoint_action}"
+        if args.modules_limit:
+            cmdline += f" ferrix.modules_limit={args.modules_limit}"
         empty = work / "vendor-ramdisk.cpio"
         empty.write_bytes(Cpio().finish())
         empty = lz4_legacy(empty)
