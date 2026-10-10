@@ -26,7 +26,7 @@ change these licenses to Apache-2.0 merely by changing Ferrix metadata:
 | Google Material Symbols SVG subset (48 glyphs, Rounded, FILL 1) | `crates/ferrix-ui/assets/icons/material-symbols/` | Apache-2.0, verified with the GitHub licence API and the upstream `LICENSE` file at the exact pinned commit (see below). The upstream `LICENSE` and a `README.md` notice are vendored beside the SVGs, exposed to code as `ferrix_ui::icons::MATERIAL_SYMBOLS_LICENSE`, installed in the QEMU guests (initramfs and postmarketOS) under `/usr/share/licenses/ferrix/material-symbols/`, and named in Settings > About. |
 | `usvg`, `sha2` and their dependencies | Build-time only (`crates/ferrix-ui/build.rs`); not linked into any binary | MIT and/or Apache-2.0 (`usvg`, `kurbo`, `roxmltree`, `svgtypes`, `simplecss`, `euclid`, `data-url`, `polycool`, `siphasher`), MIT (`float-cmp`, `imagesize`, `pico-args`), BSD-3-Clause (`tiny-skia-path`). |
 | Rust dependencies | Resolved by `Cargo.lock` and linked into the workspace | Each crate retains its upstream SPDX expression. The dependency set includes MIT, BSD, Zlib, and other compatible licenses in addition to Apache-2.0 options. |
-| Fulguris Web Browser | Downloaded only into ignored `out/android/` by `tools/android/fulguris-fetch.sh` | MPL-2.0; bundled third-party components retain their own licenses. The F-Droid APK is never committed or relabeled. |
+| LineageOS Jelly (the Browser) | Built into the Android system image (LineageOS 23.2 Ferrix build on the Pixel 9a route; `/product/app/Jelly/Jelly.apk` in the pinned Waydroid LineageOS 20 image on QEMU). No separate APK is fetched, staged, or committed. | Apache-2.0 (LineageOS); its notices travel with the image (Android's own Settings > Legal information) as Apache-2.0 §4 requires for redistribution. That is a distribution notice, not UI branding: Ferrix labels it "Browser" and does not show LineageOS or Jelly marks. |
 | Waydroid and Android images | Opt-in postmarketOS Android route | Waydroid is GPL-3.0; Android/LineageOS images include their own Apache-2.0, GPL-2.0, and other upstream components. They are external runtime inputs, not Ferrix source. |
 | postmarketOS, Alpine, pmbootstrap, and guest system libraries | QEMU/postmarketOS build and runtime | Each project and package retains its upstream license. Ferrix invokes or packages these inputs but does not relicense them. |
 
@@ -51,7 +51,9 @@ falls back to outlined. The glyphs are used only as UI symbols, never as a
 logo or brand mark.
 
 The Ferrix browser descriptor is first-party Apache-2.0 metadata; that does not
-change the license of the Fulguris APK it identifies. Likewise, the Ferrix color
+change the license of the Android package it identifies (LineageOS Jelly).
+Fulguris (MPL-2.0), the Browser before ADR-008, is no longer fetched or
+shipped. Likewise, the Ferrix color
 palette is an original adaptation and does not bundle the GPL-3.0 Space Monkey
 theme configuration, artwork, wallpapers, or branding.
 

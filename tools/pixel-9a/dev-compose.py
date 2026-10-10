@@ -19,9 +19,10 @@ manifest:
 
 With --android (FERRIX_PIXEL9A_DEV_ANDROID=1; owner request 2026-10-09) the
 rootfs is grown (default 8 GiB) and carries the OPT-IN Waydroid runtime: the
-pinned LineageOS system/vendor images and Fulguris APK verified against
-tools/android/*.pins, the shared guest bootstrap, and the ferrix-android
-service. The base rootfs must come from rootfs.sh with FERRIX_PIXEL9A_ANDROID=1.
+pinned (or locally built) LineageOS system/vendor images verified against
+tools/android/waydroid.pins or their build manifest, the shared guest
+bootstrap, and the ferrix-android service. The Browser is LineageOS Jelly,
+part of the Android image (ADR-008); no APK is staged. The base rootfs must come from rootfs.sh with FERRIX_PIXEL9A_ANDROID=1.
 
 Only partitions the stock factory image rewrites are produced. vendor_dlkm and
 system_dlkm live inside super, which dev-flash never writes, so their modules
@@ -453,10 +454,11 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
 
 
 # --- OPT-IN Android compatibility runtime (owner request 2026-10-09) --------
-# Waydroid + Fulguris per ADR-005/ADR-007. The base rootfs must have been built
-# with FERRIX_PIXEL9A_ANDROID=1 (tools/pixel-9a/rootfs.sh installs the package
-# set in pmos/android/packages). This composer only stages the pinned images
-# and APK the QEMU route already pins (tools/android/*.pins), the shared guest
+# Waydroid per ADR-005/ADR-008 (the Browser is Jelly, inside the Android
+# image). The base rootfs must have been built with FERRIX_PIXEL9A_ANDROID=1
+# (tools/pixel-9a/rootfs.sh installs the package set in pmos/android/packages).
+# This composer only stages the pinned images the QEMU route already pins
+# (tools/android/waydroid.pins) or a verified local build, the shared guest
 # bootstrap (tools/android/guest/ferrix-waydroid.sh), the target's renderer
 # properties, and the ferrix-android runlevel link.
 ANDROID_SERVICE = "ferrix-android"
@@ -535,10 +537,9 @@ def android_package_set(target_dir):
     return [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
 
 
-def verify_android_inputs(repo, images_dir, apk):
+def verify_android_inputs(repo, images_dir):
     """Check the staged inputs against the shared pins; returns manifest facts."""
     wpins = read_pins(repo / "tools/android/waydroid.pins")
-    fpins = read_pins(repo / "tools/android/fulguris.pins")
     images_dir = images_dir.resolve()
     if images_dir.name != wpins["WAYDROID_BUILD"]:
         die(f"Waydroid images dir is not the pinned build {wpins['WAYDROID_BUILD']}: {images_dir}")
@@ -561,12 +562,8 @@ def verify_android_inputs(repo, images_dir, apk):
         if image.is_symlink() or not image.is_file() or sha256(image) != entry.get("img_sha256"):
             die(f"Waydroid {kind}.img differs from the image unpacked from the pinned zip: {image}")
         images[kind] = image
-    verify_pinned_file(apk, fpins["FULGURIS_SIZE"], fpins["FULGURIS_SHA256"], "Fulguris APK")
-    if apk.name != fpins["FULGURIS_ASSET"]:
-        die(f"Fulguris APK is not the pinned asset {fpins['FULGURIS_ASSET']}: {apk}")
     return {"build": wpins["WAYDROID_BUILD"], "channel": wpins["WAYDROID_CHANNEL"],
-            "images": images, "meta": meta_path, "apk": apk,
-            "fulguris_version": fpins["FULGURIS_VERSION"]}
+            "images": images, "meta": meta_path}
 
 
 
@@ -706,7 +703,6 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
         (inputs["images"]["vendor"], "/etc/waydroid-extra/images/vendor.img", 0o644),
         (inputs["meta"], "/etc/waydroid-extra/images.json"
          if inputs["meta"].name == "images.json" else "/etc/waydroid-extra/ferrix-build-manifest.tsv", 0o644),
-        (inputs["apk"], "/usr/share/ferrix/android/fulguris.apk", 0o644),
         (props, "/etc/ferrix/waydroid-properties.ini", 0o644),
         (helper, "/usr/lib/ferrix/ferrix-waydroid.sh", 0o755),
     ]
@@ -778,20 +774,14 @@ def main():
                         help="comma-separated module names /init must not load (bisection)")
     parser.add_argument("--product-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_PRODUCT_DIR"),
                         help="pixel-9a product build to install over the base rootfs")
-    fulguris = read_pins(repo / "tools/android/fulguris.pins")
     parser.add_argument("--android", action="store_true",
                         default=env("FERRIX_PIXEL9A_DEV_ANDROID", "") == "1",
-                        help="stage the opt-in Waydroid runtime and Fulguris (base rootfs built "
+                        help="stage the opt-in Waydroid runtime (base rootfs built "
                              "with FERRIX_PIXEL9A_ANDROID=1)")
     parser.add_argument("--waydroid-images", type=Path,
                         default=Path(env("FERRIX_PIXEL9A_DEV_WAYDROID_IMAGES",
                                          repo / "out/android/waydroid/current")),
                         help="verified tools/android/waydroid-images-fetch.sh output")
-    parser.add_argument("--fulguris-apk", type=Path,
-                        default=Path(env("FERRIX_PIXEL9A_DEV_FULGURIS_APK",
-                                         repo / "out/android/fulguris" / fulguris["FULGURIS_VERSION"]
-                                         / fulguris["FULGURIS_ASSET"])),
-                        help="verified tools/android/fulguris-fetch.sh output")
     parser.add_argument("--firmware-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_FIRMWARE_DIR"),
                         help="verified firmware stage (firmware.sh stage output) to install "
                              "over the base rootfs firmware")
@@ -860,16 +850,11 @@ def main():
             if shutil.which(tool) is None:
                 die(f"host tool missing: {tool}")
         if args.waydroid_built is not None:
-            fpins = read_pins(repo / "tools/android/fulguris.pins")
-            verify_pinned_file(args.fulguris_apk, fpins["FULGURIS_SIZE"], fpins["FULGURIS_SHA256"],
-                               "Fulguris APK")
             images, built_manifest, combo = verify_built_waydroid(args.waydroid_built)
             android_inputs = {"build": args.waydroid_built.name, "channel": combo, "images": images,
-                              "built": True,
-                              "meta": built_manifest, "apk": args.fulguris_apk,
-                              "fulguris_version": fpins["FULGURIS_VERSION"]}
+                              "built": True, "meta": built_manifest}
         else:
-            android_inputs = verify_android_inputs(repo, args.waydroid_images, args.fulguris_apk)
+            android_inputs = verify_android_inputs(repo, args.waydroid_images)
         if args.mali_overlay is not None:
             android_inputs["mali"] = verify_mali_overlay(args.mali_overlay)
         if args.renderer == "mali" and "mali" not in android_inputs:

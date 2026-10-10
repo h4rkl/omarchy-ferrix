@@ -5,11 +5,13 @@
 #
 #   ferrix-waydroid.sh prepare    root, before the compositor: offline
 #                                 `waydroid init`, renderer properties,
-#                                 container start, APK staging record.
+#                                 container start.
 #   ferrix-waydroid.sh provision  root, after the compositor's Wayland socket
 #                                 exists: session bus, pulse socket, session
-#                                 start, idempotent Fulguris install, default
-#                                 browser role.
+#                                 start, Android setup (wizard and home
+#                                 launcher disabled), default browser role
+#                                 for the built-in Browser (LineageOS Jelly,
+#                                 part of the image; nothing is installed).
 #   ferrix-waydroid.sh run        prepare, wait for the Wayland socket, then
 #                                 provision (for a backgrounded service).
 #
@@ -28,7 +30,8 @@
 #   FERRIX_ANDROID_WAYLAND_DISPLAY compositor socket name (wayland-0)
 #   FERRIX_ANDROID_SESSION_BUS     session D-Bus address (unix:path=<xdg>/ferrix-android-bus)
 #   FERRIX_ANDROID_PULSE           system | pipewire (falls back to null) | null | none (system)
-#   FERRIX_ANDROID_PROPS, _IMAGES, _CONFIG, _BASE_PROPS, _FULGURIS_APK,
+#   FERRIX_ANDROID_PACKAGE         Browser package (org.lineageos.jelly)
+#   FERRIX_ANDROID_PROPS, _IMAGES, _CONFIG, _BASE_PROPS,
 #   _CONSOLE, _RUN_DIR, _LXC_PATH, _BOOT_TICKS, _WAYLAND_TICKS  paths/bounds
 #   FERRIX_ANDROID_RENDERER        swiftshader (default) | mali; else read from
 #                                  /etc/ferrix/waydroid-renderer
@@ -49,8 +52,7 @@ props=${FERRIX_ANDROID_PROPS:-/etc/ferrix/waydroid-properties.ini}
 images=${FERRIX_ANDROID_IMAGES:-/etc/waydroid-extra/images}
 cfg=${FERRIX_ANDROID_CONFIG:-/var/lib/waydroid/waydroid.cfg}
 base_props=${FERRIX_ANDROID_BASE_PROPS:-${cfg%/*}/waydroid_base.prop}
-fulguris_apk=${FERRIX_ANDROID_FULGURIS_APK:-/usr/share/ferrix/android/fulguris.apk}
-package=${FERRIX_ANDROID_PACKAGE:-net.slions.fulguris.full.fdroid}
+package=${FERRIX_ANDROID_PACKAGE:-org.lineageos.jelly}
 console=${FERRIX_ANDROID_CONSOLE:-/dev/console}
 run_dir=${FERRIX_ANDROID_RUN_DIR:-/run/ferrix}
 session_user=${FERRIX_ANDROID_SESSION_USER:-}
@@ -296,7 +298,6 @@ prepare() {
     ev waydroid-container ",\"status\":\"failed\",\"log\":\"$run_dir/waydroid-container.log\""
     tail -n 20 "$run_dir/waydroid-container.log" >> "$console" 2>/dev/null || true
   fi
-  [ ! -f "$fulguris_apk" ] || ev android-app-staged ",\"app\":\"org.ferrix.browser\",\"path\":\"$fulguris_apk\""
   return 0
 }
 
@@ -366,6 +367,15 @@ complete_android_setup() {
     waydroid shell -- pm path "$wizard" 2>/dev/null | grep -q '^package:' || continue
     waydroid shell -- pm disable "$wizard" >>"$run_dir/waydroid-setup.log" 2>&1 || true
   done
+  # Android's home launcher never gets a window under Ferrix and costs
+  # ~62 MB PSS. Disabled, HOME resolves to Settings' FallbackHome and apps
+  # still launch as task windows (physical Pixel 9a, 2026-10-10).
+  launcher=absent
+  for home in com.android.launcher3 org.lineageos.trebuchet; do
+    waydroid shell -- pm path "$home" 2>/dev/null | grep -q '^package:' || continue
+    waydroid shell -- pm disable "$home" >>"$run_dir/waydroid-setup.log" 2>&1 || true
+    launcher=disabled
+  done
   # Ferrix owns display power. Android never sees the shell's user activity,
   # so its own screen timeout puts it to sleep; asleep, a newly launched task
   # never draws and (in task-streams mode) never gets a window.
@@ -373,14 +383,13 @@ complete_android_setup() {
   waydroid shell -- svc power stayon true >>"$run_dir/waydroid-setup.log" 2>&1 || true
   done_flag=$(waydroid shell -- settings get secure user_setup_complete 2>/dev/null | tr -d '\r')
   if [ "$done_flag" = 1 ]; then
-    ev android-setup ',"status":"complete"'
+    ev android-setup ",\"status\":\"complete\",\"launcher\":\"$launcher\""
   else
-    ev android-setup ",\"status\":\"failed\",\"log\":\"$run_dir/waydroid-setup.log\""
+    ev android-setup ",\"status\":\"failed\",\"launcher\":\"$launcher\",\"log\":\"$run_dir/waydroid-setup.log\""
   fi
 }
 
 provision() {
-  [ -f "$fulguris_apk" ] || return 0
   if ! command -v waydroid >/dev/null 2>&1; then
     ev android-app-provision ',"app":"org.ferrix.browser","status":"failed","reason":"waydroid-not-installed"'
     return 0
@@ -402,13 +411,9 @@ provision() {
   done
   ev android-boot ",\"boot_completed\":$booted,\"session_user\":\"${session_user:-$(id -un 2>/dev/null)}\""
   [ "$booted" != true ] || complete_android_setup
-  provision_status=present
-  if ! package_present; then
-    provision_status=installed
-    install_log=$(session_log waydroid-fulguris-install.log)
-    as_session "waydroid app install $fulguris_apk >>$install_log 2>&1" || true
-  fi
-  for _ in $(seq 1 600); do
+  # The Browser is built into the Android image (ADR-008): nothing is
+  # installed here, only verified present and made the default browser.
+  for _ in $(seq 1 100); do
     package_present && break
     sleep 0.1
   done
@@ -417,12 +422,12 @@ provision() {
     # the UID 0 used by `waydroid shell`. Run it in the existing container as
     # that UID, then verify the effective HTTPS resolver rather than trusting
     # the command's asynchronous, output-free success response.
-    : > "$run_dir/waydroid-fulguris-role.log"
+    : > "$run_dir/waydroid-browser-role.log"
     : > "$run_dir/waydroid-browser-resolver.log"
-    waydroid container unfreeze >>"$run_dir/waydroid-fulguris-role.log" 2>&1 || true
+    waydroid container unfreeze >>"$run_dir/waydroid-browser-role.log" 2>&1 || true
     lxc-attach -P "$lxc_path" -n waydroid --uid 2000 -- \
       /system/bin/cmd role add-role-holder android.app.role.BROWSER "$package" \
-      >>"$run_dir/waydroid-fulguris-role.log" 2>&1 || true
+      >>"$run_dir/waydroid-browser-role.log" 2>&1 || true
     for _ in $(seq 1 100); do
       waydroid shell -- cmd package resolve-activity --brief \
         -a android.intent.action.VIEW -c android.intent.category.BROWSABLE \
@@ -431,16 +436,16 @@ provision() {
       sleep 0.1
     done
     if grep -q "^$package/" "$run_dir/waydroid-browser-resolver.log" 2>/dev/null; then
-      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"$provision_status\",\"package\":\"$package\",\"browser_role\":\"default\""
+      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"present\",\"package\":\"$package\",\"browser_role\":\"default\""
     else
-      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"default-browser-role\",\"role_log\":\"$run_dir/waydroid-fulguris-role.log\",\"resolver_log\":\"$run_dir/waydroid-browser-resolver.log\""
-      cat "$run_dir/waydroid-fulguris-role.log" "$run_dir/waydroid-browser-resolver.log" >> "$console" 2>/dev/null || true
+      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"default-browser-role\",\"role_log\":\"$run_dir/waydroid-browser-role.log\",\"resolver_log\":\"$run_dir/waydroid-browser-resolver.log\""
+      cat "$run_dir/waydroid-browser-role.log" "$run_dir/waydroid-browser-resolver.log" >> "$console" 2>/dev/null || true
     fi
   else
-    ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"session_log\":\"$session\",\"install_log\":\"$run_dir/waydroid-fulguris-install.log\""
+    ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"browser-package-missing\",\"package\":\"$package\",\"session_log\":\"$session\""
     printf '%s\n' 'android provisioning diagnostics:' >> "$console"
     waydroid status >> "$console" 2>&1 || true
-    for log in "$session" "$run_dir/waydroid-fulguris-install.log" "$run_dir/android-pulse.log" "$run_dir/android-dbus.log"; do
+    for log in "$session" "$run_dir/waydroid-app-list.log" "$run_dir/android-pulse.log" "$run_dir/android-dbus.log"; do
       [ ! -s "$log" ] || { printf '%s\n' "--- $log" >> "$console"; tail -n 40 "$log" >> "$console"; }
     done
   fi

@@ -24,7 +24,7 @@ AGENTS.md. Nothing here applies to QEMU or to other Tensor devices.
 
 ## Baseline: browser on the software path (physical)
 
-Fulguris in Waydroid (LineageOS 20, `ro.hardware.egl=swiftshader`,
+Fulguris (the Browser at the time; replaced by Jelly in ADR-008) in Waydroid (LineageOS 20, `ro.hardware.egl=swiftshader`,
 `gralloc=default`). SurfaceFlinger reports
 `ANGLE (Vulkan 1.2.0 (SwiftShader Device (LLVM 10.0.0)))`. Six up-swipes and
 three down-swipes on a search-results page give:
@@ -100,7 +100,7 @@ Waydroid GPU use panics the phone.
    graphics stack (`libGLES_mali`, allocator V2 service, `mapper.pixel.so`,
    VINTF fragments, `vendor.mali.*` properties) as an opt-in overlay
    extracted locally from the pinned factory image. Keep SwiftShader as the
-   default and fallback. Re-measure Fulguris against the baseline above.
+   default and fallback. Re-measure the Browser (now Jelly, ADR-008) against the baseline above.
 3. Keep `ferrix-shell` on pixman. Composition is not the bottleneck. A GLES
    renderer would need libhybris or Mesa, and neither exists here.
 

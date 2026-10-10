@@ -1,5 +1,39 @@
 # Status
 
+## 2026-10-10 (Browser is LineageOS Jelly; Fulguris removed; Android launcher disabled; mock)
+
+- **Browser:** `org.ferrix.browser` now launches `org.lineageos.jelly`
+  (ADR-008, owner decision 2026-10-10). Jelly is part of the Android image:
+  the Pixel 9a's LineageOS 23.2 build, and on QEMU the pinned Waydroid
+  LineageOS 20 `system.img` (a 2026-10-10 byte search found
+  `/product/app/Jelly/Jelly.apk` and `org.lineageos.jelly.MainActivity`; the
+  image was not mounted and Jelly has not been booted on QEMU). The launcher
+  label stays "Browser".
+- **Removed:** `tools/android/fulguris-fetch.sh`, `fulguris-verify.sh`,
+  `fulguris.pins`, and `lib.sh` (Fulguris-only); the APK staging in
+  `pmos-build.sh`, `finalize-in-container.sh` (manifest fact
+  `fulguris_apk_sha256` replaced by `browser_package`), and
+  `tools/pixel-9a/dev-compose.py` (`--fulguris-apk` and
+  `FERRIX_PIXEL9A_DEV_FULGURIS_APK` are gone); the `android-app-staged`
+  record and its `pmos-android-check` requirement (now `waydroid-renderer`).
+  `tools/android/tests/run.sh` keeps only the Waydroid pin tests (4) and has
+  a recipe, `just android-tools-test`.
+- **Provisioning:** `ferrix-waydroid.sh provision` runs whenever Waydroid is
+  installed, installs nothing, verifies `pm path org.lineageos.jelly`,
+  assigns the BROWSER role, and verifies the HTTPS resolver. The
+  `android-app-provision` record keeps its schema; its status is `present`,
+  or `failed` with `reason:"browser-package-missing"` or
+  `"default-browser-role"`. `complete_android_setup` also disables
+  `com.android.launcher3`/`org.lineageos.trebuchet` when present
+  (`android-setup {launcher:"disabled"|"absent"}`); the lead verified on the
+  physical Pixel 9a that HOME then resolves to Settings' FallbackHome and
+  apps still launch as task windows.
+- **Evidence:** `mock` only: `android-bootstrap-test.sh` (61 checks),
+  `tools/android/tests/run.sh` (4), `dev-compose-android-contract.py`,
+  `native-builder-workflow.sh`. No QEMU or device run of this change.
+- Earlier entries that mention Fulguris are history: Fulguris was the
+  Browser from 2026-09-28 until ADR-008.
+
 ## 2026-10-10 (Pixel 9a: stock Codec2 hardware video overlay for Waydroid; offline only, not yet booted)
 
 - **What:** `tools/pixel-9a/waydroid-codec2-overlay.sh` extracts the stock

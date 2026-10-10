@@ -67,18 +67,18 @@ UI prototype:
   QEMU guest (`just qemu-scenario-check`) through host-only mock-control
   channels; none of it is a radio, SIM, carrier, or Wi-Fi hardware claim.
 - The Android compatibility runtime is evaluated (`docs/android-runtime.md`),
-  `RuntimeKind::Android` has a private Waydroid-based adapter, and Fulguris
-  (an Android application in that runtime) has a pinned, verified F-Droid
-  acquisition workflow. The separate Android-enabled postmarketOS image can
-  stage and provision that APK; the existing graphical Brave evidence predates
-  this replacement and is retained only as historical evidence.
+  `RuntimeKind::Android` has a private Waydroid-based adapter, and the
+  Browser is LineageOS Jelly (an Android application built into the Android
+  image, ADR-008), so nothing is downloaded or installed for it. The separate
+  Android-enabled postmarketOS image makes it Android's default browser; the
+  earlier Brave and Fulguris evidence is retained only as history.
 - Orientation events travel from the hardware adapter through the core to both
   compositor and client. Portrait and landscape output have been inspected in
   the actual QEMU framebuffer.
 - The pmbootstrap-built postmarketOS image contains the same core, compositor,
   reference client, profile, and runtime libraries. Its bounded check currently
-  validates the product core and OpenRC boot path; Fulguris-specific graphical
-  validation remains outstanding.
+  validates the product core and OpenRC boot path; graphical validation of
+  the Browser (Jelly) on QEMU remains outstanding.
 
 All evidence remains `QEMU` or `mock`. This is a usable development foundation,
 not a finished mobile OS or a physical-device port.
@@ -169,11 +169,10 @@ just pmos-run          # interactive serial route
 FERRIX_QEMU_GRAPHICS=cocoa just pmos-run  # graphical product route
 ```
 
-Android/Fulguris postmarketOS route (macOS SDK path shown):
+Android postmarketOS route (the Browser, LineageOS Jelly, is part of the
+pinned Waydroid image):
 
 ```sh
-export APKSIGNER=/Library/Android/sdk/build-tools/36.0.0/apksigner
-sh tools/android/fulguris-fetch.sh
 just waydroid-images-fetch
 just pmos-android-build
 
@@ -185,7 +184,7 @@ just pmos-android-run
 ```
 
 Remove `FERRIX_PMOS_FRESH=1` after the first run to reuse the persistent
-overlay (including Fulguris' Android data). See
+overlay (including the Android user data). See
 `targets/qemu-aarch64/README.md` for route selection, every environment
 variable, SSH diagnostics, and headless checks.
 
@@ -232,10 +231,10 @@ artifacts, boots a fresh overlay under TCG, requires `product-core-ready` before
 that the intended full guest substrate contains and starts the core; graphical
 pmOS claims are backed separately by inspected framebuffers. The normal product
 route has rendered the Ferrix launcher; the existing Android-enabled Brave
-framebuffer is historical. Fulguris's first-run onboarding has been captured
-on QEMU, and on the Pixel 9a development route the Browser tile opens Fulguris
-(framebuffer capture, `docs/status.md`); interaction beyond onboarding is
-unverified.
+framebuffer is historical, as are the Fulguris captures (Fulguris was the
+Browser before ADR-008). On the Pixel 9a development route Jelly runs as its
+own task window and scrolls and plays video (ADR-008 evidence,
+`docs/status.md`); Jelly on QEMU has not been captured.
 
 ## Validation before handoff
 
@@ -289,8 +288,6 @@ them. Record evidence and limitations honestly, labelled `QEMU` or `mock`.
   UPower, PipeWire, and sensor adapters are not implemented.
 - Telephony audio routing on the production adapter is `unsupported` until an
   audio service exists. Emergency calling is not supported anywhere.
-- Fulguris acquisition requires Android SDK Build-Tools `apksigner` (or an
-  explicit `APKSIGNER` path); host tooling is checked but never installed.
 - Android is opt-in and QEMU-only: audio, input/OSK integration, Google
   services, DRM, codecs, camera, telephony, biometrics, and physical-device
   behavior remain unverified.

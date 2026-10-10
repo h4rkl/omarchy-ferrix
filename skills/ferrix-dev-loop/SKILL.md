@@ -45,8 +45,8 @@ its paths, serials or MACs.
 - Every builder run goes through `tools/pixel-9a/attempt-env.sh` (UTC stamp +
   named capacity TSV) and `tools/pixel-9a/native-builder.sh run kernel|product|dev-compose build`
   with its typed acknowledgement variable. The scripts do this for you.
-- `dev-compose` on the Mac fails on pin checks (Fulguris APK and Waydroid
-  image paths, no e2fsprogs); run it in the builder.
+- `dev-compose` on the Mac fails on pin checks (Waydroid image paths, no
+  e2fsprogs); run it in the builder.
 - `kernel.sh` reverts and reapplies `targets/boards/…/kernel-patches/`
   around source verification; "kernel patch reverted/applied" lines are
   normal. Only rebuild the kernel when patches or the defconfig fragment
@@ -184,5 +184,6 @@ personal data; never commit raw ones.
   failures, and read `docs/pixel-9a-bt-wpa3-research.md`.
 - Bluetooth is a UART controller (`btattach -P bcm`, `/dev/ttySAC18`, 115200)
   and needs about 90 s after boot before scans return anything.
-- Fulguris's first-run terms are for the owner to accept; don't click
-  through them.
+- The Browser is LineageOS Jelly, built into the Android image (no APK to
+  fetch or install). Any first-run terms or prompts an Android app shows are
+  for the owner to accept; don't click through them.

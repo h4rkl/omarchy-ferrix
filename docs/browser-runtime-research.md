@@ -6,6 +6,15 @@ evidence comes from repo docs, the pinned GKI source, Alpine package indexes
 and upstream Waydroid sources, all fetched on 2026-10-09. Any statement marked
 **unverified** has no primary-source confirmation yet.
 
+> **Historical (2026-10-10).** ADR-008 superseded the browser choice this
+> note works from: the Browser is now LineageOS Jelly
+> (`org.lineageos.jelly`), built into the Android image, and Fulguris is no
+> longer fetched, verified, staged, or installed (its pins and scripts were
+> removed). The Pixel 9a route also shipped since: Waydroid runs on the
+> board with a source-built GKI. Every Fulguris step below is a record of
+> the 2026-10-09 analysis, not an instruction; current procedure is in
+> `docs/android-runtime.md` and `targets/qemu-aarch64/README.md`.
+
 ## 0. Why the Browser tile fails today
 
 `apps/org.ferrix.browser.json` is `runtime: "android"`, and its private
@@ -20,7 +29,7 @@ available" (`crates/ferrix-runtime-android/src/runtime.rs`).
 
 - **QEMU:** this is expected on `just qemu-run` (Alpine smoke) and on
   `just pmos-run`. Waydroid is installed only by the separate opt-in image:
-  `just waydroid-images-fetch && APKSIGNER=… just pmos-android-build &&
+  `just waydroid-images-fetch && just pmos-android-build &&
   FERRIX_PMOS_MEMORY=4096 FERRIX_PMOS_SMP=4 FERRIX_PMOS_FRESH=1
   FERRIX_QEMU_GRAPHICS=cocoa just pmos-android-run`
   (`targets/qemu-aarch64/README.md` §routes). On that route, Fulguris

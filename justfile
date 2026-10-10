@@ -233,8 +233,8 @@ pixel-9a-boot-test:
 pixel-9a-dev-compose *args:
     @python3 "{{root}}/tools/pixel-9a/dev-compose.py" "$@"
 
-# Offline contract for dev-compose's opt-in Android (Waydroid + Fulguris)
-# staging; on a host with e2fsprogs it also stages into a scratch ext4 image.
+# Offline contract for dev-compose's opt-in Android (Waydroid; the Browser
+# is LineageOS Jelly, built into the Android image) staging; on a host with e2fsprogs it also stages into a scratch ext4 image.
 pixel-9a-dev-compose-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/dev-compose-android-contract.py"
     @sh "{{root}}/tools/pixel-9a/tests/waydroid-codec2-xml.sh"
@@ -627,10 +627,15 @@ pmos-check:
 waydroid-images-fetch:
     @sh "{{root}}/tools/android/waydroid-images-fetch.sh"
 
-# Host-only deterministic test of the guest's staged-APK bootstrap. It uses a
-# fake Waydroid CLI and never starts a container, QEMU, or a physical device.
+# Host-only deterministic test of the guest's Android bootstrap (setup,
+# launcher disable, built-in Browser role). It uses a fake Waydroid CLI and
+# never starts a container, QEMU, or a physical device.
 android-bootstrap-test:
     @sh "{{root}}/targets/qemu-aarch64/scripts/android-bootstrap-test.sh"
+
+# Host-only tests of the Waydroid image pin handling (no network).
+android-tools-test:
+    @sh "{{root}}/tools/android/tests/run.sh"
 
 pmos-android-build:
     @FERRIX_PMOS_ANDROID=1 "{{root}}/targets/qemu-aarch64/scripts/pmos-build.sh"

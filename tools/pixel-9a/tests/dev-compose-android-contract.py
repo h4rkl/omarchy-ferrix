@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Offline checks for dev-compose's opt-in Android (Waydroid + Fulguris) mode.
+"""Offline checks for dev-compose's opt-in Android (Waydroid) mode; the Browser
+(LineageOS Jelly) ships inside the Android image, so no APK is staged.
 
 Always: pin verification against tools/android/*.pins shapes, package-set
 policy (no waydroid-nftrules), and the checked-in target/guest inputs. On a host with
@@ -101,27 +102,19 @@ with tempfile.TemporaryDirectory() as tmp:
         meta[kind] = {"zip": names[kind], "zip_sha256": digest(zips[kind]),
                       "img_sha256": digest(imgs[kind])}
     (build / "images.json").write_text(json.dumps(meta))
-    apk_bytes = b"PK" + b"\0" * 1000
-    apk = tmp / "out/android/fulguris/2.0.10/fulguris_261.apk"
-    apk.parent.mkdir(parents=True)
-    apk.write_bytes(apk_bytes)
-    (fake_repo / "tools/android/fulguris.pins").write_text(
-        "FULGURIS_VERSION=2.0.10\nFULGURIS_ASSET=fulguris_261.apk\n"
-        f"FULGURIS_SIZE={len(apk_bytes)}\nFULGURIS_SHA256={digest(apk_bytes)}\n")
-
-    inputs = compose.verify_android_inputs(fake_repo, tmp / "out/android/waydroid/current", apk)
+    # The Browser (LineageOS Jelly) is part of the Android image: no APK
+    # input exists any more.
+    inputs = compose.verify_android_inputs(fake_repo, tmp / "out/android/waydroid/current")
     assert inputs["build"] == "20260403" and inputs["images"]["system"].name == "system.img"
+    assert "apk" not in inputs
 
-    # A tampered image, a wrong APK, and a non-pinned build are refused.
+    # A tampered image and a non-pinned build are refused.
     (build / "vendor.img").write_bytes(b"tampered")
-    assert refused(compose.verify_android_inputs, fake_repo, build, apk)
+    assert refused(compose.verify_android_inputs, fake_repo, build)
     (build / "vendor.img").write_bytes(imgs["vendor"])
-    apk.write_bytes(apk_bytes + b"x")
-    assert refused(compose.verify_android_inputs, fake_repo, build, apk)
-    apk.write_bytes(apk_bytes)
     other = tmp / "out/android/waydroid/20990101"
     shutil.copytree(build, other)
-    assert refused(compose.verify_android_inputs, fake_repo, other, apk)
+    assert refused(compose.verify_android_inputs, fake_repo, other)
 
     # Stock vendor overlays (Mali renderer, hardware Codec2): files and the
     # property file must match the manifest; hardware codecs need both their
@@ -191,7 +184,9 @@ with tempfile.TemporaryDirectory() as tmp:
         rows = compose.stage_android(image, work2, fake_repo, target, inputs, 1200)
         assert image.stat().st_size == 1200 << 20
         assert "rootfs_size_mib\t1200" in rows
-        assert any(row.startswith("android_file\t/usr/share/ferrix/android/fulguris.apk\t")
+        assert not any(row.startswith("android_file\t/usr/share/ferrix/android/")
+                       for row in rows)
+        assert any(row.startswith("android_file\t/usr/lib/ferrix/ferrix-waydroid.sh\t")
                    for row in rows)
         assert compose.debugfs_type(image, "/etc/runlevels/default/ferrix-android") == "symlink"
         assert compose.debugfs_type(image, "/etc/waydroid-extra/images/system.img") == "regular"

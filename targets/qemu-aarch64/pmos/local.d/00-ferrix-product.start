@@ -147,11 +147,11 @@ done
 }
 # Waydroid's package manager needs a running Wayland-backed session.  The
 # early Android local.d hook can initialize the container but intentionally
-# runs before this socket exists.  Provision the already verified, staged APK
-# here, before appd begins launching applications.  The session bus and pulse
-# socket are owned by this bootstrap, not by an application or appd.
-if [ -f /usr/share/ferrix/android/fulguris.apk ] && command -v waydroid >/dev/null 2>&1 \
-  && [ -f /usr/lib/ferrix/ferrix-waydroid.sh ]; then
+# runs before this socket exists.  Start the session and make the built-in
+# Browser (LineageOS Jelly) the default browser here, before appd begins
+# launching applications.  The session bus and pulse socket are owned by this
+# bootstrap, not by an application or appd.
+if command -v waydroid >/dev/null 2>&1 && [ -f /usr/lib/ferrix/ferrix-waydroid.sh ]; then
   # Exported here, not only inside the helper: ferrix-appd inherits them and
   # its Waydroid CLI calls must reach the same session bus and pulse path.
   export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/0/ferrix-android-bus

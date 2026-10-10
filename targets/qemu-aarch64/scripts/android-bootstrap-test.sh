@@ -2,8 +2,10 @@
 # Deterministic host test for the shared Android guest bootstrap
 # (tools/android/guest/ferrix-waydroid.sh). It proves, against stub tools:
 #   - QEMU prepare via 00-ferrix-android.start: offline initialization,
-#     renderer materialization, container startup, APK staging (idempotent);
-#   - QEMU provision (root-owned session): install, browser role;
+#     renderer materialization, container startup (idempotent);
+#   - QEMU provision (root-owned session): the built-in Browser (Jelly) is
+#     verified present and never installed, browser role, setup wizard and
+#     Android home launcher disabled;
 #   - Pixel-style provision (session owned by `user`, PipeWire pulse):
 #     session-side commands run through su as that user, root-only commands
 #     (waydroid shell, lxc-attach) do not, records carry the physical label;
@@ -18,10 +20,13 @@ script=$root/targets/qemu-aarch64/pmos/local.d/00-ferrix-android.start
 helper=$root/tools/android/guest/ferrix-waydroid.sh
 work=$(mktemp -d "${TMPDIR:-/tmp}/ferrix-android-bootstrap.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
-mkdir -p "$work/bin" "$work/images" "$work/run" "$work/xdg" "$work/state" "$work/var/lib/waydroid" "$work/usr/share/ferrix/android"
+mkdir -p "$work/bin" "$work/images" "$work/run" "$work/xdg" "$work/state" "$work/var/lib/waydroid"
 : > "$work/images/system.img"
 : > "$work/images/vendor.img"
-: > "$work/usr/share/ferrix/android/fulguris.apk"
+# Packages the fake Android image ships: the Browser and both home launchers.
+: > "$work/state/pkg-org.lineageos.jelly"
+: > "$work/state/pkg-com.android.launcher3"
+: > "$work/state/pkg-org.lineageos.trebuchet"
 : > "$work/console"
 cat > "$work/properties.ini" <<'PROPS'
 [properties]
@@ -87,10 +92,9 @@ case "$*" in
     [ "${FAKE_USER:-root}" = root ] || exit 7
     echo 1 ;;
   'shell -- pm path '*)
-    if [ -f "$FAKE_STATE/installed" ]; then echo "package:/data/app/base.apk"; else exit 1; fi ;;
+    if [ -f "$FAKE_STATE/pkg-$5" ]; then echo "package:/product/app/$5/base.apk"; else exit 1; fi ;;
   'app install '*)
-    printf 'app-install user=%s\n' "${FAKE_USER:-root}" >> "$FAKE_STATE/calls"
-    : > "$FAKE_STATE/installed" ;;
+    printf 'app-install user=%s\n' "${FAKE_USER:-root}" >> "$FAKE_STATE/calls" ;;
   'container unfreeze'|status) ;;
   'shell -- settings put '*)
     printf 'settings-put %s\n' "$5 $6 $7" >> "$FAKE_STATE/calls"
@@ -103,7 +107,7 @@ case "$*" in
     printf 'pm-disable %s\n' "$5" >> "$FAKE_STATE/calls" ;;
   'shell -- cmd package resolve-activity'*)
     if [ -f "$FAKE_STATE/role" ]; then
-      echo "net.slions.fulguris.full.fdroid/acr.browser.lightning.MainActivity"
+      echo "org.lineageos.jelly/org.lineageos.jelly.MainActivity"
     else
       echo "android/com.android.internal.app.ResolverActivity"
     fi ;;
@@ -119,7 +123,6 @@ common_env() {
     FERRIX_ANDROID_IMAGES="$work/images" \
     FERRIX_ANDROID_CONFIG="$work/var/lib/waydroid/waydroid.cfg" \
     FERRIX_ANDROID_BASE_PROPS="$work/var/lib/waydroid/waydroid_base.prop" \
-    FERRIX_ANDROID_FULGURIS_APK="$work/usr/share/ferrix/android/fulguris.apk" \
     FERRIX_ANDROID_CONSOLE="$work/console" \
     FERRIX_ANDROID_RUN_DIR="$work/run" \
     FERRIX_ANDROID_XDG_RUNTIME_DIR="$work/xdg" \
@@ -148,7 +151,7 @@ common_env sh "$script"
 check '"evidence":"QEMU","event":"waydroid-init".*"status":"ok"' "$work/console"
 check '"event":"waydroid-properties".*"status":"materialized".*"density_dpi":400' "$work/console"
 check '"event":"waydroid-container".*"status":"started"' "$work/console"
-check '"event":"android-app-staged"' "$work/console"
+refute '"event":"android-app-staged"' "$work/console"
 check '"event":"android-binder-devices".*"binderfs"' "$work/console"
 check '^ro.sf.lcd_density=400$' "$work/var/lib/waydroid/waydroid_base.prop"
 # Android apps run as per-task windows: both properties reach the file the
@@ -162,8 +165,12 @@ check '"event":"waydroid-init".*"status":"already-initialized"' "$work/console"
 : > "$work/console"
 : > "$work/state/calls"
 common_env FERRIX_ANDROID_EVIDENCE=QEMU FERRIX_ANDROID_PULSE=system sh "$helper" provision
-check '"evidence":"QEMU","event":"android-app-provision".*"status":"installed".*"browser_role":"default"' "$work/console"
-check '^app-install user=root$' "$work/state/calls"
+check '"evidence":"QEMU","event":"android-app-provision","app":"org.ferrix.browser","status":"present","package":"org.lineageos.jelly","browser_role":"default"' "$work/console"
+refute '^app-install' "$work/state/calls"
+check '"event":"android-setup","status":"complete","launcher":"disabled"' "$work/console"
+check '^pm-disable com.android.launcher3$' "$work/state/calls"
+check '^pm-disable org.lineageos.trebuchet$' "$work/state/calls"
+check "^lxc-attach user=root .*add-role-holder android.app.role.BROWSER org.lineageos.jelly\$" "$work/state/calls"
 check "^session-start user=root bus=unix:path=$work/xdg/ferrix-android-bus wayland=wayland-0\$" "$work/state/calls"
 refute '^su ' "$work/state/calls"
 
@@ -212,20 +219,23 @@ common_env sh "$helper" prepare
 [ "$(grep -c '^ro.hardware.gralloc' "$cfg")" = 1 ] || { echo 'FAIL android-bootstrap-test: duplicate not repaired' >&2; exit 1; }
 
 # Pixel-style provision: session owned by `user`, PipeWire pulse.
-rm -f "$work/state/installed" "$work/state/role"
+rm -f "$work/state/role" "$work/state/pkg-org.lineageos.trebuchet"
 : > "$work/console"
 : > "$work/state/calls"
 common_env FERRIX_ANDROID_EVIDENCE=physical:google-pixel-9a-tegu-gxq96-mp1-0 \
   FERRIX_ANDROID_SESSION_USER=user FERRIX_ANDROID_PULSE=pipewire \
   FERRIX_ANDROID_SESSION_BUS="unix:path=$work/xdg/bus" sh "$helper" provision
-check '"evidence":"physical:google-pixel-9a-tegu-gxq96-mp1-0","event":"android-app-provision".*"status":"installed".*"browser_role":"default"' "$work/console"
+check '"evidence":"physical:google-pixel-9a-tegu-gxq96-mp1-0","event":"android-app-provision".*"status":"present".*"browser_role":"default"' "$work/console"
 check '"event":"android-boot".*"boot_completed":true.*"session_user":"user"' "$work/console"
-check '"event":"android-setup","status":"complete"' "$work/console"
+check '"event":"android-setup","status":"complete","launcher":"disabled"' "$work/console"
+# Only the launchers the image reports are disabled.
+check '^pm-disable com.android.launcher3$' "$work/state/calls"
+refute '^pm-disable org.lineageos.trebuchet$' "$work/state/calls"
+refute '^app-install' "$work/state/calls"
 check '^settings-put global device_provisioned 1$' "$work/state/calls"
 check '^settings-put secure user_setup_complete 1$' "$work/state/calls"
 check '^settings-put system screen_off_timeout 2147483647$' "$work/state/calls"
 check '^stayon$' "$work/state/calls"
-check '^app-install user=user$' "$work/state/calls"
 check '^dbus-daemon user=user$' "$work/state/calls"
 # pipewire-pulse is backgrounded by design; allow it a moment to record.
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -235,12 +245,17 @@ done
 check "^pipewire-pulse user=user xdg=$work/xdg\$" "$work/state/calls"
 check "^session-start user=user bus=unix:path=$work/xdg/bus wayland=wayland-0\$" "$work/state/calls"
 check '^lxc-attach user=root ' "$work/state/calls"
-# Already installed: not reinstalled.
+# An image without the Browser package: typed failure, nothing installed,
+# and no launcher left to disable.
+rm -f "$work/state/pkg-org.lineageos.jelly" "$work/state/pkg-com.android.launcher3"
 : > "$work/console"
 : > "$work/state/calls"
 common_env FERRIX_ANDROID_SESSION_USER=user FERRIX_ANDROID_PULSE=none sh "$helper" provision
-check '"event":"android-app-provision".*"status":"present"' "$work/console"
+check '"event":"android-app-provision","app":"org.ferrix.browser","status":"failed","reason":"browser-package-missing","package":"org.lineageos.jelly"' "$work/console"
+check '"event":"android-setup","status":"complete","launcher":"absent"' "$work/console"
 refute '^app-install' "$work/state/calls"
+refute '^lxc-attach' "$work/state/calls"
+: > "$work/state/pkg-org.lineageos.jelly"
 
 # Null pulse: a socket-only PulseAudio for Waydroid's mandatory bind mount,
 # never an ALSA module (PipeWire keeps the card).

@@ -919,7 +919,7 @@ and overlays:
 | --- | --- | --- |
 | Alpine smoke guest | `just qemu-run` | Small emulator/CI contract guest; not the full substrate and no Waydroid. |
 | postmarketOS product | `just pmos-run` | Full product substrate without the Android compatibility packages/images. |
-| postmarketOS + Android | `just pmos-android-run` | Separate image with Waydroid images and the pinned Fulguris APK; use this for Fulguris. |
+| postmarketOS + Android | `just pmos-android-run` | Separate image with the pinned Waydroid images (which include the Browser, LineageOS Jelly); use this for the Browser and other Android apps. |
 
 Use these variables with `just pmos-run` or `just pmos-android-run`; they are
 read by the checked-in runner, not by an application. The smoke route has its
@@ -1016,12 +1016,14 @@ state; inputs from
 `docs/android-runtime.md` §6). The default `pmos-build`, `pmos-check`, and
 CI never read that file. Steps:
 
-1. Acquire all pinned host inputs, then build. The Android build now refuses
-   to proceed if Fulguris is absent or fails its hash/signature/signer check:
+1. Acquire the pinned images, then build. No APK is fetched: the Browser
+   (LineageOS Jelly, `org.lineageos.jelly`, ADR-008) is part of the pinned
+   system image. On 2026-10-10 a byte search of the pinned
+   `out/android/waydroid/20260403/system.img` found
+   `/product/app/Jelly/Jelly.apk` and `org.lineageos.jelly.MainActivity`;
+   the image was not mounted and Jelly has not been booted on QEMU yet.
 
    ```sh
-   export APKSIGNER=/Library/Android/sdk/build-tools/36.0.0/apksigner
-   sh tools/android/fulguris-fetch.sh
    just waydroid-images-fetch
    just pmos-android-build
    ```
@@ -1044,13 +1046,11 @@ CI never read that file. Steps:
    physical-target workflow.
    links `51_waydroid.nft` into `/etc/nftables.d/`, enables `cgroups` and
    `dbus` in the default runlevel, installs
-   `/etc/local.d/00-ferrix-android.start`, and stages
-   `/usr/share/ferrix/android/fulguris.apk` after requiring
-   `out/android/fulguris/<version>/net.slions.fulguris.full.fdroid_261.apk` to
-   pass `tools/android/fulguris-verify.sh`. Every
+   `/etc/local.d/00-ferrix-android.start` and the shared helper
+   `/usr/lib/ferrix/ferrix-waydroid.sh`. Every
    hash lands in `image-facts.json` / `manifest.json` under `guest.android`
-   (`waydroid_version`, image hashes, properties and init-script hashes,
-   `fulguris_apk_sha256`, `density_dpi`, `nftables_rule_linked`).
+   (`waydroid_version`, image hashes, properties, init-script and helper
+   hashes, `browser_package`, `density_dpi`, `nftables_rule_linked`).
 3. At first boot `00-ferrix-android.start` (before `00-ferrix-product.start`)
    records `android-binder-devices {binder, hwbinder, vndbinder, psi}`, runs
    `waydroid init -f -i /etc/waydroid-extra/images` offline (`waydroid-init
@@ -1063,36 +1063,41 @@ CI never read that file. Steps:
    a render node, a combination that made SurfaceFlinger abort with `output
    buffer not gpu writeable`.
 4. Once `ferrix-shell` has created the Wayland socket, the product bootstrap
-   starts the Waydroid session, waits for Android `sys.boot_completed=1`, and
-   installs the staged APK only when `pm path net.slions.fulguris.full.fdroid`
-   has no package result. It then assigns `android.app.role.BROWSER` to
-   Fulguris as Android's shell UID and verifies that an HTTPS intent resolves
-   to Fulguris. It records
-   `android-app-provision` with `browser_role:"default"`, as `installed` on
-   first boot and `present` on subsequent persistent-overlay boots.
+   starts the Waydroid session, waits for Android `sys.boot_completed=1`,
+   marks setup complete, disables the setup wizard and Android's home
+   launcher (`com.android.launcher3`, `org.lineageos.trebuchet`; recorded as
+   `android-setup {launcher}`), and checks `pm path org.lineageos.jelly`. It
+   then assigns `android.app.role.BROWSER` to Jelly as Android's shell UID and
+   verifies that an HTTPS intent resolves to Jelly. It records
+   `android-app-provision` with `status:"present"` and
+   `browser_role:"default"`, or `status:"failed"` with
+   `reason:"browser-package-missing"` when the image lacks Jelly. Nothing is
+   installed.
    `ferrix-appd` never installs packages; it launches the installed package
    through its private runtime adapter. An idle Waydroid container's `FROZEN`
    state is healthy and launchable; Waydroid's app command unfreezes it.
 5. `just pmos-android-check` additionally requires the
-   `android-binder-devices` and `waydroid-init` records and, when Fulguris was
-   staged, the `android-app-staged` record. The headless check deliberately
-   does not claim installation because no compositor/Wayland session exists.
+   `android-binder-devices`, `waydroid-init`, and `waydroid-renderer`
+   records. The headless check deliberately does not claim provisioning
+   because no compositor/Wayland session exists.
    `just android-bootstrap-test` exercises offline init, renderer
-   materialization, container startup, and staging without QEMU.
+   materialization, container startup, setup/launcher disable, and the
+   Browser role without QEMU.
 
 Historical Brave evidence (2026-09-21) on Apple Silicon/HVF with QEMU 11.1.1
 recorded `waydroid-properties {status:"materialized", renderer:"swiftshader"}`
 and `android-app-provision {status:"installed", package:"com.brave.browser",
-browser_role:"default"}`. That evidence predates the Fulguris replacement and
-does not validate Fulguris.
+browser_role:"default"}`. That evidence predates the Fulguris and then Jelly
+replacements and validates neither.
 Launching `org.ferrix.browser` through `ferrix-appd` recorded
 `android-app-launched`, `app-started`, and a mapped
 `waydroid.com.brave.browser` surface; the Cocoa framebuffer was captured and
 inspected showing Brave's first-run UI. After orderly power-off, a run without
 `FERRIX_PMOS_FRESH=1` recorded provisioning status `present`, proving the
 installation lives in the persistent overlay. This remains historical QEMU
-evidence only, not a physical-device claim. A fresh Fulguris QEMU run now
-reaches and has inspected its onboarding framebuffer; full Android
+evidence only, not a physical-device claim. A Fulguris QEMU run (history:
+Fulguris was the Browser before ADR-008) reached and inspected its onboarding
+framebuffer; Jelly has no QEMU framebuffer evidence yet, and full Android
 interaction remains bounded by the limitations recorded in `docs/status.md`.
 
 ### Limitations
@@ -1109,8 +1114,8 @@ interaction remains bounded by the limitations recorded in `docs/status.md`.
   compositor/client rather than a postmarketOS desktop package. The bounded
   pmOS check remains serial-only, but separate graphical QEMU runs have
   framebuffer-validated the normal Ferrix launcher. The Android-enabled Brave
-  capture is historical; a fresh Fulguris onboarding capture is recorded under
-  `out/qemu-aarch64/pmos-android/`. Those captures do not broaden the
+  capture is historical, as is the Fulguris onboarding capture (pre-ADR-008)
+  under `out/qemu-aarch64/pmos-android/`. Those captures do not broaden the
   headless contract or establish physical-device support.
 - The rootfs is what pmbootstrap installs from the pinned binary channel. The
   project binaries, profile, theme file, startup script, and readiness marker are injected

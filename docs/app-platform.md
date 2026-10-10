@@ -31,7 +31,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 
 ```text
   home surface           native apps             Android app
-  (ferrix-basic-screen)  (Terminal, Phone, …)     (Fulguris via Waydroid)
+  (ferrix-basic-screen)  (Terminal, Phone, …)     (Browser/Jelly via Waydroid)
         |  Launch/Subscribe        |  YieldForeground
         +-------------+------------+-----------------------------+
                       |  ferrix-app-protocol (line-delimited JSON, schema v1)
