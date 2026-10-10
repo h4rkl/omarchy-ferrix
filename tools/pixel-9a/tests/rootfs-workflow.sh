@@ -32,7 +32,7 @@ sh -n "$script"
 if grep -q 'targets/qemu-aarch64/pmos/pins.env' "$script"; then
 	fail 'physical rootfs workflow must not inherit the QEMU pmaports pin'
 fi
-for file in ferrix-core.initd ferrix-networkd.initd ferrix-telephonyd.initd ferrix-audio.initd ferrix-product.initd ferrix-s5300-mounts.initd ferrix-radio-firmware.initd exynos-modem.initd sit-proxy.initd; do
+for file in ferrix-core.initd ferrix-networkd.initd ferrix-telephonyd.initd ferrix-audio.initd ferrix-product.initd ferrix-s5300-mounts.initd ferrix-radio-firmware.initd ferrix-aoc-firmware.initd exynos-modem.initd sit-proxy.initd; do
 	sh -n "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/$file"
 done
 
@@ -53,6 +53,13 @@ grep -q 'need .*ferrix-radio-firmware' "$package_dir/ferrix-core.initd" ||
 	fail 'Ferrix core does not require the runtime radio firmware gate'
 grep -q 'before networkmanager bluetooth' "$package_dir/ferrix-radio-firmware.initd" ||
 	fail 'runtime radio firmware gate does not order before NetworkManager and BlueZ'
+grep -q 'ferrix-aoc-firmware.initd' "$package_dir/APKBUILD" ||
+	fail 'device package does not install the AoC firmware loader'
+grep -q 'for service in .* ferrix-aoc-firmware .*; do' "$package_dir/APKBUILD" ||
+	fail 'AoC firmware loader is not in the default runlevel'
+if grep -Eq 'need .*ferrix-aoc-firmware' "$package_dir"/*.initd; then
+	fail 'a service needs ferrix-aoc-firmware; an AoC failure must not block the session'
+fi
 [ -f "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/ubuntu-touch-radio-correlation.md" ] ||
 	fail 'target is missing the external Ubuntu Touch radio correlation boundary'
 grep -q 'Halium/Android-based' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/ubuntu-touch-radio-correlation.md" ||
@@ -317,7 +324,14 @@ lib/firmware/bcmdhd_txcap.blob_4383_a3
 lib/firmware/brcm/BCM.hcd
 lib/firmware/mali_csffw-r52p0.bin
 lib/firmware/mali_csffw.bin
-lib/firmware/mfc_fw.bin'
+lib/firmware/mfc_fw.bin
+lib/firmware/aoc.bin
+lib/firmware/tismartpa_driver_tuning.bin
+lib/firmware/cs40l26.wmfw
+lib/firmware/cs40l26.bin
+lib/firmware/cs40l26-svc.bin
+lib/firmware/cs40l26-dvl.bin
+lib/firmware/cs40l26-dbc.bin'
 firmware_paths="$stage_file_paths
 lib/firmware/carrierconfig/carrier.conf
 lib/firmware/carrierconfig/carrier-extra.conf
@@ -338,13 +352,16 @@ cmp -s "$work/expected-bundles" "$work/allowlist-bundles" ||
 while IFS="$tab" read -r component path required; do
 	case "$component" in ''|'#'*) continue ;; esac
 	case "$component" in
-		bcm4383|bluetooth-broadcom|gpu-mali|video-mfc) ;;
+		bcm4383|bluetooth-broadcom|gpu-mali|video-mfc|audio-aoc|audio-tas25xx|haptics-cs40l26) ;;
 		modem-s5300) continue ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
-	# The Mali CSF and MFC firmware are listed for the manifest but are not
-	# radio gate inputs, so they are the optional rows.
-	[ "$required" = 1 ] || [ "$component" = gpu-mali ] || [ "$component" = video-mfc ] || fail "firmware fixture is not required: $path"
+	# The Mali CSF, MFC, AoC audio, and haptics firmware are listed for the manifest
+	# but are not radio gate inputs, so they are the optional rows.
+	case "$required:$component" in
+		1:*|0:gpu-mali|0:video-mfc|0:audio-aoc|0:audio-tas25xx|0:haptics-cs40l26) ;;
+		*) fail "firmware fixture is not required: $path" ;;
+	esac
 	mkdir -p "$firmware/$(dirname -- "$path")"
 	printf 'fixture-%s\n' "$path" >"$firmware/$path"
 	hash=$(hash_file "$firmware/$path")
@@ -377,7 +394,7 @@ while IFS="$tab" read -r component source_image source_path path entry_type extr
 	hash=$(hash_file "$firmware/$path")
 	case "$component" in
 		wifi-bcm4383|bcm4383) manifest_controller=wifi-bcm4383 ;;
-		bluetooth-broadcom|gpu-mali|video-mfc) manifest_controller=$component ;;
+		bluetooth-broadcom|gpu-mali|video-mfc|audio-aoc|audio-tas25xx|haptics-cs40l26) manifest_controller=$component ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
 	printf 'firmware\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -396,13 +413,13 @@ for path in lib/firmware/carrierconfig/carrier.conf lib/firmware/carrierconfig/c
 done
 awk -F "$tab" '
 	$1 == "firmware" {
-			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300|gpu-mali|video-mfc)$/ || $3 != "vendor.img" ||
+			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300|gpu-mali|video-mfc|audio-aoc|audio-tas25xx|haptics-cs40l26)$/ || $3 != "vendor.img" ||
 			index($4, "/firmware/") != 1 || index($5, "lib/firmware/") != 1 ||
 			$4 == $5 || $4 ~ /[[:space:]]/ || $5 ~ /[[:space:]]/ ||
 			$6 !~ /^[0-9]+$/ || length($7) != 64 || $7 ~ /[^0-9a-f]/) exit 1
 		count++
 	}
-		END { exit(count == 17 ? 0 : 1) }
+		END { exit(count == 24 ? 0 : 1) }
 ' "$firmware/firmware-manifest.tsv"
 awk -F "$tab" '$1 == "firmware" { print $5 }' "$firmware/firmware-manifest.tsv" >"$work/manifest-firmware-paths"
 cmp -s "$work/expected-firmware-paths" "$work/manifest-firmware-paths" ||

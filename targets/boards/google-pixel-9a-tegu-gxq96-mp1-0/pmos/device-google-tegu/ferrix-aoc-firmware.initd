@@ -1,0 +1,92 @@
+#!/sbin/openrc-run
+
+# Boots the Always-on Compute (AoC) audio DSP. aoc_core.ko is a first-stage
+# (vendor_kernel_boot) module and does not load firmware at probe: Android's
+# aocd writes the image name to the platform device's `firmware` attribute
+# once the vendor filesystem is up, and the driver then request_firmware()s
+# /lib/firmware/aoc.bin, has GSA authenticate it, and starts the DSP. This
+# one-shot does that single write after the rootfs is mounted. Until AoC is
+# online the google-aoc-snd-card probe defers and no ALSA card exists.
+#
+# Shell, not Rust: like ferrix-bluetooth-uart this only writes one sysfs
+# attribute and polls a status string; there is no project logic to own.
+# AoC watchdog restarts reload the firmware inside the driver, so no daemon
+# is kept running. Mixer routing and speaker policy are deliberately absent.
+
+name="Ferrix Pixel 9a AoC firmware"
+description="Loads the AoC audio DSP firmware so the AoC sound card can bind"
+
+# Tests point these at a synthetic tree; the target uses the real paths.
+aoc_device=${FERRIX_AOC_DEVICE:-/sys/devices/platform/17000000.aoc}
+firmware_root=${FERRIX_AOC_FIRMWARE_ROOT:-/lib/firmware}
+firmware_name=aoc.bin
+# Polling budgets, in 0.1 s steps. aoc_core is already probed by the time the
+# rootfs runs OpenRC, and the driver's own firmware callback holds the AP awake
+# for 2 s while the DSP boots, so 10 s each is generous without stalling boot.
+device_wait=${FERRIX_AOC_DEVICE_WAIT:-100}
+online_wait=${FERRIX_AOC_ONLINE_WAIT:-100}
+
+depend() {
+	need udev
+	# The AoC card can only appear after AoC is online. WirePlumber also
+	# follows udev hotplug, so this ordering only saves a late card add; the
+	# service is never a `need` of the session, and a failure here leaves the
+	# rest of the boot (and Bluetooth audio) unaffected.
+	before ferrix-pipewire ferrix-audio
+}
+
+aoc_offline() {
+	# `revision` reads "Offline" until the firmware reports online.
+	[ "$(head -n 1 "$aoc_device/revision" 2>/dev/null)" = Offline ]
+}
+
+wait_for() {
+	steps=$1
+	shift
+	while [ "$steps" -gt 0 ]; do
+		"$@" && return 0
+		sleep 0.1
+		steps=$((steps - 1))
+	done
+	"$@"
+}
+
+aoc_attribute_ready() {
+	[ -w "$aoc_device/firmware" ] && [ -r "$aoc_device/revision" ]
+}
+
+aoc_online() {
+	aoc_attribute_ready && ! aoc_offline
+}
+
+start() {
+	ebegin "Starting $name"
+	image="$firmware_root/$firmware_name"
+	if [ ! -f "$image" ] || [ -L "$image" ]; then
+		eerror "$image is not staged (audio-aoc firmware row); AoC audio stays offline"
+		eend 1
+		return 1
+	fi
+	wait_for "$device_wait" aoc_attribute_ready || {
+		eerror "$aoc_device/firmware did not appear (aoc_core not probed)"
+		eend 1
+		return 1
+	}
+	if ! aoc_offline; then
+		einfo "AoC is already online; not reloading $firmware_name"
+		eend 0
+		return 0
+	fi
+	printf '%s' "$firmware_name" >"$aoc_device/firmware" || {
+		eerror "writing $firmware_name to $aoc_device/firmware failed"
+		eend 1
+		return 1
+	}
+	wait_for "$online_wait" aoc_online || {
+		eerror "AoC did not come online; check dmesg for aoc/GSA errors"
+		eend 1
+		return 1
+	}
+	einfo "AoC online: $(tr '\n' ' ' <"$aoc_device/revision")"
+	eend 0
+}
