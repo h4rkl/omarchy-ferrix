@@ -24,3 +24,16 @@ gpu-mali	lib/firmware/mali_csffw.bin	0
 # Exynos MFC video codec firmware (video-mfc in firmware-stage-allowlist.tsv);
 # optional like the Mali image.
 video-mfc	lib/firmware/mfc_fw.bin	0
+# AoC audio DSP image and TAS2572 amplifier tuning (audio-aoc and
+# audio-tas25xx in firmware-stage-allowlist.tsv); optional like the Mali
+# image. ferrix-aoc-firmware starts the DSP from lib/firmware/aoc.bin.
+audio-aoc	lib/firmware/aoc.bin	0
+audio-tas25xx	lib/firmware/tismartpa_driver_tuning.bin	0
+# CS40L26 haptics DSP image and coefficients (haptics-cs40l26). Its ASoC
+# codec is the AoC card's haptics back end, so the card cannot bind
+# while cs40l26 probe fails for want of cs40l26.wmfw.
+haptics-cs40l26	lib/firmware/cs40l26.wmfw	0
+haptics-cs40l26	lib/firmware/cs40l26.bin	0
+haptics-cs40l26	lib/firmware/cs40l26-svc.bin	0
+haptics-cs40l26	lib/firmware/cs40l26-dvl.bin	0
+haptics-cs40l26	lib/firmware/cs40l26-dbc.bin	0

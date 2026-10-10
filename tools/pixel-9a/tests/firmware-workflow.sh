@@ -26,7 +26,10 @@ grep -q '^kernel_driver = "nitrous"$' "$policy"
 grep -q '^kernel_driver = "cpif"$' "$policy"
 grep -q '^kernel_driver = "mali_kbase"$' "$policy"
 grep -q '^kernel_driver = "exynos_mfc"$' "$policy"
-awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 14 ? 0 : 1) }' "$allowlist"
+grep -q '^kernel_driver = "aoc_core"$' "$policy"
+grep -q '^kernel_driver = "snd-soc-tas25xx"$' "$policy"
+grep -q '^kernel_driver = "cs40l26-core"$' "$policy"
+awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 21 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 5 && $5 == "bundle" { count++ } END { exit(count == 2 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && (NF == 4 || (NF == 5 && $5 == "bundle")) { if (seen[$4]++) bad=1 } END { exit(bad ? 1 : 0) }' "$allowlist"
 awk -F '\t' '$1 == "bluetooth-broadcom" && $2 == "vendor.img" && $3 == "/firmware/brcm/BCM.hcd" && $4 == "lib/firmware/brcm/BCM.hcd" { found=1 } END { exit(found ? 0 : 1) }' \
@@ -37,6 +40,18 @@ awk -F '\t' '$1 == "wifi-bcm4383" && $2 == "vendor.img" && $3 == "/firmware/bcmd
   "$allowlist" >/dev/null
 awk -F '\t' '$1 == "gpu-mali" && $2 == "vendor.img" && $3 == "/firmware/mali_csffw-r51p0.bin" && ($4 == "lib/firmware/mali_csffw-r52p0.bin" || $4 == "lib/firmware/mali_csffw.bin") { count++ } END { exit(count == 2 ? 0 : 1) }' \
   "$allowlist" >/dev/null
+awk -F '\t' '$1 == "audio-aoc" && $2 == "vendor.img" && $3 == "/firmware/aoc.bin" && $4 == "lib/firmware/aoc.bin" { found=1 } END { exit(found ? 0 : 1) }' \
+  "$allowlist" >/dev/null
+awk -F '\t' '$1 == "audio-tas25xx" && $2 == "vendor.img" && $3 == "/firmware/tismartpa_driver_tuning.bin" && $4 == "lib/firmware/tismartpa_driver_tuning.bin" { found=1 } END { exit(found ? 0 : 1) }' \
+  "$allowlist" >/dev/null
+awk -F '\t' '$1 == "haptics-cs40l26" && $2 == "vendor.img" && $3 == "/firmware/cs40l26.wmfw" && $4 == "lib/firmware/cs40l26.wmfw" { found=1 } END { exit(found ? 0 : 1) }' \
+  "$allowlist" >/dev/null
+# The per-unit speaker calibration lives on the persist partition and is
+# device data; the HAL-only speaker-protection tuning has no kernel consumer.
+if grep -Eq 'speaker\.cal|smartamp_calib|ti_sp_tuning|cs40l26-calib|/persist' "$allowlist"; then
+  echo 'firmware stage allowlist names device calibration or HAL-only audio data' >&2
+  exit 1
+fi
 awk -F '\t' '$1 == "modem-s5300" && $2 == "vendor.img" && $3 == "/firmware/carrierconfig" && $4 == "lib/firmware/carrierconfig" && $5 == "bundle" { found=1 } END { exit(found ? 0 : 1) }' \
   "$allowlist" >/dev/null
 awk -F '\t' '$1 == "modem-s5300" && $2 == "vendor.img" && $3 == "/firmware/uecapconfig" && $4 == "lib/firmware/uecapconfig" && $5 == "bundle" { found=1 } END { exit(found ? 0 : 1) }' \

@@ -90,6 +90,55 @@ runtime_paths = ["mfc"]
 required_names = ["mfc_fw.bin"]
 
 [[controller]]
+id = "audio-aoc"
+# Always-on Compute (AoC) audio/sensor DSP. The pinned Kleaf AoC source emits
+# `aoc_core.ko` (first-stage, vendor_kernel_boot). Its probe does not load
+# firmware (`aoc_autoload_firmware` defaults to false); Android's `aocd`
+# writes `aoc.bin` to /sys/devices/platform/17000000.aoc/firmware, and the
+# driver then request_firmware()s it, GSA-authenticates the signed image, and
+# boots the DSP. Ferrix's ferrix-aoc-firmware OpenRC service performs the
+# same write once the rootfs firmware tree is mounted. Until AoC is online the
+# `google-aoc-snd-card` defers (`aoc_snd_card_probe: wait for aoc output ctrl`)
+# and no ALSA card exists. Offline check (2026-10-11): the CP3A.260905.009
+# image (version 16047897-polygon, release, signed) carries all 293 interface
+# UUIDs the pinned driver's aoc-interface-zuma.h requires. Not yet booted.
+kernel_driver = "aoc_core"
+source_images = ["vendor.img"]
+runtime_paths = ["aoc"]
+required_names = ["aoc.bin"]
+
+[[controller]]
+id = "audio-tas25xx"
+# TI TAS2572 stereo speaker amplifiers (I2C 0x48/0x49) behind the AoC TDM_0
+# back end. The pinned `snd-soc-tas25xx.ko` request_firmware()s
+# `tismartpa_driver_tuning.bin` (register init sequences and codec profiles
+# such as `music_17dB_stereo`) from its ASoC component probe, i.e. when the
+# AoC sound card binds. The per-unit speaker calibration
+# (/mnt/vendor/persist/audio/speaker.cal) is device data, is consumed only by
+# the Android audio HAL, and is never staged. `ti_sp_tuning.bin` is the HAL's
+# speaker-protection tuning pushed to the AoC DSP over /dev/acd-*; it has no
+# Linux kernel consumer and is not staged. Not yet booted.
+kernel_driver = "snd-soc-tas25xx"
+source_images = ["vendor.img"]
+runtime_paths = ["tas25xx"]
+required_names = ["tismartpa_driver_tuning.bin"]
+
+[[controller]]
+id = "haptics-cs40l26"
+# Cirrus CS40L26 haptics driver (I2C 0x43). The Tegu DT has neither
+# `cirrus,fw-defer` nor `cirrus,calib-fw`, so the pinned `cs40l26-core.ko`
+# probe request_firmware()s `cs40l26.wmfw` and fails without it; only then
+# does it register the `cs40l26-codec` ASoC component, which is the AoC
+# card's haptics back end (`dai_be_haptic_rx`). The coefficient files are
+# loaded "continuing" when absent: wavetable `cs40l26.bin`, `cs40l26-svc.bin`,
+# `cs40l26-dvl.bin`, `cs40l26-dbc.bin`. The `cs40l26-calib.*` pair is used
+# only by the calibration firmware and is not staged. Not yet booted.
+kernel_driver = "cs40l26-core"
+source_images = ["vendor.img"]
+runtime_paths = ["cs40l26"]
+required_names = ["cs40l26.wmfw"]
+
+[[controller]]
 id = "display-audio-touch"
 kernel_driver = "tegu-board-kernel"
 source_images = ["vendor.img", "vendor_dlkm.img"]

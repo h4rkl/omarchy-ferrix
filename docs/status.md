@@ -50,6 +50,49 @@
   each frame re-composes the whole surface in software. Only the Apps list
   flings; Settings, Files and other lists still scroll by drag only.
 
+## 2026-10-11 (Pixel 9a: AoC audio DSP firmware route; offline only, not yet booted)
+
+- **Observed on `google-pixel-9a-tegu-gxq96-mp1-0` (Kleaf dev route, by the
+  lead):** no ALSA cards. `aoc_core` probes (`found aoc …`), but the
+  `google-aoc-snd-card` keeps deferring (`aoc_snd_card_probe: wait for aoc
+  output ctrl`). AoC never requests firmware, and PipeWire offers only Dummy
+  Output.
+- **Cause (pinned AoC source and the factory vendor image):** `aoc_core`
+  does not load firmware at probe (`aoc_autoload_firmware=false`). On
+  Android, `aocd` writes `aoc.bin` to
+  `/sys/devices/platform/17000000.aoc/firmware`, and the driver then loads
+  it, has GSA authenticate it, and starts the DSP. Its
+  `audio_output_control` service is what the card waits for. Autoload is not
+  an option here: `aoc_core` is first-stage, so it probes before the rootfs
+  firmware exists. A second blocker: the card's haptics back end is
+  `cs40l26-codec`, which registers only after `cs40l26.wmfw` loads at probe.
+- **Change:** new controllers `audio-aoc` (`aoc.bin`), `audio-tas25xx`
+  (`tismartpa_driver_tuning.bin`, the TAS2572 init sequences and profiles)
+  and `haptics-cs40l26` (`cs40l26.wmfw`, wavetable, svc/dvl/dbc) in
+  `firmware-stage-allowlist.tsv` and `firmware-policy.toml`. They are
+  optional rows in the rootfs firmware allowlist. A new
+  `ferrix-aoc-firmware` OpenRC one-shot writes `aoc.bin` once, only while
+  `revision` reads `Offline`, and nothing `need`s it. Per-unit
+  `speaker.cal`, the HAL-only `ti_sp_tuning.bin` and the `cs40l26-calib.*`
+  pair are deliberately not staged.
+- **Offline evidence:** the factory `aoc.bin` (signed release
+  `16047897-polygon`) contains all 293 interface UUIDs that the pinned
+  driver's `aoc-interface-zuma.h` checks. `firmware-workflow.sh`,
+  `rootfs-workflow.sh`, `radio-firmware-runtime.sh` and the new
+  `aoc-firmware-runtime.sh` pass on macOS. The last three also pass on the
+  Linux builder. On the builder `firmware-workflow.sh` hits a GNU-grep `\t`
+  check that already fails on `origin/pixel-9a-gpu`, so that failure is not
+  from this change.
+- **Limitations:** nothing has booted. GSA acceptance, AoC coming online,
+  the card binding and any sound are all unproven. No UCM or mixer policy
+  is set, so a PCM needs `TDM_0_RX Mixer EP1` and the `TAS25XX` switches set
+  by hand. Speaker protection, which the Android HAL configures on the AoC
+  DSP, is not configured, so speaker tests must stay at low level and short.
+  `audio` stays `unsupported` in `capabilities.toml`. Device steps, risks
+  and the stock mixer paths are in
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/audio-bringup.md`. No QEMU
+  claim.
+
 ## 2026-10-11 (Pixel 9a: APKs as per-task Ferrix windows on a clean flash; physical `google-pixel-9a-tegu-gxq96-mp1-0`)
 
 Image `tegu-kleaf-dev-20261010T204302Z`: LineageOS 23.2 (Android 16)
