@@ -52,6 +52,28 @@
 
 ## 2026-10-11 (Pixel 9a: AoC audio DSP firmware route; offline only, not yet booted)
 
+- **Hand test on physical `google-pixel-9a-tegu-gxq96-mp1-0` (lead, same
+  day):**
+  - Steps: copied the seven staged files (`aoc.bin`, the TAS25xx tuning file
+    and the `cs40l26*` files) to `/lib/firmware` on the running phone, then
+    `echo -n aoc.bin > /sys/devices/platform/17000000.aoc/firmware`.
+  - GSA accepted the image (`Loading signed aoc image`), and the log shows
+    `firmware version 16047897-polygon did become online with 94 services`.
+  - The card bound: card 0 `google,aoc-snd-card`, 35 PCMs and 440 mixer
+    controls.
+  - With `TDM_0_RX Mixer EP1` set to on, `aplay -M -D hw:0,0` (mmap access)
+    played 2 s of zeros. Both TAS25xx channels ran their pre- and
+    post-power-up sequences, with no errors. Without `-M`, writes fail with
+    `Bad address`: the AoC PCM needs mmap access.
+  - Injected input still works after AoC came up. The physical touchscreen
+    was not touched.
+  - No audible output was played. Ferrix has none of Android's speaker
+    protection (see Risks), so audible output waits for the owner's go-ahead.
+  - `alsa-utils` was installed by hand for this test. The packages were
+    signature-checked on the builder because the image carries no apk
+    repository keys. This was not done by a checked-in workflow.
+  - PipeWire still shows only Dummy Output. A UCM profile for the AoC card
+    (mmap, plus mixer routes) is the next step.
 - **Observed on `google-pixel-9a-tegu-gxq96-mp1-0` (Kleaf dev route, by the
   lead):** no ALSA cards. `aoc_core` probes (`found aoc …`), but the
   `google-aoc-snd-card` keeps deferring (`aoc_snd_card_probe: wait for aoc
