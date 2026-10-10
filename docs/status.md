@@ -1,5 +1,65 @@
 # Status
 
+## 2026-10-11 (Pixel 9a: APKs as per-task Ferrix windows on a clean flash; physical `google-pixel-9a-tegu-gxq96-mp1-0`)
+
+Image `tegu-kleaf-dev-20261010T204302Z`: LineageOS 23.2 (Android 16)
+`lineage_waydroid_arm64_only-bp4a-userdebug` built from the pinned tree
+with the Ferrix patch stack, rootfs `tegu-android-20261010T114217Z`, Mali
+overlay, Codec2 overlay with `codecs=hardware` (Exynos MFC only). Flashed
+through `pixel-9a-dev-flash` with user data reset; Ferrix up after 77 s.
+Framebuffer and host-webcam captures were inspected for every step below.
+
+- **Provisioning (fresh user data, no manual steps):** `ferrix-android.log`
+  records `android-setup` `complete` with `launcher` `disabled`, Jelly
+  provisioned as `org.ferrix.browser` with the browser role,
+  `waydroid-codecs` `hardware`, the Codec2 node binds, and
+  `android-wayland-link` `linked`.
+- **Browser tile:** opens Jelly as its own `waydroid.org.lineageos.jelly`
+  window. No setup wizard, no Android home, status bar or nav bar. Home
+  and reopen work.
+- **Android stays awake:** Waydroid's hwcomposer puts Android to sleep
+  ("host visibility/engagement changed, turning Android screen off") when
+  none of its windows has entered an output. Before this, `ferrix-shell`
+  never sent `wl_surface.enter`, so new tasks never drew and the YouTube
+  feed scroll test recorded 0 frames. The shell now enters the front window
+  into the output and has the others leave it. After 90 s with Jelly in
+  front: `mWakefulness=Awake`, and the last hwcomposer event is "turning
+  Android screen on".
+- **Shell restart:** `rc-service ferrix-product restart` with Jelly open.
+  The hwcomposer reconnects through the bound socket directory. `ferrix-appd`
+  logs `app-adopting` then `android-app-attached` for `org.ferrix.browser`
+  (no `app-crashed`), and the Browser tile raises the same Jelly page.
+- **Apps list:** 17 entries sorted by label. LineageOS apps carry the
+  "Android" line. Clock (`apk.com.android.deskclock`) launches from the
+  list and draws.
+- **Cold-launch splash fix:** Android's starting window arrives on a
+  transparent buffer, and the Ferrix home showed through Clock's splash for
+  about a second. `ferrix-shell` now paints an opaque theme-coloured
+  backdrop under the front window. Rechecked on the webcam after a
+  `force-stop`: the splash is on a solid background.
+- **Stale sockets:** after `deploy-product.sh`, every `/run/ferrix/*.sock`
+  is back as `root:user 660` (the `start_pre` removal holds).
+- **Earlier on the same target (2026-10-10, hand-staged state before this
+  flash):**
+
+  | Jelly, Wikipedia, 12 swipes (`dumpsys gfxinfo`) | p50 | p90 | p95 | p99 | Janky |
+  |---|---|---|---|---|---|
+  | Task streams (per-app windows) | 12 ms | 18 ms | 21 ms | 27 ms | 1.37 % |
+  | Single window | 13 ms | 20 ms | 22 ms | 30 ms | 1.36 % |
+
+  - YouTube (m.youtube.com) in Jelly played with software VP9
+    (`c2.ffmpeg`) and with hardware VP9 (`c2.exynos.vp9.decoder`, which
+    needs `mfc_fw.bin`), at about 23 % CPU busy during hardware playback.
+  - Android used about 1.26 GB PSS; disabling Launcher3 saves 62 MB.
+- **Limitations:**
+  - The flash reset user data, so Wi-Fi was disconnected; hardware VP9 and
+    the YouTube feed scroll test were not repeated on this image.
+  - AV1 hardware decode (BigWave) decodes but shows no picture in Chromium,
+    so it is excluded by default (`FERRIX_CODEC2_AV1=1` opts in).
+  - APK icons are letter glyphs, and the Apps list has no fling.
+  - Bluetooth and audio inside Android were not checked.
+  - No QEMU claim: QEMU runs no Android.
+
 ## 2026-10-11 (Home grid stays first-party; app list for every app; listing flap fixed; QEMU + mock)
 
 - **Why:** on the Pixel 9a (lead's screenshot, not re-run here) the home

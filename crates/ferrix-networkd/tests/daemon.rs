@@ -611,7 +611,12 @@ fn socket_client_round_trip_with_full_grants() {
             radio: RadioState::Disabled
         }
     );
-    assert!(wake_count.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+    // The event thread sends before it wakes, so the wake can trail recv.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while wake_count.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(std::time::Instant::now() < deadline, "wake never ran");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]
