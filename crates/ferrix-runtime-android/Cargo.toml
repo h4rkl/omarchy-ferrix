@@ -9,6 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+# Decodes Waydroid's untrusted launcher PNGs (src/icon.rs); already in the
+# tree through tiny-skia.
+png = "0.17"
 ferrix-app-api = { path = "../ferrix-app-api" }
 ferrix-app-runtime-api = { path = "../ferrix-app-runtime-api" }
 serde = { version = "1", features = ["derive"] }

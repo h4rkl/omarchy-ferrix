@@ -135,6 +135,13 @@ pub trait AndroidHost: Send + Sync {
         None
     }
 
+    /// The package's launcher icon, decoded and bounded
+    /// ([`crate::icon`]), or `None` when the host has none or it is
+    /// unusable. Bounded file I/O only; never starts anything.
+    fn launcher_icon(&self, _package: &str) -> Option<ferrix_app_api::AppIconBitmap> {
+        None
+    }
+
     /// Starts `package` (its default activity, or `activity` when given).
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError>;
 

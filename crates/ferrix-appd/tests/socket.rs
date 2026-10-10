@@ -83,6 +83,9 @@ fn hello_catalog_and_typed_errors_over_the_socket() {
     assert!(apps.iter().any(|d| d.id.as_str() == "org.ferrix.home"));
     assert!(apps.iter().any(|d| d.id.as_str() == "org.ferrix.terminal"));
     assert!(home.instances().unwrap().is_empty());
+    // First-party apps never carry a bitmap icon; the request is public.
+    assert_eq!(home.app_icon(&id("org.ferrix.terminal")), Ok(None));
+    assert_eq!(home.app_icon(&id("apk.org.example.absent")), Ok(None));
 
     // A reference entry is not launchable: typed error, not a protocol error.
     // Which entries are illustrative changes as apps land, so pick one from

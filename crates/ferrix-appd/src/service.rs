@@ -337,6 +337,33 @@ impl Service {
         lock(&self.installed).entries.get(id).cloned()
     }
 
+    /// The launcher bitmap of an installed app, from its runtime
+    /// ([`Runtime::app_icon`], bounded and decoded by the adapter). `None`
+    /// for unknown ids and for checked-in descriptors: first-party tiles
+    /// keep their drawn glyphs. The runtime is asked outside every lock.
+    pub fn app_icon(&self, id: &AppId) -> Option<ferrix_app_api::AppIconBitmap> {
+        let entry = lock(&self.installed).entries.get(id).cloned()?;
+        if entry.descriptor.origin != AppOrigin::Installed {
+            return None;
+        }
+        let icon = self
+            .runtimes
+            .get(&entry.descriptor.runtime)?
+            .app_icon(&entry.launch);
+        self.recorder.emit(
+            "app-icon",
+            [
+                ("app", serde_json::json!(id)),
+                ("found", serde_json::json!(icon.is_some())),
+                (
+                    "size",
+                    serde_json::json!(icon.as_ref().map(|i| [i.width(), i.height()])),
+                ),
+            ],
+        );
+        icon
+    }
+
     fn knows(&self, id: &AppId) -> bool {
         self.catalog.contains(id) || lock(&self.installed).entries.contains_key(id)
     }
@@ -3658,6 +3685,27 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn installed_app_icons_come_from_their_runtime_and_first_party_apps_have_none() {
+        let h = installed_harness();
+        let icon = ferrix_app_api::AppIconBitmap::new(1, 1, vec![1, 2, 3, 255]).unwrap();
+        h.android.set_icon("org.example.notes", icon.clone());
+        // The checked-in Browser launches Jelly; its key has an icon too.
+        h.android.set_icon(JELLY, icon.clone());
+        h.android.set_installed(Some(Ok(vec![
+            provided("org.example.notes", "Notes"),
+            provided("org.example.plain", "Plain"),
+        ])));
+        assert!(h.service.refresh_installed().changed);
+        assert_eq!(h.service.app_icon(&id("apk.org.example.notes")), Some(icon));
+        assert_eq!(h.service.app_icon(&id("apk.org.example.plain")), None);
+        assert_eq!(h.service.app_icon(&id("org.ferrix.browser")), None);
+        assert_eq!(h.service.app_icon(&id("org.ferrix.terminal")), None);
+        assert_eq!(h.service.app_icon(&id("apk.org.example.absent")), None);
+        let events = captured_events(&h.records);
+        assert!(events.iter().filter(|e| *e == "app-icon").count() >= 2);
     }
 
     #[test]

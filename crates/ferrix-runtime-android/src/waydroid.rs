@@ -40,6 +40,11 @@ pub struct WaydroidOptions {
     /// find the surface client pid. Unverified default until QEMU evidence
     /// exists; see `docs/android-runtime.md`.
     pub surface_client_needle: String,
+    /// Directory of Waydroid's per-package launcher PNGs. `None` resolves
+    /// it from this process's environment when the adapter is created
+    /// ([`crate::icon::default_icon_dir`]); with nothing resolvable,
+    /// installed apps keep their letter glyphs.
+    pub icon_dir: Option<PathBuf>,
 }
 
 impl Default for WaydroidOptions {
@@ -48,6 +53,7 @@ impl Default for WaydroidOptions {
             binary: None,
             proc_root: PathBuf::from("/proc"),
             surface_client_needle: "graphics.composer".to_owned(),
+            icon_dir: None,
         }
     }
 }
@@ -209,7 +215,10 @@ pub struct WaydroidCli {
 }
 
 impl WaydroidCli {
-    pub fn new(options: WaydroidOptions) -> Self {
+    pub fn new(mut options: WaydroidOptions) -> Self {
+        if options.icon_dir.is_none() {
+            options.icon_dir = crate::icon::default_icon_dir(|name| std::env::var(name).ok());
+        }
         Self {
             options,
             session: Mutex::new(None),
@@ -384,6 +393,10 @@ fn first_line(text: &str) -> Option<String> {
 impl AndroidHost for WaydroidCli {
     fn name(&self) -> &'static str {
         "waydroid"
+    }
+
+    fn launcher_icon(&self, package: &str) -> Option<ferrix_app_api::AppIconBitmap> {
+        crate::icon::load_icon(self.options.icon_dir.as_deref()?, package)
     }
 
     fn status(&self) -> RuntimeStatus {

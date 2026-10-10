@@ -22,7 +22,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{
-    AppDescriptor, AppError, AppEvent, AppId, AppIdentity, AppInstance, AppIntent, SCHEMA_VERSION,
+    AppDescriptor, AppError, AppEvent, AppIconBitmap, AppId, AppIdentity, AppInstance, AppIntent,
+    SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,13 @@ pub enum Request {
     },
     Catalog,
     Instances,
+    /// The launcher bitmap of an installed app (ADR-008), when its runtime
+    /// provides one. Wire form: `{"request":"app-icon","id":"apk.org.example"}`.
+    /// One bounded bitmap per reply ([`ferrix_app_api::APP_ICON_MAX_SIDE`]);
+    /// checked-in apps never have one (their glyphs are drawn by the home).
+    AppIcon {
+        id: AppId,
+    },
     /// Start an app, or activate it when a single-instance app already runs.
     Launch {
         id: AppId,
@@ -162,6 +170,15 @@ pub enum Reply {
     Instances {
         schema_version: u32,
         instances: Vec<AppInstance>,
+    },
+    /// Result of `AppIcon`. `icon` is `null` when the app is unknown, not
+    /// installed, or its runtime has no usable icon; the caller then draws
+    /// its letter glyph.
+    AppIcon {
+        schema_version: u32,
+        id: AppId,
+        #[serde(default)]
+        icon: Option<AppIconBitmap>,
     },
     /// Result of `Launch`/`Activate`: the (possibly pre-existing) instance.
     Instance {
@@ -290,6 +307,17 @@ impl Client {
             Reply::Catalog { apps, .. } => Ok(apps),
             Reply::Error { error } => Err(error.to_string()),
             other => Err(format!("unexpected ferrix-appd catalog reply: {other:?}")),
+        }
+    }
+
+    /// The installed app's launcher bitmap (see [`Request::AppIcon`]).
+    /// `Ok(None)` when there is none; an `Err` also covers an older service
+    /// that does not know the request.
+    pub fn app_icon(&mut self, id: &AppId) -> Result<Option<AppIconBitmap>, String> {
+        match self.request(&Request::AppIcon { id: id.clone() })? {
+            Reply::AppIcon { id: got, icon, .. } if &got == id => Ok(icon),
+            Reply::Error { error } => Err(error.to_string()),
+            other => Err(format!("unexpected ferrix-appd app-icon reply: {other:?}")),
         }
     }
 
@@ -569,6 +597,44 @@ pub fn intent_of(notification: Notification) -> Option<AppIntent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_icon_request_and_reply_wire_shapes() {
+        let id = AppId::new("apk.org.example.notes").unwrap();
+        let request = Request::AppIcon { id: id.clone() };
+        let text = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            text,
+            r#"{"request":"app-icon","id":"apk.org.example.notes"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Inbound>(&text).unwrap(),
+            Inbound::Request(request)
+        );
+        let reply = Reply::AppIcon {
+            schema_version: SCHEMA_VERSION,
+            id: id.clone(),
+            icon: Some(AppIconBitmap::new(1, 1, vec![1, 2, 3, 4]).unwrap()),
+        };
+        let text = serde_json::to_string(&reply).unwrap();
+        assert_eq!(
+            text,
+            r#"{"reply":"app-icon","schema_version":1,"id":"apk.org.example.notes","icon":{"width":1,"height":1,"rgba":"AQIDBA=="}}"#
+        );
+        assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
+        let none: Reply = serde_json::from_str(
+            r#"{"reply":"app-icon","schema_version":1,"id":"apk.org.example.notes","icon":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(none, Reply::AppIcon { icon: None, .. }));
+        // An out-of-bounds bitmap fails the whole reply.
+        assert!(
+            serde_json::from_str::<Reply>(
+                r#"{"reply":"app-icon","schema_version":1,"id":"apk.org.example.notes","icon":{"width":500,"height":1,"rgba":""}}"#
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn requests_and_reports_have_distinct_wire_shapes() {

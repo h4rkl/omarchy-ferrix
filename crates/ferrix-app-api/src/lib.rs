@@ -18,6 +18,9 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+mod icon;
+pub use icon::{APP_ICON_MAX_SIDE, AppIconBitmap};
+
 /// Current schema version of every serialized type in this crate and of the
 /// `ferrix_appd` wire protocol built on it.
 pub const SCHEMA_VERSION: u32 = 1;

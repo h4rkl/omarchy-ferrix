@@ -27,6 +27,7 @@
 
 mod config;
 mod host;
+pub mod icon;
 mod installed;
 mod runtime;
 pub mod testing;

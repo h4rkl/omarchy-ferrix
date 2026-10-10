@@ -31,6 +31,8 @@ struct State {
     next_pid: u32,
     surface_client_pid: Option<u32>,
     surface_client_pids: Option<Vec<u32>>,
+    /// Launcher icon file contents per package (decoded like Waydroid's).
+    icons: BTreeMap<String, Vec<u8>>,
 }
 
 /// Clone handles share state: a test keeps one and hands another to the
@@ -148,6 +150,12 @@ impl FakeAndroidHost {
         lock(&self.0).session_starts
     }
 
+    /// Gives `package` a launcher icon file with these bytes (an encoded
+    /// PNG, or garbage to exercise the fallback).
+    pub fn set_icon_file(&self, package: &str, bytes: Vec<u8>) {
+        lock(&self.0).icons.insert(package.to_owned(), bytes);
+    }
+
     pub fn set_surface_client_pid(&self, pid: Option<u32>) {
         lock(&self.0).surface_client_pid = pid;
     }
@@ -241,6 +249,11 @@ impl AndroidHost for FakeAndroidHost {
             return Err(HostError::SessionFailed("no packages listed".to_owned()));
         }
         Ok(entries)
+    }
+
+    fn launcher_icon(&self, package: &str) -> Option<ferrix_app_api::AppIconBitmap> {
+        let bytes = lock(&self.0).icons.get(package).cloned()?;
+        crate::icon::decode_icon(&bytes).ok()
     }
 
     fn android_booted(&self) -> Option<bool> {
