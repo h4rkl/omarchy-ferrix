@@ -283,6 +283,11 @@ complete_android_setup() {
     waydroid shell -- pm path "$wizard" 2>/dev/null | grep -q '^package:' || continue
     waydroid shell -- pm disable "$wizard" >>"$run_dir/waydroid-setup.log" 2>&1 || true
   done
+  # Ferrix owns display power. Android never sees the shell's user activity,
+  # so its own screen timeout puts it to sleep; asleep, a newly launched task
+  # never draws and (in task-streams mode) never gets a window.
+  waydroid shell -- settings put system screen_off_timeout 2147483647 >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  waydroid shell -- svc power stayon true >>"$run_dir/waydroid-setup.log" 2>&1 || true
   done_flag=$(waydroid shell -- settings get secure user_setup_complete 2>/dev/null | tr -d '\r')
   if [ "$done_flag" = 1 ]; then
     ev android-setup ',"status":"complete"'

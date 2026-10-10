@@ -92,6 +92,8 @@ case "$*" in
     [ "$6" != user_setup_complete ] || : > "$FAKE_STATE/setup" ;;
   'shell -- settings get secure user_setup_complete')
     if [ -f "$FAKE_STATE/setup" ]; then echo 1; else echo null; fi ;;
+  'shell -- svc power stayon true')
+    printf 'stayon\n' >> "$FAKE_STATE/calls" ;;
   'shell -- pm disable '*)
     printf 'pm-disable %s\n' "$5" >> "$FAKE_STATE/calls" ;;
   'shell -- cmd package resolve-activity'*)
@@ -183,6 +185,8 @@ check '"event":"android-boot".*"boot_completed":true.*"session_user":"user"' "$w
 check '"event":"android-setup","status":"complete"' "$work/console"
 check '^settings-put global device_provisioned 1$' "$work/state/calls"
 check '^settings-put secure user_setup_complete 1$' "$work/state/calls"
+check '^settings-put system screen_off_timeout 2147483647$' "$work/state/calls"
+check '^stayon$' "$work/state/calls"
 check '^app-install user=user$' "$work/state/calls"
 check '^dbus-daemon user=user$' "$work/state/calls"
 # pipewire-pulse is backgrounded by design; allow it a moment to record.
