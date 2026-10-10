@@ -92,20 +92,36 @@ pub enum Request {
 pub enum Report {
     /// A toplevel committed its first buffer. `pid` is the client's process
     /// id as seen by the compositor; `app_id` is the untrusted xdg app id.
+    /// `surface` is the compositor's opaque id for this one toplevel: several
+    /// toplevels (and several Wayland connections) may share a pid, as the
+    /// Android runtime's per-task windows do.
     SurfaceMapped {
         pid: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         app_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
     },
-    /// The last toplevel of that client went away.
-    SurfaceUnmapped { pid: u32 },
-    /// Keyboard/visual focus moved to the client with `pid` (or to nothing).
+    /// A mapped toplevel went away. With `surface`, exactly that toplevel;
+    /// without it (older compositors), every toplevel of `pid`.
+    SurfaceUnmapped {
+        pid: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
+    },
+    /// Keyboard/visual focus moved to the client with `pid` (or to nothing);
+    /// `surface` names the focused toplevel when known.
     FocusChanged {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
     },
+    /// A client asked (xdg_activation_v1) to raise one of its toplevels.
+    /// `ferrix_appd` decides; a linked compositor never raises on its own.
+    ActivationRequested { pid: u32, surface: u64 },
     /// The compositor recognised the global home gesture.
     HomeGesture,
     /// The compositor recognised a deliberate dismiss/close gesture.
@@ -169,8 +185,20 @@ pub enum Reply {
 pub enum Notification {
     /// A lifecycle or catalog event.
     App { event: AppEvent },
-    /// Compositor directive: raise the toplevel(s) of the client with `pid`.
-    Activate { pid: u32, app_id: AppId },
+    /// Compositor directive: raise the toplevel(s) of the client with `pid`;
+    /// with `surface`, exactly that toplevel (revealing it when withheld).
+    Activate {
+        pid: u32,
+        app_id: AppId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
+    },
+    /// Compositor directive: never present this toplevel until an
+    /// `Activate` names it. Used for shared-runtime windows that belong to
+    /// no running application.
+    Withhold { pid: u32, surface: u64 },
+    /// Compositor directive: ask this toplevel to close (`xdg_toplevel.close`).
+    Close { pid: u32, surface: u64 },
     /// An intent for an already running handler. Sent only to the streams
     /// of the handler application itself.
     Intent { app_id: AppId, intent: AppIntent },
@@ -555,6 +583,7 @@ mod tests {
             pid: 42,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: None,
+            surface: None,
         };
         assert_eq!(
             serde_json::to_string(&mapped).unwrap(),
@@ -566,7 +595,31 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<Inbound>(r#"{"report":"focus-changed"}"#).unwrap(),
-            Inbound::Report(Report::FocusChanged { pid: None })
+            Inbound::Report(Report::FocusChanged {
+                pid: None,
+                surface: None
+            })
+        );
+        // Per-toplevel ids are optional on the wire: an older compositor's
+        // pid-only report still parses.
+        assert_eq!(
+            serde_json::to_string(&Report::SurfaceUnmapped {
+                pid: 9,
+                surface: Some(3)
+            })
+            .unwrap(),
+            r#"{"report":"surface-unmapped","pid":9,"surface":3}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Inbound>(r#"{"report":"surface-unmapped","pid":9}"#).unwrap(),
+            Inbound::Report(Report::SurfaceUnmapped {
+                pid: 9,
+                surface: None
+            })
+        );
+        assert_eq!(
+            serde_json::to_string(&Report::ActivationRequested { pid: 9, surface: 3 }).unwrap(),
+            r#"{"report":"activation-requested","pid":9,"surface":3}"#
         );
         assert_eq!(
             serde_json::to_string(&Report::CloseGesture).unwrap(),
@@ -580,11 +633,20 @@ mod tests {
         let text = serde_json::to_string(&Notification::Activate {
             pid: 7,
             app_id: AppId::new("org.ferrix.home").unwrap(),
+            surface: None,
         })
         .unwrap();
         assert_eq!(
             text,
             r#"{"notification":"activate","pid":7,"app_id":"org.ferrix.home"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Notification::Withhold { pid: 7, surface: 2 }).unwrap(),
+            r#"{"notification":"withhold","pid":7,"surface":2}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Notification::Close { pid: 7, surface: 2 }).unwrap(),
+            r#"{"notification":"close","pid":7,"surface":2}"#
         );
         let event = Notification::App {
             event: AppEvent::CatalogChanged { apps: 3 },

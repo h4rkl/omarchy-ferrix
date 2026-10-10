@@ -117,4 +117,17 @@ pub trait AndroidHost: Send + Sync {
     fn surface_client_pid(&self) -> Option<u32> {
         None
     }
+
+    /// Every host pid that may hold a Wayland connection for the container
+    /// (multi-window mode opens one connection per Android task, possibly
+    /// from more than one process). These pids are the trust anchor for
+    /// associating task windows; ascending order.
+    fn surface_client_pids(&self) -> Vec<u32> {
+        self.surface_client_pid().into_iter().collect()
+    }
+
+    /// The xdg `app_id` the runtime gives the task window(s) of `package`.
+    /// Only meaningful together with [`AndroidHost::surface_client_pids`]:
+    /// the compositor-side match requires both.
+    fn window_app_id(&self, package: &str) -> String;
 }

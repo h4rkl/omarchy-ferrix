@@ -1,12 +1,13 @@
 //! [`AndroidRuntime`]: the [`ferrix_app_runtime_api::Runtime`] for
 //! [`RuntimeKind::Android`], generic over an [`AndroidHost`].
 
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
-use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
+use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime, SurfaceMatch};
 use serde_json::{Value, json};
 
 use crate::config::AndroidLaunch;
@@ -24,6 +25,9 @@ const POLL: Duration = Duration::from_millis(100);
 /// Consecutive "not running" observations before an exit is declared, so a
 /// momentary `/proc` race does not count as a crash.
 const GONE_CONFIRMATIONS: u8 = 2;
+/// How often a running app re-reads the container's Wayland client pids
+/// (multi-window mode may open connections after the launch returned).
+const SURFACE_PIDS_REFRESH: Duration = Duration::from_millis(500);
 
 /// Options for [`AndroidRuntime`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,25 +83,7 @@ impl AndroidRuntime {
     /// `ferrix-appd`'s log like the sandbox's records). Carries package ids
     /// and states only.
     fn record(&self, evidence: &str, event: &str, app: &AppId, extra: Value) {
-        let mut record = json!({
-            "evidence": evidence,
-            "event": event,
-            "runtime": "android",
-            "host": self.host.name(),
-            "app": app.as_str(),
-        });
-        if let (Some(target), Some(extra)) = (record.as_object_mut(), extra.as_object()) {
-            for (key, value) in extra {
-                target.insert(key.clone(), value.clone());
-            }
-        }
-        // One write(2) for the whole line so another writer sharing the log
-        // cannot land inside it.
-        let line = format!("{record}\n");
-        let mut stdout = std::io::stdout().lock();
-        let _ = stdout.flush();
-        let _ = stdout.write_all(line.as_bytes());
-        let _ = stdout.flush();
+        emit_record(evidence, self.host.name(), event, app, extra);
     }
 
     /// Parses and validates the daemon-private `launch` object.
@@ -141,6 +127,29 @@ impl AndroidRuntime {
             .install(path)
             .map_err(|error| map_host_error(&app.id, error))
     }
+}
+
+/// Writes one runtime record line to stdout.
+fn emit_record(evidence: &str, host: &str, event: &str, app: &AppId, extra: Value) {
+    let mut record = json!({
+        "evidence": evidence,
+        "event": event,
+        "runtime": "android",
+        "host": host,
+        "app": app.as_str(),
+    });
+    if let (Some(target), Some(extra)) = (record.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    // One write(2) for the whole line so another writer sharing the log
+    // cannot land inside it.
+    let line = format!("{record}\n");
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.flush();
+    let _ = stdout.write_all(line.as_bytes());
+    let _ = stdout.flush();
 }
 
 fn map_host_error(id: &AppId, error: HostError) -> AppError {
@@ -258,13 +267,21 @@ impl Runtime for AndroidRuntime {
                 "package": launch.package,
                 "pid": launched.pid,
                 "surface_client_pid": launched.surface_client_pid,
+                "window_app_id": self.host.window_app_id(&launch.package),
                 "instance": context.instance,
             }),
         );
+        let window_app_id = self.host.window_app_id(&launch.package);
+        let surface_pids = self.host.surface_client_pids().into_iter().collect();
         Ok(Box::new(AndroidApp {
             id: app.id.clone(),
             host: Arc::clone(&self.host),
             host_name: self.host.name(),
+            evidence,
+            window_app_id,
+            surface_pids,
+            surface_pids_read: Instant::now(),
+            reopens: 0,
             package: launch.package,
             activity: launch.activity,
             launched,
@@ -284,6 +301,13 @@ struct AndroidApp {
     id: AppId,
     host: Arc<dyn AndroidHost>,
     host_name: &'static str,
+    evidence: String,
+    /// xdg `app_id` of this package's task windows.
+    window_app_id: String,
+    /// Container Wayland client pids last read from the host.
+    surface_pids: BTreeSet<u32>,
+    surface_pids_read: Instant,
+    reopens: u32,
     package: String,
     activity: Option<String>,
     launched: LaunchedApp,
@@ -311,10 +335,26 @@ impl AndroidApp {
         reason
     }
 
+    /// Re-reads the container's Wayland client pids, at most every
+    /// [`SURFACE_PIDS_REFRESH`] (or right away while none is known).
+    fn refresh_surface_pids(&mut self) {
+        if !self.surface_pids.is_empty() && self.surface_pids_read.elapsed() < SURFACE_PIDS_REFRESH
+        {
+            return;
+        }
+        self.surface_pids_read = Instant::now();
+        let pids: BTreeSet<u32> = self.host.surface_client_pids().into_iter().collect();
+        if let Some(first) = pids.first() {
+            self.launched.surface_client_pid = Some(*first);
+        }
+        self.surface_pids = pids;
+    }
+
     fn observe(&mut self) -> Result<Option<ExitReason>, AppError> {
         if let Some(finished) = &self.finished {
             return finished.clone().map(Some);
         }
+        self.refresh_surface_pids();
         let running = self
             .host
             .is_running(&self.package)
@@ -339,10 +379,51 @@ impl AndroidApp {
 }
 
 impl RunningApp for AndroidApp {
-    /// The pid the compositor will report for this app's surface: the
-    /// container's Wayland client when known, else the application process.
+    /// Host pid of the Android application process, when visible. Surfaces
+    /// are not associated through it: the windows come from the container's
+    /// shared Wayland client (see [`RunningApp::surface_match`]).
     fn pid(&self) -> Option<u32> {
-        self.launched.surface_client_pid.or(self.launched.pid)
+        self.launched.pid
+    }
+
+    /// Task windows of this package: drawn by the container's Wayland
+    /// client(s), one toplevel per Android task, named
+    /// [`AndroidHost::window_app_id`].
+    fn surface_match(&self) -> SurfaceMatch {
+        SurfaceMatch::SharedHost {
+            client_pids: self.surface_pids.clone(),
+            app_id: self.window_app_id.clone(),
+        }
+    }
+
+    /// Re-issues the launch so Android creates (or raises) the package's
+    /// task when its window is gone.
+    fn reopen(&mut self) -> Result<bool, AppError> {
+        if self.finished.is_some() {
+            return Ok(false);
+        }
+        let launched = self
+            .host
+            .launch(&self.package, self.activity.as_deref())
+            .map_err(|error| map_host_error(&self.id, error))?;
+        self.reopens += 1;
+        if launched.pid.is_some() {
+            self.launched.pid = launched.pid;
+        }
+        // A relaunch restarts the appearance window: the process may have
+        // been reaped by Android while the task was gone.
+        self.started = Instant::now();
+        // Re-read the composer pids on the next poll.
+        let now = Instant::now();
+        self.surface_pids_read = now.checked_sub(SURFACE_PIDS_REFRESH).unwrap_or(now);
+        emit_record(
+            &self.evidence,
+            self.host_name,
+            "android-app-reopened",
+            &self.id,
+            json!({ "package": self.package, "pid": self.launched.pid, "reopens": self.reopens }),
+        );
+        Ok(true)
     }
 
     fn diagnostics(&self) -> Value {
@@ -353,6 +434,8 @@ impl RunningApp for AndroidApp {
             "activity": self.activity,
             "pid": self.launched.pid,
             "surface_client_pid": self.launched.surface_client_pid,
+            "surface_client_pids": self.surface_pids,
+            "window_app_id": self.window_app_id,
             "session": self.session,
             "exit_cause": self.finished.as_ref().map(|f| match f {
                 Ok(_) if self.stop_requested => "stopped",
@@ -569,8 +652,16 @@ mod tests {
             .unwrap();
         assert_eq!(host.launches(), vec![(PACKAGE.to_owned(), None)]);
         assert_eq!(host.session_starts(), 1);
-        // Surface association uses the container's Wayland client pid.
-        assert_eq!(running.pid(), Some(4242));
+        // The instance pid is the Android process; windows are matched by
+        // the container's Wayland client pid plus the task's app_id.
+        assert_eq!(running.pid(), Some(5000));
+        assert_eq!(
+            running.surface_match(),
+            SurfaceMatch::SharedHost {
+                client_pids: [4242].into_iter().collect(),
+                app_id: format!("waydroid.{PACKAGE}"),
+            }
+        );
         let diagnostics = running.diagnostics();
         assert_eq!(diagnostics["kind"], "android");
         assert_eq!(diagnostics["host"], "fake");
@@ -688,13 +779,45 @@ mod tests {
     }
 
     #[test]
-    fn pid_falls_back_to_the_app_process_without_a_surface_client() {
+    fn surface_client_pids_appear_after_launch_and_never_fall_back_to_the_app() {
         let host = FakeAndroidHost::new();
         host.install_package(PACKAGE);
         host.set_surface_client_pid(None);
-        let running = runtime(&host)
+        let mut running = runtime(&host)
             .launch(&descriptor(), &config(), &context())
             .unwrap();
         assert_eq!(running.pid(), Some(5000));
+        // No composer pid yet: nothing can claim the task window.
+        let SurfaceMatch::SharedHost { client_pids, .. } = running.surface_match() else {
+            panic!("android windows are shared-host windows");
+        };
+        assert!(client_pids.is_empty());
+        assert!(!running.surface_match().claims(5000, Some("waydroid.x.y")));
+        // Multi-window mode: several composer connections, read while polling.
+        host.set_surface_client_pids(vec![4300, 4242]);
+        assert_eq!(running.try_wait().unwrap(), None);
+        let matcher = running.surface_match();
+        assert!(matcher.claims(4242, Some(&format!("waydroid.{PACKAGE}"))));
+        assert!(matcher.claims(4300, Some(&format!("waydroid.{PACKAGE}"))));
+        assert!(!matcher.claims(4242, Some("waydroid.org.lineageos.setupwizard")));
+        assert!(!matcher.claims(9999, Some(&format!("waydroid.{PACKAGE}"))));
+        assert!(!matcher.claims(4242, None));
+    }
+
+    #[test]
+    fn reopen_relaunches_the_package_until_the_instance_finished() {
+        let host = FakeAndroidHost::new();
+        host.install_package(PACKAGE);
+        let mut running = runtime(&host)
+            .launch(&descriptor(), &config(), &context())
+            .unwrap();
+        assert_eq!(running.reopen(), Ok(true));
+        assert_eq!(
+            host.launches(),
+            vec![(PACKAGE.to_owned(), None), (PACKAGE.to_owned(), None)]
+        );
+        running.terminate(Duration::from_secs(1)).unwrap();
+        assert_eq!(running.reopen(), Ok(false));
+        assert_eq!(host.launches().len(), 2);
     }
 }

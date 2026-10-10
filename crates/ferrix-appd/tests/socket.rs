@@ -62,7 +62,10 @@ fn next_app_event(rx: &Receiver<Notification>) -> AppEvent {
     loop {
         match rx.recv_timeout(TIMEOUT).expect("notification") {
             Notification::App { event } => return event,
-            Notification::Activate { .. } | Notification::Intent { .. } => continue,
+            Notification::Activate { .. }
+            | Notification::Withhold { .. }
+            | Notification::Close { .. }
+            | Notification::Intent { .. } => continue,
         }
     }
 }
@@ -149,6 +152,7 @@ fn compositor_role_is_gated_and_associates_surfaces() {
         pid: sandbox_pid + 2,
         app_id: Some("org.ferrix.terminal".to_owned()),
         title: None,
+        surface: None,
     })
     .unwrap();
     // Reports are fire-and-forget; a request afterwards proves the stream is fine.
@@ -165,11 +169,13 @@ fn compositor_role_is_gated_and_associates_surfaces() {
             pid: sandbox_pid + 2,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: Some("Terminal".to_owned()),
+            surface: None,
         })
         .unwrap();
     compositor
         .report(&Report::FocusChanged {
             pid: Some(sandbox_pid + 2),
+            surface: None,
         })
         .unwrap();
     assert!(ferrix_appd::testing::wait_for(TIMEOUT, || {
@@ -319,6 +325,7 @@ fn subscribers_receive_catalog_and_lifecycle_notifications() {
             pid: client_pid,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: Some("Terminal".to_owned()),
+            surface: None,
         })
         .unwrap();
     let compositor = compositor.subscribe().unwrap();
@@ -330,6 +337,7 @@ fn subscribers_receive_catalog_and_lifecycle_notifications() {
         Notification::Activate {
             pid: client_pid,
             app_id: terminal.clone(),
+            surface: None,
         }
     );
 

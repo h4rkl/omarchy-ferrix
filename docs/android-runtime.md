@@ -56,7 +56,7 @@ Each row states what upstream documents or its source does, with the source.
 | Binder requirements | MAINLINE vendor type needs `/dev/binder`, `/dev/hwbinder`, `/dev/vndbinder` (static nodes or binderfs; `drivers.py` mounts binderfs and allocates nodes only when the static nodes are missing). Ashmem optional: `sys.use_memfd=true` is set when `/dev/ashmem` is absent. | `tools/helpers/drivers.py`, `lxc.py` |
 | Kernel configuration (pinned guest kernel) | `device/main/linux-postmarketos-stable` v26.06 = **7.0.12**, `config-stable.aarch64`: `CONFIG_ANDROID_BINDER_IPC=y`, `CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"`, `# CONFIG_ANDROID_BINDERFS is not set`, `CONFIG_PSI=y`, `CONFIG_MEMFD_CREATE=y`, `CONFIG_VETH=m`, `CONFIG_TUN=m`, `CONFIG_BRIDGE=m`, `CONFIG_BLK_DEV_LOOP=y`, `CONFIG_OVERLAY_FS=m`, `CONFIG_SQUASHFS=m`, `CONFIG_EROFS_FS=m`, nftables + iptables NAT/masquerade as modules, all namespaces, cgroups. The kernel carries `pmb:kconfigcheck-community`, whose alias includes `category:waydroid` in pmaports `kconfigcheck.toml` (`ANDROID_BINDERFS = "n"`, `ANDROID_BINDER_DEVICES = ["binder","hwbinder","vndbinder"]`, `ANDROID_BINDER_IPC = "y"`, `BLK_DEV_LOOP`, `BRIDGE`, `VETH`, `TUN`, `SQUASHFS*`, `FUSE_FS`, `IP_NF_MANGLE`, `NETFILTER_XT_MATCH_COMMENT`, …). **No kernel change is required**; `pmos-check` should still prove the three nodes exist. `CONFIG_RT_GROUP_SCHED` must stay disabled (pmOS wiki). `psi=1` on the command line is a documented workaround for "Service manager /dev/binder has died". | pmaports v26.06 raw config and `kconfigcheck.toml`; docs.waydro.id troubleshooting |
 | Container / process isolation | One LXC container (user, pid, uts, net, mount, ipc namespaces) for the whole Android userspace; all apps are processes inside it (visible from the host `/proc`). No per-app host process. LXC mounts the binder nodes, `/dev/fuse`, `/dev/net/tun`, DRI render node when present, `/dev/dma_heap/*`, the Wayland socket, and the PulseAudio socket into the container. Every passed device must be recorded before any claim (§8). | README; `lxc.py` |
-| Wayland integration | Host `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` is bind-mounted to `/run/xdg/wayland-0`; the container-side hwcomposer is the Wayland client. `xdg_toplevel` `app_id` is `"waydroid." + <package>` for apps and `"Waydroid"` for the full UI; title is the app name. `persist.waydroid.multi_windows` (default false) selects one surface vs. per-app windows. `waydroid session start` needs `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the compositor session and refuses `sudo`. | `wayland-hwc.cpp` (lineage-20), `session_manager.py`, docs |
+| Wayland integration | Host `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY` is bind-mounted to `/run/xdg/wayland-0`; the container-side hwcomposer is the Wayland client. `xdg_toplevel` `app_id` is `"waydroid." + <package>` for apps and `"Waydroid"` for the full UI; title is the app name. `persist.waydroid.multi_windows` (default false) selects one surface vs. per-app windows; Ferrix sets it and `persist.waydroid.task_streams` to true (one toplevel per Android task, §7). `waydroid session start` needs `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` of the compositor session and refuses `sudo`. | `wayland-hwc.cpp` (lineage-20), `session_manager.py`, docs |
 | Software rendering without virgl/host GPU | FAQ "Get Waydroid to work through a VM": add `ro.hardware.gralloc=default` and `ro.hardware.egl=swiftshader` to `[properties]` in `/var/lib/waydroid/waydroid.cfg`, then `waydroid upgrade -o`. The QEMU Android image also sets `ro.sf.lcd_density=400`, a slightly relaxed Pixel-class logical density that makes the 1080-pixel panel approximately 432 dp wide; this setting is target-local and is not part of the shared Ferrix profile. `lxc.py` auto-selects the same renderer pair when no DRI render node exists; with a render node it selects `gralloc=gbm`, `egl=mesa`. Upstream states only QEMU (and possibly crosvm) have working 3D acceleration in a VM and only with virtio-gpu 3D enabled. **Performance caveat:** SwiftShader is a CPU rasteriser; under TCG the guest CPU is itself emulated, so Android boot and Fulguris rendering are expected to be very slow. No upstream frame-rate numbers exist; a future QEMU check (§8) must measure boot-to-ready and time-to-first-frame and record them. Correctness (non-blank framebuffer) is the acceptance bar, not speed. | docs.waydro.id FAQ; `lxc.py` |
 | Input and on-screen keyboard | Touch/mouse/keyboard arrive through the Wayland surface (`persist.waydroid.fake_touch` maps mouse to touch per package). Waydroid shows the **Android** virtual keyboard inside its surface by default; no host OSK/text-input integration is documented. Consequence: the product OSK (phase 3) and the Android keyboard would compete; the initial evaluation keeps Android's keyboard inside the Android surface and records this as a departure. | docs FAQ "Disable on-screen keyboard" |
 | Audio | Binds the host PulseAudio socket `$PULSE_RUNTIME_PATH/native` (default `$XDG_RUNTIME_DIR/pulse/native`) into the container. PipeWire is not mentioned by upstream; PipeWire's pulse compatibility server is the expected path but is **unverified**. pmOS wiki: the container fails to start when the socket is absent. | `lxc.py`, `config/__init__.py`; pmOS wiki |
@@ -175,11 +175,19 @@ offline (no `ota.waydro.id` access from the guest), then writes
 ```ini
 ro.hardware.gralloc=default
 ro.hardware.egl=swiftshader
-persist.waydroid.multi_windows=false
+persist.waydroid.multi_windows=true
+persist.waydroid.task_streams=true
 ro.sf.lcd_density=400
 ```
 
-followed by `waydroid upgrade -o`. The manifest records image filenames,
+followed by `waydroid upgrade -o`. The container reads only the generated
+`/var/lib/waydroid/waydroid_base.prop`, so `ferrix-waydroid.sh prepare`
+reruns `waydroid upgrade -o` whenever it applied a property change or any
+managed `key=value` is missing from that file (record
+`waydroid-properties` `status:"materialized"`, `trigger:"properties-applied"`
+or `"stale"`). The two `persist.waydroid.*` values (owner decision
+2026-10-10, also in the Pixel 9a's `waydroid-properties.ini`) make every
+Android task its own window; see §7 "Surface association". The manifest records image filenames,
 sizes, hashes, the `waydroid` package version, and the QEMU-only
 `density_dpi` value.
 
@@ -294,8 +302,13 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   "session-failed: …" }`; package not listed → `LaunchFailed { reason:
   "not-installed" }` (launch never installs); bad `launch` object →
   `InvalidDescriptor`; wrong `RuntimeKind` → `RuntimeUnsupported`.
-- **`RunningApp`**: `pid()` returns `surface_client_pid` when known, else
-  the app pid (see limitation below). `try_wait`/`wait` poll
+- **`RunningApp`**: `pid()` returns the Android application's host pid
+  (never the composer's). `surface_match()` returns
+  `SurfaceMatch::SharedHost { client_pids, app_id }`: every host pid whose
+  command line contains `surface_client_needle` (`surface_client_pids`,
+  re-read at most every 500 ms while polling) and `waydroid.<package>`.
+  `reopen()` re-runs the launch command so Android recreates or raises the
+  task (`android-app-reopened`). `try_wait`/`wait` poll
   `is_running`; a process that never appeared within `appear_grace` (30 s)
   or disappears for two consecutive polls is classified: after our own
   `terminate` → `ExitReason::Signaled { signal: 15 }`; otherwise →
@@ -306,26 +319,58 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   the process outlives the grace period.
 - **Diagnostics** (runtime-private, attached to `app-started`):
   `{"kind":"android","host":"waydroid","package":"net.slions.fulguris.full.fdroid",
-  "activity":null,"pid":…,"surface_client_pid":…,"session":{"state":
+  "activity":null,"pid":…,"surface_client_pid":…,"surface_client_pids":[…],
+  "window_app_id":"waydroid.net.slions.fulguris.full.fdroid","session":{"state":
   "running","session_pid":…},"exit_cause":null}`. The package name appears
   only here and in the runtime's records, never in `ferrix-app-protocol`.
-- **Surface association limitation.** The compositor sees one Wayland client
-  for the whole container: Waydroid's hwcomposer, whose host pid is not a
-  descendant of `ferrix-appd`. `ferrix-appd`'s ancestry walk therefore
-  cannot match it. The adapter reports that pid as `RunningApp::pid()` so
-  appd's direct-pid match associates the surface; with `multi_windows=false`
-  there is exactly one Android surface, so this is sufficient for the
-  single-app phase. The `xdg_toplevel` `app_id` `waydroid.<package>` is
-  useful for confirmation but is untrusted metadata and must not identify
-  the caller. Appd refuses a launch whose reported runtime pid is already
-  owned by another app, so this limitation fails closed instead of silently
-  reassigning the shared surface. Multiple simultaneous Android apps would need Waydroid's
-  multi-window mode and a per-window mapping — not in scope.
+- **Surface association (multi-window task streams, 2026-10-10).** Waydroid
+  runs with `multi_windows=true` and `task_streams=true`: its hwcomposer
+  (inside the container, not a descendant of `ferrix-appd`) opens one
+  `xdg_toplevel` per Android task, possibly over separate Wayland
+  connections from the same host pid, with `app_id` `waydroid.<package>`
+  (`Waydroid` for the full UI) and one viewport-scaled surface each.
+  `ferrix-shell` gives every toplevel a compositor surface id and reports
+  `SurfaceMapped/SurfaceUnmapped/FocusChanged{pid, surface}`. In
+  `ferrix-appd` a toplevel belongs to a running Android instance only when
+  its kernel-reported client pid is one of that instance's runtime-reported
+  composer pids (the trust anchor) **and** its `app_id` equals
+  `waydroid.<descriptor package>`. The `app_id` alone never identifies
+  anything: from any other pid it is untrusted metadata and the toplevel
+  resolves by process ancestry as before; composer pids never resolve by
+  pid, ancestry, or `Identify`.
+- **Unclaimed task windows** (setup wizard, launcher, the `Waydroid` full
+  UI, packages without a running Ferrix instance) are **withheld**, never
+  closed: the shell maps every `waydroid.*`/`Waydroid` toplevel withheld
+  (not drawn, not focusable) until appd sends `Activate{pid, surface}` for
+  that exact surface, and appd sends `Withhold{pid, surface}` for any
+  composer toplevel no instance claims (`app-surface-withheld`). Closing
+  them could fight Android (its launcher and wizard come back) or stop the
+  session; withholding is reversible, and a withheld task is adopted when
+  its app launches. A window that outlives its instance is withheld again.
+- **Configure, focus, activation, close.** Every toplevel gets the same
+  fullscreen configure (the client area) with the first commit; Waydroid
+  resizes the whole Android display on any size change, so per-window sizes
+  are never sent. Keyboard focus follows the raised task (Android's task
+  focus). `xdg_activation_v1` requests from the window's own pid become
+  `ActivationRequested{pid, surface}`; appd raises only a claimed window of
+  a running instance. The close gesture sends `Close{pid, surface}`
+  (`xdg_toplevel.close`, Android removes the task) and force-stops only if
+  the window is still there after 5 s.
+- **Task lifecycle in appd.** When the last task window of an instance goes
+  away and none returns within 1 s while the process lives, the instance
+  ends `terminated` with exit code 0 (`app-task-closed`), not `crashed`; the
+  next tap is a fresh `waydroid app launch`. Activating a running instance
+  that has no window re-runs the launch (`app-reopen`) instead of raising a
+  surface that no longer exists. Limitations: a task Android opens for a
+  package without a running instance (an intent from another app) stays
+  withheld; the composer needle `graphics.composer` is still unverified on
+  hardware.
+
 - **Records**: `android-runtime-absent`, `android-session-failed`,
-  `android-app-not-installed`, `android-app-launched` (fields: `evidence`,
+  `android-app-not-installed`, `android-app-launched`, `android-app-reopened` (fields: `evidence`,
   `event`, `runtime`, `host`, `app`, `reason`/`package`/`pid`/
-  `surface_client_pid`/`instance`).
-- **Tests** (`cargo test -p ferrix-runtime-android`, 21 tests, `mock`):
+  `surface_client_pid`/`window_app_id`/`instance`/`reopens`).
+- **Tests** (`cargo test -p ferrix-runtime-android`, 22 tests, `mock`):
   package/activity grammar; `launch` object parsing and unknown-field
   rejection; absent runtime → `RuntimeUnsupported`; failed session (both
   pre-existing `failed` status and a failing start) → `LaunchFailed`;

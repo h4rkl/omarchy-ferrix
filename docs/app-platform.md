@@ -243,12 +243,25 @@ release provides.
 
 ## Surface association and focus
 
-The compositor reads each client's pid from the kernel (`SO_PEERCRED`) and
-reports `SurfaceMapped{pid, app_id, title}`, `SurfaceUnmapped{pid}`, and
-`FocusChanged{pid}`. `ferrix-appd` resolves a pid to an instance by matching the
-sandbox pid or by walking `/proc/<pid>/status` parents (the application is a
-grandchild of `ferrix-appd`). The xdg `app_id` string an application sets is untrusted
-metadata: it is recorded and compared, never used to identify the caller.
+The compositor reads each client's pid from the kernel (`SO_PEERCRED`),
+gives every toplevel an opaque surface id, and reports
+`SurfaceMapped{pid, app_id, title, surface}`, `SurfaceUnmapped{pid, surface}`
+(per toplevel), and `FocusChanged{pid, surface}`. `ferrix-appd` resolves a pid
+to an instance by matching the sandbox pid or by walking `/proc/<pid>/status`
+parents (the application is a grandchild of `ferrix-appd`). The xdg `app_id`
+string an application sets is untrusted metadata: it is recorded and
+compared, never used to identify the caller.
+
+The one exception is a runtime whose windows all come from a shared client
+(the Android runtime's composer, one toplevel per Android task). Its adapter
+declares `SurfaceMatch::SharedHost { client_pids, app_id }`: a toplevel
+belongs to the instance only when its kernel pid is one of those
+runtime-reported pids **and** its `app_id` matches; those pids never resolve
+by pid or ancestry. Shared-host toplevels no running instance claims are
+withheld from presentation (`Notification::Withhold`), activations name the
+exact surface, the close gesture asks the task to close
+(`Notification::Close`), and the instance ends `terminated` (not crashed)
+once its last window stays gone. Details in `docs/android-runtime.md` §7.
 
 `ferrix-appd` pushes `Notification::Activate{pid}` to the compositor to raise a
 window: on a first launch once its surface maps, on a second launch of a running
@@ -300,7 +313,7 @@ then gates by the verified role:
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
 | `Open` with `dial` / `compose` | `application`, `home`, `tool` |
 | `Open` with `show-call` or `show-bluetooth-pairing` | `service`, `tool` |
-| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture`, `CloseGesture` | `compositor` |
+| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `ActivationRequested`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
 
 A `service` resolves identities and observes lifecycle events; it never

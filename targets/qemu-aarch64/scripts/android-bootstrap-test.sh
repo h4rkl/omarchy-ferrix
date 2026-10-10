@@ -25,7 +25,8 @@ cat > "$work/properties.ini" <<'PROPS'
 [properties]
 ro.hardware.gralloc=default
 ro.hardware.egl=swiftshader
-persist.waydroid.multi_windows=false
+persist.waydroid.multi_windows=true
+persist.waydroid.task_streams=true
 ro.sf.lcd_density=400
 PROPS
 
@@ -71,10 +72,12 @@ set -eu
 case "$*" in
   'init -f'*) printf '[waydroid]\nimages_path = %s\n' "$4" > "${FERRIX_ANDROID_CONFIG:?}" ;;
   'upgrade -o')
-    # Like Waydroid: the renderer comes from waydroid.cfg [properties].
-    v() { sed -n "s/^$1[ ]*=[ ]*//p" "${FERRIX_ANDROID_CONFIG:?}" | tail -n 1; }
-    printf 'ro.hardware.gralloc=%s\nro.hardware.egl=%s\nro.sf.lcd_density=400\n' \
-      "$(v ro.hardware.gralloc)" "$(v ro.hardware.egl)" > "${FERRIX_ANDROID_BASE_PROPS:?}"
+    # Like Waydroid: waydroid_base.prop gets every waydroid.cfg [properties]
+    # entry as key=value (the container reads only this file).
+    printf 'upgrade\n' >> "$FAKE_STATE/calls"
+    awk '/^\[/ { in_props = ($0 == "[properties]"); next }
+         in_props && /=/ { k = $0; sub(/[ \t]*=.*/, "", k); v = $0; sub(/^[^=]*=[ \t]*/, "", v); print k "=" v }' \
+      "${FERRIX_ANDROID_CONFIG:?}" > "${FERRIX_ANDROID_BASE_PROPS:?}"
     ;;
   'session start')
     printf 'session-start user=%s bus=%s wayland=%s\n' "${FAKE_USER:-root}" "$DBUS_SESSION_BUS_ADDRESS" "$WAYLAND_DISPLAY" >> "$FAKE_STATE/calls" ;;
@@ -146,6 +149,10 @@ check '"event":"waydroid-container".*"status":"started"' "$work/console"
 check '"event":"android-app-staged"' "$work/console"
 check '"event":"android-binder-devices".*"binderfs"' "$work/console"
 check '^ro.sf.lcd_density=400$' "$work/var/lib/waydroid/waydroid_base.prop"
+# Android apps run as per-task windows: both properties reach the file the
+# container reads, not only waydroid.cfg.
+check '^persist.waydroid.multi_windows=true$' "$work/var/lib/waydroid/waydroid_base.prop"
+check '^persist.waydroid.task_streams=true$' "$work/var/lib/waydroid/waydroid_base.prop"
 common_env sh "$script"
 check '"event":"waydroid-init".*"status":"already-initialized"' "$work/console"
 
@@ -167,6 +174,35 @@ common_env sh "$helper" prepare
 [ "$(grep -c '^ro.hardware.gralloc' "$cfg")" = 1 ] || { echo 'FAIL android-bootstrap-test: duplicate gralloc option' >&2; exit 1; }
 [ "$(grep -c '^ro.sf.lcd_density' "$cfg")" = 1 ] || { echo 'FAIL android-bootstrap-test: duplicate density option' >&2; exit 1; }
 check '^ro.sf.lcd_density=400$' "$cfg"
+
+# Device regression (2026-10-10): waydroid.cfg already carried
+# multi_windows=true but waydroid_base.prop still said false, because the
+# offline upgrade only ran for renderer/density drift. A stale managed
+# property in the base file must trigger `waydroid upgrade -o`.
+base="$work/var/lib/waydroid/waydroid_base.prop"
+sed -i.bak 's/^persist.waydroid.multi_windows=true$/persist.waydroid.multi_windows=false/' "$base"
+: > "$work/console"
+: > "$work/state/calls"
+common_env sh "$helper" prepare
+check '^upgrade$' "$work/state/calls"
+check '"event":"waydroid-properties".*"status":"materialized".*"trigger":"stale"' "$work/console"
+check '^persist.waydroid.multi_windows=true$' "$base"
+# Changing a property in the target file applies it to waydroid.cfg and
+# always regenerates the base file in the same run.
+sed -i.bak 's/^persist.waydroid.task_streams=true$/persist.waydroid.task_streams=false/' "$work/properties.ini"
+: > "$work/console"
+: > "$work/state/calls"
+common_env sh "$helper" prepare
+check '"event":"waydroid-properties".*"status":"applied"' "$work/console"
+check '"event":"waydroid-properties".*"status":"materialized".*"trigger":"properties-applied"' "$work/console"
+check '^persist.waydroid.task_streams=false$' "$base"
+sed -i.bak 's/^persist.waydroid.task_streams=false$/persist.waydroid.task_streams=true/' "$work/properties.ini"
+common_env sh "$helper" prepare
+check '^persist.waydroid.task_streams=true$' "$base"
+# Up to date: no upgrade.
+: > "$work/state/calls"
+common_env sh "$helper" prepare
+refute '^upgrade$' "$work/state/calls"
 
 # A config already holding a duplicate (an older helper's rerun) is repaired.
 printf 'ro.hardware.gralloc=default\n' >> "$cfg"

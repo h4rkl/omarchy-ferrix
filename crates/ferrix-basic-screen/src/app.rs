@@ -419,7 +419,10 @@ impl Home {
                 event: AppEvent::CatalogChanged { .. },
             } => return self.refresh_catalog(),
             // `Activate` is a compositor directive; intents go to handlers.
-            Notification::Activate { .. } | Notification::Intent { .. } => return false,
+            Notification::Activate { .. }
+            | Notification::Withhold { .. }
+            | Notification::Close { .. }
+            | Notification::Intent { .. } => return false,
         };
         let Some(index) = self.ui.tile_index(&instance.app) else {
             return false;
