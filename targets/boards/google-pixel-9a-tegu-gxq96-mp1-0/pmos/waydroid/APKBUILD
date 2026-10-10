@@ -27,7 +27,7 @@ depends="
 	py3-pyclip
 	python3
 	"
-makedepends="coreutils"
+makedepends="coreutils python3"
 triggers="$pkgname.trigger=/usr/share/waydroid-extra/images"
 install="$pkgname.post-upgrade"
 subpackages="
@@ -47,8 +47,9 @@ options="!check" # No tests
 package() {
 	make DESTDIR="$pkgdir" USE_SYSTEMD=1 USE_NFTABLES=1 install
 
-	# Generate __pycache__ at packaging time instead of runtime
-	python -m compileall "$pkgdir"/usr/lib/waydroid/tools
+	# Generate __pycache__ at packaging time instead of runtime (python3:
+	# the pmbootstrap chroot has no unversioned python).
+	python3 -m compileall "$pkgdir"/usr/lib/waydroid/tools
 
 	install -Dm644 -t "$pkgdir"/etc/xdg/autostart "$srcdir"/waydroid-session.desktop
 
