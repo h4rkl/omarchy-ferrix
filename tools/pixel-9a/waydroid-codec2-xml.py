@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Merge stock media_codecs XMLs into one Waydroid overlay XML without secure codecs.
 
-    waydroid-codec2-xml.py [--rank N] OUTPUT INPUT...
+    waydroid-codec2-xml.py [--rank N] [--exclude PREFIX]... OUTPUT INPUT...
 
 Reads the stock vendor `media_codecs*_c2.xml` inputs in order and writes one
 `<MediaCodecs>` document holding their `<Decoders>`/`<Encoders>` entries:
@@ -15,6 +15,8 @@ Reads the stock vendor `media_codecs*_c2.xml` inputs in order and writes one
     gets `rank="N"`, so Android's MediaCodecList orders the hardware codecs
     ahead of the container's ffmpeg and AOSP software codecs regardless of
     the stock component traits;
+  - with `--exclude PREFIX`, codecs whose name starts with PREFIX are
+    dropped (e.g. `c2.google.` keeps the BigWave AV1 codecs out of the list);
   - a codec defined twice is an error.
 
 Offline; part of tools/pixel-9a/waydroid-codec2-overlay.sh.
@@ -46,6 +48,7 @@ def strip_secure_features(codec):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--rank", type=int)
+    parser.add_argument("--exclude", action="append", default=[])
     parser.add_argument("output")
     parser.add_argument("inputs", nargs="+")
     args = parser.parse_args()
@@ -69,7 +72,7 @@ def main():
             for codec in child:
                 if codec.tag != "MediaCodec" or "name" not in codec.attrib:
                     die(f"{path}: unexpected <{codec.tag}> in <{child.tag}>")
-                if is_secure(codec):
+                if is_secure(codec) or any(codec.get("name").startswith(p) for p in args.exclude):
                     continue
                 strip_secure_features(codec)
                 if codec.get("update") != "true":
@@ -86,7 +89,7 @@ def main():
     for section in SECTIONS:
         if merged[section]:
             ET.SubElement(out, section).extend(merged[section])
-    if not any(merged.values()):
+    if not any(merged.values()) and not args.exclude:
         die("no codecs left after filtering")
     ET.indent(out, space="    ")
     with open(args.output, "wb") as handle:

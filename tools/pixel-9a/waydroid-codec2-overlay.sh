@@ -120,6 +120,13 @@ while [ -n "${queue# }" ]; do
   done
 done
 
+# BigWave AV1 stays out of the codec list unless FERRIX_CODEC2_AV1=1: with it
+# listed, YouTube picks AV1, and on physical google-pixel-9a-tegu-gxq96-mp1-0
+# (2026-10-11) c2.google.av1.decoder decoded but no frame reached the page,
+# while c2.exynos.vp9.decoder played. The service still ships for testing.
+av1_exclude="--exclude c2.google."
+[ "${FERRIX_CODEC2_AV1:-0}" != 1 ] || av1_exclude=
+
 # media_codecs: the stock lists merged per destination, secure codecs out,
 # hardware rank in. Waydroid's media_codecs.xml already includes
 # media_codecs_c2.xml (absent from its vendor image) after its ffmpeg list,
@@ -131,7 +138,7 @@ for destination in $xml_outputs; do
   rank=
   case "$destination" in *performance*) ;; *) rank="--rank $hw_rank" ;; esac
   # shellcheck disable=SC2046,SC2086
-  python3 -I "$xmltool" $rank "$dest/overlay/vendor/$destination" $(cat "$work/xml/$key.inputs") ||
+  python3 -I "$xmltool" $rank $av1_exclude "$dest/overlay/vendor/$destination" $(cat "$work/xml/$key.inputs") ||
     die "media_codecs generation failed: $destination"
 done
 ! grep -Eq '[.]secure"|secure-playback' "$dest/overlay/vendor/etc/media_codecs_c2.xml" ||

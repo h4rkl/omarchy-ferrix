@@ -73,4 +73,10 @@ if FERRIX_OUT_DIR="$work/out" sh "$root/tools/pixel-9a/waydroid-codec2-overlay.s
 fi
 grep -q 'opt-in\|missing prerequisite' "$work/gate.err" || fail "unexpected gate error: $(cat "$work/gate.err")"
 [ ! -e "$work/out" ] || fail "overlay extraction wrote output without its opt-in token"
+# --exclude drops a prefix (BigWave AV1) and may leave a list empty.
+xml --exclude c2.vendor.av1. "$work/ex.xml" "$work/b.xml" || fail 'exclude run failed'
+! grep -q 'c2.vendor.av1.decoder' "$work/ex.xml" || fail 'excluded codec kept'
+xml --exclude c2.vendor.av1. "$work/ex2.xml" "$work/a.xml" "$work/b.xml" || fail 'exclude with others failed'
+grep -q 'c2.vendor.avc.decoder"' "$work/ex2.xml" || fail 'exclude dropped an unrelated codec'
+
 printf 'PASS waydroid-codec2-xml-test\n'
