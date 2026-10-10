@@ -7,7 +7,7 @@ use ferrix_protocol::Subscription;
 
 use smithay::{
     backend::{
-        renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer},
+        renderer::{ImportDma, ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent},
     },
     output::{Output, PhysicalProperties, Scale, Subpixel},
@@ -87,6 +87,7 @@ pub fn run(
     shell
         .shm_state
         .update_formats(backend.renderer().shm_formats());
+    shell.enable_dmabuf(backend.renderer().dmabuf_formats());
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
     let (logical_w, logical_h) = shell.plan.logical_size();

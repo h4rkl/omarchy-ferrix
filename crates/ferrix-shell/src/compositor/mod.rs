@@ -35,11 +35,12 @@ use ferrix_protocol::Subscription;
 
 use smithay::{
     backend::{
+        allocator::{Buffer, dmabuf::Dmabuf, format::FormatSet},
         input::TouchSlot,
         renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     },
-    delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
-    delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_layer_shell,
+    delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
     desktop::{
         LayerSurface, PopupKind, PopupManager, Window, WindowSurfaceType, find_popup_root_surface,
         get_popup_toplevel_coords, layer_map_for_output, utils::send_frames_surface_tree,
@@ -65,6 +66,7 @@ use smithay::{
             CompositorClientState, CompositorHandler, CompositorState, get_parent,
             is_sync_subsurface, with_states,
         },
+        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         output::{OutputHandler, OutputManagerState},
         selection::{
             SelectionHandler,
@@ -222,6 +224,12 @@ pub struct Shell {
     pub xdg_shell_state: XdgShellState,
     pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
+    /// zwp_linux_dmabuf_v1, published by the backend once its renderer is up
+    /// (`enable_dmabuf`); clients that render on a GPU (Waydroid's
+    /// hwcomposer) hand over linear buffers instead of CPU-copying into SHM.
+    dmabuf_state: DmabufState,
+    dmabuf_global: Option<DmabufGlobal>,
+    dmabuf_formats: FormatSet,
     /// Owns the wl_output/xdg_output globals; kept alive for the shell's lifetime.
     #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
@@ -254,6 +262,7 @@ impl Shell {
         );
         let layer_shell_state = WlrLayerShellState::new::<Shell>(&dh);
         let shm_state = ShmState::new::<Shell>(&dh, Vec::new());
+        let dmabuf_state = DmabufState::new();
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Shell>(&dh);
         let data_device_state = DataDeviceState::new::<Shell>(&dh);
         let mut seat_state = SeatState::new();
@@ -351,6 +360,9 @@ impl Shell {
             xdg_shell_state,
             layer_shell_state,
             shm_state,
+            dmabuf_state,
+            dmabuf_global: None,
+            dmabuf_formats: FormatSet::default(),
             output_manager_state,
             seat_state,
             data_device_state,
@@ -729,6 +741,46 @@ impl BufferHandler for Shell {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
+impl Shell {
+    /// Publish zwp_linux_dmabuf_v1 with the formats the backend's renderer
+    /// can import (pixman: linear single-plane only). Idempotent.
+    pub fn enable_dmabuf(&mut self, formats: FormatSet) {
+        if self.dmabuf_global.is_some() || formats.iter().next().is_none() {
+            return;
+        }
+        let global = self
+            .dmabuf_state
+            .create_global::<Shell>(&self.display_handle, formats.iter().copied());
+        tracing::info!(
+            formats = formats.iter().count(),
+            "zwp_linux_dmabuf_v1 published"
+        );
+        self.dmabuf_formats = formats;
+        self.dmabuf_global = Some(global);
+    }
+}
+
+impl DmabufHandler for Shell {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        // The renderer maps the buffer on first use; refuse up front what it
+        // could never import so the client falls back instead of drawing nothing.
+        if dmabuf.num_planes() == 1 && self.dmabuf_formats.contains(&dmabuf.format()) {
+            let _ = notifier.successful::<Shell>();
+        } else {
+            notifier.failed();
+        }
+    }
+}
+
 impl ShmHandler for Shell {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
@@ -737,6 +789,7 @@ impl ShmHandler for Shell {
 
 delegate_compositor!(Shell);
 delegate_shm!(Shell);
+delegate_dmabuf!(Shell);
 
 // ---------------------------------------------------------------------------
 // xdg-shell: fullscreen-only toplevels
