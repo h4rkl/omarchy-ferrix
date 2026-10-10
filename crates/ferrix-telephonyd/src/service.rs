@@ -276,8 +276,11 @@ impl Service {
         identity: IdentityInfo,
         mut sink: Box<dyn Write + Send>,
     ) -> std::io::Result<()> {
+        // Reply and register under one lock so no event published in between
+        // is lost: the client treats `ok` as "subscribed".
+        let mut subscribers = lock(&self.subscribers);
         write_json(&mut sink, &Reply::Ok)?;
-        lock(&self.subscribers).push(Subscriber {
+        subscribers.push(Subscriber {
             identity,
             peer_pid: None,
             identity_source: None,
@@ -302,8 +305,9 @@ impl Service {
                 "telephony-state grant was revoked",
             ));
         }
+        let mut subscribers = lock(&self.subscribers);
         write_json(&mut sink, &Reply::Ok)?;
-        lock(&self.subscribers).push(Subscriber {
+        subscribers.push(Subscriber {
             identity,
             peer_pid,
             identity_source: Some(identity_source),
