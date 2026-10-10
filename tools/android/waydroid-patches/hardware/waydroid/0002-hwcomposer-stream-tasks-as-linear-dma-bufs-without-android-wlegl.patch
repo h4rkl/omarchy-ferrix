@@ -1,0 +1,150 @@
+--- a/hwcomposer/gralloc_handler.cpp
++++ b/hwcomposer/gralloc_handler.cpp
+@@ -171,7 +171,8 @@
+ }
+ std::unique_ptr<buffer> create_dmabuf_wl_buffer(wl_conn *conn, const buffer_metadata& metadata,
+                                                                 int prime_fd, int drm_format, int byte_stride,
+-                                                                int offset, uint64_t modifier, buffer_handle_t handle)
++                                                                int offset, uint64_t modifier, buffer_handle_t handle,
++                                                                const wl_buffer_listener *listener, void *listener_data)
+ {
+     assert(prime_fd >= 0);
+ 
+@@ -192,11 +193,57 @@
+ 
+     buf->wl_buffer = zwp_linux_buffer_params_v1_create_immed(params, buf->metadata.width, buf->metadata.height, drm_format, 0);
+     zwp_linux_buffer_params_v1_destroy(params);
+-    wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
++    if (listener)
++        wl_buffer_add_listener(buf->wl_buffer, listener, listener_data);
++    else
++        wl_buffer_add_listener(buf->wl_buffer, &buffer_listener, nullptr);
+ 
+     return buf;
+ }
+ 
++/* Ferrix: vendor grallocs (e.g. the Pixel 9a's gchips mapper.pixel) without
++ * android_wlegl. A linear single-plane buffer's dma-buf goes to the
++ * compositor as-is (zwp_linux_dmabuf_v1, which software compositors can map);
++ * anything else (AFBC/AFRC, multi-plane, a format the compositor did not
++ * advertise) returns nullptr so the caller picks its fallback. Plane geometry
++ * and the modifier come from the mapper's standard metadata, never from the
++ * private handle layout. */
++std::unique_ptr<buffer> create_linear_dmabuf_wl_buffer(wl_conn *conn, const buffer_metadata& metadata,
++                                                       buffer_handle_t handle,
++                                                       const wl_buffer_listener *listener, void *listener_data)
++{
++    if (!conn->dmabuf || !handle || handle->numFds < 1)
++        return nullptr;
++    auto &mapper = android::GraphicBufferMapper::get();
++    buffer_handle_t imported = nullptr;
++    if (mapper.importBufferNoValidate(handle, &imported) != android::OK || !imported)
++        return nullptr;
++    uint64_t modifier = DRM_FORMAT_MOD_INVALID;
++    uint32_t fourcc = 0;
++    std::vector<android::ui::PlaneLayout> planes;
++    bool ok = mapper.getPixelFormatModifier(imported, &modifier) == android::OK &&
++              mapper.getPixelFormatFourCC(imported, &fourcc) == android::OK &&
++              mapper.getPlaneLayouts(imported, &planes) == android::OK &&
++              planes.size() == 1 && modifier == DRM_FORMAT_MOD_LINEAR &&
++              isFormatSupported(conn, fourcc);
++    std::unique_ptr<buffer> buf;
++    if (ok) {
++        const auto &plane = planes[0];
++        buf = create_dmabuf_wl_buffer(conn, metadata, handle->data[0], fourcc,
++                                      static_cast<int>(plane.strideInBytes),
++                                      static_cast<int>(plane.offsetInBytes), modifier, handle,
++                                      listener, listener_data);
++        ALOGI("android buffer %ux%u fourcc=%.4s stride=%lld exported as linear dma-buf",
++              metadata.width, metadata.height, (const char *)&fourcc, (long long)plane.strideInBytes);
++    } else {
++        ALOGI("android buffer %ux%u modifier=0x%llx planes=%zu fourcc=0x%x: not a linear single-plane "
++              "dma-buf the compositor takes",
++              metadata.width, metadata.height, (unsigned long long)modifier, planes.size(), fourcc);
++    }
++    mapper.freeBuffer(imported);
++    return buf;
++}
++
+ std::unique_ptr<buffer> create_android_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle,
+                                                  const wl_buffer_listener *listener, void *listener_data)
+ {
+@@ -315,41 +362,12 @@
+ std::unique_ptr<buffer> create_buffer_android(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
+     return create_android_wl_buffer(conn, metadata, handle);
+ }
+-/* Ferrix: vendor grallocs (e.g. the Pixel 9a's gchips mapper.pixel) without
+- * android_wlegl. A linear buffer's dma-buf goes to the compositor as-is
+- * (zwp_linux_dmabuf_v1, which software compositors can map); anything else
+- * (AFBC/AFRC, multi-plane) is copied into SHM by CPU lock each frame
+- * (update_shm_buffer_android). Plane geometry and the modifier come from the
+- * mapper's standard metadata, never from the private handle layout. */
++/* Ferrix: no android_wlegl. Linear buffers go zero-copy as dma-bufs
++ * (create_linear_dmabuf_wl_buffer); anything else is copied into SHM by CPU
++ * lock each frame (update_shm_buffer_android). */
+ std::unique_ptr<buffer> create_buffer_android_dmabuf(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle) {
+-    if (conn->dmabuf && handle && handle->numFds >= 1) {
+-        auto &mapper = android::GraphicBufferMapper::get();
+-        buffer_handle_t imported = nullptr;
+-        if (mapper.importBufferNoValidate(handle, &imported) == android::OK && imported) {
+-            uint64_t modifier = DRM_FORMAT_MOD_INVALID;
+-            uint32_t fourcc = 0;
+-            std::vector<android::ui::PlaneLayout> planes;
+-            bool ok = mapper.getPixelFormatModifier(imported, &modifier) == android::OK &&
+-                      mapper.getPixelFormatFourCC(imported, &fourcc) == android::OK &&
+-                      mapper.getPlaneLayouts(imported, &planes) == android::OK &&
+-                      planes.size() == 1 && modifier == DRM_FORMAT_MOD_LINEAR &&
+-                      isFormatSupported(conn, fourcc);
+-            if (ok) {
+-                const auto &plane = planes[0];
+-                auto buf = create_dmabuf_wl_buffer(conn, metadata, handle->data[0], fourcc,
+-                                                   static_cast<int>(plane.strideInBytes),
+-                                                   static_cast<int>(plane.offsetInBytes), modifier, handle);
+-                mapper.freeBuffer(imported);
+-                ALOGI("android buffer %ux%u fourcc=%.4s stride=%lld exported as linear dma-buf",
+-                      metadata.width, metadata.height, (const char *)&fourcc, (long long)plane.strideInBytes);
+-                return buf;
+-            }
+-            ALOGI("android buffer %ux%u modifier=0x%llx planes=%zu fourcc=0x%x: not a linear single-plane "
+-                  "dma-buf the compositor takes; using CPU-copied SHM",
+-                  metadata.width, metadata.height, (unsigned long long)modifier, planes.size(), fourcc);
+-            mapper.freeBuffer(imported);
+-        }
+-    }
++    if (auto buf = create_linear_dmabuf_wl_buffer(conn, metadata, handle))
++        return buf;
+     return create_shm_wl_buffer(conn, metadata, handle);
+ }
+ 
+--- a/hwcomposer/gralloc_handler.h
++++ b/hwcomposer/gralloc_handler.h
+@@ -33,7 +33,11 @@
+ std::unique_ptr<buffer> create_shm_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t handle);
+ std::unique_ptr<buffer> create_dmabuf_wl_buffer(wl_conn *conn, const buffer_metadata& metadata,
+                                                                 int prime_fd, int format, int byte_stride,
+-                                                                int offset, uint64_t modifier, buffer_handle_t handle);
++                                                                int offset, uint64_t modifier, buffer_handle_t handle,
++                                                                const wl_buffer_listener *listener = nullptr, void *listener_data = nullptr);
++std::unique_ptr<buffer> create_linear_dmabuf_wl_buffer(wl_conn *conn, const buffer_metadata& metadata,
++                                                       buffer_handle_t handle,
++                                                       const wl_buffer_listener *listener = nullptr, void *listener_data = nullptr);
+ std::unique_ptr<buffer> create_android_wl_buffer(wl_conn *conn, const buffer_metadata& metadata, buffer_handle_t target,
+                                                  const wl_buffer_listener *listener = nullptr, void *listener_data = nullptr);
+ bool cpu_render_to_pixels(buffer *buffer);
+--- a/hwcomposer/wayland-hwc.cpp
++++ b/hwcomposer/wayland-hwc.cpp
+@@ -1761,8 +1761,12 @@
+     if (sb.busy)
+         return -EBUSY;
+     if (!sb.buf) {
+-        auto buf = create_android_wl_buffer(conn, md, handle,
+-                                            &task_stream_buffer_listener, conn);
++        /* Ferrix: compositors without android_wlegl take the task's buffer
++         * as a linear dma-buf (the stream's buffers come from the same
++         * gralloc as layer buffers). */
++        auto buf = conn->android_wlegl
++                ? create_android_wl_buffer(conn, md, handle, &task_stream_buffer_listener, conn)
++                : create_linear_dmabuf_wl_buffer(conn, md, handle, &task_stream_buffer_listener, conn);
+         if (!buf)
+             return -EINVAL;
+         /* The handle belongs to the transport; libwayland already dup'ed the

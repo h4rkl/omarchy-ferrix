@@ -10,6 +10,8 @@
 #   sh tools/android/waydroid-lineage-build.sh pins      # write + check Waydroid revision pins
 #   sh tools/android/waydroid-lineage-build.sh patch     # Waydroid + Ferrix patches
 #   sh tools/android/waydroid-lineage-build.sh build     # systemimage + vendorimage
+#   sh tools/android/waydroid-lineage-build.sh modules M… # named modules only (dev iteration;
+#                                                         # prints installed files, no images)
 #   sh tools/android/waydroid-lineage-build.sh all
 #
 # Every phase needs FERRIX_WAYDROID_LINEAGE_BUILD=I-understand-this-syncs-and-builds-lineageos
@@ -43,7 +45,7 @@ pin() {
 sha256_of() { sha256sum "$1" | awk '{ print $1 }'; }
 
 phase=${1:-}
-[ -n "$phase" ] || { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ -n "$phase" ] || { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ "${FERRIX_WAYDROID_LINEAGE_BUILD:-}" = "$ack" ] ||
   die "opt-in; set FERRIX_WAYDROID_LINEAGE_BUILD=$ack"
 [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ] || die "needs a Linux x86_64 build host"
@@ -294,6 +296,23 @@ do_build() {
   printf 'PASS waydroid-lineage build: %s (%s)\n' "$dest" "$combo"
 }
 
+# Dev iteration: build named modules from the patched tree and list what they
+# install, so one library can be tried in a device's Waydroid vendor overlay
+# without rebuilding images. Release evidence still needs `build`.
+do_modules() {
+  cd "$src"
+  [ $# -gt 0 ] || die "modules needs at least one module name"
+  release=$(target_release)
+  [ -n "$release" ] || die "cannot resolve the release config; set FERRIX_WAYDROID_LINEAGE_RELEASE"
+  combo="$(pin LUNCH_PRODUCT)-$release-$(pin LUNCH_VARIANT)"
+  mkdir -p "$cache/android/logs"
+  log="$cache/android/logs/modules-$(date -u +%Y%m%dT%H%M%SZ).log"
+  bash -c ". build/envsetup.sh >/dev/null && lunch $combo && m -j$jobs $*" >"$log" 2>&1 ||
+    { tail -40 "$log" >&2; die "module build failed; log $log"; }
+  sed -n 's/^\[[^]]*\] Install: //p' "$log" | sort -u
+  printf 'PASS waydroid-lineage modules: %s (log %s)\n' "$*" "$log"
+}
+
 case $phase in
   tools) do_tools ;;
   init) do_tools; do_init ;;
@@ -303,6 +322,7 @@ case $phase in
         printf 'PASS waydroid-lineage pins: %s projects\n' "$(grep -vc '^#' "$revisions")" ;;
   patch) do_tools; do_patch ;;
   build) do_tools; do_build ;;
+  modules) shift; do_tools; do_modules "$@" ;;
   all) do_tools; do_init; do_sync; do_patch; do_build ;;
   *) die "unknown phase: $phase" ;;
 esac
