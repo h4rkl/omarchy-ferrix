@@ -215,18 +215,35 @@ lfs_check() {
   [ -z "$pointers" ] || die "LFS objects not fetched (run the sync phase): $pointers"
 }
 
+# Ferrix patches live only in each project's working tree (never committed),
+# and a later patch may rewrite an earlier one's lines, so "already applied"
+# cannot be judged one patch at a time. Per project: refuse local changes
+# outside the files the patches touch, restore those files to HEAD, then
+# apply the project's patches in order.
 apply_ferrix_patches() {
   [ -d "$patches" ] || return 0
-  find "$patches" -type f -name '*.patch' | LC_ALL=C sort | while IFS= read -r patch; do
-    project=$(dirname -- "${patch#"$patches"/}")
-    [ -d "$src/$project" ] || die "patch targets a missing project: $project"
-    if git -C "$src/$project" apply --reverse --check "$patch" 2>/dev/null; then
-      printf '= ferrix patch already applied: %s\n' "${patch#"$patches"/}"
-    else
-      git -C "$src/$project" apply --check "$patch" || die "patch does not apply: ${patch#"$patches"/}"
-      git -C "$src/$project" apply "$patch"
+  find "$patches" -type f -name '*.patch' | while IFS= read -r patch; do
+    dirname -- "${patch#"$patches"/}"
+  done | LC_ALL=C sort -u | while IFS= read -r project; do
+    dir="$src/$project"
+    [ -d "$dir" ] || die "patch targets a missing project: $project"
+    stack=$(find "$patches/$project" -maxdepth 1 -type f -name '*.patch' | LC_ALL=C sort)
+    touched=$(for patch in $stack; do git -C "$dir" apply --numstat "$patch"; done | awk -F '\t' '{ print $3 }' | LC_ALL=C sort -u)
+    unexpected=$({ git -C "$dir" diff --name-only HEAD; git -C "$dir" ls-files --others --exclude-standard; } |
+      LC_ALL=C sort -u | grep -vxF "$touched" || true)
+    [ -z "$unexpected" ] || die "unexpected local change in $project: $(printf '%s ' $unexpected)"
+    for file in $touched; do
+      if git -C "$dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+        git -C "$dir" checkout -q HEAD -- "$file"
+      else
+        rm -f "$dir/$file"
+      fi
+    done
+    for patch in $stack; do
+      git -C "$dir" apply --check "$patch" || die "patch does not apply: ${patch#"$patches"/}"
+      git -C "$dir" apply "$patch"
       printf '+ ferrix patch applied: %s\n' "${patch#"$patches"/}"
-    fi
+    done
   done
 }
 
