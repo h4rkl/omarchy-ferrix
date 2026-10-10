@@ -110,6 +110,17 @@ props_applied() {
   done | grep -q missing && return 1
   return 0
 }
+# base_props_current: every managed property is in waydroid_base.prop with
+# its value. `waydroid upgrade -o` copies waydroid.cfg [properties] there and
+# the container reads only that file, so a cfg change (for example
+# persist.waydroid.multi_windows) has no effect until it is regenerated.
+base_props_current() {
+  [ -f "$base_props" ] || return 1
+  grep -v '^\[' "$props" | grep '=' | while IFS= read -r line; do
+    grep -qxF "$line" "$base_props" || { echo stale; break; }
+  done | grep -q stale && return 1
+  return 0
+}
 rec() { printf '%s\n' "$1" >> "$console"; logger -t ferrix "$1" 2>/dev/null || true; }
 # ev EVENT [,"k":v...]  -> one record with the configured evidence label.
 ev() { rec "{\"evidence\":\"$evidence\",\"event\":\"$1\"${2:-}}"; }
@@ -182,6 +193,7 @@ prepare() {
   # Renderer properties. waydroid init rewrites the file without
   # them, and Waydroid itself rewrites it as `key = value`; merge by key so a
   # rerun never leaves a duplicate option (configparser refuses those).
+  props_changed=0
   if [ -f "$cfg" ] && [ -f "$props" ] && ! props_applied; then
     merged="$cfg.ferrix"
     awk -v props="$props" '
@@ -191,17 +203,23 @@ prepare() {
     ' "$cfg" > "$merged"
     { grep -q '^\[properties\]' "$merged" || printf '\n[properties]\n'; grep -v '^\[' "$props"; } >> "$merged"
     mv "$merged" "$cfg"
+    props_changed=1
     ev waydroid-properties ",\"status\":\"applied\",\"density_dpi\":${density_dpi},\"path\":\"$cfg\""
   fi
   # `waydroid init` creates waydroid_base.prop before the overrides above
-  # exist. A plain container start reuses that file and may select a GPU
-  # renderer the target cannot provide; regenerate the offline container
-  # configuration whenever its effective renderer differs.
-  if [ -f "$cfg" ] && { ! grep -q "^ro.hardware.gralloc=${gralloc:-default}$" "$base_props" 2>/dev/null \
+  # exist, and the container reads only that file. A plain container start
+  # reuses it: a stale renderer may select a GPU the target cannot provide,
+  # and a stale persist.waydroid.multi_windows keeps the single-window
+  # surface. Regenerate the offline container configuration whenever the
+  # properties were just applied or any managed value is missing there.
+  if [ -f "$cfg" ] && { [ "$props_changed" = 1 ] || ! base_props_current \
+    || ! grep -q "^ro.hardware.gralloc=${gralloc:-default}$" "$base_props" 2>/dev/null \
     || ! grep -q "^ro.hardware.egl=${egl:-swiftshader}$" "$base_props" 2>/dev/null \
     || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null; }; then
+    trigger=stale
+    [ "$props_changed" = 0 ] || trigger=properties-applied
     if timeout 300 waydroid upgrade -o >"$run_dir/waydroid-upgrade.log" 2>&1; then
-      ev waydroid-properties ",\"status\":\"materialized\",\"renderer\":\"$renderer\",\"density_dpi\":${density_dpi}"
+      ev waydroid-properties ",\"status\":\"materialized\",\"trigger\":\"$trigger\",\"renderer\":\"$renderer\",\"density_dpi\":${density_dpi}"
     else
       ev waydroid-properties ",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\""
     fi

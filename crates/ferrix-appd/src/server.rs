@@ -64,6 +64,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
         Inbound::Report(Report::SurfaceMapped { .. }) => "surface-mapped",
         Inbound::Report(Report::SurfaceUnmapped { .. }) => "surface-unmapped",
         Inbound::Report(Report::FocusChanged { .. }) => "focus-changed",
+        Inbound::Report(Report::ActivationRequested { .. }) => "activation-requested",
         Inbound::Report(Report::HomeGesture) => "home-gesture",
         Inbound::Report(Report::CloseGesture) => "close-gesture",
         Inbound::Report(Report::YieldForeground) => "yield-foreground",
@@ -102,6 +103,7 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
             Report::SurfaceMapped { .. }
             | Report::SurfaceUnmapped { .. }
             | Report::FocusChanged { .. }
+            | Report::ActivationRequested { .. }
             | Report::HomeGesture
             | Report::CloseGesture,
         ) => role == Compositor,
@@ -251,14 +253,22 @@ fn handle_request(
 
 fn handle_report(service: &Arc<Service>, report: Report) {
     match report {
-        Report::SurfaceMapped { pid, app_id, title } => {
-            service.surface_mapped(pid, app_id.as_deref(), title.as_deref());
+        Report::SurfaceMapped {
+            pid,
+            app_id,
+            title,
+            surface,
+        } => {
+            service.map_surface(pid, surface, app_id.as_deref(), title.as_deref());
         }
-        Report::SurfaceUnmapped { pid } => {
-            service.surface_unmapped(pid);
+        Report::SurfaceUnmapped { pid, surface } => {
+            service.unmap_surface(pid, surface);
         }
-        Report::FocusChanged { pid } => {
-            service.focus_changed(pid);
+        Report::FocusChanged { pid, surface } => {
+            service.focus_surface(pid, surface);
+        }
+        Report::ActivationRequested { pid, surface } => {
+            service.activation_requested(pid, surface);
         }
         Report::HomeGesture | Report::YieldForeground => {
             // Activation is best effort: a failure here (no home in the
@@ -550,7 +560,8 @@ mod tests {
                 Inbound::Report(Report::SurfaceMapped {
                     pid,
                     app_id: None,
-                    title: None
+                    title: None,
+                    surface: None,
                 })
             ),
             Outcome::Silent
@@ -586,7 +597,10 @@ mod tests {
             dispatch(
                 &service,
                 &mut conn,
-                Inbound::Report(Report::FocusChanged { pid: None })
+                Inbound::Report(Report::FocusChanged {
+                    pid: None,
+                    surface: None
+                })
             ),
             Outcome::Silent
         );
@@ -921,6 +935,7 @@ mod tests {
             pid: 1,
             app_id: None,
             title: None,
+            surface: None,
         });
         let yield_fg = Inbound::Report(Report::YieldForeground);
         assert!(allowed(ClientRole::Home, &launch));

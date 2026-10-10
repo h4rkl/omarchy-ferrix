@@ -23,7 +23,7 @@
 //! daemon-private `launch` object and in the runtime's diagnostics; they are
 //! never returned over `ferrix-app-protocol`. See `docs/android-runtime.md`
 //! for the evaluation, the guest integration plan, and the known limitations
-//! (surface association in particular).
+//! (task-window association in particular).
 
 mod config;
 mod host;

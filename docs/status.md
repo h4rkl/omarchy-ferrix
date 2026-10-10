@@ -1,5 +1,25 @@
 # Status
 
+## 2026-10-10 (Android apps as per-task windows: association model; mock)
+
+- **Runtime properties:** QEMU (`finalize-in-container.sh`) and the Pixel 9a
+  (`waydroid-properties.ini`) now set `persist.waydroid.multi_windows=true`
+  and `persist.waydroid.task_streams=true`. `ferrix-waydroid.sh prepare` now
+  reruns `waydroid upgrade -o` when it applied a property or any managed
+  value is missing from `waydroid_base.prop` (the device had
+  `multi_windows=true` in `waydroid.cfg` but `false` in the base file).
+- **Association:** a toplevel belongs to an Android instance only when its
+  client pid is a runtime-reported composer pid and its `app_id` is
+  `waydroid.<package>`. Unclaimed task windows (setup wizard, launcher,
+  full UI) are withheld, never shown as another app. Closing a task ends the
+  instance `terminated`; activating an instance without a window relaunches
+  it. The shell adds per-toplevel surface ids, `wp_viewporter`, and
+  `xdg_activation_v1`. Design: `docs/android-runtime.md` §7.
+- **Evidence:** `mock` only (unit tests in `ferrix-appd`,
+  `ferrix-runtime-android`, `ferrix-shell` layout, and
+  `android-bootstrap-test.sh`). No framebuffer or device run yet: task
+  windows on the Pixel 9a and in QEMU are **unverified**.
+
 ## 2026-10-10 (Pixel 9a: Mali GPU runs in the Waydroid container; panel-accurate safe area; physical)
 
 - **Baseline browser (physical:google-pixel-9a-tegu-gxq96-mp1-0):** Fulguris

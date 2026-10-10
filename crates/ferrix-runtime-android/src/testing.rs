@@ -23,6 +23,7 @@ struct State {
     session_starts: u32,
     next_pid: u32,
     surface_client_pid: Option<u32>,
+    surface_client_pids: Option<Vec<u32>>,
 }
 
 /// Clone handles share state: a test keeps one and hands another to the
@@ -103,6 +104,13 @@ impl FakeAndroidHost {
 
     pub fn set_surface_client_pid(&self, pid: Option<u32>) {
         lock(&self.0).surface_client_pid = pid;
+    }
+
+    /// Every container Wayland client pid (multi-window: several connections).
+    pub fn set_surface_client_pids(&self, pids: Vec<u32>) {
+        let mut state = lock(&self.0);
+        state.surface_client_pid = pids.iter().copied().min();
+        state.surface_client_pids = Some(pids);
     }
 }
 
@@ -190,5 +198,17 @@ impl AndroidHost for FakeAndroidHost {
 
     fn surface_client_pid(&self) -> Option<u32> {
         lock(&self.0).surface_client_pid
+    }
+
+    fn window_app_id(&self, package: &str) -> String {
+        format!("waydroid.{package}")
+    }
+
+    fn surface_client_pids(&self) -> Vec<u32> {
+        let state = lock(&self.0);
+        match &state.surface_client_pids {
+            Some(pids) => pids.clone(),
+            None => state.surface_client_pid.into_iter().collect(),
+        }
     }
 }

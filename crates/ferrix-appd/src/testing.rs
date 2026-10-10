@@ -3,7 +3,7 @@
 //! into the library so `tests/*.rs` can use them; nothing here touches the
 //! operating system.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
-use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
+use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime, SurfaceMatch};
 
 use crate::process_tree::ProcessTree;
 
@@ -22,6 +22,8 @@ pub struct FakeLaunch {
     pub pid: u32,
     exit: Sender<ExitReason>,
     terminated: Arc<AtomicBool>,
+    matcher: Arc<Mutex<SurfaceMatch>>,
+    reopens: Arc<AtomicU32>,
 }
 
 impl FakeLaunch {
@@ -36,6 +38,9 @@ struct FakeInner {
     next_pid: AtomicU32,
     launches: Mutex<Vec<FakeLaunch>>,
     fail_next: Mutex<Option<AppError>>,
+    /// `(client pids, app_id prefix)` for a shared-host runtime: every
+    /// instance's windows are `prefix + app id` from those pids.
+    shared_host: Mutex<Option<(BTreeSet<u32>, String)>>,
 }
 
 /// A [`Runtime`] whose instances exit when the test says so. Clone handles
@@ -50,7 +55,37 @@ impl FakeRuntime {
             next_pid: AtomicU32::new(1000),
             launches: Mutex::new(Vec::new()),
             fail_next: Mutex::new(None),
+            shared_host: Mutex::new(None),
         }))
+    }
+
+    /// A runtime whose windows come from shared client `pids` (like the
+    /// Android composer): each instance claims toplevels whose app_id is
+    /// `prefix` followed by its app id.
+    pub fn shared_host(kind: RuntimeKind, pids: &[u32], prefix: &str) -> Self {
+        let runtime = Self::new(kind);
+        *lock(&runtime.0.shared_host) = Some((pids.iter().copied().collect(), prefix.to_owned()));
+        runtime
+    }
+
+    /// Replaces the shared client pids of the most recent instance of `app`
+    /// (the runtime learned or lost composer connections).
+    pub fn set_client_pids(&self, app: &AppId, pids: &[u32]) {
+        if let Some(launch) = lock(&self.0.launches).iter().rev().find(|l| &l.app == app) {
+            let mut matcher = lock(&launch.matcher);
+            if let SurfaceMatch::SharedHost { client_pids, .. } = &mut *matcher {
+                *client_pids = pids.iter().copied().collect();
+            }
+        }
+    }
+
+    /// How often the most recent instance of `app` was asked to reopen.
+    pub fn reopen_count(&self, app: &AppId) -> u32 {
+        lock(&self.0.launches)
+            .iter()
+            .rev()
+            .find(|l| &l.app == app)
+            .map_or(0, |l| l.reopens.load(Ordering::SeqCst))
     }
 
     pub fn native() -> Self {
@@ -146,18 +181,31 @@ impl Runtime for FakeRuntime {
         let pid = self.0.next_pid.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         let terminated = Arc::new(AtomicBool::new(false));
+        let matcher = match &*lock(&self.0.shared_host) {
+            Some((pids, prefix)) => SurfaceMatch::SharedHost {
+                client_pids: pids.clone(),
+                app_id: format!("{prefix}{}", app.id),
+            },
+            None => SurfaceMatch::ProcessTree,
+        };
+        let matcher = Arc::new(Mutex::new(matcher));
+        let reopens = Arc::new(AtomicU32::new(0));
         lock(&self.0.launches).push(FakeLaunch {
             app: app.id.clone(),
             context: context.clone(),
             pid,
             exit: tx,
             terminated: Arc::clone(&terminated),
+            matcher: Arc::clone(&matcher),
+            reopens: Arc::clone(&reopens),
         });
         Ok(Box::new(FakeRunning {
             pid,
             rx,
             done: None,
             terminated,
+            matcher,
+            reopens,
         }))
     }
 }
@@ -167,9 +215,23 @@ struct FakeRunning {
     rx: Receiver<ExitReason>,
     done: Option<ExitReason>,
     terminated: Arc<AtomicBool>,
+    matcher: Arc<Mutex<SurfaceMatch>>,
+    reopens: Arc<AtomicU32>,
 }
 
 impl RunningApp for FakeRunning {
+    fn surface_match(&self) -> SurfaceMatch {
+        lock(&self.matcher).clone()
+    }
+
+    fn reopen(&mut self) -> Result<bool, AppError> {
+        if self.done.is_some() || !lock(&self.matcher).is_shared_host() {
+            return Ok(false);
+        }
+        self.reopens.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    }
+
     fn pid(&self) -> Option<u32> {
         Some(self.pid)
     }

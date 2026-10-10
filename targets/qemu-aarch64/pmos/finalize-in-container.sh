@@ -122,7 +122,8 @@ if [ "${FERRIX_PMOS_ANDROID:-0}" = 1 ]; then
 [properties]
 ro.hardware.gralloc=default
 ro.hardware.egl=swiftshader
-persist.waydroid.multi_windows=false
+persist.waydroid.multi_windows=true
+persist.waydroid.task_streams=true
 ro.sf.lcd_density=400
 INI
   install -Dm755 "$project/local.d/00-ferrix-android.start" "$mnt/etc/local.d/00-ferrix-android.start"

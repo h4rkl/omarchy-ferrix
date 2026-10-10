@@ -3,11 +3,13 @@
 //! only kernel-facing knowledge here is the host-side `/proc` scan used to
 //! find the Android application's pid.
 //!
-//! Limitation recorded in `docs/android-runtime.md`: the Wayland client the
-//! compositor sees is Waydroid's container-side composer process, not the
-//! Android application, so `ferrix-appd` must associate surfaces with the pid
-//! this adapter reports ([`LaunchedApp::surface_client_pid`]) rather than
-//! with a process ancestry walk.
+//! The Wayland client the compositor sees is Waydroid's container-side
+//! composer process, not the Android application: in multi-window mode it
+//! opens one toplevel per Android task, all from the composer's pid(s).
+//! `ferrix-appd` therefore associates a task window by the composer pids this
+//! adapter reports ([`AndroidHost::surface_client_pids`]) together with the
+//! task's `app_id` ([`AndroidHost::window_app_id`]), never by ancestry
+//! (`docs/android-runtime.md` §7).
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -441,15 +443,28 @@ impl AndroidHost for WaydroidCli {
     }
 
     fn surface_client_pid(&self) -> Option<u32> {
+        self.surface_client_pids().into_iter().next()
+    }
+
+    /// Waydroid's hwcomposer names each task window (multi-window mode with
+    /// task streams) `waydroid.<package>`.
+    fn window_app_id(&self, package: &str) -> String {
+        format!("waydroid.{package}")
+    }
+
+    fn surface_client_pids(&self) -> Vec<u32> {
         let needle = &self.options.surface_client_needle;
         if needle.is_empty() {
-            return None;
+            return Vec::new();
         }
-        self.cmdlines()
+        let mut pids: Vec<u32> = self
+            .cmdlines()
             .into_iter()
             .filter(|(_, cmd)| cmd.contains(needle.as_str()))
             .map(|(pid, _)| pid)
-            .min()
+            .collect();
+        pids.sort_unstable();
+        pids
     }
 }
 
@@ -572,6 +587,13 @@ mod tests {
         });
         assert_eq!(cli.app_pid("net.slions.fulguris.full.fdroid"), Some(4321));
         assert_eq!(cli.surface_client_pid(), Some(77));
+        std::fs::create_dir_all(root.join("90")).unwrap();
+        std::fs::write(
+            root.join("90/cmdline"),
+            b"/vendor/bin/hw/android.hardware.graphics.composer3-service.waydroid\0",
+        )
+        .unwrap();
+        assert_eq!(cli.surface_client_pids(), vec![77, 90]);
         assert_eq!(cli.is_running("net.slions.fulguris.full.fdroid"), Ok(true));
         assert_eq!(cli.is_running("org.none"), Ok(false));
         let _ = std::fs::remove_dir_all(root);

@@ -40,7 +40,8 @@ use smithay::{
         renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     },
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_layer_shell,
-    delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_output, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_activation,
+    delegate_xdg_shell,
     desktop::{
         LayerSurface, PopupKind, PopupManager, Window, WindowSurfaceType, find_popup_root_surface,
         get_popup_toplevel_coords, layer_map_for_output, utils::send_frames_surface_tree,
@@ -87,6 +88,10 @@ use smithay::{
         },
         shm::{ShmHandler, ShmState},
         socket::ListeningSocketSource,
+        viewporter::ViewporterState,
+        xdg_activation::{
+            XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+        },
     },
 };
 
@@ -96,8 +101,11 @@ use crate::{
     config::ShellConfig,
     evidence::{self, Evidence, Value},
     gesture::EdgeGesture,
-    layout::{OutputLayout, Rotation, WindowStack},
+    layout::{OutputLayout, Rotation, WindowStack, toplevel_configure_size},
 };
+
+/// Activation tokens older than this are refused (xdg_activation_v1).
+const ACTIVATION_TOKEN_TTL: Duration = Duration::from_secs(10);
 
 /// Which contact currently owns the grabbed home gesture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -224,6 +232,14 @@ pub struct Shell {
     pub xdg_shell_state: XdgShellState,
     pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
+    /// wp_viewporter: Waydroid's task windows are one buffer scaled to the
+    /// window size through a viewport. Smithay's buffer handler applies the
+    /// viewport's source crop and destination size to the surface state.
+    #[allow(dead_code)]
+    viewporter_state: ViewporterState,
+    /// xdg_activation_v1: lets a client (Android) ask to raise a window;
+    /// `ferrix-appd` decides.
+    activation_state: XdgActivationState,
     /// zwp_linux_dmabuf_v1, published by the backend once its renderer is up
     /// (`enable_dmabuf`); clients that render on a GPU (Waydroid's
     /// hwcomposer) hand over linear buffers instead of CPU-copying into SHM.
@@ -262,6 +278,8 @@ impl Shell {
         );
         let layer_shell_state = WlrLayerShellState::new::<Shell>(&dh);
         let shm_state = ShmState::new::<Shell>(&dh, Vec::new());
+        let viewporter_state = ViewporterState::new::<Shell>(&dh);
+        let activation_state = XdgActivationState::new::<Shell>(&dh);
         let dmabuf_state = DmabufState::new();
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Shell>(&dh);
         let data_device_state = DataDeviceState::new::<Shell>(&dh);
@@ -360,6 +378,8 @@ impl Shell {
             xdg_shell_state,
             layer_shell_state,
             shm_state,
+            viewporter_state,
+            activation_state,
             dmabuf_state,
             dmabuf_global: None,
             dmabuf_formats: FormatSet::default(),
@@ -417,6 +437,12 @@ impl Shell {
         Rectangle::new((x, y).into(), (w as i32, h as i32).into())
     }
 
+    /// The configure size of every toplevel ([`toplevel_configure_size`]).
+    pub fn toplevel_size(&self) -> Size<i32, Logical> {
+        let (w, h) = toplevel_configure_size(&self.plan, self.config.safe_area);
+        Size::from((w as i32, h as i32))
+    }
+
     /// Rows of the compositor home indicator, when the focused window does
     /// not draw Ferrix's pill itself (see `layout::draws_own_pill`).
     pub fn system_pill(&self) -> Vec<Rectangle<i32, Logical>> {
@@ -443,7 +469,7 @@ impl Shell {
             None,
             Some((0, 0).into()),
         );
-        let size = self.client_area().size;
+        let size = self.toplevel_size();
         for window in self.windows.iter() {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.with_pending_state(|state| state.size = Some(size));
@@ -585,6 +611,23 @@ impl Shell {
         self.mapped_clients += 1;
         let (app_id, title) = appd_link::toplevel_meta(window);
         self.windows.set_app_id(window, app_id.clone());
+        // A shared runtime's window (an Android task) is not presented until
+        // ferrix-appd names this exact surface in an activation: its pid is
+        // shared, so only appd can say which application it belongs to.
+        if self.ferrix_appd.is_some() && crate::layout::withheld_until_activated(app_id.as_deref())
+        {
+            self.windows.set_held(window, true);
+            let pid = self.windows.pid_of(window);
+            let surface = self.windows.surface_of(window).unwrap_or_default();
+            self.emit(
+                "client-withheld",
+                &[
+                    ("pid", pid.into()),
+                    ("surface", Value::Int(surface as i64)),
+                    ("source", "awaiting-activation".into()),
+                ],
+            );
+        }
         let size = window.geometry().size;
         evidence::emit(&evidence::client_mapped(
             self.evidence,
@@ -799,8 +842,10 @@ impl XdgShellHandler for Shell {
         &mut self.xdg_shell_state
     }
 
+    /// Every toplevel gets the same fullscreen configure
+    /// ([`Shell::toplevel_size`]), sent with the first commit.
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let size = self.client_area().size;
+        let size = self.toplevel_size();
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Fullscreen);
             state.size = Some(size);
@@ -839,7 +884,7 @@ impl XdgShellHandler for Shell {
         surface: ToplevelSurface,
         _output: Option<wl_output::WlOutput>,
     ) {
-        let size = self.client_area().size;
+        let size = self.toplevel_size();
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Fullscreen);
             state.size = Some(size);
@@ -868,6 +913,7 @@ impl XdgShellHandler for Shell {
         if let Some(window) = self.window_for_surface(surface.wl_surface()) {
             let was_mapped = self.windows.is_mapped(&window);
             let pid = self.windows.pid_of(&window);
+            let surface_id = self.windows.surface_of(&window);
             let app_id = self
                 .windows
                 .app_id_of(&window)
@@ -888,9 +934,10 @@ impl XdgShellHandler for Shell {
                         &app_id,
                         toplevels,
                     ));
-                    if let Some(pid) = pid {
-                        self.report_surface_unmapped(pid);
-                    }
+                }
+                // Per toplevel: several windows (Android tasks) share a pid.
+                if let Some(pid) = pid {
+                    self.report_surface_unmapped(pid, surface_id);
                 }
             }
         }
@@ -899,6 +946,61 @@ impl XdgShellHandler for Shell {
 }
 
 delegate_xdg_shell!(Shell);
+delegate_viewporter!(Shell);
+
+// ---------------------------------------------------------------------------
+// xdg-activation: a client asks to raise one of its toplevels
+
+impl XdgActivationHandler for Shell {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.activation_state
+    }
+
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        self.activation_state.remove_token(&token);
+        // Old tokens are stale requests; drop every expired one too.
+        self.activation_state
+            .retain_tokens(|_, data| data.timestamp.elapsed() < ACTIVATION_TOKEN_TTL);
+        if token_data.timestamp.elapsed() >= ACTIVATION_TOKEN_TTL {
+            return;
+        }
+        let Some(window) = self.window_for_surface(&surface) else {
+            return;
+        };
+        if !self.windows.is_mapped(&window) {
+            return;
+        }
+        // A client may only ask to raise its own windows: the token must
+        // come from the same process (Waydroid may use one connection per
+        // task, all from the same pid). Raising another client's window
+        // would let any app pull an application over the foreground.
+        let token_pid = token_data.client_id.and_then(|id| {
+            self.display_handle
+                .backend_handle()
+                .get_client_credentials(id)
+                .ok()
+                .and_then(|c| u32::try_from(c.pid).ok())
+        });
+        if token_pid.is_none() || token_pid != self.windows.pid_of(&window) {
+            self.emit(
+                "client-activation-refused",
+                &[
+                    ("pid", self.windows.pid_of(&window).into()),
+                    ("token_pid", token_pid.into()),
+                ],
+            );
+            return;
+        }
+        self.raise_on_request(&window);
+    }
+}
+
+delegate_xdg_activation!(Shell);
 
 // ---------------------------------------------------------------------------
 // wlr-layer-shell: reserved for status / launcher surfaces

@@ -1036,7 +1036,8 @@ CI never read that file. Steps:
 2. `just pmos-android-build` mounts those images read-only into the finalize
    step, which installs them to `/etc/waydroid-extra/images/`, writes
    `/etc/ferrix/waydroid-properties.ini` (`ro.hardware.gralloc=default`,
-   `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=false`,
+   `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=true`,
+   `persist.waydroid.task_streams=true` (one window per Android task),
    `ro.sf.lcd_density=400`). The 400 dpi value is scoped to this QEMU
    Android image and gives the 1080-pixel panel an approximately 432 dp
    Pixel-class logical width; it is not read by the default pmOS image or any

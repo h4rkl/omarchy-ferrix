@@ -158,40 +158,81 @@ pub fn draws_own_pill(app_id: Option<&str>) -> bool {
     app_id.is_some_and(|id| id.starts_with("org.ferrix."))
 }
 
+/// Whether a toplevel's claimed xdg `app_id` is in the namespace of the
+/// shared application runtime's windows: Android task windows
+/// (`waydroid.<package>`) and the runtime's full UI (`Waydroid`). Such a
+/// window is mapped *withheld*: never drawn or focused until `ferrix-appd`
+/// activates that exact surface, because the client pid alone cannot say
+/// which application (if any) the window belongs to. The `app_id` is
+/// client-claimed, which is fine here: withholding only restricts
+/// presentation, so a false claim harms only the claimant, and the
+/// association itself is decided by `ferrix-appd` from the runtime-reported
+/// pid.
+pub fn withheld_until_activated(app_id: Option<&str>) -> bool {
+    app_id.is_some_and(|id| id == "Waydroid" || id.starts_with("waydroid."))
+}
+
+/// The one configure size every toplevel gets: the client area (logical
+/// output minus the safe area). It never depends on the window, its client,
+/// or its app_id. Waydroid's multi-window hwcomposer resizes the whole
+/// Android display whenever any task window is configured to a new size, so
+/// per-window sizes would make tasks fight over the display.
+pub fn toplevel_configure_size(plan: &OutputLayout, safe: SafeArea) -> (u32, u32) {
+    let (_, _, w, h) = plan.client_rect(safe);
+    (w, h)
+}
+
 /// Fullscreen-only toplevel stack. Newest mapped window is focused and drawn;
-/// unmapped toplevels (no buffer yet) are tracked but never focused.
+/// unmapped toplevels (no buffer yet) are tracked but never focused, and
+/// withheld ones (see [`withheld_until_activated`]) are mapped but never
+/// focused or drawn until [`WindowStack::raise_surface`] reveals them.
 ///
 /// Every entry carries the owning client's process id (from the kernel via
-/// `SO_PEERCRED`, so it cannot be spoofed) and the last xdg `app_id` the
-/// client claimed (untrusted, evidence only). The pid is what links a window
-/// to an `ferrix_appd` application instance.
+/// `SO_PEERCRED`, so it cannot be spoofed), a compositor-assigned surface id
+/// (several toplevels may share a pid), and the last xdg `app_id` the client
+/// claimed (untrusted). The pid and surface id are what link a window to an
+/// `ferrix_appd` application instance.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WindowStack<T: PartialEq + Clone> {
     entries: Vec<Entry<T>>,
+    last_surface: u64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct Entry<T> {
     id: T,
+    surface: u64,
     mapped: bool,
+    held: bool,
     pid: Option<u32>,
     app_id: Option<String>,
+}
+
+impl<T: PartialEq + Clone> Entry<T> {
+    fn visible(&self) -> bool {
+        self.mapped && !self.held
+    }
 }
 
 impl<T: PartialEq + Clone> WindowStack<T> {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            last_surface: 0,
         }
     }
 
     /// Track a new (not yet mapped) toplevel owned by the client with `pid`
-    /// (`None` when the kernel did not report credentials).
+    /// (`None` when the kernel did not report credentials). Assigns its
+    /// surface id (unique for the compositor's lifetime, never 0).
     pub fn push_with_pid(&mut self, id: T, pid: Option<u32>) {
         if !self.contains(&id) {
+            self.last_surface += 1;
             self.entries.push(Entry {
                 id,
+                surface: self.last_surface,
                 mapped: false,
+                held: false,
                 pid,
                 app_id: None,
             });
@@ -221,10 +262,22 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         true
     }
 
-    /// Move a mapped toplevel to the top so [`WindowStack::focused`] returns
-    /// it. Returns `false` when the toplevel is unknown or not mapped yet.
+    /// Withhold (or stop withholding) a toplevel from focus and drawing.
+    pub fn set_held(&mut self, id: &T, held: bool) {
+        if let Some(entry) = self.entries.iter_mut().find(|e| &e.id == id) {
+            entry.held = held;
+        }
+    }
+
+    pub fn is_held(&self, id: &T) -> bool {
+        self.entries.iter().any(|e| &e.id == id && e.held)
+    }
+
+    /// Move a mapped, visible toplevel to the top so
+    /// [`WindowStack::focused`] returns it. Returns `false` when the toplevel
+    /// is unknown, not mapped yet, or withheld.
     pub fn raise(&mut self, id: &T) -> bool {
-        let Some(index) = self.entries.iter().position(|e| &e.id == id && e.mapped) else {
+        let Some(index) = self.entries.iter().position(|e| &e.id == id && e.visible()) else {
             return false;
         };
         let entry = self.entries.remove(index);
@@ -232,13 +285,15 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         true
     }
 
-    /// Raise the newest mapped toplevel of the client with `pid`. Returns
-    /// `false` when that client has no mapped toplevel.
+    /// Raise the newest visible toplevel of the client with `pid`. Returns
+    /// `false` when that client has none. Never reveals a withheld window:
+    /// a pid shared by several applications' windows says nothing about
+    /// which one is meant.
     pub fn raise_pid(&mut self, pid: u32) -> bool {
         let Some(index) = self
             .entries
             .iter()
-            .rposition(|e| e.mapped && e.pid == Some(pid))
+            .rposition(|e| e.visible() && e.pid == Some(pid))
         else {
             return false;
         };
@@ -247,25 +302,60 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         true
     }
 
+    /// Reveal and raise the mapped toplevel with surface id `surface` owned
+    /// by `pid`. Returns `false` when there is no such mapped toplevel.
+    pub fn raise_surface(&mut self, pid: u32, surface: u64) -> bool {
+        let Some(index) = self
+            .entries
+            .iter()
+            .position(|e| e.mapped && e.surface == surface && e.pid == Some(pid))
+        else {
+            return false;
+        };
+        let mut entry = self.entries.remove(index);
+        entry.held = false;
+        self.entries.push(entry);
+        true
+    }
+
+    /// The toplevel with surface id `surface` owned by `pid`.
+    pub fn find_surface(&self, pid: u32, surface: u64) -> Option<&T> {
+        self.entries
+            .iter()
+            .find(|e| e.surface == surface && e.pid == Some(pid))
+            .map(|e| &e.id)
+    }
+
     pub fn remove(&mut self, id: &T) -> bool {
         let before = self.entries.len();
         self.entries.retain(|e| &e.id != id);
         before != self.entries.len()
     }
 
-    /// The single visible, focused toplevel: the newest mapped one.
+    /// The single visible, focused toplevel: the newest mapped one that is
+    /// not withheld.
     pub fn focused(&self) -> Option<&T> {
-        self.entries.iter().rev().find(|e| e.mapped).map(|e| &e.id)
+        self.entries
+            .iter()
+            .rev()
+            .find(|e| e.visible())
+            .map(|e| &e.id)
     }
 
-    /// The mapped toplevel furthest down the stack: the fallback "home" when
-    /// no application service can say which window is home.
+    /// The visible toplevel furthest down the stack: the fallback "home"
+    /// when no application service can say which window is home.
     pub fn oldest_mapped(&self) -> Option<&T> {
-        self.entries.iter().find(|e| e.mapped).map(|e| &e.id)
+        self.entries.iter().find(|e| e.visible()).map(|e| &e.id)
     }
 
+    /// Mapped toplevels, withheld ones included.
     pub fn mapped_count(&self) -> usize {
         self.entries.iter().filter(|e| e.mapped).count()
+    }
+
+    /// Mapped toplevels that may be focused and drawn.
+    pub fn visible_count(&self) -> usize {
+        self.entries.iter().filter(|e| e.visible()).count()
     }
 
     /// Mapped toplevels owned by the client with `pid`.
@@ -282,6 +372,11 @@ impl<T: PartialEq + Clone> WindowStack<T> {
             .iter()
             .find(|e| &e.id == id)
             .and_then(|e| e.pid)
+    }
+
+    /// Compositor-assigned surface id of `id`.
+    pub fn surface_of(&self, id: &T) -> Option<u64> {
+        self.entries.iter().find(|e| &e.id == id).map(|e| e.surface)
     }
 
     /// Last xdg `app_id` seen for `id` (client-claimed, untrusted).
@@ -304,12 +399,13 @@ impl<T: PartialEq + Clone> WindowStack<T> {
         self.entries.iter().map(|e| &e.id)
     }
 
-    /// Mapped toplevels with their pid and app id, bottom to top.
-    pub fn mapped(&self) -> impl Iterator<Item = (&T, Option<u32>, Option<&str>)> {
+    /// Mapped toplevels (withheld ones included) with their pid and surface
+    /// id, bottom to top.
+    pub fn mapped(&self) -> impl Iterator<Item = (&T, Option<u32>, u64)> {
         self.entries
             .iter()
             .filter(|e| e.mapped)
-            .map(|e| (&e.id, e.pid, e.app_id.as_deref()))
+            .map(|e| (&e.id, e.pid, e.surface))
     }
 }
 
@@ -462,10 +558,7 @@ mod tests {
         let mapped: Vec<_> = stack.mapped().collect();
         assert_eq!(
             mapped,
-            vec![
-                (&"home", Some(100), Some("org.ferrix.home")),
-                (&"terminal", Some(200), None),
-            ]
+            vec![(&"home", Some(100), 1), (&"terminal", Some(200), 2),]
         );
     }
 
@@ -552,6 +645,88 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.3).sum::<u32>(), 12);
         // No inset, no pill.
         assert!(portrait.system_pill_rows(SafeArea::default()).is_empty());
+    }
+
+    #[test]
+    fn toplevels_sharing_a_pid_get_distinct_surface_ids() {
+        let mut stack: WindowStack<&'static str> = WindowStack::new();
+        stack.push_with_pid("browser", Some(4242));
+        stack.push_with_pid("wizard", Some(4242));
+        stack.push_with_pid("browser", Some(4242));
+        let browser = stack.surface_of(&"browser").unwrap();
+        let wizard = stack.surface_of(&"wizard").unwrap();
+        assert_ne!(browser, wizard);
+        assert!(browser > 0 && wizard > 0);
+        assert_eq!(stack.find_surface(4242, wizard), Some(&"wizard"));
+        assert_eq!(stack.find_surface(1, wizard), None, "pid must match too");
+        // Ids are never reused after a removal.
+        stack.remove(&"wizard");
+        stack.push_with_pid("again", Some(4242));
+        assert!(stack.surface_of(&"again").unwrap() > wizard);
+    }
+
+    #[test]
+    fn withheld_windows_are_never_focused_until_raised_by_surface() {
+        let mut stack: WindowStack<&'static str> = WindowStack::new();
+        stack.push_with_pid("home", Some(100));
+        stack.mark_mapped(&"home");
+        stack.push_with_pid("browser", Some(4242));
+        stack.push_with_pid("wizard", Some(4242));
+        stack.mark_mapped(&"browser");
+        stack.set_held(&"browser", true);
+        stack.mark_mapped(&"wizard");
+        stack.set_held(&"wizard", true);
+        assert_eq!(stack.focused(), Some(&"home"));
+        assert_eq!(stack.mapped_count(), 3);
+        assert_eq!(stack.visible_count(), 1);
+        // A pid-only activation cannot reveal a withheld window.
+        assert!(!stack.raise_pid(4242));
+        assert!(!stack.raise(&"wizard"));
+        assert_eq!(stack.focused(), Some(&"home"));
+        // The surface-addressed activation reveals exactly that window.
+        let browser = stack.surface_of(&"browser").unwrap();
+        assert!(!stack.raise_surface(1, browser), "wrong pid");
+        assert!(stack.raise_surface(4242, browser));
+        assert_eq!(stack.focused(), Some(&"browser"));
+        assert!(!stack.is_held(&"browser"));
+        assert!(stack.is_held(&"wizard"));
+        // Withholding the focused window falls back to the one below.
+        stack.set_held(&"browser", true);
+        assert_eq!(stack.focused(), Some(&"home"));
+        assert_eq!(stack.oldest_mapped(), Some(&"home"));
+    }
+
+    #[test]
+    fn only_runtime_task_window_app_ids_are_withheld() {
+        assert!(withheld_until_activated(Some(
+            "waydroid.net.slions.fulguris.full.fdroid"
+        )));
+        assert!(withheld_until_activated(Some(
+            "waydroid.org.lineageos.setupwizard"
+        )));
+        assert!(withheld_until_activated(Some("Waydroid")));
+        assert!(!withheld_until_activated(Some("org.ferrix.terminal")));
+        assert!(!withheld_until_activated(Some("waydroid")));
+        assert!(!withheld_until_activated(None));
+    }
+
+    #[test]
+    fn every_toplevel_is_configured_to_the_same_client_area() {
+        let safe = SafeArea {
+            top: 120,
+            right: 0,
+            bottom: 60,
+            left: 0,
+        };
+        let portrait = OutputLayout::plan(1080, 2424, Orientation::Portrait);
+        let size = toplevel_configure_size(&portrait, safe);
+        assert_eq!(size, (1080, 2424 - 180));
+        let (_, _, w, h) = portrait.client_rect(safe);
+        assert_eq!(size, (w, h));
+        // Only the output plan changes it (rotation), never the window.
+        let rotated = portrait.with_rotation(Rotation::Rotate90);
+        assert_eq!(toplevel_configure_size(&rotated, safe), (2424 - 180, 1080));
+        assert_ne!(toplevel_configure_size(&rotated, safe), (0, 0));
     }
 
     #[test]

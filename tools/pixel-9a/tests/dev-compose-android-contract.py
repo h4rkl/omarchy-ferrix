@@ -49,6 +49,9 @@ assert not set(packages) & set(compose.ANDROID_FORBIDDEN_PACKAGES), packages
 assert (repo / "tools/android/guest/ferrix-waydroid.sh").is_file()
 props = (target / "pmos/android/waydroid-properties.ini").read_text()
 assert "ro.hardware.egl=swiftshader" in props and "ro.hardware.gralloc=default" in props
+# Android apps are per-task windows (owner decision 2026-10-10).
+assert "persist.waydroid.multi_windows=true" in props.splitlines(), props
+assert "persist.waydroid.task_streams=true" in props.splitlines(), props
 service = (target / "pmos/device-google-tegu/ferrix-android.initd").read_text()
 assert "FERRIX_ANDROID_SESSION_USER=user" in service and "before ferrix-product" in service
 product = (target / "pmos/device-google-tegu/ferrix-product.initd").read_text()
