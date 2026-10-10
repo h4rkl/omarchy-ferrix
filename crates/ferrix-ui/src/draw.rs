@@ -156,6 +156,50 @@ impl Canvas {
         );
     }
 
+    /// Draws a straight-alpha RGBA8 image of `width` x `height` pixels
+    /// scaled (bicubic) into `dest`, blended over the canvas. Returns false
+    /// and draws nothing when the buffer does not match the size.
+    pub fn draw_rgba(&mut self, dest: Rect, width: u32, height: u32, rgba: &[u8]) -> bool {
+        if dest.w <= 0
+            || dest.h <= 0
+            || width == 0
+            || height == 0
+            || rgba.len() as u64 != u64::from(width) * u64::from(height) * 4
+        {
+            return false;
+        }
+        // tiny-skia pixmaps are premultiplied.
+        let premultiplied: Vec<u8> = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b, a]| {
+                let p = |c: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
+                [p(r), p(g), p(b), a]
+            })
+            .collect();
+        let Some(image) = tiny_skia::IntSize::from_wh(width, height)
+            .and_then(|size| Pixmap::from_vec(premultiplied, size))
+        else {
+            return false;
+        };
+        let transform = Transform::from_row(
+            dest.w as f32 / width as f32,
+            0.0,
+            0.0,
+            dest.h as f32 / height as f32,
+            dest.x as f32,
+            dest.y as f32,
+        );
+        let paint = tiny_skia::PixmapPaint {
+            quality: tiny_skia::FilterQuality::Bicubic,
+            ..tiny_skia::PixmapPaint::default()
+        };
+        self.pm
+            .draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
+        true
+    }
+
     /// Little-endian XRGB8888 bytes as expected by `wl_shm` format `xrgb8888`.
     pub fn xrgb_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.pm.data().len());
@@ -313,5 +357,35 @@ impl Type {
         for ch in text.chars() {
             pen += self.char(canvas, style, ch, pen.round() as i32, baseline);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgba_images_scale_into_the_destination_and_blend() {
+        let mut c = Canvas::new(40, 40, 0x000000);
+        // 2x2: opaque red, transparent, transparent, half-alpha white.
+        let rgba = [
+            255, 0, 0, 255, 0, 0, 0, 0, //
+            0, 0, 0, 0, 255, 255, 255, 128,
+        ];
+        let dest = Rect {
+            x: 10,
+            y: 10,
+            w: 20,
+            h: 20,
+        };
+        assert!(c.draw_rgba(dest, 2, 2, &rgba));
+        assert_eq!(c.get(13, 13), 0xff0000, "top-left quadrant is red");
+        assert_eq!(c.get(26, 13), 0x000000, "transparent keeps the canvas");
+        let blended = c.get(26, 26);
+        assert!((0x70..=0x90).contains(&(blended & 0xff)), "{blended:06x}");
+        assert_eq!(c.get(5, 5), 0x000000, "nothing outside the destination");
+        // Mismatched buffers draw nothing.
+        assert!(!c.draw_rgba(dest, 3, 2, &rgba));
+        assert!(!c.draw_rgba(Rect { w: 0, ..dest }, 2, 2, &rgba));
     }
 }

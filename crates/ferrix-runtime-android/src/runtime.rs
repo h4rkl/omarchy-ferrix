@@ -355,6 +355,16 @@ impl Runtime for AndroidRuntime {
         Some(launch.package)
     }
 
+    /// The launcher PNG Waydroid wrote for the package, decoded and
+    /// bounded; never for Android's own shell packages.
+    fn app_icon(&self, config: &Value) -> Option<ferrix_app_api::AppIconBitmap> {
+        let package = self.app_key(config)?;
+        if is_hidden_package(&package) {
+            return None;
+        }
+        self.host.launcher_icon(&package)
+    }
+
     /// `waydroid.<package>`, except for Android's own shell packages, whose
     /// windows are never anyone's.
     fn window_app_id(&self, config: &Value) -> Option<String> {
@@ -1026,6 +1036,32 @@ mod tests {
             "android shell windows are nobody's"
         );
         assert_eq!(rt.app_key(&json!({ "exec": ["x"] })), None);
+    }
+
+    #[test]
+    fn installed_app_icons_come_from_the_host_decoded_and_bounded() {
+        use crate::icon::tests::solid_rgba;
+        let host = FakeAndroidHost::new();
+        host.set_icon_file("org.example.notes", solid_rgba(192, 192, [9, 8, 7, 255]));
+        host.set_icon_file("org.example.broken", b"\x89PNG not really".to_vec());
+        host.set_icon_file("com.android.settings", solid_rgba(8, 8, [1, 1, 1, 255]));
+        let rt = runtime(&host);
+        let icon = rt
+            .app_icon(&json!({ "package": "org.example.notes" }))
+            .expect("icon");
+        assert_eq!((icon.width(), icon.height()), (96, 96));
+        assert_eq!(&icon.rgba()[..4], &[9, 8, 7, 255]);
+        // Corrupt, missing, Android shell, and malformed configs: no icon.
+        assert_eq!(
+            rt.app_icon(&json!({ "package": "org.example.broken" })),
+            None
+        );
+        assert_eq!(rt.app_icon(&json!({ "package": "org.example.none" })), None);
+        assert_eq!(
+            rt.app_icon(&json!({ "package": "com.android.settings" })),
+            None
+        );
+        assert_eq!(rt.app_icon(&json!({ "exec": ["x"] })), None);
     }
 
     #[test]

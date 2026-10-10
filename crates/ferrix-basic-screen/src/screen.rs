@@ -724,12 +724,20 @@ fn apps_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: &
 
 /// Tile artwork: first-party applications use their filled Material glyph
 /// (`ferrix_ui::icons`) at `size` (96 design px on a tile, 64 in a list
-/// row), in the descriptor tone. Any other app
+/// row), in the descriptor tone. An installed app (APK) shows its Android
+/// launcher bitmap when `ferrix_appd` provided one, scaled into the same
+/// box. Any other app, or an APK without a usable bitmap,
 /// shows its descriptor glyph when the face has it, else the first letter of
 /// its name (never a tofu box). The label under the tile always stays.
 fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32, size: i32) {
     if let Some(icon) = Icon::for_app(tile.kind()) {
         icons::draw_centered(c, icon, cx, cy, size, accent);
+        return;
+    }
+    if tile.installed
+        && let Some(bitmap) = &tile.bitmap
+        && draw_bitmap(c, bitmap, cx, cy, size)
+    {
         return;
     }
     // Letter glyphs keep their 96 px proportions at any glyph size.
@@ -738,6 +746,30 @@ fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i3
     let style = Style::bold(px as f32, accent);
     let gw = ty.width(style, &glyph);
     ty.text(c, style, &glyph, cx - gw / 2, cy + size * 20 / 96);
+}
+
+/// Draws `bitmap` fitted (aspect kept) into the `size` box centred on
+/// `(cx, cy)`. False when nothing could be drawn.
+fn draw_bitmap(
+    c: &mut Canvas,
+    bitmap: &ferrix_app_api::AppIconBitmap,
+    cx: i32,
+    cy: i32,
+    size: i32,
+) -> bool {
+    let (w, h) = (bitmap.width() as i32, bitmap.height() as i32);
+    let (dw, dh) = if w >= h {
+        (size, (size * h / w).max(1))
+    } else {
+        ((size * w / h).max(1), size)
+    };
+    let dest = Rect {
+        x: cx - dw / 2,
+        y: cy - dh / 2,
+        w: dw,
+        h: dh,
+    };
+    c.draw_rgba(dest, bitmap.width(), bitmap.height(), bitmap.rgba())
 }
 
 /// The descriptor glyph when every character exists in the bold face, else
@@ -1361,6 +1393,41 @@ mod tests {
                 "scrolling moves the rows"
             );
         }
+    }
+
+    #[test]
+    fn installed_apps_draw_their_bitmap_and_fall_back_to_the_letter() {
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        let (w, h) = (1080, 2340);
+        let red = ferrix_app_api::AppIconBitmap::new(2, 2, [0xff, 0, 0, 0xff].repeat(4)).unwrap();
+        let render = |bitmap: Option<&ferrix_app_api::AppIconBitmap>, installed: bool| {
+            let mut ui = state();
+            let mut tiles = ui.tiles.clone();
+            let mut apk = crate::catalog::sample_installed_tiles().remove(0);
+            apk.installed = installed;
+            apk.bitmap = bitmap.cloned().map(std::sync::Arc::new);
+            tiles.push(apk);
+            ui.set_tiles(tiles);
+            ui.page = Page::Apps;
+            let index = ui.tiles.len() - 1;
+            let row = ui.list_entries().iter().position(|&i| i == index).unwrap();
+            let r = app_row_rects((w, h), ui.tiles.len(), 0)[row];
+            let c = compose(&p, 600, &ty, w, h, &ui);
+            // The icon box centre and a point near its corner (where a
+            // letter glyph never reaches).
+            let cx = r.x + s_at(32, w, h) + s_at(64, w, h) / 2;
+            let corner = (cx - s_at(28, w, h), r.y + r.h / 2 - s_at(28, w, h));
+            (c.get(cx, r.y + r.h / 2), c.get(corner.0, corner.1))
+        };
+        let (centre, corner) = render(Some(&red), true);
+        assert_eq!(centre, 0xff0000, "the bitmap fills the icon box");
+        assert_eq!(corner, 0xff0000);
+        let (_, letter_corner) = render(None, true);
+        assert_ne!(letter_corner, 0xff0000, "no bitmap: the letter glyph");
+        // A first-party tile never draws a bitmap, even if one were set.
+        let (_, first_party) = render(Some(&red), false);
+        assert_ne!(first_party, 0xff0000);
     }
 
     fn s_at(v: i32, w: u32, h: u32) -> i32 {

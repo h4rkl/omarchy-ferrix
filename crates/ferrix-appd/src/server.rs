@@ -58,6 +58,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
         Inbound::Request(Request::Identify { .. }) => "identify",
         Inbound::Request(Request::Catalog) => "catalog",
         Inbound::Request(Request::Instances) => "instances",
+        Inbound::Request(Request::AppIcon { .. }) => "app-icon",
         Inbound::Request(Request::Launch { .. }) => "launch",
         Inbound::Request(Request::Activate { .. }) => "activate",
         Inbound::Request(Request::Terminate { .. }) => "terminate",
@@ -78,7 +79,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
 ///
 /// | message | roles |
 /// |---|---|
-/// | `Catalog`, `Instances`, `Subscribe` | any |
+/// | `Catalog`, `Instances`, `AppIcon`, `Subscribe` | any |
 /// | `Home` | `compositor`, `home`, `application`, `tool` |
 /// | `Identify` | `service`, `tool` |
 /// | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
@@ -94,7 +95,9 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
     use ClientRole::*;
     match inbound {
         Inbound::Request(Request::Hello { .. }) => true,
-        Inbound::Request(Request::Catalog | Request::Instances | Request::Subscribe) => true,
+        Inbound::Request(
+            Request::Catalog | Request::Instances | Request::AppIcon { .. } | Request::Subscribe,
+        ) => true,
         Inbound::Request(Request::Home) => role != Service,
         Inbound::Request(Request::Identify { .. }) => matches!(role, Service | Tool),
         Inbound::Request(
@@ -205,6 +208,11 @@ fn handle_request(
         Request::Instances => Reply::Instances {
             schema_version: SCHEMA_VERSION,
             instances: service.instances(),
+        },
+        Request::AppIcon { id } => Reply::AppIcon {
+            schema_version: SCHEMA_VERSION,
+            icon: service.app_icon(&id),
+            id,
         },
         Request::Launch { id } => match service.launch(&id) {
             Ok(outcome) => Reply::Instance {

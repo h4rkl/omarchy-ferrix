@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
+use ferrix_app_api::{AppDescriptor, AppError, AppIconBitmap, AppId, ExitReason, RuntimeKind};
 use ferrix_app_runtime_api::{LaunchContext, ProvidedApp, RunningApp, Runtime, SurfaceMatch};
 
 use crate::process_tree::ProcessTree;
@@ -48,6 +48,8 @@ struct FakeInner {
     listings: AtomicU32,
     /// Pids `shared_host_pids` reports whether or not an instance runs.
     host_pids: Mutex<BTreeSet<u32>>,
+    /// What `app_icon` returns per `config.key`.
+    icons: Mutex<HashMap<String, AppIconBitmap>>,
 }
 
 /// A [`Runtime`] whose instances exit when the test says so. Clone handles
@@ -66,12 +68,18 @@ impl FakeRuntime {
             installed: Mutex::new(None),
             listings: AtomicU32::new(0),
             host_pids: Mutex::new(BTreeSet::new()),
+            icons: Mutex::new(HashMap::new()),
         }))
     }
 
     /// Sets what `installed_apps` reports from now on.
     pub fn set_installed(&self, installed: Option<Result<Vec<ProvidedApp>, AppError>>) {
         *lock(&self.0.installed) = installed;
+    }
+
+    /// The icon `app_icon` returns for launch configs with `key`.
+    pub fn set_icon(&self, key: &str, icon: AppIconBitmap) {
+        lock(&self.0.icons).insert(key.to_owned(), icon);
     }
 
     /// How often `installed_apps` was called.
@@ -243,6 +251,11 @@ impl Runtime for FakeRuntime {
 
     fn shared_host_pids(&self) -> BTreeSet<u32> {
         lock(&self.0.host_pids).clone()
+    }
+
+    fn app_icon(&self, config: &serde_json::Value) -> Option<AppIconBitmap> {
+        let key = self.app_key(config)?;
+        lock(&self.0.icons).get(&key).cloned()
     }
 }
 

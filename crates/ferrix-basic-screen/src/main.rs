@@ -29,7 +29,9 @@
 //! `notifications-empty`, or the kind of a non-launchable catalog entry
 //! (`camera`) for its reference page. `--sample-apks` appends the ten
 //! installed-APK labels seen on the Pixel 9a as mock installed entries, so a
-//! host preview shows a catalog with APKs (mock evidence, no Android). Launchable entries (Phone, Messages,
+//! host preview shows a catalog with APKs (mock evidence, no Android); all
+//! but Calculator carry a synthetic launcher bitmap standing in for
+//! Waydroid's PNG, so the icon and the letter fallback both show. Launchable entries (Phone, Messages,
 //! Contacts, Settings, Files, Terminal) are real apps started by
 //! `ferrix-appd`, not pages of this surface. `--size` overrides the
 //! profile's panel size, e.g. `830x1800` for the narrow QEMU display window.

@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Wire form of the bounded installed-app icon bitmap (src/icon.rs).
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

@@ -7,7 +7,9 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use ferrix_app_api::{AppCapability, AppDescriptor, AppError, ExitReason, RuntimeKind};
+use ferrix_app_api::{
+    AppCapability, AppDescriptor, AppError, AppIconBitmap, ExitReason, RuntimeKind,
+};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +138,16 @@ pub trait Runtime: Send + Sync {
     /// they come from a shared host ([`SurfaceMatch::SharedHost`]); only
     /// meaningful together with [`Runtime::shared_host_pids`].
     fn window_app_id(&self, _config: &Value) -> Option<String> {
+        None
+    }
+
+    /// The launcher icon of an app this runtime reports by itself
+    /// ([`Runtime::installed_apps`]), decoded and bounded by the adapter
+    /// (the runtime's own image files are untrusted input). `None` when
+    /// there is none or it is unusable; the home then draws the letter
+    /// glyph. May block on bounded file I/O; never call it while holding a
+    /// lock other callers need.
+    fn app_icon(&self, _config: &Value) -> Option<AppIconBitmap> {
         None
     }
 
