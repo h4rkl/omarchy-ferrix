@@ -5,8 +5,27 @@ The tracked Mesa fork (26.2.3) generates libpan shaders for Mali v14,
 which the pinned prebuilts/mesa-tools panfrost_compile predates
 ("Unsupported target arch 14"). Panfrost cannot drive the Pixel 9a GPU
 anyway (kbase, not panthor), and the Ferrix route uses the stock Mali
-blobs or the software fallback, so drop it from this board.
+blobs or the software fallback, so drop it from this board and skip
+its vulkan.panfrost package there.
 ---
+diff --git a/device.mk b/device.mk
+--- a/device.mk
++++ b/device.mk
+@@ -144,9 +144,13 @@
+ else
+ PRODUCT_PACKAGES += \
+     vulkan.freedreno \
+-    vulkan.broadcom \
++    vulkan.broadcom
++# waydroid_arm64_only does not build Mesa panfrost (see its BoardConfig.mk).
++ifeq ($(filter %_arm64_only,$(TARGET_PRODUCT)),)
++PRODUCT_PACKAGES += \
+     vulkan.panfrost
+ endif
++endif
+ 
+ PRODUCT_COPY_FILES += \
+     frameworks/native/data/etc/android.hardware.opengles.aep.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.opengles.aep.xml
 diff --git a/waydroid_arm64_only/BoardConfig.mk b/waydroid_arm64_only/BoardConfig.mk
 index e3a7745..3772b3d 100644
 --- a/waydroid_arm64_only/BoardConfig.mk
