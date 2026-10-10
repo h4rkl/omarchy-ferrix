@@ -78,6 +78,18 @@ runtime_paths = ["mali"]
 required_names = ["mali_csffw-r51p0.bin"]
 
 [[controller]]
+id = "video-mfc"
+# Exynos MFC hardware video codec (s5p-mfc, /dev/video6..11). The driver loads
+# `mfc_fw.bin` when the first instance opens; without it every open fails
+# (`mfc_rm_instance_init ... Failed to init`) and the stock Codec2 service in
+# the Waydroid container reports "input is corrupted" for every frame
+# (physical:google-pixel-9a-tegu-gxq96-mp1-0, 2026-10-11).
+kernel_driver = "exynos_mfc"
+source_images = ["vendor.img"]
+runtime_paths = ["mfc"]
+required_names = ["mfc_fw.bin"]
+
+[[controller]]
 id = "display-audio-touch"
 kernel_driver = "tegu-board-kernel"
 source_images = ["vendor.img", "vendor_dlkm.img"]

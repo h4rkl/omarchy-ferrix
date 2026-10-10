@@ -21,3 +21,4 @@ modem-s5300	vendor.img	/firmware/carrierconfig	lib/firmware/carrierconfig	bundle
 modem-s5300	vendor.img	/firmware/uecapconfig	lib/firmware/uecapconfig	bundle
 gpu-mali	vendor.img	/firmware/mali_csffw-r51p0.bin	lib/firmware/mali_csffw-r52p0.bin
 gpu-mali	vendor.img	/firmware/mali_csffw-r51p0.bin	lib/firmware/mali_csffw.bin
+video-mfc	vendor.img	/firmware/mfc_fw.bin	lib/firmware/mfc_fw.bin
