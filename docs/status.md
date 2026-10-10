@@ -1,5 +1,55 @@
 # Status
 
+## 2026-10-11 (Apps list fling with deceleration; QEMU/mock only)
+
+- **Why:** the home Apps list scrolled only while the finger dragged (the
+  limitation recorded in both 2026-10-11 entries below). No surface in the
+  tree had fling or velocity code to reuse.
+- **Shared helper:** `ferrix_ui::fling` (pure, time-injected). Release
+  velocity is a least-squares slope over the samples in the last 100 ms;
+  with fewer than two samples there (sparse input) it uses the last pair
+  when they are at most 250 ms apart; a finger still for 50 ms before
+  lifting releases at zero; samples at the same millisecond replace rather
+  than add. The glide is `v0 * exp(-t / 325 ms)` and ends below 0.05 px/ms.
+- **Input times:** `ClientHandler::input_time` (default no-op) now gets the
+  Wayland timestamp of every touch down/motion/up and pointer
+  press/motion/release before it is delivered, so velocity uses the
+  compositor's event clock, not the time the client happened to dispatch a
+  batch. Other surfaces are unchanged.
+- **Launcher:** a list drag released faster than 0.1 panel heights/s glides
+  on (capped at 4 heights/s). The runner's existing `deadline`/`timer`
+  drives it at 16 ms frames, and it redraws only when the rounded offset
+  changes; the timer is idle otherwise. The glide clamps and stops at either
+  end with no overscroll, does not start when the drag already reached the
+  end it would glide toward, ends when the list is left, and a touch on a
+  gliding list stops it without tapping the row under it. Untimed input
+  (tests without `set_time`) never flings, so plain drags behave as before.
+  `apps-fling` (`scroll`, `velocity_px_s`) and `apps-fling-end` (`scroll`)
+  records make the glide observable.
+- **Evidence (QEMU, TCG, headless):** with a fresh `FERRIX_OUT_DIR`,
+  `just qemu-build`, `just qemu-check` (`check-passed`) and
+  `just qemu-gesture-check` (`gesture-check-passed`) pass at the versioned
+  1080x2340 profile. The 8-entry QEMU list fits that panel and does not
+  scroll there, so the fling was driven on a scratch copy of the profile
+  with `height = 1200` (`FERRIX_QEMU_PROFILE`, not checked in) with
+  `just qemu-swipe`-style QMP input (6 tablet motions 20 ms apart): a 40 px
+  flick logged `apps-fling scroll:40 velocity_px_s:280` and then
+  `apps-fling-end scroll:114`. The captured frame shows the list at that
+  offset with the cursor ring where the finger lifted. Hard flicks that
+  reached either end during the drag started no glide. **mock:** 7
+  `ferrix-ui` fling tests (120 Hz speed, recent-window fit, jitter and
+  duplicate times, sparse pairs, rest before lift, monotonic deceleration and
+  settle time, min/max) and 5 launcher tests (glide and deceleration, clamp
+  at both ends, stop-on-touch without tap, slow/paused/untimed drags, sparse
+  QEMU-style input and leaving the list). fmt, workspace clippy (host and
+  `just linux-check`) and `just linux-check test -p ferrix-ui -p
+  ferrix-basic-screen` pass.
+- **Limitations:** nothing has run on the Pixel 9a. The tuning (325 ms time
+  constant, thresholds) is unvalidated by feel on a real panel; frames are
+  timer-paced at 16 ms rather than synchronised to `wl_surface.frame`, and
+  each frame re-composes the whole surface in software. Only the Apps list
+  flings; Settings, Files and other lists still scroll by drag only.
+
 ## 2026-10-11 (Pixel 9a: APKs as per-task Ferrix windows on a clean flash; physical `google-pixel-9a-tegu-gxq96-mp1-0`)
 
 Image `tegu-kleaf-dev-20261010T204302Z`: LineageOS 23.2 (Android 16)

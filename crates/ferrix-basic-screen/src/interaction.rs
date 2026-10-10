@@ -482,13 +482,21 @@ impl Input {
             if let Some((ms, now)) = self.now {
                 let release = f64::from(ms.wrapping_sub(contact.start_ms));
                 let velocity = -self.tracker.velocity(release);
-                self.fling = Fling::start(
-                    f64::from(state.apps_scroll),
-                    velocity,
-                    fling_min(size),
-                    fling_max(size),
-                    now,
-                );
+                // Already pinned at the end it would glide toward: no glide.
+                let max = apps_max_scroll(size, state.tiles.len());
+                let pinned = (velocity < 0.0 && state.apps_scroll <= 0)
+                    || (velocity > 0.0 && state.apps_scroll >= max);
+                self.fling = (!pinned)
+                    .then(|| {
+                        Fling::start(
+                            f64::from(state.apps_scroll),
+                            velocity,
+                            fling_min(size),
+                            fling_max(size),
+                            now,
+                        )
+                    })
+                    .flatten();
             }
             state.pressed = None;
             return true;
@@ -1218,6 +1226,10 @@ mod tests {
         assert_eq!(state.apps_scroll, max, "clamped at the end");
         assert_eq!(frames.last(), Some(&max));
         assert!(frames.iter().all(|s| *s <= max));
+        // A drag that already reached the end does not start a glide there.
+        timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 4);
+        assert_eq!(state.apps_scroll, max);
+        assert!(!input.flinging() && input.deadline().is_none());
         // Downward fling back toward the top.
         state.apps_scroll = 150;
         let release = timed_drag(&mut input, &mut state, t0, 1400.0, 1500.0, 4, 8, 2);
@@ -1273,9 +1285,9 @@ mod tests {
         // QEMU's tablet: 6 motions 20 ms apart (and sometimes coalesced).
         let (mut state, mut input) = open_list();
         let t0 = Instant::now();
-        let release = timed_drag(&mut input, &mut state, t0, 1800.0, 1000.0, 6, 20, 0);
+        let release = timed_drag(&mut input, &mut state, t0, 1800.0, 1500.0, 6, 20, 0);
         let v = input.fling_velocity().expect("glides");
-        assert!((v - 800.0 / 120.0).abs() < 0.5, "{v}");
+        assert!((v - 300.0 / 120.0).abs() < 0.2, "{v}");
         // Only two motions, 60 ms apart.
         let (mut state, mut input) = open_list();
         timed_drag(&mut input, &mut state, t0, 1800.0, 1400.0, 2, 60, 0);
