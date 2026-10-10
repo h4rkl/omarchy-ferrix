@@ -136,6 +136,25 @@ session_log() {
   printf '%s' "$run_dir/$1"
 }
 
+# ensure_lxc_extras: Android 14+ init and aconfigd write flag storage under
+# /metadata (`mkdir /metadata/aconfig`), which is read-only in the Waydroid
+# rootfs; without it every aconfig flag reads false and system_server dies
+# on flag-gated permissions (android.permission.RANGING). Waydroid 1.6
+# mounts nothing there, and rewrites `config` on init/upgrade, so keep the
+# mount in a Ferrix-owned include and re-add the include before each start.
+# `optional` keeps images without a /metadata mountpoint (LineageOS 20)
+# starting.
+ensure_lxc_extras() {
+  conf_dir="$lxc_path/waydroid"
+  [ -f "$conf_dir/config" ] || return 0
+  extras="$conf_dir/config_ferrix"
+  printf '%s\n' '# Managed by ferrix-waydroid.sh' \
+    'lxc.mount.entry = tmpfs metadata tmpfs nodev,nosuid,mode=0755,optional 0 0' >"$extras"
+  grep -qxF "lxc.include = $extras" "$conf_dir/config" ||
+    printf 'lxc.include = %s\n' "$extras" >>"$conf_dir/config"
+  ev waydroid-lxc-extras ",\"status\":\"ok\",\"metadata\":\"tmpfs\",\"path\":\"$extras\""
+}
+
 prepare() {
   mkdir -p "$run_dir"
   binderfs=absent
@@ -187,6 +206,7 @@ prepare() {
       ev waydroid-properties ",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\""
     fi
   fi
+  ensure_lxc_extras
   if [ -f "$cfg" ] && rc-service waydroid-container start >"$run_dir/waydroid-container.log" 2>&1; then
     ev waydroid-container ',"status":"started"'
   else

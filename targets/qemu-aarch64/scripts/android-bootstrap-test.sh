@@ -7,7 +7,8 @@
 #   - Pixel-style provision (session owned by `user`, PipeWire pulse):
 #     session-side commands run through su as that user, root-only commands
 #     (waydroid shell, lxc-attach) do not, records carry the physical label;
-#   - run without a compositor socket fails with a typed record.
+#   - run without a compositor socket fails with a typed record;
+#   - the Mali renderer round-trip and the /metadata tmpfs LXC include.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -235,5 +236,20 @@ check '^ro.hardware.egl=swiftshader$' "$work/var/lib/waydroid/waydroid_base.prop
 common_env FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_MALI_DIR="$work/absent" \
   FERRIX_ANDROID_OVERLAY="$work/overlay/vendor" sh "$helper" prepare
 check '"event":"waydroid-renderer","renderer":"swiftshader"' "$work/console"
+
+# Android 14+ needs a writable /metadata for aconfig storage: prepare adds a
+# Ferrix-owned LXC include with an optional tmpfs there, exactly once.
+lxc="$work/lxc/waydroid"
+mkdir -p "$lxc"
+printf 'lxc.rootfs.path = /var/lib/waydroid/rootfs\n' > "$lxc/config"
+for _ in 1 2; do
+  : > "$work/console"
+  common_env FERRIX_ANDROID_LXC_PATH="$work/lxc" sh "$helper" prepare
+done
+check '"event":"waydroid-lxc-extras".*"metadata":"tmpfs"' "$work/console"
+check '^lxc.mount.entry = tmpfs metadata tmpfs .*optional 0 0$' "$lxc/config_ferrix"
+[ "$(grep -cxF "lxc.include = $lxc/config_ferrix" "$lxc/config")" = 1 ] ||
+  { echo 'FAIL android-bootstrap-test: config_ferrix include not present exactly once' >&2; cat "$lxc/config" >&2; exit 1; }
+passed=$((passed + 1))
 
 printf '{"evidence":"host","event":"android-bootstrap-tests","passed":%s,"failed":0}\n' "$passed"
