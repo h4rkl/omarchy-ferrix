@@ -371,6 +371,46 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   that has no window re-runs the launch (`app-reopen`) instead of raising a
   surface that no longer exists. Limitation: the composer needle
   `graphics.composer` is still unverified on hardware.
+- **Compositor restarts (2026-10-11).** Symptom (physical
+  `google-pixel-9a-tegu-gxq96-mp1-0`): after `rc-service ferrix-product
+  restart`, Android apps never came back (Browser ended `crashed`, exit
+  code 1, no window) until the whole Waydroid session was restarted. Root
+  cause: Waydroid 1.6.3 bind-mounts the host socket **file**
+  (`tools/helpers/lxc.py` `generate_session_lxc_config`:
+  `realpath($XDG_RUNTIME_DIR/$WAYLAND_DISPLAY)` → `run/xdg/wayland-0`,
+  `rbind,create=file`) once, when the session starts, and nothing in
+  `waydroid session` watches the socket. ferrix-shell creates a new socket
+  (new inode) on every start, so the container kept the dead one. The
+  hwcomposer (`hardware/waydroid` `dev/lineage-23.2`) already reconnects:
+  the control connection's dispatch thread parks on disconnect and
+  `hwc_set` calls `reconnect_display` → `wl_conn_reconnect`, which retries
+  `wl_display_connect` every 500 ms **forever, inside `hwc_set` and under
+  `windowsMutex`**; per-task connections (`kPerTaskConns`) end their
+  dispatch thread and are reopened by `task_conn_for`/`sweep_dead_task_conns`.
+  Against the stale inode every retry fails (`ECONNREFUSED`), so the
+  composer thread spins and SurfaceFlinger stalls, which is what took the
+  freshly launched Browser down. Fix, without patching the hwcomposer:
+  ferrix-shell also listens on `--extra-socket
+  ferrix-android-wayland/wayland-0` (same display; record
+  `wayland-extra-socket`); `ferrix-waydroid.sh` binds that **directory**
+  into the container at `/run/ferrix-wayland` (Ferrix LXC include,
+  `optional`) and, after each session start, replaces Waydroid's file bind
+  with a symlink `/run/xdg/wayland-0 → /run/ferrix-wayland/wayland-0`
+  (record `android-wayland-link`, status `linked|already|unavailable|
+  failed`; rerun by hand with `ferrix-waydroid.sh link-wayland`). A
+  directory bind follows the recreated socket, so upstream's reconnect
+  reaches the new compositor. In `ferrix-appd` the end of the compositor's
+  connection (or a new compositor Hello) forgets every surface record
+  (`appd-surfaces-reset`) without ending anything: Android instances stay
+  running with no window and no close settle (never `app-task-closed` or
+  `app-crashed` because of a compositor restart); returning task windows are
+  claimed again by composer pid and `app_id`, and activating meanwhile
+  relaunches the task (`app-reopen`). Limitations: during the restart gap
+  the hwcomposer's retry loop still blocks composition (bounded by the
+  shell's start time); other host sockets bound as files (PulseAudio
+  `native`) have the same inode problem if their service restarts; native
+  Ferrix apps lose their Wayland connection with the shell as before. Not
+  yet verified on the device.
 - **Installed APKs and adoption** (ADR-008 "Installed APKs"). The runtime
   implements `Runtime::installed_apps` (launchable packages from
   `installed_packages`, minus `HIDDEN_PACKAGES`: launchers, Settings and

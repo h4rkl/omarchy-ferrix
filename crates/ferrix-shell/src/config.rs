@@ -77,6 +77,10 @@ pub struct ShellConfig {
     /// Panel insets fullscreen clients stay clear of (cutout, corners).
     pub safe_area: SafeArea,
     pub socket_name: String,
+    /// Second socket for the same display (`--extra-socket`): a name under
+    /// `XDG_RUNTIME_DIR`, at most `<dir>/<name>`. The Android runtime binds
+    /// its directory into the container so compositor restarts reach it.
+    pub extra_socket: Option<String>,
     /// `ferrix_appd` socket the compositor links to (with retries); `None` disables
     /// the link and the home gesture falls back to the oldest mapped window.
     pub appd_socket: Option<String>,
@@ -112,6 +116,7 @@ impl ShellConfig {
             scanout_byte_order: profile.display.scanout_byte_order,
             safe_area: profile.display.safe_area,
             socket_name: socket_name.unwrap_or("wayland-0").to_owned(),
+            extra_socket: None,
             appd_socket: None,
         }
     }
@@ -119,6 +124,12 @@ impl ShellConfig {
     /// Set the `ferrix_appd` socket to link to (`None` disables the link).
     pub fn with_appd(mut self, appd_socket: Option<String>) -> Self {
         self.appd_socket = appd_socket;
+        self
+    }
+
+    /// Set the extra listening socket (`None`: only the primary socket).
+    pub fn with_extra_socket(mut self, extra_socket: Option<String>) -> Self {
+        self.extra_socket = extra_socket;
         self
     }
 
@@ -189,7 +200,13 @@ route = "speaker"
         assert_eq!(config.geometry_source, GeometrySource::Profile);
         assert_eq!(config.socket_name, "wayland-0");
         assert_eq!(config.appd_socket, None);
+        assert_eq!(config.extra_socket, None);
         assert_eq!(config.appd_label(), "disabled");
+        let config = config.with_extra_socket(Some("ferrix-android-wayland/wayland-0".to_owned()));
+        assert_eq!(
+            config.extra_socket.as_deref(),
+            Some("ferrix-android-wayland/wayland-0")
+        );
         let config = config.with_appd(Some("/run/ferrix/ferrix-appd.sock".to_owned()));
         assert_eq!(config.appd_label(), "/run/ferrix/ferrix-appd.sock");
     }

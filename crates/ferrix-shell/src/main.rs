@@ -91,7 +91,8 @@ fn run(args: Vec<String>, evidence: Evidence) -> Result<(), Failure> {
         cmdline.as_deref(),
         args.socket.as_deref(),
     )
-    .with_appd(args.appd_socket.clone());
+    .with_appd(args.appd_socket.clone())
+    .with_extra_socket(args.extra_socket.clone());
     let mut plan = layout::OutputLayout::plan(
         config.geometry.width,
         config.geometry.height,
