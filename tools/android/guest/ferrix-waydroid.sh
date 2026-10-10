@@ -14,6 +14,9 @@
 #                                 part of the image; nothing is installed).
 #   ferrix-waydroid.sh run        prepare, wait for the Wayland socket, then
 #                                 provision (for a backgrounded service).
+#   ferrix-waydroid.sh link-wayland  root, running session: (re)point
+#                                 Android's Wayland socket at the bound
+#                                 compositor directory (provision does this).
 #
 # Installed as /usr/lib/ferrix/ferrix-waydroid.sh by
 # targets/qemu-aarch64/pmos/finalize-in-container.sh (QEMU, run from local.d
@@ -28,6 +31,12 @@
 #                                  runs session commands as the caller
 #   FERRIX_ANDROID_XDG_RUNTIME_DIR session runtime dir ($XDG_RUNTIME_DIR, /run/user/0)
 #   FERRIX_ANDROID_WAYLAND_DISPLAY compositor socket name (wayland-0)
+#   FERRIX_ANDROID_WAYLAND_DIR     directory under the runtime dir holding the
+#                                  compositor's extra socket wayland-0
+#                                  (ferrix-shell --extra-socket
+#                                  ferrix-android-wayland/wayland-0); bound
+#                                  into the container so Android reconnects
+#                                  after a compositor restart
 #   FERRIX_ANDROID_SESSION_BUS     session D-Bus address (unix:path=<xdg>/ferrix-android-bus)
 #   FERRIX_ANDROID_PULSE           system | pipewire (falls back to null) | null | none (system)
 #   FERRIX_ANDROID_PACKAGE         Browser package (org.lineageos.jelly)
@@ -58,6 +67,11 @@ run_dir=${FERRIX_ANDROID_RUN_DIR:-/run/ferrix}
 session_user=${FERRIX_ANDROID_SESSION_USER:-}
 xdg=${FERRIX_ANDROID_XDG_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/0}}
 wayland=${FERRIX_ANDROID_WAYLAND_DISPLAY:-wayland-0}
+wayland_dir=${FERRIX_ANDROID_WAYLAND_DIR:-ferrix-android-wayland}
+# Container side of that directory bind, and the socket path Android's
+# hwcomposer connects to (Waydroid: XDG_RUNTIME_DIR=/run/xdg, wayland-0).
+container_wayland_dir=/run/ferrix-wayland
+container_wayland_socket=/run/xdg/wayland-0
 bus=${FERRIX_ANDROID_SESSION_BUS:-unix:path=$xdg/ferrix-android-bus}
 pulse=${FERRIX_ANDROID_PULSE:-system}
 lxc_path=${FERRIX_ANDROID_LXC_PATH:-/var/lib/waydroid/lxc}
@@ -215,6 +229,12 @@ ensure_lxc_extras() {
   extras="$conf_dir/config_ferrix"
   printf '%s\n' '# Managed by ferrix-waydroid.sh' \
     'lxc.mount.entry = tmpfs metadata tmpfs nodev,nosuid,mode=0755,optional 0 0' >"$extras"
+  # The compositor's extra-socket directory (see link_wayland). A directory
+  # bind follows the socket a restarted compositor recreates; Waydroid's own
+  # bind of the socket file keeps the first compositor's inode forever.
+  # `optional`: a shell without --extra-socket leaves Waydroid's bind alone.
+  printf 'lxc.mount.entry = %s %s none bind,create=dir,optional 0 0\n' \
+    "$xdg/$wayland_dir" "${container_wayland_dir#/}" >>"$extras"
   # Hardware codecs: bind the extra stock Codec2 nodes the host has (always
   # `optional`) and hand them to the container's mediacodec UID.
   bound=
@@ -230,6 +250,35 @@ ensure_lxc_extras() {
   grep -qxF "lxc.include = $extras" "$conf_dir/config" ||
     printf 'lxc.include = %s\n' "$extras" >>"$conf_dir/config"
   ev waydroid-lxc-extras ",\"status\":\"ok\",\"metadata\":\"tmpfs\",\"codec2_nodes\":[${bound}],\"path\":\"$extras\""
+}
+
+# link_wayland: point Android's Wayland socket path at the bound directory.
+# Waydroid bind-mounts the host socket *file* at /run/xdg/wayland-0 when the
+# session starts. ferrix-shell recreates its socket on every start (new
+# inode), so after a compositor restart that bind names a dead socket and
+# the hwcomposer's reconnect loop (hardware/waydroid wl_conn_reconnect,
+# task_conn_for) can never succeed; only a new Waydroid session used to
+# recover. Replacing the bind with a symlink into the directory bind makes
+# every reconnect resolve to the live socket. Established connections are
+# untouched, and the step is idempotent; it must run again after every
+# session start (Waydroid regenerates its session mounts).
+# The in-container script prints one word: linked | already | no-socket | failed.
+link_wayland_script="s=$container_wayland_socket t=$container_wayland_dir/wayland-0
+i=0
+while [ ! -S \$t ] && [ \$i -lt 50 ]; do sleep 0.1; i=\$((i + 1)); done
+[ -S \$t ] || { echo no-socket; exit 0; }
+[ \"\$(readlink \$s)\" = \$t ] && { echo already; exit 0; }
+for _ in 1 2 3; do umount \$s 2>/dev/null || break; done
+rm -f \$s && ln -s \$t \$s && [ \"\$(readlink \$s)\" = \$t ] && echo linked || echo failed"
+link_wayland() {
+  waydroid container unfreeze >/dev/null 2>&1 || true
+  status=$(lxc-attach -P "$lxc_path" -n waydroid --clear-env -- /system/bin/sh -c "$link_wayland_script" 2>/dev/null | tail -n 1 | tr -d '\r')
+  case $status in
+    linked|already) ;;
+    no-socket) status=unavailable ;;
+    *) status=failed ;;
+  esac
+  ev android-wayland-link ",\"status\":\"$status\",\"host_dir\":\"$xdg/$wayland_dir\",\"socket\":\"$container_wayland_socket\",\"target\":\"$container_wayland_dir/wayland-0\""
 }
 
 prepare() {
@@ -397,6 +446,12 @@ provision() {
   mkdir -p "$run_dir"
   start_session_bus
   start_pulse
+  # The directory the container binds (ensure_lxc_extras) must exist when the
+  # session starts the container; ferrix-shell creates it too.
+  if [ ! -d "$xdg/$wayland_dir" ]; then
+    mkdir -p -m 0755 "$xdg/$wayland_dir"
+    [ -z "$session_user" ] || chown "$session_user" "$xdg/$wayland_dir" 2>/dev/null || true
+  fi
   session=$(session_log waydroid-session.log)
   as_session "waydroid session start >>$session 2>&1 &"
   # RUNNING only means the LXC/session processes exist. Package operations
@@ -410,6 +465,7 @@ provision() {
     sleep 0.1
   done
   ev android-boot ",\"boot_completed\":$booted,\"session_user\":\"${session_user:-$(id -un 2>/dev/null)}\""
+  link_wayland
   [ "$booted" != true ] || complete_android_setup
   # The Browser is built into the Android image (ADR-008): nothing is
   # installed here, only verified present and made the default browser.
@@ -465,6 +521,7 @@ case ${1:-} in
   prepare) prepare ;;
   provision) provision ;;
   run) prepare; wait_for_wayland && provision ;;
-  *) printf 'usage: %s prepare|provision|run\n' "$0" >&2; exit 2 ;;
+  link-wayland) link_wayland ;;
+  *) printf 'usage: %s prepare|provision|run|link-wayland\n' "$0" >&2; exit 2 ;;
 esac
 exit 0

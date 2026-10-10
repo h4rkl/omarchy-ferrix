@@ -240,6 +240,8 @@ struct State {
     /// Window app ids from a runtime host that matched no app and already
     /// woke the installed-app poller (bounded by [`MAX_REFRESH_HINTS`]).
     refresh_hints: BTreeSet<String>,
+    /// Bumped on every compositor Hello (see [`Service::compositor_connected`]).
+    compositor_generation: u64,
 }
 
 /// Installed apps reported by the runtimes, beside the checked-in catalog.
@@ -889,6 +891,77 @@ impl Service {
             }
         }
         result
+    }
+
+    /// A compositor said Hello: it resyncs every toplevel it has right after
+    /// (`SurfaceMapped` for each), so every surface record is stale from
+    /// here on. Returns this compositor connection's generation for
+    /// [`Service::compositor_lost`].
+    pub fn compositor_connected(&self) -> u64 {
+        let mut state = self.lock_state();
+        state.compositor_generation += 1;
+        let generation = state.compositor_generation;
+        self.forget_surfaces(&mut state, "compositor-connected");
+        generation
+    }
+
+    /// The compositor connection of `generation` ended: the shell restarted
+    /// or crashed and took every toplevel with it (surface ids restart with
+    /// the next shell). Windows are forgotten without ending anything: a
+    /// shared-host (Android) instance keeps running with no window, its task
+    /// windows come back when Android reconnects to the new compositor
+    /// (docs/android-runtime.md "Compositor restarts"), and activating it
+    /// meanwhile relaunches the task through the runtime. A compositor
+    /// restart is never recorded as an app crash. Ignored when a newer
+    /// compositor already connected.
+    pub fn compositor_lost(&self, generation: u64) {
+        let mut state = self.lock_state();
+        if state.compositor_generation != generation {
+            return;
+        }
+        self.forget_surfaces(&mut state, "compositor-lost");
+    }
+
+    fn forget_surfaces(&self, state: &mut State, reason: &str) {
+        let windows = state.surfaces.len();
+        state.surfaces.clear();
+        state.focused_surface = None;
+        state.focused_pid = None;
+        let mut affected = Vec::new();
+        for (app, tracked) in state.instances.iter_mut() {
+            if tracked.surfaces.is_empty() {
+                continue;
+            }
+            tracked.surfaces.clear();
+            tracked.instance.surface_mapped = false;
+            // No close settle: the window did not close, the compositor went.
+            tracked.window_closed_at = None;
+            affected.push(app.clone());
+        }
+        if windows == 0 && affected.is_empty() {
+            return;
+        }
+        self.recorder.emit(
+            "appd-surfaces-reset",
+            [
+                ("reason", reason.into()),
+                ("windows", windows.into()),
+                (
+                    "apps",
+                    serde_json::Value::from(
+                        affected.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+                    ),
+                ),
+            ],
+        );
+        for app in affected {
+            if state.foreground.as_ref() == Some(&app) {
+                state.foreground = None;
+                self.transition(state, &app, LifecycleState::Background);
+            } else {
+                self.publish_instance(state, &app);
+            }
+        }
     }
 
     /// Focus moved to `pid` (or to nothing): the pid-only form of
@@ -3249,6 +3322,73 @@ mod tests {
         let again = h.service.launch(&android).unwrap();
         assert!(!again.activated_existing);
         assert_eq!(h.android.launch_count(), 2);
+    }
+
+    #[test]
+    fn a_compositor_restart_keeps_android_instances_and_readopts_their_windows() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        let generation = h.service.compositor_connected();
+        let number = h.service.launch(&android).unwrap().instance.instance;
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.focus_surface(Some(COMPOSER), Some(1));
+        assert_eq!(h.service.foreground(), Some(android.clone()));
+
+        // The shell dies: no SurfaceUnmapped ever arrives, its connection ends.
+        h.service.compositor_lost(generation);
+        // Well past the close settle: still running, not closed, not crashed.
+        std::thread::sleep(Duration::from_millis(150));
+        let instance = h.service.instance(&android).unwrap();
+        assert!(instance.state.is_running(), "{instance:?}");
+        assert_eq!(instance.instance, number);
+        assert!(!instance.surface_mapped);
+        assert_eq!(h.service.foreground(), None);
+        let events = captured_events(&h.records);
+        assert!(events.contains(&"appd-surfaces-reset".to_owned()));
+        assert!(!events.contains(&"app-task-closed".to_owned()));
+        assert!(!events.contains(&"app-crashed".to_owned()));
+
+        // Opening it before Android reconnects relaunches the task ...
+        h.service.activate(&android).unwrap();
+        assert_eq!(h.android.reopen_count(&android), 1);
+        // ... and the new shell's toplevel (surface ids restart) is claimed
+        // by the same instance and receives that activation.
+        h.service.compositor_connected();
+        let _ = notifications(&h.compositor);
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        assert!(notifications(&h.compositor).contains(&activate_note(COMPOSER, &android, 1)));
+        let instance = h.service.instance(&android).unwrap();
+        assert_eq!(instance.instance, number);
+        assert!(instance.surface_mapped);
+    }
+
+    #[test]
+    fn an_older_compositor_connection_ending_late_changes_nothing() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        let old = h.service.compositor_connected();
+        h.service.launch(&android).unwrap();
+        // The new shell connected (and resynced) before the old
+        // connection's end was processed.
+        h.service.compositor_connected();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.compositor_lost(old);
+        assert!(h.service.instance(&android).unwrap().surface_mapped);
     }
 
     #[test]

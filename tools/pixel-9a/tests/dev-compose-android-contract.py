@@ -57,6 +57,9 @@ service = (target / "pmos/device-google-tegu/ferrix-android.initd").read_text()
 assert "FERRIX_ANDROID_SESSION_USER=user" in service and "before ferrix-product" in service
 product = (target / "pmos/device-google-tegu/ferrix-product.initd").read_text()
 assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" in product
+# The container binds the extra socket's directory (ferrix-waydroid.sh
+# FERRIX_ANDROID_WAYLAND_DIR default), so Android survives a shell restart.
+assert "--extra-socket ferrix-android-wayland/wayland-0" in product
 assert "FERRIX_ANDROID_SESSION_BUS=unix:path=/run/user/1000/bus" in service
 apkbuild = (target / "pmos/device-google-tegu/APKBUILD").read_text()
 # Every APKBUILD checksum must match: pmbootstrap refuses the package

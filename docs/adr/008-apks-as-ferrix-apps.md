@@ -73,6 +73,13 @@ Base images: LineageOS (Waydroid's patch target), plain AOSP, GrapheneOS.
 
 ## Follow-ups
 
+- Compositor restarts (implemented 2026-10-11, device verification
+  pending): the warm container must outlive ferrix-shell. The container
+  sees the shell through a bound socket *directory* and a symlink at
+  Waydroid's socket path, so the hwcomposer's own reconnect reaches a
+  restarted shell; `ferrix-appd` keeps Android instances across the gap
+  (docs/android-runtime.md §7 "Compositor restarts").
+
 - Sandboxed Google Play compatibility (GrapheneOS's gmscompat approach,
   MIT/Apache) ported as patches, for apps that need Google services.
   Play Integrity device checks and Widevine L1 remain out of reach on any

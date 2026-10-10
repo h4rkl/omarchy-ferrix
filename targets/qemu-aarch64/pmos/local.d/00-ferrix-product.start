@@ -132,7 +132,10 @@ if ! rc-service seatd start >/dev/null 2>&1; then
   seatd -n -g root &
 fi
 sleep 1
-/usr/bin/ferrix-shell --core "$FERRIX_CORE_SOCKET" /etc/ferrix/profile.toml >/run/ferrix/ferrix-shell.log 2>&1 &
+# The extra socket's directory is what the Android container binds, so a
+# restarted compositor stays reachable (docs/android-runtime.md).
+/usr/bin/ferrix-shell --core "$FERRIX_CORE_SOCKET" --extra-socket ferrix-android-wayland/wayland-0 \
+  /etc/ferrix/profile.toml >/run/ferrix/ferrix-shell.log 2>&1 &
 shell_pid=$!
 for _ in $(seq 1 200); do
   if [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && grep -q '"event":"compositor-ready"' /run/ferrix/ferrix-shell.log 2>/dev/null; then

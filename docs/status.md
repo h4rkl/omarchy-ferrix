@@ -1,5 +1,25 @@
 # Status
 
+## 2026-10-11 (Android apps survive a ferrix-shell restart; host tests only)
+
+- **Problem (physical `google-pixel-9a-tegu-gxq96-mp1-0`):** after
+  `rc-service ferrix-product restart` Android apps never came back
+  (Browser `crashed`, exit 1) until Waydroid was restarted. Waydroid binds
+  the compositor socket *file* into the container at session start, so a
+  restarted shell's new socket never reached Android's hwcomposer, whose
+  upstream reconnect loop then spun forever.
+- **Fix:** `ferrix-shell --extra-socket ferrix-android-wayland/wayland-0`
+  (Pixel initd and QEMU start script); `ferrix-waydroid.sh` binds that
+  directory into the container and links `/run/xdg/wayland-0` to it
+  (`android-wayland-link`); `ferrix-appd` forgets surfaces when the
+  compositor connection ends, keeping Android instances running
+  (`appd-surfaces-reset`). Details: `docs/android-runtime.md` §7
+  "Compositor restarts". No hwcomposer patch.
+- **Evidence:** host only: `android-bootstrap-test.sh` (runs the link
+  script against a fake container root), `dev-compose-android-contract.py`,
+  `cargo test` (`ferrix-shell`, `ferrix-appd`), `just linux-check`. Not yet
+  run on the device or QEMU.
+
 ## 2026-10-10 (Installed APKs as Ferrix apps; adopted task windows; mock)
 
 - **What:** every launchable package in the Android container is a

@@ -26,6 +26,9 @@ pub struct Connection {
     /// Pids this connection already identified; the `appd-identify` record
     /// is emitted once per pid per connection.
     pub identified: BTreeSet<u32>,
+    /// Set for a compositor connection: its generation, so its end can reset
+    /// the surfaces it reported ([`Service::compositor_lost`]).
+    pub compositor_generation: Option<u64>,
 }
 
 /// What the connection thread does with a parsed line.
@@ -141,6 +144,9 @@ pub fn dispatch(service: &Arc<Service>, connection: &mut Connection, inbound: In
             return protocol_error(&reason);
         }
         connection.role = Some(role);
+        if role == ClientRole::Compositor {
+            connection.compositor_generation = Some(service.compositor_connected());
+        }
         return Outcome::Reply(service.hello_reply());
     }
     let Some(role) = connection.role else {
@@ -357,24 +363,27 @@ impl Server {
             match outcome {
                 Outcome::Reply(reply) => {
                     if write_json(&mut writer, &reply).is_err() {
-                        return;
+                        break;
                     }
                 }
                 Outcome::Subscribe => {
                     let role = connection.role.unwrap_or(ClientRole::Application);
                     let Ok(sink) = writer.try_clone() else {
-                        return;
+                        break;
                     };
                     if self
                         .service
                         .subscribe_peer(role, connection.peer_pid, Box::new(sink))
                         .is_err()
                     {
-                        return;
+                        break;
                     }
                 }
                 Outcome::Silent => {}
             }
+        }
+        if let Some(generation) = connection.compositor_generation {
+            self.service.compositor_lost(generation);
         }
     }
 }
@@ -611,6 +620,20 @@ mod tests {
         );
         assert_eq!(runtime.launch_count(), 1);
         assert_eq!(runtime.launches()[0].0.as_str(), "org.ferrix.home");
+    }
+
+    #[test]
+    fn only_compositor_connections_carry_a_generation() {
+        let (service, _, _) = service();
+        let mut first = Connection::default();
+        hello(&service, &mut first, ClientRole::Compositor);
+        let mut second = Connection::default();
+        hello(&service, &mut second, ClientRole::Compositor);
+        assert!(first.compositor_generation < second.compositor_generation);
+        assert!(first.compositor_generation.is_some());
+        let mut home = Connection::default();
+        hello(&service, &mut home, ClientRole::Home);
+        assert_eq!(home.compositor_generation, None);
     }
 
     #[test]

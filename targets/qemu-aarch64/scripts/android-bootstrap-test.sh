@@ -11,6 +11,9 @@
 #     (waydroid shell, lxc-attach) do not, records carry the physical label;
 #   - run without a compositor socket fails with a typed record;
 #   - the Mali renderer round-trip and the /metadata tmpfs LXC include;
+#   - compositor restarts: the extra-socket directory bind in the LXC include
+#     and the in-container link that replaces Waydroid's socket-file bind
+#     (run for real against a fake container root);
 #   - the hardware Codec2 overlay on top of Mali (never without it), its
 #     properties, removal without touching shared files, and its device binds.
 set -eu
@@ -19,7 +22,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 script=$root/targets/qemu-aarch64/pmos/local.d/00-ferrix-android.start
 helper=$root/tools/android/guest/ferrix-waydroid.sh
 work=$(mktemp -d "${TMPDIR:-/tmp}/ferrix-android-bootstrap.XXXXXX")
-trap 'rm -rf "$work"' EXIT INT TERM
+# Fake container root for the Wayland link; short, for the sun_path limit.
+croot=$(mktemp -d /tmp/fxa.XXXXXX)
+trap 'rm -rf "$work" "$croot"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/images" "$work/run" "$work/xdg" "$work/state" "$work/var/lib/waydroid"
 : > "$work/images/system.img"
 : > "$work/images/vendor.img"
@@ -68,10 +73,19 @@ cat > "$work/bin/pipewire-pulse" <<'EOF'
 #!/bin/sh
 printf 'pipewire-pulse user=%s xdg=%s\n' "${FAKE_USER:-root}" "$XDG_RUNTIME_DIR" >> "$FAKE_STATE/calls"
 EOF
+# lxc-attach: the browser role is recorded; the Wayland link script is run
+# for real with the container's /run mapped into $FAKE_CROOT (no umount
+# there, so the loop just stops).
 cat > "$work/bin/lxc-attach" <<'EOF'
 #!/bin/sh
 printf 'lxc-attach user=%s %s\n' "${FAKE_USER:-root}" "$*" >> "$FAKE_STATE/calls"
-: > "$FAKE_STATE/role"
+case "$*" in
+  *add-role-holder*) : > "$FAKE_STATE/role" ;;
+  *ferrix-wayland*)
+    for last; do :; done
+    script=$(printf '%s\n' "$last" | sed "s#/run/#$FAKE_CROOT/run/#g")
+    PATH=$FAKE_CROOT/bin:$PATH sh -c "$script" ;;
+esac
 EOF
 cat > "$work/bin/waydroid" <<'EOF'
 #!/bin/sh
@@ -127,6 +141,7 @@ common_env() {
     FERRIX_ANDROID_RUN_DIR="$work/run" \
     FERRIX_ANDROID_XDG_RUNTIME_DIR="$work/xdg" \
     FERRIX_ANDROID_BOOT_TICKS=3 FERRIX_ANDROID_WAYLAND_TICKS=2 \
+    FAKE_CROOT="$croot" \
     "$@"
 }
 passed=0
@@ -173,6 +188,38 @@ check '^pm-disable org.lineageos.trebuchet$' "$work/state/calls"
 check "^lxc-attach user=root .*add-role-holder android.app.role.BROWSER org.lineageos.jelly\$" "$work/state/calls"
 check "^session-start user=root bus=unix:path=$work/xdg/ferrix-android-bus wayland=wayland-0\$" "$work/state/calls"
 refute '^su ' "$work/state/calls"
+# No compositor extra socket in the container: Waydroid's bind stays and the
+# record says so. The directory the container binds now exists.
+check '"event":"android-wayland-link","status":"unavailable"' "$work/console"
+[ -d "$work/xdg/ferrix-android-wayland" ] || { echo 'FAIL android-bootstrap-test: wayland dir not created' >&2; exit 1; }
+
+# Compositor restarts (Pixel 9a, 2026-10-11): Waydroid binds the socket
+# *file*; a restarted ferrix-shell's new socket never reached Android. The
+# link replaces that bind with a symlink into the directory bind, once.
+mkdir -p "$croot/run/xdg" "$croot/run/ferrix-wayland" "$croot/bin"
+printf '#!/bin/sh\nexit 1\n' > "$croot/bin/umount"
+chmod +x "$croot/bin/umount"
+: > "$croot/run/xdg/wayland-0"
+python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$croot/run/ferrix-wayland/wayland-0"
+for expect in linked already; do
+  : > "$work/console"
+  common_env sh "$helper" link-wayland
+  check "\"event\":\"android-wayland-link\",\"status\":\"$expect\",\"host_dir\":\"$work/xdg/ferrix-android-wayland\",\"socket\":\"/run/xdg/wayland-0\",\"target\":\"/run/ferrix-wayland/wayland-0\"" "$work/console"
+done
+[ "$(readlink "$croot/run/xdg/wayland-0")" = "$croot/run/ferrix-wayland/wayland-0" ] ||
+  { echo 'FAIL android-bootstrap-test: wayland socket not linked' >&2; ls -l "$croot/run/xdg" >&2; exit 1; }
+passed=$((passed + 1))
+# A failing link (read-only /run/xdg) is a typed failure, not a silent pass.
+rm -f "$croot/run/xdg/wayland-0"
+: > "$croot/run/xdg/wayland-0"
+chmod 0555 "$croot/run/xdg"
+: > "$work/console"
+common_env sh "$helper" link-wayland
+chmod 0755 "$croot/run/xdg"
+if [ "$(id -u)" != 0 ]; then
+  check '"event":"android-wayland-link","status":"failed"' "$work/console"
+fi
+rm -f "$croot/run/xdg/wayland-0"
 
 # Waydroid rewrites its config as `key = value`; a rerun with a stale value
 # must replace, not duplicate, the managed options.
@@ -254,7 +301,7 @@ common_env FERRIX_ANDROID_SESSION_USER=user FERRIX_ANDROID_PULSE=none sh "$helpe
 check '"event":"android-app-provision","app":"org.ferrix.browser","status":"failed","reason":"browser-package-missing","package":"org.lineageos.jelly"' "$work/console"
 check '"event":"android-setup","status":"complete","launcher":"absent"' "$work/console"
 refute '^app-install' "$work/state/calls"
-refute '^lxc-attach' "$work/state/calls"
+refute 'add-role-holder' "$work/state/calls"
 : > "$work/state/pkg-org.lineageos.jelly"
 
 # Null pulse: a socket-only PulseAudio for Waydroid's mandatory bind mount,
@@ -363,6 +410,8 @@ for _ in 1 2; do
 done
 check '"event":"waydroid-lxc-extras".*"metadata":"tmpfs"' "$work/console"
 check '^lxc.mount.entry = tmpfs metadata tmpfs .*optional 0 0$' "$lxc/config_ferrix"
+# The compositor's extra-socket directory, not a socket file.
+check "^lxc.mount.entry = $work/xdg/ferrix-android-wayland run/ferrix-wayland none bind,create=dir,optional 0 0\$" "$lxc/config_ferrix"
 [ "$(grep -cxF "lxc.include = $lxc/config_ferrix" "$lxc/config")" = 1 ] ||
   { echo 'FAIL android-bootstrap-test: config_ferrix include not present exactly once' >&2; cat "$lxc/config" >&2; exit 1; }
 passed=$((passed + 1))

@@ -184,6 +184,67 @@ pub fn rotation_to_transform(rotation: Rotation) -> Transform {
     }
 }
 
+/// Listen on a second socket (`--extra-socket`, a name under
+/// `XDG_RUNTIME_DIR` with at most one directory) for the same display.
+///
+/// The Android runtime bind-mounts that socket's *directory* into its
+/// container: a directory bind follows the socket this compositor recreates
+/// on every start, whereas Waydroid's own bind of the primary socket file
+/// pins the inode of the first compositor forever (docs/android-runtime.md
+/// "Compositor restarts"). Failure is recorded and never fatal: the product
+/// socket is what the shell is for.
+fn listen_extra_socket(loop_handle: &LoopHandle<'static, Shell>, evidence: Evidence, name: &str) {
+    let record = |status: &str, reason: Option<String>| {
+        let mut fields = vec![("socket", name.into()), ("status", status.into())];
+        if let Some(reason) = reason {
+            fields.push(("reason", reason.into()));
+        }
+        evidence::emit(&evidence::record(evidence, "wayland-extra-socket", &fields));
+    };
+    if let Some(dir) = extra_socket_dir(name)
+        && let Err(e) = create_socket_dir(&dir)
+    {
+        record("failed", Some(format!("{}: {e}", dir.display())));
+        return;
+    }
+    let socket = match ListeningSocketSource::with_name(name) {
+        Ok(socket) => socket,
+        Err(e) => {
+            record("failed", Some(format!("cannot bind: {e}")));
+            return;
+        }
+    };
+    let inserted = loop_handle.insert_source(socket, |stream, _, shell| {
+        if let Err(e) = shell
+            .display_handle
+            .insert_client(stream, Arc::new(ClientState::default()))
+        {
+            tracing::warn!("failed to insert client: {e}");
+        }
+    });
+    match inserted {
+        Ok(_) => record("listening", None),
+        Err(e) => record("failed", Some(format!("event loop: {e}"))),
+    }
+}
+
+/// `$XDG_RUNTIME_DIR/<dir>` for a socket name with a directory part.
+fn extra_socket_dir(name: &str) -> Option<std::path::PathBuf> {
+    let (dir, _) = name.split_once('/')?;
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
+    Some(std::path::Path::new(&runtime).join(dir))
+}
+
+/// Create the socket directory (0755: it holds only the socket, inside the
+/// 0700 runtime directory) unless it exists.
+fn create_socket_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    match std::fs::DirBuilder::new().mode(0o755).create(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        other => other,
+    }
+}
+
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
@@ -308,6 +369,9 @@ impl Shell {
                 }
             })
             .map_err(|e| ("socket", format!("event loop: {e}")))?;
+        if let Some(name) = config.extra_socket.as_deref() {
+            listen_extra_socket(&loop_handle, evidence, name);
+        }
         // Wake the loop whenever clients wrote; the backend loop drains the
         // display right after every dispatch (`Shell::dispatch_clients`).
         let poll_fd = display
@@ -1111,4 +1175,40 @@ pub fn cursor_hotspot(surface: &WlSurface) -> Point<i32, Logical> {
             .map(|attrs| attrs.lock().unwrap().hotspot)
             .unwrap_or_default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn extra_socket_directory_is_created_once_and_reused() {
+        let root = std::env::temp_dir().join(format!("ferrix-shell-extra-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = root.join("ferrix-android-wayland");
+        create_socket_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode & 0o700, 0o700, "owner can create the socket");
+        assert_eq!(mode & !0o755, 0, "nobody else can write: {mode:o}");
+        // A restart finds the directory (still bind-mounted by the container).
+        create_socket_dir(&dir).unwrap();
+        // A file in the way is an error, not silently accepted.
+        let file = root.join("not-a-dir");
+        std::fs::write(&file, b"").unwrap();
+        assert!(create_socket_dir(&file).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn extra_socket_dir_is_only_the_directory_part() {
+        assert_eq!(extra_socket_dir("wayland-9"), None);
+        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+            assert_eq!(
+                extra_socket_dir("ferrix-android-wayland/wayland-0"),
+                Some(std::path::Path::new(&runtime).join("ferrix-android-wayland"))
+            );
+        }
+    }
 }
