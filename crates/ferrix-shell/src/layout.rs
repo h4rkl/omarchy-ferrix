@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn only_runtime_task_window_app_ids_are_withheld() {
         assert!(withheld_until_activated(Some(
-            "waydroid.net.slions.fulguris.full.fdroid"
+            "waydroid.org.lineageos.jelly"
         )));
         assert!(withheld_until_activated(Some(
             "waydroid.org.lineageos.setupwizard"

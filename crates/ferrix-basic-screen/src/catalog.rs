@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ferrix_app_api::{AppDescriptor, AppId, AppInstance, AppRole, IconRef, IconTone};
+use ferrix_app_api::{AppDescriptor, AppId, AppInstance, AppOrigin, AppRole, IconRef, IconTone};
 use ferrix_ui::theme;
 
 /// One launcher entry.
@@ -22,6 +22,8 @@ pub struct Tile {
     pub running: bool,
     /// A launch was requested and no foreground/background state arrived yet.
     pub starting: bool,
+    /// An installed package (an APK) rather than a checked-in descriptor.
+    pub installed: bool,
 }
 
 impl Tile {
@@ -33,12 +35,18 @@ impl Tile {
             launchable: descriptor.launchable,
             running: false,
             starting: false,
+            installed: descriptor.origin == AppOrigin::Installed,
         }
     }
 
     /// Last id segment (`org.ferrix.settings` -> `settings`), the key for the
-    /// reference pages and the drawn icons.
+    /// reference pages and the drawn icons. Empty for an installed package,
+    /// so an APK whose package ends in `.browser` never borrows a
+    /// first-party glyph or page.
     pub fn kind(&self) -> &str {
+        if self.installed {
+            return "";
+        }
         self.id.as_str().rsplit('.').next().unwrap_or("")
     }
 }
@@ -58,14 +66,18 @@ pub fn tone_color(tone: IconTone) -> u32 {
     }
 }
 
-/// Deterministic launcher order: launchable applications first (the home
-/// surface itself last among them), then reference entries; each group by
-/// name.
+/// Deterministic launcher order: launchable applications first, then
+/// reference entries, then installed Android apps (APKs) appended after
+/// every first-party tile; each group by name.
 pub fn tiles_from_catalog(apps: &[AppDescriptor], instances: &[AppInstance]) -> Vec<Tile> {
     // The home surface never lists itself: it is the launcher, not a tile.
     let mut sorted: Vec<&AppDescriptor> = apps.iter().filter(|d| d.role != AppRole::Home).collect();
     sorted.sort_by(|a, b| {
-        let group = |d: &AppDescriptor| if d.launchable { 0 } else { 1 };
+        let group = |d: &AppDescriptor| match (d.origin, d.launchable) {
+            (AppOrigin::Installed, _) => 2,
+            (_, true) => 0,
+            (_, false) => 1,
+        };
         group(a)
             .cmp(&group(b))
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
@@ -214,6 +226,37 @@ mod tests {
             tiles.iter().filter(|tile| tile.name == "Browser").count(),
             1
         );
+    }
+
+    #[test]
+    fn installed_apks_are_appended_after_first_party_tiles() {
+        let mut apps = repo_apps();
+        let template = apps[0].clone();
+        let installed = |id: &str, name: &str| AppDescriptor {
+            id: AppId::new(id).unwrap(),
+            name: name.to_owned(),
+            icon: IconRef {
+                glyph: name[..1].to_owned(),
+                tone: IconTone::Blue,
+            },
+            origin: AppOrigin::Installed,
+            runtime: RuntimeKind::Android,
+            launchable: true,
+            role: AppRole::Application,
+            capabilities: Default::default(),
+            ..template.clone()
+        };
+        apps.push(installed("apk.org.example.zebra", "Zebra"));
+        apps.push(installed("apk.com.example.browser", "Another browser"));
+        let tiles = tiles_from_catalog(&apps, &[]);
+        let n = tiles.len();
+        assert_eq!(tiles[n - 2].name, "Another browser");
+        assert_eq!(tiles[n - 1].name, "Zebra");
+        assert!(tiles[n - 2].installed && tiles[n - 2].launchable);
+        // Never mistaken for the first-party Browser glyph or page.
+        assert_eq!(tiles[n - 2].kind(), "");
+        assert!(tiles[..n - 2].iter().all(|t| !t.installed));
+        assert_eq!(tiles.iter().filter(|t| t.kind() == "browser").count(), 1);
     }
 
     #[test]

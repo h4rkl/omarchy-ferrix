@@ -177,6 +177,9 @@ fn run(args: Args, recorder: Recorder, telephony_apn: Option<String>) -> Result<
         service.catalog().home().map(|d| &d.id),
     );
     service.announce_catalog();
+    // Installed APKs (ADR-008): runtimes report their launchable packages;
+    // the poller merges them beside the checked-in catalog.
+    service.spawn_installed_poller();
 
     if args.autostart {
         // Failures are recorded (`app-launch-failed`); a tool can retry them.

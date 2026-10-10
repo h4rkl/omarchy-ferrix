@@ -3,18 +3,23 @@
 //! installed packages, and which packages are "running", and inspects the
 //! calls the adapter made.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use crate::host::{AndroidHost, HostError, LaunchedApp, RuntimeStatus};
+use crate::host::{AndroidHost, HostError, InstalledPackage, LaunchedApp, RuntimeStatus};
 
 #[derive(Debug, Default)]
 struct State {
     status: Option<RuntimeStatus>,
     session_start_fails: Option<String>,
     installed: BTreeSet<String>,
+    /// Label and launchability per installed package (default: the last
+    /// package segment, launchable).
+    listing: BTreeMap<String, (String, bool)>,
+    listing_fails: Option<String>,
+    listings: u32,
     running: BTreeSet<String>,
     launch_fails: Option<String>,
     launches: Vec<(String, Option<String>)>,
@@ -75,6 +80,40 @@ impl FakeAndroidHost {
 
     pub fn install_package(&self, package: &str) {
         lock(&self.0).installed.insert(package.to_owned());
+    }
+
+    /// Installs `package` with an Android label; `launchable` says whether
+    /// it has a launcher activity.
+    pub fn install_labeled(&self, package: &str, name: &str, launchable: bool) {
+        let mut state = lock(&self.0);
+        state.installed.insert(package.to_owned());
+        state
+            .listing
+            .insert(package.to_owned(), (name.to_owned(), launchable));
+    }
+
+    /// Removes `package` (it stops running too).
+    pub fn uninstall_package(&self, package: &str) {
+        let mut state = lock(&self.0);
+        state.installed.remove(package);
+        state.listing.remove(package);
+        state.running.remove(package);
+    }
+
+    /// `installed_packages` fails with `reason` until cleared with `None`.
+    pub fn fail_listing(&self, reason: Option<&str>) {
+        lock(&self.0).listing_fails = reason.map(str::to_owned);
+    }
+
+    /// How many times the package listing was read.
+    pub fn listings(&self) -> u32 {
+        lock(&self.0).listings
+    }
+
+    /// Simulates Android starting `package` by itself (an intent from
+    /// another app): its process appears without a `launch` call.
+    pub fn start_by_android(&self, package: &str) {
+        lock(&self.0).running.insert(package.to_owned());
     }
 
     /// Simulates the Android process disappearing (crash, LMK, force stop).
@@ -159,6 +198,42 @@ impl AndroidHost for FakeAndroidHost {
 
     fn is_installed(&self, package: &str) -> Result<bool, HostError> {
         Ok(lock(&self.0).installed.contains(package))
+    }
+
+    fn installed_packages(&self) -> Result<Vec<InstalledPackage>, HostError> {
+        let mut state = lock(&self.0);
+        state.listings += 1;
+        if let Some(reason) = state.listing_fails.clone() {
+            return Err(HostError::SessionFailed(reason));
+        }
+        if let Some(RuntimeStatus::Absent { reason }) = &state.status {
+            return Err(HostError::Absent(reason.clone()));
+        }
+        let entries: Vec<InstalledPackage> = state
+            .installed
+            .iter()
+            .map(|package| {
+                let (name, launchable) = state.listing.get(package).cloned().unwrap_or_else(|| {
+                    (
+                        package.rsplit('.').next().unwrap_or(package).to_owned(),
+                        true,
+                    )
+                });
+                InstalledPackage {
+                    package: package.clone(),
+                    name,
+                    categories: if launchable {
+                        vec!["android.intent.category.LAUNCHER".to_owned()]
+                    } else {
+                        Vec::new()
+                    },
+                }
+            })
+            .collect();
+        if entries.is_empty() {
+            return Err(HostError::SessionFailed("no packages listed".to_owned()));
+        }
+        Ok(entries)
     }
 
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError> {

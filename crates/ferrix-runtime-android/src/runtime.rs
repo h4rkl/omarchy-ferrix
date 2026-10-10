@@ -7,11 +7,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind};
-use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime, SurfaceMatch};
+use ferrix_app_runtime_api::{LaunchContext, ProvidedApp, RunningApp, Runtime, SurfaceMatch};
 use serde_json::{Value, json};
 
 use crate::config::AndroidLaunch;
 use crate::host::{AndroidHost, HostError, LaunchedApp, RuntimeStatus};
+use crate::installed::{installed_descriptor, is_hidden_package};
 
 /// How long a launch waits for the runtime session to come up. Generous
 /// because the guest runs under TCG and the container boots a full Android
@@ -271,9 +272,128 @@ impl Runtime for AndroidRuntime {
                 "instance": context.instance,
             }),
         );
+        Ok(self.supervise(app, launch, launched, session, evidence))
+    }
+
+    /// The launchable packages Android lists, as installed Ferrix apps.
+    /// Android's own shell (launcher, setup wizard, System UI, Settings'
+    /// fallback home) is never listed; see [`crate::HIDDEN_PACKAGES`].
+    fn installed_apps(&self) -> Option<Result<Vec<ProvidedApp>, AppError>> {
+        let listed = match self.host.installed_packages() {
+            Ok(listed) => listed,
+            Err(HostError::Absent(_)) => {
+                return Some(Err(AppError::RuntimeUnsupported {
+                    runtime: RuntimeKind::Android,
+                }));
+            }
+            Err(error) => {
+                return Some(Err(AppError::Io {
+                    reason: format!("android package listing unavailable: {error}"),
+                }));
+            }
+        };
+        let mut apps: Vec<ProvidedApp> = listed
+            .iter()
+            .filter_map(|entry| {
+                let descriptor = installed_descriptor(entry)?;
+                Some(ProvidedApp {
+                    descriptor,
+                    launch: json!({ "package": entry.package }),
+                })
+            })
+            .collect();
+        apps.sort_by(|a, b| a.descriptor.id.cmp(&b.descriptor.id));
+        apps.dedup_by(|a, b| a.descriptor.id == b.descriptor.id);
+        Some(Ok(apps))
+    }
+
+    fn app_key(&self, config: &Value) -> Option<String> {
+        let launch: AndroidLaunch = serde_json::from_value(config.clone()).ok()?;
+        launch.validate().ok()?;
+        Some(launch.package)
+    }
+
+    /// `waydroid.<package>`, except for Android's own shell packages, whose
+    /// windows are never anyone's.
+    fn window_app_id(&self, config: &Value) -> Option<String> {
+        let package = self.app_key(config)?;
+        (!is_hidden_package(&package)).then(|| self.host.window_app_id(&package))
+    }
+
+    fn shared_host_pids(&self) -> BTreeSet<u32> {
+        self.host.surface_client_pids().into_iter().collect()
+    }
+
+    /// Supervises a package Android started by itself (a task opened by an
+    /// intent from another app) without launching it again. Refused when
+    /// the session is not running or the package is not installed.
+    fn attach(
+        &self,
+        app: &AppDescriptor,
+        config: &Value,
+        context: &LaunchContext,
+    ) -> Result<Box<dyn RunningApp>, AppError> {
+        if app.runtime != RuntimeKind::Android {
+            return Err(AppError::RuntimeUnsupported {
+                runtime: app.runtime,
+            });
+        }
+        let launch = Self::parse_launch(app, config)?;
+        if is_hidden_package(&launch.package) {
+            return Err(AppError::LaunchFailed {
+                id: app.id.clone(),
+                reason: "android system package".to_owned(),
+            });
+        }
+        let evidence = self.evidence(context).to_owned();
+        let session = self.host.status();
+        match &session {
+            RuntimeStatus::Running { .. } => {}
+            RuntimeStatus::Absent { .. } => {
+                return Err(AppError::RuntimeUnsupported {
+                    runtime: RuntimeKind::Android,
+                });
+            }
+            other => {
+                return Err(AppError::LaunchFailed {
+                    id: app.id.clone(),
+                    reason: format!("session-failed: {other:?}"),
+                });
+            }
+        }
+        let launched = LaunchedApp {
+            pid: self.host.app_pid(&launch.package),
+            surface_client_pid: self.host.surface_client_pid(),
+        };
+        self.record(
+            &evidence,
+            "android-app-attached",
+            &app.id,
+            json!({
+                "package": launch.package,
+                "pid": launched.pid,
+                "surface_client_pid": launched.surface_client_pid,
+                "window_app_id": self.host.window_app_id(&launch.package),
+                "instance": context.instance,
+            }),
+        );
+        Ok(self.supervise(app, launch, launched, session, evidence))
+    }
+}
+
+impl AndroidRuntime {
+    /// The supervised handle shared by `launch` and `attach`.
+    fn supervise(
+        &self,
+        app: &AppDescriptor,
+        launch: AndroidLaunch,
+        launched: LaunchedApp,
+        session: RuntimeStatus,
+        evidence: String,
+    ) -> Box<dyn RunningApp> {
         let window_app_id = self.host.window_app_id(&launch.package);
         let surface_pids = self.host.surface_client_pids().into_iter().collect();
-        Ok(Box::new(AndroidApp {
+        Box::new(AndroidApp {
             id: app.id.clone(),
             host: Arc::clone(&self.host),
             host_name: self.host.name(),
@@ -292,7 +412,7 @@ impl Runtime for AndroidRuntime {
             gone_observations: 0,
             stop_requested: false,
             finished: None,
-        }))
+        })
     }
 }
 
@@ -495,7 +615,7 @@ mod tests {
     use crate::testing::FakeAndroidHost;
     use ferrix_app_api::{AppCapability, AppRole, IconRef, SCHEMA_VERSION, TrustLevel};
 
-    const PACKAGE: &str = "net.slions.fulguris.full.fdroid";
+    const PACKAGE: &str = "org.lineageos.jelly";
 
     fn descriptor() -> AppDescriptor {
         AppDescriptor {
@@ -510,6 +630,7 @@ mod tests {
             trust: TrustLevel::Untrusted,
             capabilities: Default::default(),
             intents: Default::default(),
+            origin: Default::default(),
         }
     }
 
@@ -517,7 +638,7 @@ mod tests {
         json!({
             "package": PACKAGE,
             "activity": null,
-            "apk": { "pins": "tools/android/fulguris.pins" }
+            "apk": { "pins": "tools/android/example.pins" }
         })
     }
 
@@ -570,7 +691,7 @@ mod tests {
         let runtime = runtime(&host);
         for bad in [
             json!({}),
-            json!({ "package": "fulguris" }),
+            json!({ "package": "jelly" }),
             json!({ "package": PACKAGE, "exec": ["x"] }),
             json!({ "package": PACKAGE, "activity": "a b" }),
         ] {
@@ -759,7 +880,7 @@ mod tests {
         ));
         let missing = json!({
             "package": PACKAGE,
-            "apk": { "pins": "tools/android/fulguris.pins", "path": "/nonexistent/fulguris.apk" }
+            "apk": { "pins": "tools/android/example.pins", "path": "/nonexistent/example.apk" }
         });
         assert!(matches!(
             runtime.install(&descriptor(), &missing),
@@ -771,7 +892,7 @@ mod tests {
         std::fs::write(&apk, b"PK").unwrap();
         let present = json!({
             "package": PACKAGE,
-            "apk": { "pins": "tools/android/fulguris.pins", "path": apk.to_str().unwrap() }
+            "apk": { "pins": "tools/android/example.pins", "path": apk.to_str().unwrap() }
         });
         runtime.install(&descriptor(), &present).unwrap();
         assert_eq!(host.installs(), vec![apk.clone()]);
@@ -819,5 +940,103 @@ mod tests {
         running.terminate(Duration::from_secs(1)).unwrap();
         assert_eq!(running.reopen(), Ok(false));
         assert_eq!(host.launches().len(), 2);
+    }
+
+    #[test]
+    fn installed_apps_list_launchable_packages_without_android_shell() {
+        let host = FakeAndroidHost::new();
+        host.install_labeled(PACKAGE, "Jelly", true);
+        host.install_labeled("org.example.notes", "Notes", true);
+        host.install_labeled("org.example.service", "Service", false);
+        host.install_labeled("com.android.launcher3", "Launcher", true);
+        host.install_labeled("com.android.settings", "Settings", true);
+        host.install_labeled("org.lineageos.setupwizard", "Setup", true);
+        let rt = runtime(&host);
+        let apps = rt.installed_apps().unwrap().unwrap();
+        let ids: Vec<&str> = apps.iter().map(|a| a.descriptor.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["apk.org.example.notes", "apk.org.lineageos.jelly"]
+        );
+        let notes = &apps[0];
+        assert_eq!(notes.descriptor.name, "Notes");
+        assert_eq!(
+            notes.descriptor.origin,
+            ferrix_app_api::AppOrigin::Installed
+        );
+        assert_eq!(notes.descriptor.trust, TrustLevel::Untrusted);
+        assert!(notes.descriptor.capabilities.is_empty());
+        assert_eq!(notes.launch, json!({ "package": "org.example.notes" }));
+        // The launch object is what launch/attach/app_key read.
+        assert_eq!(
+            rt.app_key(&notes.launch).as_deref(),
+            Some("org.example.notes")
+        );
+        assert_eq!(rt.app_key(&config()).as_deref(), Some(PACKAGE));
+        assert_eq!(
+            rt.window_app_id(&config()).as_deref(),
+            Some("waydroid.org.lineageos.jelly")
+        );
+        assert_eq!(
+            rt.window_app_id(&json!({ "package": "com.android.settings" })),
+            None,
+            "android shell windows are nobody's"
+        );
+        assert_eq!(rt.app_key(&json!({ "exec": ["x"] })), None);
+    }
+
+    #[test]
+    fn an_unavailable_listing_is_an_error_not_an_empty_catalog() {
+        let host = FakeAndroidHost::new();
+        host.install_package(PACKAGE);
+        host.fail_listing(Some("session stopped"));
+        let rt = runtime(&host);
+        assert!(matches!(
+            rt.installed_apps(),
+            Some(Err(AppError::Io { .. }))
+        ));
+        host.fail_listing(None);
+        assert_eq!(rt.installed_apps().unwrap().unwrap().len(), 1);
+        let absent = FakeAndroidHost::absent("no waydroid");
+        assert!(matches!(
+            runtime(&absent).installed_apps(),
+            Some(Err(AppError::RuntimeUnsupported { .. }))
+        ));
+    }
+
+    #[test]
+    fn attach_supervises_a_task_android_started_without_relaunching() {
+        let host = FakeAndroidHost::new();
+        host.install_package(PACKAGE);
+        host.set_surface_client_pids(vec![4242]);
+        let rt = runtime(&host);
+        // The session must be running.
+        assert!(rt.attach(&descriptor(), &config(), &context()).is_err());
+        host.set_status(RuntimeStatus::Running { session_pid: None });
+        host.start_by_android(PACKAGE);
+        assert_eq!(rt.shared_host_pids(), [4242].into_iter().collect());
+        let mut attached = rt.attach(&descriptor(), &config(), &context()).unwrap();
+        assert!(host.launches().is_empty(), "attach never launches");
+        assert!(
+            attached
+                .surface_match()
+                .claims(4242, Some("waydroid.org.lineageos.jelly"))
+        );
+        assert_eq!(attached.try_wait().unwrap(), None);
+        assert!(host.kill(PACKAGE));
+        assert_eq!(attached.try_wait().unwrap(), None);
+        assert!(attached.try_wait().unwrap().is_some());
+        // Android's shell packages are never attached.
+        let mut settings = descriptor();
+        settings.id = AppId::new("apk.com.android.settings").unwrap();
+        settings.origin = ferrix_app_api::AppOrigin::Installed;
+        assert!(
+            rt.attach(
+                &settings,
+                &json!({ "package": "com.android.settings" }),
+                &context()
+            )
+            .is_err()
+        );
     }
 }

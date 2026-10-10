@@ -49,6 +49,25 @@ pub struct LaunchedApp {
     pub surface_client_pid: Option<u32>,
 }
 
+/// One package the Android side reports (`waydroid app list` block).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPackage {
+    pub package: String,
+    /// Android's label for the package (`Name:`), untrusted display text.
+    pub name: String,
+    /// Intent categories of its launch activity (`categories:`).
+    pub categories: Vec<String>,
+}
+
+impl InstalledPackage {
+    /// Whether the package has a launcher entry (`android.intent.category.LAUNCHER`).
+    pub fn is_launchable(&self) -> bool {
+        self.categories
+            .iter()
+            .any(|c| c == "android.intent.category.LAUNCHER")
+    }
+}
+
 /// Typed failures of the host; the runtime maps them onto `AppError`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostError {
@@ -100,6 +119,12 @@ pub trait AndroidHost: Send + Sync {
 
     /// Whether `package` is installed in the Android side.
     fn is_installed(&self, package: &str) -> Result<bool, HostError>;
+
+    /// Every package the Android side lists with a launch activity. An
+    /// empty listing is reported as an error (a running Android always has
+    /// launchable packages; the CLI prints nothing while the session is
+    /// stopped), so callers never mistake "unavailable" for "uninstalled".
+    fn installed_packages(&self) -> Result<Vec<InstalledPackage>, HostError>;
 
     /// Starts `package` (its default activity, or `activity` when given).
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError>;

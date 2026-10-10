@@ -22,7 +22,7 @@ struct Manifest {
     launch: Value,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CatalogEntry {
     pub descriptor: AppDescriptor,
     pub launch: Value,
@@ -147,6 +147,11 @@ impl Catalog {
         self.apps.is_empty()
     }
 
+    /// Every entry (descriptor and opaque launch object), ordered by id.
+    pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.apps.values()
+    }
+
     /// All descriptors ordered by id.
     pub fn iter(&self) -> impl Iterator<Item = &AppDescriptor> {
         self.apps.values().map(|entry| &entry.descriptor)
@@ -196,6 +201,7 @@ mod tests {
             trust: TrustLevel::Untrusted,
             capabilities: Default::default(),
             intents: Default::default(),
+            origin: Default::default(),
         }
     }
 
@@ -225,8 +231,31 @@ mod tests {
                 entry.descriptor.id
             );
         }
+        // The Browser is LineageOS Jelly, built into the Android image (ADR-008).
+        let browser = catalog
+            .get(&AppId::new("org.ferrix.browser").unwrap())
+            .expect("browser");
+        assert_eq!(
+            browser.launch.pointer("/package"),
+            Some(&Value::String("org.lineageos.jelly".to_owned()))
+        );
+        assert!(browser.launch.get("apk").is_none(), "nothing to install");
         // Home is autostarted by the service, never listed twice.
         assert!(catalog.autostart().all(|d| d.role != AppRole::Home));
+    }
+
+    #[test]
+    fn the_installed_app_namespace_is_not_for_checked_in_descriptors() {
+        let mut catalog = Catalog::new();
+        assert!(matches!(
+            catalog.insert(descriptor(
+                "apk.org.example.app",
+                AppRole::Application,
+                true
+            )),
+            Err(AppError::InvalidDescriptor { .. })
+        ));
+        assert!(catalog.is_empty());
     }
 
     #[test]

@@ -93,6 +93,17 @@ pub trait RunningApp: Send {
     }
 }
 
+/// An application a runtime reports by itself: a package the user installed
+/// into it (an APK). `descriptor` is public catalog data
+/// ([`ferrix_app_api::AppOrigin::Installed`], untrusted, no capabilities);
+/// `launch` is the same opaque configuration a checked-in descriptor of this
+/// runtime carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProvidedApp {
+    pub descriptor: AppDescriptor,
+    pub launch: Value,
+}
+
 /// Adapter for one runtime kind. `config` is private manifest data interpreted
 /// only by that adapter, keeping `ferrix_appd` and public clients runtime-neutral.
 pub trait Runtime: Send + Sync {
@@ -103,4 +114,49 @@ pub trait Runtime: Send + Sync {
         config: &Value,
         context: &LaunchContext,
     ) -> Result<Box<dyn RunningApp>, AppError>;
+
+    /// Launchable applications installed in this runtime, already filtered
+    /// of the runtime's own system surfaces. `None` when the runtime has no
+    /// such notion (native processes are described by checked-in files
+    /// only). An `Err` means the listing is unavailable right now (runtime
+    /// stopped or failed); the caller keeps what it had. May block (bounded);
+    /// never call it while holding a lock other callers need.
+    fn installed_apps(&self) -> Option<Result<Vec<ProvidedApp>, AppError>> {
+        None
+    }
+
+    /// Runtime-native identity of a launch configuration (for Android: the
+    /// package), used to avoid listing an installed package twice when a
+    /// checked-in descriptor already covers it. `None` when not applicable.
+    fn app_key(&self, _config: &Value) -> Option<String> {
+        None
+    }
+
+    /// The xdg `app_id` the runtime gives this configuration's windows when
+    /// they come from a shared host ([`SurfaceMatch::SharedHost`]); only
+    /// meaningful together with [`Runtime::shared_host_pids`].
+    fn window_app_id(&self, _config: &Value) -> Option<String> {
+        None
+    }
+
+    /// Host client pids the runtime draws shared-host windows from right
+    /// now, whether or not any instance runs (the trust anchor for adopting
+    /// a window the runtime opened by itself). May scan `/proc`.
+    fn shared_host_pids(&self) -> BTreeSet<u32> {
+        BTreeSet::new()
+    }
+
+    /// Supervises an application the runtime already started on its own
+    /// (an Android task opened by an intent from another app) without
+    /// starting it again. Runtimes that cannot do this refuse.
+    fn attach(
+        &self,
+        app: &AppDescriptor,
+        _config: &Value,
+        _context: &LaunchContext,
+    ) -> Result<Box<dyn RunningApp>, AppError> {
+        Err(AppError::RuntimeUnsupported {
+            runtime: app.runtime,
+        })
+    }
 }

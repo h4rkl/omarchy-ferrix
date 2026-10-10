@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use ferrix_app_api::TELEPHONY_APN_ENV;
 
-use crate::host::{AndroidHost, HostError, LaunchedApp, RuntimeStatus};
+use crate::host::{AndroidHost, HostError, InstalledPackage, LaunchedApp, RuntimeStatus};
 
 /// Default binary name resolved through `PATH`.
 pub const WAYDROID_BIN: &str = "waydroid";
@@ -110,6 +110,70 @@ pub fn parse_app_list(text: &str) -> Vec<String> {
         })
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+/// Parses `waydroid app list` into package blocks:
+///
+/// ```text
+/// Name: Jelly
+/// packageName: org.lineageos.jelly
+/// categories:
+/// <TAB>android.intent.category.LAUNCHER
+/// ```
+///
+/// A block starts at `Name:` (or at a second `packageName:`); the indented
+/// lines after `categories:` are its categories. Blocks without a package
+/// name are dropped.
+pub fn parse_app_entries(text: &str) -> Vec<InstalledPackage> {
+    fn flush(entries: &mut Vec<InstalledPackage>, current: &mut InstalledPackage) {
+        let entry = std::mem::take(current);
+        if !entry.package.is_empty() {
+            entries.push(entry);
+        }
+    }
+    let mut entries = Vec::new();
+    let mut current = InstalledPackage::default();
+    let mut in_categories = false;
+    for raw in text.lines() {
+        let indented = raw.starts_with('\t') || raw.starts_with(' ');
+        let line = raw.trim();
+        if line.is_empty() {
+            in_categories = false;
+            continue;
+        }
+        if in_categories && indented {
+            current.categories.push(line.to_owned());
+            continue;
+        }
+        in_categories = false;
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim().to_ascii_lowercase().as_str() {
+            "name" => {
+                if !current.package.is_empty() || !current.name.is_empty() {
+                    flush(&mut entries, &mut current);
+                }
+                current.name = value.to_owned();
+            }
+            "packagename" => {
+                if !current.package.is_empty() {
+                    flush(&mut entries, &mut current);
+                }
+                current.package = value.to_owned();
+            }
+            "categories" => {
+                in_categories = true;
+                if !value.is_empty() {
+                    current.categories.push(value.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    flush(&mut entries, &mut current);
+    entries
 }
 
 /// Given `(pid, cmdline)` pairs, the pid whose `argv[0]` is exactly
@@ -402,6 +466,19 @@ impl AndroidHost for WaydroidCli {
         Ok(parse_app_list(&listing).iter().any(|p| p == package))
     }
 
+    fn installed_packages(&self) -> Result<Vec<InstalledPackage>, HostError> {
+        let (stdout, stderr, code) = self.run(&["app", "list"])?;
+        let entries = parse_app_entries(&stdout);
+        if code != Some(0) || entries.is_empty() {
+            return Err(HostError::SessionFailed(format!(
+                "waydroid app list returned no packages (exit {}): {}",
+                code.map_or("signal".to_owned(), |c| c.to_string()),
+                first_line(&stderr).unwrap_or_default()
+            )));
+        }
+        Ok(entries)
+    }
+
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError> {
         match activity {
             None => self.run_ok(&["app", "launch", package])?,
@@ -502,11 +579,11 @@ mod tests {
 
     #[test]
     fn app_list_yields_package_names() {
-        let text = "Name: Fulguris\npackageName: net.slions.fulguris.full.fdroid\ncategories: \n\tandroid.intent.category.LAUNCHER\n\nName: Files\npackageName: com.android.documentsui\n";
+        let text = "Name: Jelly\npackageName: org.lineageos.jelly\ncategories: \n\tandroid.intent.category.LAUNCHER\n\nName: Files\npackageName: com.android.documentsui\n";
         assert_eq!(
             parse_app_list(text),
             vec![
-                "net.slions.fulguris.full.fdroid".to_owned(),
+                "org.lineageos.jelly".to_owned(),
                 "com.android.documentsui".to_owned()
             ]
         );
@@ -517,20 +594,17 @@ mod tests {
     fn cmdline_scan_prefers_the_main_process() {
         let cmdlines = [
             (1u32, "/sbin/init\0"),
-            (900, "net.slions.fulguris.full.fdroid:sandboxed_process0\0"),
-            (850, "net.slions.fulguris.full.fdroid:privileged_process0\0"),
-            (700, "net.slions.fulguris.full.fdroid\0"),
-            (2, "net.slions.fulguris.full.fdroid.other\0"),
+            (900, "org.lineageos.jelly:sandboxed_process0\0"),
+            (850, "org.lineageos.jelly:privileged_process0\0"),
+            (700, "org.lineageos.jelly\0"),
+            (2, "org.lineageos.jelly.other\0"),
         ];
         assert_eq!(
-            pid_from_cmdlines("net.slions.fulguris.full.fdroid", cmdlines.iter().copied(),),
+            pid_from_cmdlines("org.lineageos.jelly", cmdlines.iter().copied(),),
             Some(700)
         );
         assert_eq!(
-            pid_from_cmdlines(
-                "net.slions.fulguris.full.fdroid",
-                cmdlines[..3].iter().copied(),
-            ),
+            pid_from_cmdlines("org.lineageos.jelly", cmdlines[..3].iter().copied(),),
             Some(850)
         );
         assert_eq!(
@@ -552,7 +626,7 @@ mod tests {
             Err(HostError::Absent(_))
         ));
         assert!(matches!(
-            cli.is_installed("net.slions.fulguris.full.fdroid"),
+            cli.is_installed("org.lineageos.jelly"),
             Err(HostError::Absent(_))
         ));
     }
@@ -570,11 +644,7 @@ mod tests {
         std::fs::create_dir_all(root.join("4321")).unwrap();
         std::fs::create_dir_all(root.join("77")).unwrap();
         std::fs::create_dir_all(root.join("self")).unwrap();
-        std::fs::write(
-            root.join("4321/cmdline"),
-            b"net.slions.fulguris.full.fdroid\0",
-        )
-        .unwrap();
+        std::fs::write(root.join("4321/cmdline"), b"org.lineageos.jelly\0").unwrap();
         std::fs::write(
             root.join("77/cmdline"),
             b"/vendor/bin/hw/android.hardware.graphics.composer@2.1-service\0",
@@ -585,7 +655,7 @@ mod tests {
             proc_root: root.clone(),
             ..WaydroidOptions::default()
         });
-        assert_eq!(cli.app_pid("net.slions.fulguris.full.fdroid"), Some(4321));
+        assert_eq!(cli.app_pid("org.lineageos.jelly"), Some(4321));
         assert_eq!(cli.surface_client_pid(), Some(77));
         std::fs::create_dir_all(root.join("90")).unwrap();
         std::fs::write(
@@ -594,8 +664,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cli.surface_client_pids(), vec![77, 90]);
-        assert_eq!(cli.is_running("net.slions.fulguris.full.fdroid"), Ok(true));
+        assert_eq!(cli.is_running("org.lineageos.jelly"), Ok(true));
         assert_eq!(cli.is_running("org.none"), Ok(false));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_entries_carry_names_and_categories() {
+        let text = "Name: Jelly\npackageName: org.lineageos.jelly\ncategories:\n\tandroid.intent.category.LAUNCHER\nName: Calculator\npackageName: com.android.calculator2\ncategories:\n\tandroid.intent.category.LAUNCHER\n\tandroid.intent.category.APP_CALCULATOR\n\nName: Shell\npackageName: com.android.shell\ncategories:\nName: Broken\n";
+        let entries = parse_app_entries(text);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].name, "Jelly");
+        assert_eq!(entries[0].package, "org.lineageos.jelly");
+        assert!(entries[0].is_launchable());
+        assert_eq!(entries[1].categories.len(), 2);
+        assert!(entries[1].is_launchable());
+        assert_eq!(entries[2].package, "com.android.shell");
+        assert!(!entries[2].is_launchable());
+        assert!(parse_app_entries("WayDroid session is stopped\n").is_empty());
     }
 }

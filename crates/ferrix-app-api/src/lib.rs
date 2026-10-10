@@ -321,6 +321,31 @@ pub struct IconRef {
     pub tone: IconTone,
 }
 
+/// Where a descriptor comes from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AppOrigin {
+    /// A checked-in descriptor file (`apps/`, `/usr/share/ferrix/apps`).
+    #[default]
+    Catalog,
+    /// Reported at run time by a runtime adapter: a package the user
+    /// installed into a compatibility runtime (an APK). Its id lives in the
+    /// reserved [`INSTALLED_APP_PREFIX`]; it is always untrusted and
+    /// declares no capabilities.
+    Installed,
+}
+
+impl AppOrigin {
+    pub fn is_catalog(&self) -> bool {
+        *self == AppOrigin::Catalog
+    }
+}
+
+/// First id segment reserved for runtime-reported installed applications
+/// ([`AppOrigin::Installed`], `apk.<package>`). A checked-in descriptor may
+/// not use it, so an installed package can never shadow a catalog entry.
+pub const INSTALLED_APP_PREFIX: &str = "apk";
+
 /// A versioned application descriptor. One file per application in the
 /// descriptor directory, serialized as JSON. Runtime-private launch data is
 /// deliberately not part of this public type.
@@ -349,6 +374,10 @@ pub struct AppDescriptor {
     /// handler from this set). Declaring a kind grants nothing.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub intents: BTreeSet<IntentKind>,
+    /// Checked-in catalog entry (default, omitted on the wire) or an
+    /// installed package reported by a runtime.
+    #[serde(default, skip_serializing_if = "AppOrigin::is_catalog")]
+    pub origin: AppOrigin,
 }
 
 fn default_true() -> bool {
@@ -393,6 +422,33 @@ impl AppDescriptor {
         }
         if self.role == AppRole::Home && !self.launchable {
             return Err(invalid("the home surface must be launchable".to_owned()));
+        }
+        let reserved = self.id.as_str().split('.').next() == Some(INSTALLED_APP_PREFIX);
+        match self.origin {
+            AppOrigin::Catalog if reserved => {
+                return Err(invalid(format!(
+                    "ids starting {INSTALLED_APP_PREFIX}. are reserved for installed packages"
+                )));
+            }
+            AppOrigin::Installed => {
+                if !reserved {
+                    return Err(invalid(format!(
+                        "an installed app id must start with {INSTALLED_APP_PREFIX}."
+                    )));
+                }
+                if self.role != AppRole::Application
+                    || self.trust != TrustLevel::Untrusted
+                    || self.autostart
+                    || !self.capabilities.is_empty()
+                    || !self.intents.is_empty()
+                {
+                    return Err(invalid(
+                        "an installed app is an untrusted application without autostart, capabilities, or intents"
+                            .to_owned(),
+                    ));
+                }
+            }
+            AppOrigin::Catalog => {}
         }
         Ok(())
     }
@@ -1002,6 +1058,7 @@ mod tests {
             trust: TrustLevel::Untrusted,
             capabilities: [AppCapability::Shell].into_iter().collect(),
             intents: Default::default(),
+            origin: Default::default(),
         }
     }
 
@@ -1037,6 +1094,30 @@ mod tests {
             AppDescriptor::from_json("{"),
             Err(AppError::InvalidDescriptor { id: None, .. })
         ));
+    }
+
+    #[test]
+    fn the_installed_prefix_is_reserved_and_installed_apps_are_untrusted() {
+        // A checked-in descriptor cannot take an installed-app id.
+        let mut d = descriptor();
+        d.id = AppId::new("apk.org.example.app").unwrap();
+        d.capabilities.clear();
+        assert!(d.validate().is_err());
+        d.origin = AppOrigin::Installed;
+        assert_eq!(d.validate(), Ok(()));
+        // The origin is on the wire only for installed apps.
+        assert!(d.to_json().contains("\"origin\": \"installed\""));
+        assert!(!descriptor().to_json().contains("origin"));
+        // Installed apps declare nothing and are never privileged.
+        let mut privileged = d.clone();
+        privileged.trust = TrustLevel::Privileged;
+        assert!(privileged.validate().is_err());
+        let mut capable = d.clone();
+        capable.capabilities.insert(AppCapability::Background);
+        assert!(capable.validate().is_err());
+        let mut outside = d;
+        outside.id = AppId::new("org.example.app").unwrap();
+        assert!(outside.validate().is_err());
     }
 
     #[test]

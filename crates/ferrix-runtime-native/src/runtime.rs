@@ -500,6 +500,7 @@ mod tests {
             trust: TrustLevel::Untrusted,
             capabilities: Default::default(),
             intents: Default::default(),
+            origin: Default::default(),
         }
     }
 

@@ -194,7 +194,7 @@ fn handle_request(
         }
         Request::Catalog => Reply::Catalog {
             schema_version: SCHEMA_VERSION,
-            apps: service.catalog().descriptors(),
+            apps: service.descriptors(),
         },
         Request::Instances => Reply::Instances {
             schema_version: SCHEMA_VERSION,

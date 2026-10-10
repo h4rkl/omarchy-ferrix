@@ -27,13 +27,18 @@
 
 mod config;
 mod host;
+mod installed;
 mod runtime;
 pub mod testing;
 mod waydroid;
 
 pub use config::{AndroidLaunch, ApkSource, validate_activity, validate_package};
-pub use host::{AndroidHost, HostError, LaunchedApp, RuntimeStatus};
+pub use host::{AndroidHost, HostError, InstalledPackage, LaunchedApp, RuntimeStatus};
+pub use installed::{
+    HIDDEN_PACKAGES, display_label, installed_app_id, installed_descriptor, is_hidden_package,
+};
 pub use runtime::{AndroidRuntime, AndroidRuntimeOptions, DEFAULT_SESSION_TIMEOUT};
 pub use waydroid::{
-    WaydroidCli, WaydroidOptions, WaydroidStatus, parse_app_list, parse_status, pid_from_cmdlines,
+    WaydroidCli, WaydroidOptions, WaydroidStatus, parse_app_entries, parse_app_list, parse_status,
+    pid_from_cmdlines,
 };
