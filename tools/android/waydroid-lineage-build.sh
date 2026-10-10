@@ -93,9 +93,16 @@ mesa_host_tools() {
   mkdir -p "$mesa_bin"
   ln -sf ../bin/meson "$mesa_bin/meson"
   ln -sf ../bin/python3 "$mesa_bin/python3"
-  # Mesa's own ninja step; Soong ships a prebuilt ninja.
+  # Mesa's own ninja step and its ld.lld wrapper (MESON_MESA3D_GEN/ld.lld
+  # execs ld.lld from PATH) come from the tree's prebuilts: Soong's ninja and
+  # the default clang's lld.
   if [ -x "$src/prebuilts/build-tools/linux-x86/bin/ninja" ]; then
     ln -sf "$src/prebuilts/build-tools/linux-x86/bin/ninja" "$mesa_bin/ninja"
+  fi
+  clang=$(sed -n 's/^[[:space:]]*ClangDefaultVersion[[:space:]]*=[[:space:]]*"\(clang-[^"]*\)".*/\1/p' \
+    "$src/build/soong/cc/config/global.go" 2>/dev/null | head -n 1)
+  if [ -n "$clang" ] && [ -x "$src/prebuilts/clang/host/linux-x86/$clang/bin/ld.lld" ]; then
+    ln -sf "$src/prebuilts/clang/host/linux-x86/$clang/bin/ld.lld" "$mesa_bin/ld.lld"
   fi
   FERRIX_MESA_HOST_PATH=$mesa_bin
   export FERRIX_MESA_HOST_PATH
