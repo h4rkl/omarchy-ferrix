@@ -1,0 +1,16 @@
+diff --git a/llvm/Android.bp b/llvm/Android.bp
+--- a/llvm/Android.bp
++++ b/llvm/Android.bp
+@@ -74,10 +74,10 @@ llvm_defaults {
+         linux: {
+             cppflags: ["-Woverloaded-virtual"],
+ 
+-            // Add on ncurses to have support for terminfo
++            // Ferrix: LLVM no longer uses terminfo (removed in LLVM 19);
++            // linking ncurses only made host tools need libncurses.so.5.
+             host_ldlibs: [
+                 "-ldl",
+-                "-lncurses",
+                 "-lgcc_s",
+             ],
+         },
