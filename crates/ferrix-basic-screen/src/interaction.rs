@@ -3,7 +3,10 @@
 
 use ferrix_app_api::AppId;
 use ferrix_hardware_api::{CapabilityMatrix, CapabilityStatus};
+use std::time::Instant;
+
 use ferrix_ui::draw::Rect;
+use ferrix_ui::fling::{Fling, VelocityTracker};
 
 use crate::catalog::Tile;
 use crate::status::{NetworkSummary, TelephonySummary};
@@ -287,14 +290,85 @@ struct Contact {
     scroll_from: Option<i32>,
     /// The contact became a list drag: it scrolls and never taps.
     dragging: bool,
+    /// Event time of the down, so sample times stay small and survive the
+    /// Wayland clock wrapping.
+    start_ms: u32,
+}
+
+/// Minimum release speed that starts a glide: a tenth of the panel height
+/// per second (in px/ms).
+fn fling_min(size: (u32, u32)) -> f64 {
+    f64::from(size.1) * 0.1 / 1000.0
+}
+
+/// Fastest glide: four panel heights per second (in px/ms).
+fn fling_max(size: (u32, u32)) -> f64 {
+    f64::from(size.1) * 4.0 / 1000.0
 }
 
 #[derive(Default)]
 pub struct Input {
     contact: Option<Contact>,
+    /// Finger positions of a list drag, for the release velocity.
+    tracker: VelocityTracker,
+    /// The app list's glide after a fast release; advanced by [`Input::tick`].
+    fling: Option<Fling>,
+    /// Time of the event about to be delivered: Wayland milliseconds and the
+    /// matching instant, from [`Input::set_time`]. Untimed input (`None`)
+    /// never flings.
+    now: Option<(u32, Instant)>,
 }
 
 impl Input {
+    /// Stamps the next event: its Wayland time and the instant it was read.
+    pub fn set_time(&mut self, time_ms: u32, now: Instant) {
+        self.now = Some((time_ms, now));
+    }
+
+    fn time_ms(&self) -> u32 {
+        self.now.map_or(0, |(ms, _)| ms)
+    }
+
+    /// When [`Input::tick`] must next run: only while the list glides.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.fling.map(|fling| fling.deadline())
+    }
+
+    /// Advances the app list's glide to `now`; returns whether the visible
+    /// offset changed. The glide ends when it slows down, reaches either end
+    /// of the list, or the list is no longer shown.
+    pub fn tick(&mut self, state: &mut UiState, size: (u32, u32), now: Instant) -> bool {
+        let Some(fling) = self.fling.as_mut() else {
+            return false;
+        };
+        if state.page != Page::Apps {
+            self.fling = None;
+            return false;
+        }
+        let Some(position) = fling.advance(now) else {
+            self.fling = None;
+            return false;
+        };
+        let max = f64::from(apps_max_scroll(size, state.tiles.len()));
+        let clamped = position.clamp(0.0, max);
+        if clamped != position {
+            self.fling = None;
+        }
+        let old = state.apps_scroll;
+        state.apps_scroll = clamped.round() as i32;
+        old != state.apps_scroll
+    }
+
+    /// The list is gliding.
+    pub fn flinging(&self) -> bool {
+        self.fling.is_some()
+    }
+
+    /// The glide's starting scroll speed in px/ms while the list glides.
+    pub fn fling_velocity(&self) -> Option<f64> {
+        self.fling.map(|fling| fling.initial_velocity())
+    }
+
     pub fn down(
         &mut self,
         id: i32,
@@ -305,7 +379,9 @@ impl Input {
         if self.contact.is_some() {
             return false;
         }
-        let target = hit_test(state, position, size);
+        // A touch on a gliding list stops it, and that touch never taps.
+        let caught = self.fling.take().is_some();
+        let target = (!caught).then(|| hit_test(state, position, size)).flatten();
         let viewport = apps_viewport(size);
         let scroll_from = (state.page == Page::Apps
             && position.1 >= f64::from(viewport.y)
@@ -322,7 +398,10 @@ impl Input {
             target,
             scroll_from,
             dragging: false,
+            start_ms: self.time_ms(),
         });
+        self.tracker.reset();
+        self.tracker.add(0.0, position.1);
         state.pressed = target;
         true
     }
@@ -338,6 +417,12 @@ impl Input {
             return false;
         };
         contact.current = position;
+        let t = f64::from(
+            self.now
+                .map_or(0, |(ms, _)| ms)
+                .wrapping_sub(contact.start_ms),
+        );
+        self.tracker.add(t, position.1);
         if let Some(from) = contact.scroll_from {
             let dx = position.0 - contact.start.0;
             let dy = position.1 - contact.start.1;
@@ -391,7 +476,20 @@ impl Input {
         }
 
         if contact.dragging {
-            // A list drag only scrolls; the offset is already applied.
+            // A list drag only scrolls; the offset is already applied. A
+            // fast release glides on (content follows the finger, so the
+            // scroll velocity is the finger's, reversed).
+            if let Some((ms, now)) = self.now {
+                let release = f64::from(ms.wrapping_sub(contact.start_ms));
+                let velocity = -self.tracker.velocity(release);
+                self.fling = Fling::start(
+                    f64::from(state.apps_scroll),
+                    velocity,
+                    fling_min(size),
+                    fling_max(size),
+                    now,
+                );
+            }
             state.pressed = None;
             return true;
         }
@@ -1023,6 +1121,172 @@ mod tests {
         assert_eq!(state.pending_launch, vec![state.tiles[index].id.clone()]);
         assert_eq!(state.page, Page::Launcher);
     }
+
+    /// A vertical drag on the list with injected event times: `steps`
+    /// motions `interval_ms` apart, then a release `hold_ms` after the last.
+    /// Returns the instant of the release.
+    #[allow(clippy::too_many_arguments)]
+    fn timed_drag(
+        input: &mut Input,
+        state: &mut UiState,
+        t0: Instant,
+        from_y: f64,
+        to_y: f64,
+        steps: u32,
+        interval_ms: u32,
+        hold_ms: u32,
+    ) -> Instant {
+        let stamp = |input: &mut Input, ms: u32| {
+            let now = t0 + std::time::Duration::from_millis(u64::from(ms));
+            input.set_time(ms, now);
+            now
+        };
+        stamp(input, 0);
+        input.down(0, (540.0, from_y), state, SIZE);
+        for step in 1..=steps {
+            stamp(input, step * interval_ms);
+            let y = from_y + (to_y - from_y) * f64::from(step) / f64::from(steps);
+            input.motion(0, (540.0, y), state, SIZE);
+        }
+        let release = stamp(input, steps * interval_ms + hold_ms);
+        input.up(0, state, SIZE);
+        release
+    }
+
+    /// Runs the glide at 16 ms frames from `start`; returns the scroll after
+    /// each frame that changed it and the instant the glide ended.
+    fn run_glide(input: &mut Input, state: &mut UiState, start: Instant) -> (Vec<i32>, Instant) {
+        let mut frames = Vec::new();
+        let mut now = start;
+        while let Some(at) = input.deadline() {
+            assert!(at > now, "deadlines advance");
+            now = at;
+            if input.tick(state, SIZE, now) {
+                frames.push(state.apps_scroll);
+            }
+            assert!(now - start < std::time::Duration::from_secs(5), "ends");
+        }
+        (frames, now)
+    }
+
+    fn open_list() -> (UiState, Input) {
+        let mut state = with_apks();
+        state.page = Page::Apps;
+        (state, Input::default())
+    }
+
+    #[test]
+    fn a_fast_release_glides_on_and_decelerates() {
+        let (mut state, mut input) = open_list();
+        let t0 = Instant::now();
+        // 120 Hz touch: 60 px up in 6 motions 8 ms apart (1.25 px/ms).
+        let release = timed_drag(&mut input, &mut state, t0, 1600.0, 1540.0, 6, 8, 4);
+        assert_eq!(state.apps_scroll, 60, "the drag itself follows the finger");
+        assert!(input.flinging());
+        let v = input.fling_velocity().unwrap();
+        assert!((v - 1.25).abs() < 0.05, "scroll speed {v}");
+        let (frames, end) = run_glide(&mut input, &mut state, release);
+        assert!(
+            !input.flinging() && input.deadline().is_none(),
+            "idle after"
+        );
+        assert!(frames.len() > 10, "{frames:?}");
+        let steps: Vec<i32> = std::iter::once(60)
+            .chain(frames.iter().copied())
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .collect();
+        assert!(steps.iter().all(|d| *d > 0), "forward only: {steps:?}");
+        assert!(steps.first() > steps.last(), "decelerates: {steps:?}");
+        // Settles near v0 * tau (~406 px) short of the list's end.
+        assert!(state.apps_scroll > 60 + 380 && state.apps_scroll <= 60 + 407);
+        assert!(state.apps_scroll < apps_max_scroll(SIZE, state.tiles.len()));
+        assert!(end - release > std::time::Duration::from_millis(500));
+        // A tick with nothing gliding never redraws.
+        assert!(!input.tick(&mut state, SIZE, end + std::time::Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_glide_stops_at_either_end_of_the_list() {
+        let (mut state, mut input) = open_list();
+        let max = apps_max_scroll(SIZE, state.tiles.len());
+        let t0 = Instant::now();
+        state.apps_scroll = max - 300;
+        let release = timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 4);
+        let (frames, _) = run_glide(&mut input, &mut state, release);
+        assert_eq!(state.apps_scroll, max, "clamped at the end");
+        assert_eq!(frames.last(), Some(&max));
+        assert!(frames.iter().all(|s| *s <= max));
+        // Downward fling back toward the top.
+        state.apps_scroll = 150;
+        let release = timed_drag(&mut input, &mut state, t0, 1400.0, 1500.0, 4, 8, 2);
+        assert!(input.flinging());
+        run_glide(&mut input, &mut state, release);
+        assert_eq!(state.apps_scroll, 0);
+    }
+
+    #[test]
+    fn touching_a_gliding_list_stops_it_without_tapping() {
+        let (mut state, mut input) = open_list();
+        let t0 = Instant::now();
+        let release = timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 4);
+        let mid = release + std::time::Duration::from_millis(48);
+        input.tick(&mut state, SIZE, mid);
+        let held = state.apps_scroll;
+        assert!(held > 200);
+        // Touch on a row mid-glide: it stops, and lifting does not launch.
+        input.set_time(200, mid);
+        input.down(0, (540.0, 1200.0), &mut state, SIZE);
+        assert!(!input.flinging() && input.deadline().is_none());
+        assert_eq!(state.pressed, None);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.apps_scroll, held);
+        assert!(state.pending_launch.is_empty());
+        assert_eq!(state.page, Page::Apps);
+        // The next tap acts normally.
+        input.down(0, (540.0, 1200.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.pending_launch.len(), 1);
+    }
+
+    #[test]
+    fn slow_paused_or_untimed_drags_do_not_glide() {
+        let t0 = Instant::now();
+        // Slow: 60 px over 400 ms (0.15 px/ms, under the 0.234 minimum).
+        let (mut state, mut input) = open_list();
+        timed_drag(&mut input, &mut state, t0, 1600.0, 1540.0, 10, 40, 4);
+        assert!(!input.flinging());
+        // Fast, but the finger rested 80 ms before lifting.
+        let (mut state, mut input) = open_list();
+        timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 80);
+        assert!(!input.flinging());
+        // Untimed input (no `set_time`) never flings.
+        let (mut state, mut input) = open_list();
+        drag(&mut input, &mut state, (540.0, 1600.0), (540.0, 1200.0));
+        assert!(!input.flinging());
+        assert_eq!(state.apps_scroll, 400);
+    }
+
+    #[test]
+    fn sparse_qemu_style_input_still_glides() {
+        // QEMU's tablet: 6 motions 20 ms apart (and sometimes coalesced).
+        let (mut state, mut input) = open_list();
+        let t0 = Instant::now();
+        let release = timed_drag(&mut input, &mut state, t0, 1800.0, 1000.0, 6, 20, 0);
+        let v = input.fling_velocity().expect("glides");
+        assert!((v - 800.0 / 120.0).abs() < 0.5, "{v}");
+        // Only two motions, 60 ms apart.
+        let (mut state, mut input) = open_list();
+        timed_drag(&mut input, &mut state, t0, 1800.0, 1400.0, 2, 60, 0);
+        assert!(input.flinging());
+        // Leaving the list ends the glide on the next frame.
+        state.page = Page::Launcher;
+        assert!(!input.tick(&mut state, SIZE, release + FRAME));
+        assert!(!input.flinging());
+    }
+
+    const FRAME: std::time::Duration = ferrix_ui::fling::FRAME;
 
     #[test]
     fn app_list_hits_only_rows_inside_the_viewport() {

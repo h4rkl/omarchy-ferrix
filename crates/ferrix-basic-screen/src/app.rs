@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ferrix_app_api::{AppEvent, AppId, LifecycleState};
 use ferrix_app_protocol::{Client, ClientRole, Notification, Subscription};
@@ -66,6 +66,8 @@ struct Home {
     core_lost_reported: bool,
     ui: UiState,
     input: Input,
+    /// Last configured surface size, for the list glide's timer frames.
+    size: (u32, u32),
     wake: Wake,
     appd_socket: PathBuf,
     ferrix_appd: AppdLink,
@@ -124,6 +126,7 @@ pub fn run(
         first_frame_extra: vec![("profile".to_owned(), profile.name.clone())],
     };
     let appd_socket = appd_socket.to_path_buf();
+    let initial_size = config.initial_size;
     ferrix_ui::client::run(config, move |wake| {
         // Redraw the status-bar clock at each local minute boundary.
         let tick = Arc::clone(&wake);
@@ -199,6 +202,7 @@ pub fn run(
             core_lost_reported: false,
             ui,
             input: Input::default(),
+            size: initial_size,
             wake,
             appd_socket,
             ferrix_appd,
@@ -222,6 +226,18 @@ fn appd_connected_record(socket: &Path, apps: usize) -> String {
 }
 
 impl Home {
+    /// One record when a release starts the app list's glide (QEMU/phone
+    /// evidence that the fling ran; `apps-fling-end` closes it).
+    fn report_fling_start(&self) {
+        if let Some(velocity) = self.input.fling_velocity() {
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"apps-fling\",\"scroll\":{},\"velocity_px_s\":{}}}",
+                self.ui.apps_scroll,
+                (velocity * 1000.0).round()
+            ));
+        }
+    }
+
     fn sync_controls(&mut self) {
         // The Wi-Fi toggle mirrors the network service when it is reachable.
         self.ui.wifi_on = match &self.net_state {
@@ -639,6 +655,7 @@ impl Home {
 
 impl ClientHandler for Home {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
+        self.size = size;
         let frame = screen::compose(
             &self.hw,
             self.clock.minute(),
@@ -684,6 +701,7 @@ impl ClientHandler for Home {
     fn pointer_up(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
         let mut redraw = self.input.motion(0, position, &mut self.ui, size);
         redraw |= self.input.up(0, &mut self.ui, size);
+        self.report_fling_start();
         if redraw {
             self.after_input();
         }
@@ -712,6 +730,7 @@ impl ClientHandler for Home {
 
     fn touch_up(&mut self, id: i32, size: (u32, u32)) -> bool {
         let redraw = self.input.up(id, &mut self.ui, size);
+        self.report_fling_start();
         if redraw {
             self.after_input();
         }
@@ -737,5 +756,24 @@ impl ClientHandler for Home {
 
     fn page_name(&self) -> String {
         self.ui.page.name()
+    }
+
+    fn input_time(&mut self, time_ms: u32) {
+        self.input.set_time(time_ms, Instant::now());
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.input.deadline()
+    }
+
+    fn timer(&mut self, now: Instant) -> bool {
+        let redraw = self.input.tick(&mut self.ui, self.size, now);
+        if !self.input.flinging() {
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"apps-fling-end\",\"scroll\":{}}}",
+                self.ui.apps_scroll
+            ));
+        }
+        redraw
     }
 }
