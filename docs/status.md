@@ -1,5 +1,49 @@
 # Status
 
+## 2026-10-10 (Pixel 9a: stock Codec2 hardware video overlay for Waydroid; offline only, not yet booted)
+
+- **What:** `tools/pixel-9a/waydroid-codec2-overlay.sh` extracts the stock
+  CP3A Codec2 services from the pinned factory archive into an ignored
+  overlay: Samsung Exynos MFC (`IComponentStore/default`, `c2.exynos.*`) and
+  Google BigWave AV1 (`IComponentStore/default1`, `c2.google.av1.*`). Both are
+  AIDL `android.hardware.media.c2` V2. The allowlist is
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/waydroid-codec2-overlay.tsv`.
+  It adds generated `media_codecs{,_performance}_c2.xml` with no `.secure`
+  codecs, ranks the hardware codecs 256, ahead of ffmpeg video (272) and the
+  AOSP software codecs (512), and keeps both as fallback. It also writes a
+  Ferrix VINTF fragment and `media.c2.hal.selection=aidl`. Nothing it
+  installs replaces a Waydroid vendor file.
+- **Private runtime:** stock `libcodec2_aidl_V2` needs
+  `CreateCodec2BlockPool(C2PlatformAllocatorDescV2…)`, which only the stock
+  `libcodec2_vndk` defines. Waydroid's `libcodec2_hidl`/`libcodec2_aidl`
+  need symbols the stock copy lacks. So no copy of the library can serve
+  both sides from `/vendor/lib64`. The stock closure (all but LL-NDK) goes to
+  `/vendor/lib64/ferrix-codec2`, and the two services reach it only through
+  `setenv LD_LIBRARY_PATH` in their rc files.
+- **ABI check (offline):** `waydroid-mali-abi-check.sh` searches
+  `lib64/ferrix-*` first. It passes against the 23.2 build
+  (`20261010T070700Z` vendor.img) with system dirs `system/lib64`,
+  `apex/com.android.runtime/lib64/bionic` and `apex/com.android.i18n/lib64`.
+  Without the i18n dir it reports `libandroidicu.so` as missing, reached
+  through system-internal `libmediandk` dependencies. The Mali overlay
+  still passes.
+- **Wiring (opt-in):** `dev-compose.py --codec2-overlay DIR --codecs hardware`
+  (needs `--renderer mali` for gchips buffers) writes
+  `/etc/ferrix/waydroid-codecs`. `ferrix-waydroid.sh` installs or removes the
+  overlay next to the Mali one. It binds `/dev/{bigwave,g2d,fimg2d,m2m1shot_scaler0}`
+  (optional) through `config_ferrix` and gives them to UID 1046 with mode
+  0660; the container has no `lxc.idmap`, so that is Android's mediacodec.
+  Waydroid already binds `/dev/video*` and `/dev/dma_heap/*` and sets them
+  to 777. Covered by `android-bootstrap-test.sh`, the dev-compose contract
+  (ext4 staging, on the builder), and `tools/pixel-9a/tests/waydroid-codec2-xml.sh`.
+- **Limitations:** nothing has run on the device yet. It is unproven that
+  the `exynos_mfc`/`bigwave`/`g2d`/`smfc` modules bind, that the services
+  start under the container's minijail and seccomp, and that decoded frames
+  display. `vendor.debug.c2.sbwc.enable=0` and `vendor.google.av1dec.afbc=0`
+  are untested hints to keep decoder output linear. No `m2m1shot` scaler
+  module was found in the Kleaf dist. `media.c2.hal.selection=aidl` also
+  moves the container's software codecs onto their AIDL stores.
+
 ## 2026-10-10 (Android apps as per-task windows: association model; mock)
 
 - **Runtime properties:** QEMU (`finalize-in-container.sh`) and the Pixel 9a

@@ -8,7 +8,9 @@
 #     session-side commands run through su as that user, root-only commands
 #     (waydroid shell, lxc-attach) do not, records carry the physical label;
 #   - run without a compositor socket fails with a typed record;
-#   - the Mali renderer round-trip and the /metadata tmpfs LXC include.
+#   - the Mali renderer round-trip and the /metadata tmpfs LXC include;
+#   - the hardware Codec2 overlay on top of Mali (never without it), its
+#     properties, removal without touching shared files, and its device binds.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -287,6 +289,54 @@ common_env FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_MALI_DIR="$work/absent" \
   FERRIX_ANDROID_OVERLAY="$work/overlay/vendor" sh "$helper" prepare
 check '"event":"waydroid-renderer","renderer":"swiftshader"' "$work/console"
 
+# Opt-in stock Codec2 overlay (hardware codecs) layers over the Mali one:
+# installed with its properties only together with Mali, removed on its own
+# without touching a file the Mali overlay also ships.
+codec2="$work/codec2"
+mkdir -p "$codec2/overlay/vendor/lib64/ferrix-codec2" "$codec2/overlay/vendor/etc" "$mali/overlay/vendor/lib64"
+: > "$codec2/overlay/vendor/lib64/ferrix-codec2/libcodec2_vndk.so"
+: > "$codec2/overlay/vendor/etc/media_codecs_c2.xml"
+: > "$codec2/overlay/vendor/lib64/shared.so"
+: > "$mali/overlay/vendor/lib64/shared.so"
+printf '[properties]\nmedia.c2.hal.selection=aidl\ndebug.ffmpeg-codec2.rank.video=272\n' > "$codec2/waydroid-codec2.prop"
+codec_env() { common_env FERRIX_ANDROID_MALI_DIR="$mali" FERRIX_ANDROID_CODEC2_DIR="$codec2" \
+  FERRIX_ANDROID_OVERLAY="$work/overlay/vendor" "$@"; }
+: > "$work/console"
+codec_env FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_CODECS=hardware sh "$helper" prepare
+check '"event":"waydroid-renderer","renderer":"mali"' "$work/console"
+check '"event":"waydroid-codecs","codecs":"hardware","requested":"hardware"' "$work/console"
+check '"event":"waydroid-properties".*"status":"materialized".*"codecs":"hardware"' "$work/console"
+[ -f "$work/overlay/vendor/lib64/ferrix-codec2/libcodec2_vndk.so" ] && [ -f "$work/overlay/vendor/etc/media_codecs_c2.xml" ] ||
+  { echo 'FAIL android-bootstrap-test: codec2 overlay not installed' >&2; exit 1; }
+check '^media.c2.hal.selection=aidl$' "$cfg"
+check '^ro.hardware.egl=mali$' "$cfg"
+check '^media.c2.hal.selection=aidl$' "$work/var/lib/waydroid/waydroid_base.prop"
+check '^debug.ffmpeg-codec2.rank.video=272$' "$work/var/lib/waydroid/waydroid_base.prop"
+# Idempotent: a rerun neither duplicates keys nor re-materializes.
+: > "$work/console"
+codec_env FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_CODECS=hardware sh "$helper" prepare
+[ "$(grep -c '^media.c2.hal.selection' "$cfg")" = 1 ] || { echo 'FAIL android-bootstrap-test: duplicate codec2 key' >&2; exit 1; }
+refute '"event":"waydroid-properties"' "$work/console"
+# Codecs back to software, Mali kept: codec2-only files and keys go, the
+# shared file and the Mali overlay stay.
+: > "$work/console"
+codec_env FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_CODECS=software sh "$helper" prepare
+check '"event":"waydroid-codecs","codecs":"software","requested":"software"' "$work/console"
+[ ! -e "$work/overlay/vendor/lib64/ferrix-codec2/libcodec2_vndk.so" ] || { echo 'FAIL android-bootstrap-test: codec2 overlay not removed' >&2; exit 1; }
+[ -f "$work/overlay/vendor/lib64/shared.so" ] && [ -f "$work/overlay/vendor/lib64/egl/libGLES_mali.so" ] ||
+  { echo 'FAIL android-bootstrap-test: Mali overlay damaged by codec2 removal' >&2; exit 1; }
+refute '^media.c2' "$cfg"
+refute '^media.c2' "$work/var/lib/waydroid/waydroid_base.prop"
+check '^ro.hardware.egl=mali$' "$cfg"
+# Hardware codecs without the Mali renderer stay in software.
+: > "$work/console"
+codec_env FERRIX_ANDROID_RENDERER=swiftshader FERRIX_ANDROID_CODECS=hardware sh "$helper" prepare
+check '"event":"waydroid-codecs","codecs":"software","requested":"hardware"' "$work/console"
+[ ! -e "$work/overlay/vendor/lib64/ferrix-codec2/libcodec2_vndk.so" ] && [ ! -e "$work/overlay/vendor/lib64/shared.so" ] ||
+  { echo 'FAIL android-bootstrap-test: overlay files left without Mali' >&2; exit 1; }
+refute '^media.c2' "$cfg"
+refute '^ro.hardware.egl=mali' "$cfg"
+
 # Android 14+ needs a writable /metadata for aconfig storage: prepare adds a
 # Ferrix-owned LXC include with an optional tmpfs there, exactly once.
 lxc="$work/lxc/waydroid"
@@ -301,5 +351,20 @@ check '^lxc.mount.entry = tmpfs metadata tmpfs .*optional 0 0$' "$lxc/config_fer
 [ "$(grep -cxF "lxc.include = $lxc/config_ferrix" "$lxc/config")" = 1 ] ||
   { echo 'FAIL android-bootstrap-test: config_ferrix include not present exactly once' >&2; cat "$lxc/config" >&2; exit 1; }
 passed=$((passed + 1))
+refute 'dev/bigwave' "$lxc/config_ferrix"
+# Hardware codecs also bind the extra stock Codec2 nodes the host has.
+mkdir -p "$work/devroot/dev"
+: > "$work/devroot/dev/bigwave"
+: > "$work/devroot/dev/g2d"
+chmod 0600 "$work/devroot/dev/g2d"
+: > "$work/console"
+codec_env FERRIX_ANDROID_LXC_PATH="$work/lxc" FERRIX_ANDROID_DEV_ROOT="$work/devroot" \
+  FERRIX_ANDROID_RENDERER=mali FERRIX_ANDROID_CODECS=hardware sh "$helper" prepare
+check '"event":"waydroid-lxc-extras".*"codec2_nodes":\["bigwave","g2d"\]' "$work/console"
+check "^lxc.mount.entry = $work/devroot/dev/bigwave dev/bigwave none bind,create=file,optional 0 0\$" "$lxc/config_ferrix"
+check "^lxc.mount.entry = $work/devroot/dev/g2d dev/g2d none bind,create=file,optional 0 0\$" "$lxc/config_ferrix"
+refute 'fimg2d' "$lxc/config_ferrix"
+[ "$(ls -l "$work/devroot/dev/g2d" | cut -c1-10)" = '-rw-rw----' ] || { echo 'FAIL android-bootstrap-test: codec2 node mode' >&2; exit 1; }
+check '^lxc.mount.entry = tmpfs metadata' "$lxc/config_ferrix"
 
 printf '{"evidence":"host","event":"android-bootstrap-tests","passed":%s,"failed":0}\n' "$passed"

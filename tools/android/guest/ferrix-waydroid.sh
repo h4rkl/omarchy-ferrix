@@ -35,7 +35,14 @@
 #   FERRIX_ANDROID_MALI_DIR        extracted stock Mali overlay
 #                                  (tools/pixel-9a/waydroid-mali-overlay.sh):
 #                                  overlay/vendor/... and waydroid-mali.prop
+#   FERRIX_ANDROID_CODECS          software (default) | hardware; else read from
+#                                  /etc/ferrix/waydroid-codecs. Hardware needs
+#                                  the Mali renderer (gchips buffers)
+#   FERRIX_ANDROID_CODEC2_DIR      extracted stock Codec2 overlay
+#                                  (tools/pixel-9a/waydroid-codec2-overlay.sh):
+#                                  overlay/vendor/... and waydroid-codec2.prop
 #   FERRIX_ANDROID_OVERLAY         Waydroid vendor overlay (/var/lib/waydroid/overlay/vendor)
+#   FERRIX_ANDROID_DEV_ROOT        prefix for host device nodes (tests only)
 set -u
 evidence=${FERRIX_ANDROID_EVIDENCE:-QEMU}
 props=${FERRIX_ANDROID_PROPS:-/etc/ferrix/waydroid-properties.ini}
@@ -59,44 +66,89 @@ wayland_ticks=${FERRIX_ANDROID_WAYLAND_TICKS:-3000}
 density_dpi=$(sed -n 's/^ro\.sf\.lcd_density=\([0-9][0-9]*\)$/\1/p' "$props" 2>/dev/null | head -n 1)
 [ -n "$density_dpi" ] || density_dpi=400
 mali_dir=${FERRIX_ANDROID_MALI_DIR:-/usr/share/ferrix/android/mali}
+codec2_dir=${FERRIX_ANDROID_CODEC2_DIR:-/usr/share/ferrix/android/codec2}
 vendor_overlay=${FERRIX_ANDROID_OVERLAY:-/var/lib/waydroid/overlay/vendor}
+dev_root=${FERRIX_ANDROID_DEV_ROOT:-}
 renderer=${FERRIX_ANDROID_RENDERER:-$(cat /etc/ferrix/waydroid-renderer 2>/dev/null || echo swiftshader)}
+codecs=${FERRIX_ANDROID_CODECS:-$(cat /etc/ferrix/waydroid-codecs 2>/dev/null || echo software)}
+# Host nodes the stock Codec2 services open besides /dev/video* (MFC) and
+# /dev/dma_heap/*, which Waydroid itself binds and opens up (chmod 777) on
+# every container start. Waydroid's container is not user-namespaced (no
+# lxc.idmap), so Android's mediacodec UID 1046 is host UID 1046.
+codec2_nodes="bigwave g2d fimg2d m2m1shot_scaler0"
+mediacodec_uid=1046
+# Keys removed from the configuration this run (stale in waydroid_base.prop).
+dropped=
+
+# overlay_ready DIR PROP: an extracted overlay with its property file.
+overlay_ready() { [ -d "$1/overlay/vendor" ] && [ -f "$1/$2" ]; }
+# overlay_remove NAME: delete exactly the files a previous install recorded.
+overlay_remove() {
+  record="$vendor_overlay/.ferrix-$1-files"
+  [ -f "$record" ] || return 0
+  while IFS= read -r f; do rm -f "$vendor_overlay/${f#./}"; done < "$record"
+  rm -f "$record"
+}
+# overlay_install NAME DIR PROP: copy the overlay, record its files, and
+# layer its properties over the effective ones.
+overlay_install() {
+  record="$vendor_overlay/.ferrix-$1-files"
+  mkdir -p "$vendor_overlay"
+  (cd "$2/overlay/vendor" && find . -type f) > "$record.new"
+  cp -a "$2/overlay/vendor/." "$vendor_overlay/"
+  mv "$record.new" "$record"
+  layered="$run_dir/waydroid-properties.$1.ini"
+  awk -v over="$2/$3" '
+    BEGIN { while ((getline line < over) > 0) if (line ~ /=/) { k = line; sub(/=.*/, "", k); o[k] = 1 } }
+    /=/ { k = $0; sub(/=.*/, "", k); if (k in o) next } { print }
+  ' "$props" > "$layered"
+  grep '=' "$2/$3" >> "$layered"
+  props=$layered
+}
+# overlay_drop_keys PROP: remove from the config the keys an inactive
+# overlay's property file sets and the effective properties do not.
+overlay_drop_keys() {
+  [ -f "$cfg" ] && [ -f "$1" ] || return 0
+  for k in $(grep '=' "$1" | sed 's/=.*//'); do
+    grep -q "^$k=" "$props" || ! grep -Eq "^$k[[:space:]]*=" "$cfg" || dropped="$dropped $k"
+  done
+  awk -v over="$1" -v keep="$props" '
+    BEGIN { while ((getline l < over) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); o[k] = 1 }
+            while ((getline l < keep) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); delete o[k] } }
+    { k = $0; sub(/[ \t]*=.*/, "", k); if (!($0 ~ /=/ && k in o)) print }
+  ' "$cfg" > "$cfg.ferrix" && mv "$cfg.ferrix" "$cfg"
+}
 
 # select_renderer: for `mali`, install the stock Mali overlay and layer its
-# properties over the target's; otherwise remove a previously installed
-# overlay. Falls back to the software renderer whenever the overlay is absent.
+# properties over the target's; with `hardware` codecs on top of Mali, also
+# the stock Codec2 overlay. Anything not selected (or whose overlay is
+# absent) falls back to software, and its previously installed files and
+# keys are removed. Every recorded overlay is removed before the selected
+# ones are copied, so a library both overlays ship never disappears with the
+# one turned off.
 select_renderer() {
-  installed="$vendor_overlay/.ferrix-mali-files"
-  if [ "$renderer" = mali ] && [ -d "$mali_dir/overlay/vendor" ] && [ -f "$mali_dir/waydroid-mali.prop" ]; then
-    mkdir -p "$vendor_overlay"
-    (cd "$mali_dir/overlay/vendor" && find . -type f) > "$installed.new"
-    cp -a "$mali_dir/overlay/vendor/." "$vendor_overlay/"
-    mv "$installed.new" "$installed"
-    effective="$run_dir/waydroid-properties.effective.ini"
-    awk -v over="$mali_dir/waydroid-mali.prop" '
-      BEGIN { while ((getline line < over) > 0) if (line ~ /=/) { k = line; sub(/=.*/, "", k); o[k] = 1 } }
-      /=/ { k = $0; sub(/=.*/, "", k); if (k in o) next } { print }
-    ' "$props" > "$effective"
-    grep '=' "$mali_dir/waydroid-mali.prop" >> "$effective"
-    props=$effective
-  else
-    if [ -f "$installed" ]; then
-      while IFS= read -r f; do rm -f "$vendor_overlay/${f#./}"; done < "$installed"
-      rm -f "$installed"
-      # Drop Mali-only keys the software properties do not override.
-      if [ -f "$cfg" ] && [ -f "$mali_dir/waydroid-mali.prop" ]; then
-        awk -v over="$mali_dir/waydroid-mali.prop" -v keep="$props" '
-          BEGIN { while ((getline l < over) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); o[k] = 1 }
-                  while ((getline l < keep) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); delete o[k] } }
-          { k = $0; sub(/[ \t]*=.*/, "", k); if (!($0 ~ /=/ && k in o)) print }
-        ' "$cfg" > "$cfg.ferrix" && mv "$cfg.ferrix" "$cfg"
-      fi
-    fi
-    renderer=swiftshader
-  fi
+  requested_codecs=$codecs
+  overlay_ready "$mali_dir" waydroid-mali.prop && [ "$renderer" = mali ] || renderer=swiftshader
+  overlay_ready "$codec2_dir" waydroid-codec2.prop && [ "$codecs" = hardware ] && [ "$renderer" = mali ] ||
+    codecs=software
+  overlay_remove mali
+  overlay_remove codec2
+  mkdir -p "$run_dir"
+  [ "$renderer" != mali ] || overlay_install mali "$mali_dir" waydroid-mali.prop
+  [ "$codecs" != hardware ] || overlay_install codec2 "$codec2_dir" waydroid-codec2.prop
+  [ "$renderer" = mali ] || overlay_drop_keys "$mali_dir/waydroid-mali.prop"
+  [ "$codecs" = hardware ] || overlay_drop_keys "$codec2_dir/waydroid-codec2.prop"
   egl=$(sed -n 's/^ro\.hardware\.egl=//p' "$props" | head -n 1)
   gralloc=$(sed -n 's/^ro\.hardware\.gralloc=//p' "$props" | head -n 1)
   ev waydroid-renderer ",\"renderer\":\"$renderer\",\"egl\":\"${egl:-unset}\",\"gralloc\":\"${gralloc:-unset}\""
+  ev waydroid-codecs ",\"codecs\":\"$codecs\",\"requested\":\"$requested_codecs\""
+}
+
+# base_props_dropped: waydroid_base.prop still carries a key an inactive
+# overlay's properties set (dropped from the config this run).
+base_props_dropped() {
+  for k in $dropped; do grep -q "^$k=" "$base_props" 2>/dev/null && return 0; done
+  return 1
 }
 
 # props_applied: every managed property appears in the config exactly once
@@ -161,9 +213,21 @@ ensure_lxc_extras() {
   extras="$conf_dir/config_ferrix"
   printf '%s\n' '# Managed by ferrix-waydroid.sh' \
     'lxc.mount.entry = tmpfs metadata tmpfs nodev,nosuid,mode=0755,optional 0 0' >"$extras"
+  # Hardware codecs: bind the extra stock Codec2 nodes the host has (always
+  # `optional`) and hand them to the container's mediacodec UID.
+  bound=
+  if [ "$codecs" = hardware ]; then
+    for node in $codec2_nodes; do
+      [ -e "$dev_root/dev/$node" ] || continue
+      chown "$mediacodec_uid" "$dev_root/dev/$node" 2>/dev/null || true
+      chmod 0660 "$dev_root/dev/$node" 2>/dev/null || true
+      printf 'lxc.mount.entry = %s dev/%s none bind,create=file,optional 0 0\n' "$dev_root/dev/$node" "$node" >>"$extras"
+      bound="$bound${bound:+,}\"$node\""
+    done
+  fi
   grep -qxF "lxc.include = $extras" "$conf_dir/config" ||
     printf 'lxc.include = %s\n' "$extras" >>"$conf_dir/config"
-  ev waydroid-lxc-extras ",\"status\":\"ok\",\"metadata\":\"tmpfs\",\"path\":\"$extras\""
+  ev waydroid-lxc-extras ",\"status\":\"ok\",\"metadata\":\"tmpfs\",\"codec2_nodes\":[${bound}],\"path\":\"$extras\""
 }
 
 prepare() {
@@ -215,11 +279,12 @@ prepare() {
   if [ -f "$cfg" ] && { [ "$props_changed" = 1 ] || ! base_props_current \
     || ! grep -q "^ro.hardware.gralloc=${gralloc:-default}$" "$base_props" 2>/dev/null \
     || ! grep -q "^ro.hardware.egl=${egl:-swiftshader}$" "$base_props" 2>/dev/null \
-    || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null; }; then
+    || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null \
+    || base_props_dropped; }; then
     trigger=stale
     [ "$props_changed" = 0 ] || trigger=properties-applied
     if timeout 300 waydroid upgrade -o >"$run_dir/waydroid-upgrade.log" 2>&1; then
-      ev waydroid-properties ",\"status\":\"materialized\",\"trigger\":\"$trigger\",\"renderer\":\"$renderer\",\"density_dpi\":${density_dpi}"
+      ev waydroid-properties ",\"status\":\"materialized\",\"trigger\":\"$trigger\",\"renderer\":\"$renderer\",\"codecs\":\"$codecs\",\"density_dpi\":${density_dpi}"
     else
       ev waydroid-properties ",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\""
     fi
