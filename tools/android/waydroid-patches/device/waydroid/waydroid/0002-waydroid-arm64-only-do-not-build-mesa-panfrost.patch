@@ -1,0 +1,24 @@
+From: Ferrix <ferrix@invalid>
+Subject: [PATCH] waydroid_arm64_only: do not build Mesa panfrost
+
+The tracked Mesa fork (26.2.3) generates libpan shaders for Mali v14,
+which the pinned prebuilts/mesa-tools panfrost_compile predates
+("Unsupported target arch 14"). Panfrost cannot drive the Pixel 9a GPU
+anyway (kbase, not panthor), and the Ferrix route uses the stock Mali
+blobs or the software fallback, so drop it from this board.
+---
+diff --git a/waydroid_arm64_only/BoardConfig.mk b/waydroid_arm64_only/BoardConfig.mk
+index e3a7745..3772b3d 100644
+--- a/waydroid_arm64_only/BoardConfig.mk
++++ b/waydroid_arm64_only/BoardConfig.mk
+@@ -32,8 +32,8 @@ TARGET_2ND_CPU_VARIANT :=
+ AUDIOSERVER_MULTILIB := first
+ 
+ ifneq ($(TARGET_USE_MESA),false)
+-BOARD_MESA3D_GALLIUM_DRIVERS += asahi freedreno v3d vc4 etnaviv nouveau tegra panfrost lima
+-BOARD_MESA3D_VULKAN_DRIVERS += asahi broadcom freedreno panfrost
++BOARD_MESA3D_GALLIUM_DRIVERS += asahi freedreno v3d vc4 etnaviv nouveau tegra lima
++BOARD_MESA3D_VULKAN_DRIVERS += asahi broadcom freedreno
+ BOARD_MESA3D_GALLIUM_VA := disabled
+ BOARD_MESA3D_VIDEO_CODECS := all
+ endif
