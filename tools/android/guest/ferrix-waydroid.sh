@@ -272,6 +272,25 @@ package_present() {
   grep -q '^package:' "$run_dir/waydroid-app-list.log" 2>/dev/null
 }
 
+# Android's first-run wizard must never show: Ferrix owns setup, and until
+# user_setup_complete is set ActivityTaskManager skips app launches ("user
+# setup not complete"). Mark setup done and disable any wizard package.
+complete_android_setup() {
+  : > "$run_dir/waydroid-setup.log"
+  waydroid shell -- settings put global device_provisioned 1 >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  waydroid shell -- settings put secure user_setup_complete 1 >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  for wizard in org.lineageos.setupwizard com.google.android.setupwizard com.android.provision; do
+    waydroid shell -- pm path "$wizard" 2>/dev/null | grep -q '^package:' || continue
+    waydroid shell -- pm disable "$wizard" >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  done
+  done_flag=$(waydroid shell -- settings get secure user_setup_complete 2>/dev/null | tr -d '\r')
+  if [ "$done_flag" = 1 ]; then
+    ev android-setup ',"status":"complete"'
+  else
+    ev android-setup ",\"status\":\"failed\",\"log\":\"$run_dir/waydroid-setup.log\""
+  fi
+}
+
 provision() {
   [ -f "$fulguris_apk" ] || return 0
   if ! command -v waydroid >/dev/null 2>&1; then
@@ -294,6 +313,7 @@ provision() {
     sleep 0.1
   done
   ev android-boot ",\"boot_completed\":$booted,\"session_user\":\"${session_user:-$(id -un 2>/dev/null)}\""
+  [ "$booted" != true ] || complete_android_setup
   provision_status=present
   if ! package_present; then
     provision_status=installed

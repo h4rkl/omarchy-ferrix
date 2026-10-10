@@ -87,6 +87,13 @@ case "$*" in
     printf 'app-install user=%s\n' "${FAKE_USER:-root}" >> "$FAKE_STATE/calls"
     : > "$FAKE_STATE/installed" ;;
   'container unfreeze'|status) ;;
+  'shell -- settings put '*)
+    printf 'settings-put %s\n' "$5 $6 $7" >> "$FAKE_STATE/calls"
+    [ "$6" != user_setup_complete ] || : > "$FAKE_STATE/setup" ;;
+  'shell -- settings get secure user_setup_complete')
+    if [ -f "$FAKE_STATE/setup" ]; then echo 1; else echo null; fi ;;
+  'shell -- pm disable '*)
+    printf 'pm-disable %s\n' "$5" >> "$FAKE_STATE/calls" ;;
   'shell -- cmd package resolve-activity'*)
     if [ -f "$FAKE_STATE/role" ]; then
       echo "net.slions.fulguris.full.fdroid/acr.browser.lightning.MainActivity"
@@ -173,6 +180,9 @@ common_env FERRIX_ANDROID_EVIDENCE=physical:google-pixel-9a-tegu-gxq96-mp1-0 \
   FERRIX_ANDROID_SESSION_BUS="unix:path=$work/xdg/bus" sh "$helper" provision
 check '"evidence":"physical:google-pixel-9a-tegu-gxq96-mp1-0","event":"android-app-provision".*"status":"installed".*"browser_role":"default"' "$work/console"
 check '"event":"android-boot".*"boot_completed":true.*"session_user":"user"' "$work/console"
+check '"event":"android-setup","status":"complete"' "$work/console"
+check '^settings-put global device_provisioned 1$' "$work/state/calls"
+check '^settings-put secure user_setup_complete 1$' "$work/state/calls"
 check '^app-install user=user$' "$work/state/calls"
 check '^dbus-daemon user=user$' "$work/state/calls"
 # pipewire-pulse is backgrounded by design; allow it a moment to record.
