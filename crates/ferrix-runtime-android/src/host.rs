@@ -126,6 +126,15 @@ pub trait AndroidHost: Send + Sync {
     /// stopped), so callers never mistake "unavailable" for "uninstalled".
     fn installed_packages(&self) -> Result<Vec<InstalledPackage>, HostError>;
 
+    /// Whether Android inside the running container finished booting
+    /// (`sys.boot_completed`). `None` when the host cannot tell; callers
+    /// then rely on [`AndroidHost::status`] and the listing alone. While
+    /// Android boots, PackageManager may answer with a partial or empty
+    /// launcher set, so a listing taken then is not authoritative.
+    fn android_booted(&self) -> Option<bool> {
+        None
+    }
+
     /// Starts `package` (its default activity, or `activity` when given).
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError>;
 

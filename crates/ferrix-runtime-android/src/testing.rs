@@ -19,6 +19,8 @@ struct State {
     /// package segment, launchable).
     listing: BTreeMap<String, (String, bool)>,
     listing_fails: Option<String>,
+    /// What `android_booted` reports (`None`: unknown).
+    booted: Option<bool>,
     listings: u32,
     running: BTreeSet<String>,
     launch_fails: Option<String>,
@@ -103,6 +105,11 @@ impl FakeAndroidHost {
     /// `installed_packages` fails with `reason` until cleared with `None`.
     pub fn fail_listing(&self, reason: Option<&str>) {
         lock(&self.0).listing_fails = reason.map(str::to_owned);
+    }
+
+    /// What `android_booted` reports from now on (`None`: unknown).
+    pub fn set_booted(&self, booted: Option<bool>) {
+        lock(&self.0).booted = booted;
     }
 
     /// How many times the package listing was read.
@@ -234,6 +241,10 @@ impl AndroidHost for FakeAndroidHost {
             return Err(HostError::SessionFailed("no packages listed".to_owned()));
         }
         Ok(entries)
+    }
+
+    fn android_booted(&self) -> Option<bool> {
+        lock(&self.0).booted
     }
 
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError> {

@@ -30,6 +30,17 @@ const GONE_CONFIRMATIONS: u8 = 2;
 /// (multi-window mode may open connections after the launch returned).
 const SURFACE_PIDS_REFRESH: Duration = Duration::from_millis(500);
 
+/// One word for a runtime state in "unavailable" reasons.
+fn status_word(status: &RuntimeStatus) -> String {
+    match status {
+        RuntimeStatus::Absent { reason } => format!("absent ({reason})"),
+        RuntimeStatus::Stopped => "stopped".to_owned(),
+        RuntimeStatus::Starting => "starting".to_owned(),
+        RuntimeStatus::Running { .. } => "running".to_owned(),
+        RuntimeStatus::Failed { reason } => format!("failed ({reason})"),
+    }
+}
+
 /// Options for [`AndroidRuntime`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AndroidRuntimeOptions {
@@ -278,7 +289,32 @@ impl Runtime for AndroidRuntime {
     /// The launchable packages Android lists, as installed Ferrix apps.
     /// Android's own shell (launcher, setup wizard, System UI, Settings'
     /// fallback home) is never listed; see [`crate::HIDDEN_PACKAGES`].
+    ///
+    /// A listing is only authoritative while the session is `Running`
+    /// before and after it, Android reports itself booted (when the host
+    /// can tell), and at least one launchable app comes back. Anything
+    /// else (a session restarting, Android still booting, an empty or
+    /// failed listing) is `Err` ("unavailable"), never `Ok(vec![])`, so
+    /// `ferrix-appd` keeps the last known catalog instead of treating every
+    /// app as uninstalled.
     fn installed_apps(&self) -> Option<Result<Vec<ProvidedApp>, AppError>> {
+        let unavailable = |reason: String| {
+            Some(Err(AppError::Io {
+                reason: format!("android package listing unavailable: {reason}"),
+            }))
+        };
+        match self.host.status() {
+            RuntimeStatus::Absent { .. } => {
+                return Some(Err(AppError::RuntimeUnsupported {
+                    runtime: RuntimeKind::Android,
+                }));
+            }
+            RuntimeStatus::Running { .. } => {}
+            other => return unavailable(format!("session {}", status_word(&other))),
+        }
+        if self.host.android_booted() == Some(false) {
+            return unavailable("android has not finished booting".to_owned());
+        }
         let listed = match self.host.installed_packages() {
             Ok(listed) => listed,
             Err(HostError::Absent(_)) => {
@@ -286,12 +322,12 @@ impl Runtime for AndroidRuntime {
                     runtime: RuntimeKind::Android,
                 }));
             }
-            Err(error) => {
-                return Some(Err(AppError::Io {
-                    reason: format!("android package listing unavailable: {error}"),
-                }));
-            }
+            Err(error) => return unavailable(error.to_string()),
         };
+        // The session may have restarted while the CLI was answering.
+        if !self.host.status().is_running() {
+            return unavailable("session left RUNNING during the listing".to_owned());
+        }
         let mut apps: Vec<ProvidedApp> = listed
             .iter()
             .filter_map(|entry| {
@@ -304,6 +340,12 @@ impl Runtime for AndroidRuntime {
             .collect();
         apps.sort_by(|a, b| a.descriptor.id.cmp(&b.descriptor.id));
         apps.dedup_by(|a, b| a.descriptor.id == b.descriptor.id);
+        if apps.is_empty() {
+            // A booted Android always has launchable packages (at least the
+            // browser the image ships); none means PackageManager is not
+            // answering for real yet.
+            return unavailable("no launchable packages listed".to_owned());
+        }
         Some(Ok(apps))
     }
 
@@ -951,6 +993,7 @@ mod tests {
         host.install_labeled("com.android.launcher3", "Launcher", true);
         host.install_labeled("com.android.settings", "Settings", true);
         host.install_labeled("org.lineageos.setupwizard", "Setup", true);
+        host.set_status(RuntimeStatus::Running { session_pid: None });
         let rt = runtime(&host);
         let apps = rt.installed_apps().unwrap().unwrap();
         let ids: Vec<&str> = apps.iter().map(|a| a.descriptor.id.as_str()).collect();
@@ -989,6 +1032,7 @@ mod tests {
     fn an_unavailable_listing_is_an_error_not_an_empty_catalog() {
         let host = FakeAndroidHost::new();
         host.install_package(PACKAGE);
+        host.set_status(RuntimeStatus::Running { session_pid: None });
         host.fail_listing(Some("session stopped"));
         let rt = runtime(&host);
         assert!(matches!(
@@ -1002,6 +1046,47 @@ mod tests {
             runtime(&absent).installed_apps(),
             Some(Err(AppError::RuntimeUnsupported { .. }))
         ));
+    }
+
+    /// The flap seen on the Pixel 9a: while the Waydroid session restarted,
+    /// a listing came back with no launchable apps and every installed app
+    /// was dropped, then re-added a refresh later. Every listing taken
+    /// outside a booted, running session, and every listing with nothing
+    /// launchable, must be "unavailable" instead.
+    #[test]
+    fn a_session_restart_or_boot_never_reads_as_everything_uninstalled() {
+        let host = FakeAndroidHost::new();
+        host.install_labeled(PACKAGE, "Jelly", true);
+        host.install_labeled("org.example.notes", "Notes", true);
+        let rt = runtime(&host);
+        let unavailable =
+            |rt: &AndroidRuntime| matches!(rt.installed_apps(), Some(Err(AppError::Io { .. })));
+        for status in [
+            RuntimeStatus::Stopped,
+            RuntimeStatus::Starting,
+            RuntimeStatus::Failed {
+                reason: "session running but container STOPPED".to_owned(),
+            },
+        ] {
+            host.set_status(status.clone());
+            assert!(unavailable(&rt), "{status:?}");
+        }
+        host.set_status(RuntimeStatus::Running { session_pid: None });
+        // Running, but Android still booting.
+        host.set_booted(Some(false));
+        assert!(unavailable(&rt));
+        host.set_booted(Some(true));
+        assert_eq!(rt.installed_apps().unwrap().unwrap().len(), 2);
+        // Unknown boot state falls back to the status and the listing.
+        host.set_booted(None);
+        assert_eq!(rt.installed_apps().unwrap().unwrap().len(), 2);
+        // A listing where nothing is launchable (PackageManager not ready:
+        // only Android's shell, or entries without a launcher category).
+        let shell_only = FakeAndroidHost::new();
+        shell_only.set_status(RuntimeStatus::Running { session_pid: None });
+        shell_only.install_labeled("com.android.settings", "Settings", true);
+        shell_only.install_labeled("org.example.notes", "Notes", false);
+        assert!(unavailable(&runtime(&shell_only)));
     }
 
     #[test]

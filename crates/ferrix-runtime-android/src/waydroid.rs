@@ -479,6 +479,15 @@ impl AndroidHost for WaydroidCli {
         Ok(entries)
     }
 
+    fn android_booted(&self) -> Option<bool> {
+        let (stdout, _, code) = self
+            .run(&["shell", "--", "getprop", "sys.boot_completed"])
+            .ok()?;
+        // Only a clean answer counts; a shell that cannot attach says
+        // nothing about Android's boot state.
+        (code == Some(0)).then(|| stdout.trim() == "1")
+    }
+
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError> {
         match activity {
             None => self.run_ok(&["app", "launch", package])?,

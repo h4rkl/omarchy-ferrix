@@ -1407,7 +1407,8 @@ impl Service {
     /// Asks every runtime for its installed apps and merges them beside the
     /// checked-in catalog. A package a checked-in descriptor already covers
     /// (same [`Runtime::app_key`]) is not listed twice; an entry whose
-    /// runtime listing is unavailable, or whose app still runs, is kept.
+    /// runtime listing is unavailable (an error or an empty listing), or
+    /// whose app still runs, is kept.
     /// Publishes `CatalogChanged` when the set changed, then adopts any
     /// withheld window the new apps own. Never call it with the state lock
     /// held: listing may block (bounded) on the runtime.
@@ -1422,7 +1423,16 @@ impl Service {
             let apps = match runtime.installed_apps() {
                 None => continue,
                 Some(Err(AppError::RuntimeUnsupported { .. })) => continue,
+                // An empty listing is never "everything was uninstalled": a
+                // runtime that lists apps at all always has some while it is
+                // really up (a session restarting answered with none on the
+                // Pixel 9a). Keep its last entries, as for a failed listing.
                 Some(Err(_)) => {
+                    outcome.supported = true;
+                    unavailable.push(kind);
+                    continue;
+                }
+                Some(Ok(apps)) if apps.is_empty() => {
                     outcome.supported = true;
                     unavailable.push(kind);
                     continue;
@@ -3720,6 +3730,51 @@ mod tests {
             Err(AppError::UnknownApp { .. })
         ));
         assert!(captured_events(&h.records).contains(&"installed-apps".to_owned()));
+    }
+
+    /// Pixel 9a: `installed-apps apps:0 removed:10` while the Waydroid
+    /// session restarted, then all ten re-added a refresh later. An empty
+    /// listing or an error between two good ones changes nothing.
+    #[test]
+    fn an_empty_or_failed_listing_during_a_session_restart_keeps_the_catalog() {
+        let h = installed_harness();
+        let home = subscribe(&h.service, ClientRole::Home);
+        let listing = || {
+            Some(Ok(vec![
+                provided(JELLY, "Jelly"),
+                provided("org.example.notes", "Notes"),
+                provided("org.example.maps", "Maps"),
+            ]))
+        };
+        h.android.set_installed(listing());
+        assert!(h.service.refresh_installed().changed);
+        assert_eq!(catalog_changes(&home).len(), 1);
+        for flap in [
+            Some(Ok(vec![])),
+            Some(Err(AppError::Io {
+                reason: "session stopped".to_owned(),
+            })),
+            Some(Ok(vec![])),
+        ] {
+            h.android.set_installed(flap);
+            let outcome = h.service.refresh_installed();
+            assert!(outcome.unavailable && !outcome.changed, "{outcome:?}");
+            assert_eq!(outcome.apps, 2);
+            assert_eq!(h.service.installed_apps().len(), 2);
+        }
+        h.android.set_installed(listing());
+        let outcome = h.service.refresh_installed();
+        assert!(!outcome.changed && !outcome.unavailable);
+        assert!(
+            catalog_changes(&home).is_empty(),
+            "no CatalogChanged for a flap"
+        );
+        // A real uninstall (a non-empty listing without the app) still
+        // removes it.
+        h.android
+            .set_installed(Some(Ok(vec![provided(JELLY, "Jelly")])));
+        let outcome = h.service.refresh_installed();
+        assert!(outcome.changed && outcome.apps == 0);
     }
 
     #[test]
