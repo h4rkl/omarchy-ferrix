@@ -117,6 +117,17 @@ where
                 .into_iter()
                 .map(ShellRenderElement::Surface),
         );
+        // An opaque backdrop keeps the home layer from showing through a
+        // window's transparent pixels (Android's splash screen is drawn on a
+        // transparent task buffer until the app's first frame).
+        let [r, g, b] = crate::color::clear_rgb();
+        elements.push(ShellRenderElement::Solid(SolidColorRenderElement::new(
+            shell.backdrop_id.clone(),
+            shell.client_area().to_physical_precise_round(scale),
+            0usize,
+            Color32F::new(r, g, b, 1.0),
+            Kind::Unspecified,
+        )));
     }
 
     push_layers(&[Layer::Bottom, Layer::Background], &mut elements, renderer);

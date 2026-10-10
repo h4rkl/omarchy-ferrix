@@ -280,6 +280,8 @@ pub struct Shell {
     /// Stable damage-tracking ids for the rows of the compositor's home
     /// indicator (`OutputLayout::system_pill_rows`).
     pub pill_ids: Vec<smithay::backend::renderer::element::Id>,
+    /// Damage-tracking id for the opaque backdrop under the front window.
+    pub backdrop_id: smithay::backend::renderer::element::Id,
     pub popups: PopupManager,
     pub cursor_status: CursorImageStatus,
     pub pointer_location: Point<f64, Logical>,
@@ -433,6 +435,7 @@ impl Shell {
             pill_ids: (0..32)
                 .map(|_| smithay::backend::renderer::element::Id::new())
                 .collect(),
+            backdrop_id: smithay::backend::renderer::element::Id::new(),
             popups: PopupManager::default(),
             cursor_status: CursorImageStatus::default_named(),
             pointer_location: Point::from((0.0, 0.0)),
