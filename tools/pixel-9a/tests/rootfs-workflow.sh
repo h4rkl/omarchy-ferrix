@@ -316,7 +316,8 @@ lib/firmware/fw_bcmdhd.map_4383_a3
 lib/firmware/bcmdhd_txcap.blob_4383_a3
 lib/firmware/brcm/BCM.hcd
 lib/firmware/mali_csffw-r52p0.bin
-lib/firmware/mali_csffw.bin'
+lib/firmware/mali_csffw.bin
+lib/firmware/mfc_fw.bin'
 firmware_paths="$stage_file_paths
 lib/firmware/carrierconfig/carrier.conf
 lib/firmware/carrierconfig/carrier-extra.conf
@@ -337,13 +338,13 @@ cmp -s "$work/expected-bundles" "$work/allowlist-bundles" ||
 while IFS="$tab" read -r component path required; do
 	case "$component" in ''|'#'*) continue ;; esac
 	case "$component" in
-		bcm4383|bluetooth-broadcom|gpu-mali) ;;
+		bcm4383|bluetooth-broadcom|gpu-mali|video-mfc) ;;
 		modem-s5300) continue ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
-	# The Mali CSF firmware is listed for the manifest but is not a radio gate
-	# input, so it is the one optional row.
-	[ "$required" = 1 ] || [ "$component" = gpu-mali ] || fail "firmware fixture is not required: $path"
+	# The Mali CSF and MFC firmware are listed for the manifest but are not
+	# radio gate inputs, so they are the optional rows.
+	[ "$required" = 1 ] || [ "$component" = gpu-mali ] || [ "$component" = video-mfc ] || fail "firmware fixture is not required: $path"
 	mkdir -p "$firmware/$(dirname -- "$path")"
 	printf 'fixture-%s\n' "$path" >"$firmware/$path"
 	hash=$(hash_file "$firmware/$path")
@@ -376,7 +377,7 @@ while IFS="$tab" read -r component source_image source_path path entry_type extr
 	hash=$(hash_file "$firmware/$path")
 	case "$component" in
 		wifi-bcm4383|bcm4383) manifest_controller=wifi-bcm4383 ;;
-		bluetooth-broadcom|gpu-mali) manifest_controller=$component ;;
+		bluetooth-broadcom|gpu-mali|video-mfc) manifest_controller=$component ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
 	printf 'firmware\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -395,13 +396,13 @@ for path in lib/firmware/carrierconfig/carrier.conf lib/firmware/carrierconfig/c
 done
 awk -F "$tab" '
 	$1 == "firmware" {
-			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300|gpu-mali)$/ || $3 != "vendor.img" ||
+			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300|gpu-mali|video-mfc)$/ || $3 != "vendor.img" ||
 			index($4, "/firmware/") != 1 || index($5, "lib/firmware/") != 1 ||
 			$4 == $5 || $4 ~ /[[:space:]]/ || $5 ~ /[[:space:]]/ ||
 			$6 !~ /^[0-9]+$/ || length($7) != 64 || $7 ~ /[^0-9a-f]/) exit 1
 		count++
 	}
-		END { exit(count == 16 ? 0 : 1) }
+		END { exit(count == 17 ? 0 : 1) }
 ' "$firmware/firmware-manifest.tsv"
 awk -F "$tab" '$1 == "firmware" { print $5 }' "$firmware/firmware-manifest.tsv" >"$work/manifest-firmware-paths"
 cmp -s "$work/expected-firmware-paths" "$work/manifest-firmware-paths" ||

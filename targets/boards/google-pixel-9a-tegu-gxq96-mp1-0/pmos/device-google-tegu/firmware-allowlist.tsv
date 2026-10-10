@@ -21,3 +21,6 @@ modem-s5300	lib/firmware/uecapconfig	1
 # carry it.
 gpu-mali	lib/firmware/mali_csffw-r52p0.bin	0
 gpu-mali	lib/firmware/mali_csffw.bin	0
+# Exynos MFC video codec firmware (video-mfc in firmware-stage-allowlist.tsv);
+# optional like the Mali image.
+video-mfc	lib/firmware/mfc_fw.bin	0
