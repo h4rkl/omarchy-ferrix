@@ -162,6 +162,12 @@ pub trait ClientHandler {
     fn wake(&mut self) -> bool;
     /// Page name for the `input-release` record.
     fn page_name(&self) -> String;
+    /// The Wayland timestamp (milliseconds, arbitrary base, wraps) of the
+    /// touch or pointer event the runner is about to deliver; called right
+    /// before each `touch_*` and pointer press/motion/release. Surfaces that
+    /// estimate gesture velocity use it instead of the wall clock, which
+    /// would see batched events as simultaneous.
+    fn input_time(&mut self, _time_ms: u32) {}
     /// The next instant at which [`ClientHandler::timer`] must run.
     fn deadline(&self) -> Option<Instant> {
         None
@@ -835,7 +841,8 @@ impl PointerHandler for Client {
                     }
                     redraw |= self.handler.pointer_motion(event.position, size);
                 }
-                PointerEventKind::Motion { .. } => {
+                PointerEventKind::Motion { time } => {
+                    self.handler.input_time(time);
                     redraw |= self.handler.pointer_motion(event.position, size);
                 }
                 PointerEventKind::Leave { .. } => {
@@ -844,16 +851,22 @@ impl PointerHandler for Client {
                 PointerEventKind::Press {
                     button: 0x110,
                     serial,
-                    ..
+                    time,
                 } => {
                     self.last_serial = serial;
+                    self.handler.input_time(time);
                     redraw |= self.handler.pointer_down(event.position, size);
                     emit(format!(
                         "{{\"evidence\":\"{}\",\"event\":\"input-press\",\"x\":{},\"y\":{}}}",
                         self.config.evidence, event.position.0, event.position.1
                     ));
                 }
-                PointerEventKind::Release { button: 0x110, .. } => {
+                PointerEventKind::Release {
+                    button: 0x110,
+                    time,
+                    ..
+                } => {
+                    self.handler.input_time(time);
                     redraw |= self.handler.pointer_up(event.position, size);
                     emit(format!(
                         "{{\"evidence\":\"{}\",\"event\":\"input-release\",\"page\":\"{}\"}}",
@@ -877,12 +890,13 @@ impl TouchHandler for Client {
         _: &QueueHandle<Self>,
         _: &wl_touch::WlTouch,
         serial: u32,
-        _: u32,
+        time: u32,
         surface: wl_surface::WlSurface,
         id: i32,
         position: (f64, f64),
     ) {
         self.last_serial = serial;
+        self.handler.input_time(time);
         if surface == *self.window.wl_surface() && self.handler.touch_down(id, position, self.size)
         {
             self.draw();
@@ -895,9 +909,10 @@ impl TouchHandler for Client {
         _: &QueueHandle<Self>,
         _: &wl_touch::WlTouch,
         _: u32,
-        _: u32,
+        time: u32,
         id: i32,
     ) {
+        self.handler.input_time(time);
         if self.handler.touch_up(id, self.size) {
             self.draw();
         }
@@ -908,10 +923,11 @@ impl TouchHandler for Client {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_touch::WlTouch,
-        _: u32,
+        time: u32,
         id: i32,
         position: (f64, f64),
     ) {
+        self.handler.input_time(time);
         if self.handler.touch_motion(id, position, self.size) {
             self.draw();
         }
