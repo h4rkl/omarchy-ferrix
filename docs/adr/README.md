@@ -13,7 +13,8 @@ the boundary it creates, and what evidence may claim. Evidence is `QEMU` or
 | [004](004-service-authorization.md) | Service authorization and sandbox socket visibility |
 | [005](005-android-runtime-and-brave.md) | Android compatibility runtime and the Brave reference app (browser choice superseded by ADR-007) |
 | [006](006-evidence-mock-control-and-scenarios.md) | Evidence labels, mock-control channels, scenario files |
-| [007](007-fulguris-browser-input.md) | Fulguris browser APK input (supersedes the browser choice in ADR-005) |
+| [007](007-fulguris-browser-input.md) | Fulguris browser APK input (supersedes the browser choice in ADR-005; superseded by ADR-008) |
+| [008](008-apks-as-ferrix-apps.md) | APKs as first-class Ferrix apps: per-task windows, one warm container, LineageOS apps (Jelly browser) |
 
 ## Conventions shared by every new service (normative)
 

@@ -5,6 +5,9 @@ Status: accepted and implemented for the opt-in QEMU postmarketOS route on
 the pinned inputs, measured evidence, and remaining limitations. This is not a
 physical-device or general Android compatibility claim.
 
+**Windowing and app association superseded by [ADR-008](008-apks-as-ferrix-apps.md)
+(2026-10-10):** one Ferrix window per Android task (Waydroid task streams).
+
 **Superseded in part by [ADR-007](007-fulguris-browser-input.md) (2026-09-28):**
 the Browser app is now Fulguris (`apps/org.ferrix.browser.json` launches
 `net.slions.fulguris.full.fdroid`), acquired by `tools/android/fulguris-fetch.sh`
