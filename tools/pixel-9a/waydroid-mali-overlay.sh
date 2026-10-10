@@ -24,6 +24,13 @@ ack=I-understand-this-extracts-vendor-graphics-blobs
 # LL-NDK (and libbinder_ndk users' platform pieces) come from the Android
 # system image; shadowing them with vendor copies breaks the system side.
 llndk=" libc.so libm.so libdl.so liblog.so libnativewindow.so libbinder_ndk.so libvndksupport.so libsync.so libmediandk.so libandroid_net.so libselinux.so "
+# Vendor libraries the Waydroid LineageOS 23.2 vendor image already ships in
+# a form the stock blobs link against. Shadowing them broke Waydroid's own
+# vendor binaries (libbase: the Bluetooth HAL; libdmabufheap: codec2), so the
+# closure stops at them. libc++ stays: four stock blobs need symbols only the
+# stock copy exports. Re-check with tools/pixel-9a/waydroid-mali-abi-check.sh
+# whenever the factory or Waydroid pins move.
+container_provided=" libbase.so libcutils.so libutils.so libz.so libhidlbase.so libhardware.so libdrm.so libdmabufheap.so libgralloctypes.so libaconfig_storage_read_api_cc.so android.hardware.common-V2-ndk.so android.hardware.graphics.allocator-V2-ndk.so android.hardware.graphics.allocator@4.0.so android.hardware.graphics.common-V7-ndk.so android.hardware.graphics.common@1.0.so android.hardware.graphics.common@1.1.so android.hardware.graphics.common@1.2.so android.hardware.graphics.mapper@4.0.so "
 
 die() { printf 'FAIL pixel-9a-waydroid-mali: %s\n' "$*" >&2; exit 1; }
 for t in debugfs readelf unzip sha256sum awk; do
@@ -67,7 +74,7 @@ seen=" "
 while [ -n "${queue# }" ]; do
   set -- $queue; current=$1; shift; queue="$*"
   for lib in $(readelf -d "$dest/overlay/vendor/$current" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
-    case "$llndk$seen" in *" $lib "*) continue ;; esac
+    case "$llndk$container_provided$seen" in *" $lib "*) continue ;; esac
     seen="$seen$lib "
     [ "$(vendor_type "/lib64/$lib")" = regular ] || continue
     copy "/lib64/$lib" "lib64/$lib"
@@ -84,6 +91,11 @@ done
   printf 'ro.hardware.egl=mali\n'
   printf 'ro.hardware.gralloc=pixel\n'
   printf 'ro.hardware.vulkan=mali\n'
+  # gchips allocates GPU-rendered RGB buffers as AFBC, which neither the
+  # Ferrix software compositor (dma-buf) nor the hwcomposer's CPU copy can
+  # read; MALI_GRALLOC_USAGE_NO_AFBC (GRALLOC_USAGE_PRIVATE_1) keeps them
+  # linear (Ferrix frameworks/native libui patch).
+  printf 'ro.ferrix.gralloc.extra_rgb_usage=0x20000000\n'
   debugfs -R 'cat /build.prop' "$work/vendor.img" 2>/dev/null |
     awk -F= '/^vendor\.mali\.(base_protected_max_core_count|base_protected_tls_max|platform_agt_frequency_khz)=/ { print }'
 } >"$dest/waydroid-mali.prop"
