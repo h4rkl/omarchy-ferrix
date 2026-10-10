@@ -77,8 +77,8 @@ do_tools() {
     "$(git-lfs version)" "$("$mesa_bin/meson" --version)"
 }
 
-# Mesa's Android makefile runs host meson and python3 (with mako) under a
-# hard-coded PATH; the Ferrix mesa3d patch puts FERRIX_MESA_HOST_PATH first.
+# Mesa's Android makefile runs host meson, python3 (with mako), ld.lld and
+# mesa_clc under a hard-coded PATH; the Ferrix mesa3d patch puts FERRIX_MESA_HOST_PATH first.
 mesa_bin="$tools/mesa-host/path"
 mesa_host_tools() {
   req="$here/waydroid-mesa-host.requirements"
@@ -104,6 +104,28 @@ mesa_host_tools() {
   if [ -n "$clang" ] && [ -x "$src/prebuilts/clang/host/linux-x86/$clang/bin/ld.lld" ]; then
     ln -sf "$src/prebuilts/clang/host/linux-x86/$clang/bin/ld.lld" "$mesa_bin/ld.lld"
   fi
+  # -Dmesa-clc=system -Dprecomp-compiler=system: the tree's prebuilt CL
+  # compilers (self-verifying wrappers over prebuilts/mesa-tools/root), which
+  # need a libxml2.so.2 the bundle does not carry.
+  lib="$tools/mesa-host/lib"
+  if [ ! -e "$lib/libxml2.so.2" ]; then
+    command -v zstd >/dev/null 2>&1 || die "missing prerequisite 'zstd'; install it explicitly"
+    tmp=$(mktemp -d "$tools/.libxml2.XXXXXX")
+    curl -fsSL -o "$tmp/pkg.tar.zst" "$(pin MESA_LIBXML2_URL)"
+    [ "$(sha256_of "$tmp/pkg.tar.zst")" = "$(pin MESA_LIBXML2_SHA256)" ] ||
+      { rm -rf "$tmp"; die "libxml2-legacy package hash mismatch"; }
+    zstd -dcq "$tmp/pkg.tar.zst" | tar -x -C "$tmp" --wildcards 'usr/lib/libxml2.so.2*'
+    mkdir -p "$lib"
+    cp -P "$tmp"/usr/lib/libxml2.so.2* "$lib/"
+    rm -rf "$tmp"
+  fi
+  for t in mesa_clc vtn_bindgen2 asahi_clc panfrost_compile; do
+    [ -x "$src/prebuilts/mesa-tools/$t" ] || continue
+    rm -f "$mesa_bin/$t"
+    printf '#!/bin/sh\nLD_LIBRARY_PATH=%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} exec %s "$@"\n' \
+      "$lib" "$src/prebuilts/mesa-tools/$t" >"$mesa_bin/$t"
+    chmod 0755 "$mesa_bin/$t"
+  done
   FERRIX_MESA_HOST_PATH=$mesa_bin
   export FERRIX_MESA_HOST_PATH
 }

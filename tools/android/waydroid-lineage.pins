@@ -22,3 +22,9 @@ WAYDROID_VENDOR_COMMIT=2bfe8853e88181d65c28a76d5da291e3cbc32e4c
 WAYDROID_PATCH_SDK=36
 LUNCH_PRODUCT=lineage_waydroid_arm64_only
 LUNCH_VARIANT=userdebug
+# prebuilts/mesa-tools (mesa_clc and friends) bundles its own glibc 2.41
+# runtime but not libxml2.so.2; Arch ships only libxml2.so.16. This package
+# provides the legacy soname (needs only GLIBC_2.38), extracted into the
+# tools cache for the mesa_clc wrappers, never installed system-wide.
+MESA_LIBXML2_URL=https://archive.archlinux.org/packages/l/libxml2-legacy/libxml2-legacy-2.13.9-2-x86_64.pkg.tar.zst
+MESA_LIBXML2_SHA256=aac28a52e81422935e3bfa44044030640c5d525ad8f65a9672a3ab7139974652
