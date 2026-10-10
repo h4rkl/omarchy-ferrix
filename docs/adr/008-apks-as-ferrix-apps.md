@@ -97,3 +97,71 @@ Base images: LineageOS (Waydroid's patch target), plain AOSP, GrapheneOS.
 
 This records one physical target and revision. It does not claim general
 Android compatibility, Play-services apps, DRM, or any QEMU result.
+
+## Installed APKs (implementation record, 2026-10-10)
+
+Owner decision (c): any APK a person installs behaves as a native Ferrix app.
+Recorded design, within decisions 1–3 above:
+
+- **Listing source: `waydroid app list`**, through the adapter's existing
+  bounded CLI wrapper (`AndroidHost::installed_packages`). It is Android's
+  PackageManager view over Waydroid's maintained CLI, independent of which
+  account owns the session and of its home directory, and the call
+  `is_installed` already depends on. The generated
+  `waydroid.<pkg>.desktop` entries were rejected as the source: they are a
+  side effect of the session-side user monitor, live in the session user's
+  XDG data directory (`ferrix-appd` may run as another account), and are
+  written only while that monitor runs. Only packages with an
+  `android.intent.category.LAUNCHER` activity are apps. The CLI prints
+  nothing while the session is stopped, so an empty listing is
+  "unavailable", never "everything uninstalled".
+- **Id scheme:** `apk.<package>` when the package is already a valid Ferrix
+  id (lowercase letters and digits, e.g. `apk.org.example.notes`);
+  otherwise `apk.<readable>.x-<fnv1a64 hex>` (packages with uppercase or
+  `_`). Only the second form contains `-`, so the forms cannot collide.
+  The `apk.` prefix (`ferrix_app_api::INSTALLED_APP_PREFIX`) is reserved:
+  a checked-in descriptor using it is rejected, so an installed package
+  can never shadow a catalog entry.
+- **Dedupe:** a package a checked-in descriptor already launches (same
+  runtime `app_key`, the package) is not listed again:
+  `org.lineageos.jelly` stays `org.ferrix.browser`, labelled "Browser".
+- **Descriptor:** `origin: "installed"` (new optional `AppDescriptor`
+  field; absent means a checked-in entry), Android's label (control
+  characters dropped, at most 40 characters), the label's first letter as
+  glyph, the steel tone of the first-party utility tiles (the rust accent
+  stays the Terminal's). **Trust:** always `untrusted`, no declared
+  capabilities, no intents, no autostart, and no grants row, so zero
+  effective Ferrix capabilities; Android's own permission model governs
+  the app inside the container (ADR-004/005 unchanged).
+- **Never apps:** Android's shell: `com.android.launcher3`,
+  `org.lineageos.trebuchet` (both disabled by provisioning),
+  `com.android.settings` (its `FallbackHome` is Android's home once the
+  launcher is disabled), `com.android.systemui`, and the setup wizards.
+  Their task windows stay withheld.
+- **Refresh:** a poller in `ferrix-appd` lists every 30 s, every 10 s
+  while the listing is unavailable (Android booting), every 300 s while no
+  runtime lists apps (Waydroid absent); a toplevel from the runtime's
+  composer with an unknown `app_id` (once per id) and a `not-installed`
+  launch wake it early. A change publishes `CatalogChanged`; the home
+  surface re-fetches. An app removed while running keeps its entry until
+  it ends; a runtime whose listing fails keeps its last entries.
+- **Adoption (decision 2 completed):** a composer toplevel no running
+  instance claims is adopted when its client pid is one the runtime
+  reports right now (`Runtime::shared_host_pids`, the trust anchor) and
+  its `app_id` is the window id of a launchable catalog or installed app.
+  `ferrix-appd` then attaches (`Runtime::attach`: supervise, never
+  relaunch) a new instance that owns the window. It is raised when the app
+  in front is itself an Android app (the intent's origin); otherwise it
+  waits in the background until the person opens it. Android's later
+  raise requests reach it through `xdg_activation_v1` as before.
+- **Launcher:** installed apps are appended after every first-party tile,
+  ordered by label. They never borrow a first-party glyph or reference
+  page.
+
+Limitations: icons are letter glyphs (Waydroid's PNG icons under the
+session user's data directory are not read; a bitmap icon path through
+the protocol and the software renderer is follow-up work); the home grid
+does not scroll, so tiles beyond one screen are not reachable yet; each
+poll costs one `waydroid app list` subprocess (event-driven refresh from
+Waydroid's package-state callback is follow-up work). Evidence is `mock`
+only (`cargo test`); no physical or QEMU run has exercised installed APKs.

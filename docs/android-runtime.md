@@ -275,10 +275,13 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   {absent|stopped|starting|running{session_pid}|failed{reason}}`,
   `LaunchedApp {pid, surface_client_pid}`, `HostError`, `WaydroidCli`,
   `WaydroidOptions {binary, proc_root, surface_client_needle}`,
-  `parse_status`, `parse_app_list`, `pid_from_cmdlines`,
-  `testing::FakeAndroidHost`.
+  `parse_status`, `parse_app_list`, `parse_app_entries`,
+  `pid_from_cmdlines`, `InstalledPackage`, `installed_app_id`,
+  `installed_descriptor`, `display_label`, `HIDDEN_PACKAGES`,
+  `is_hidden_package`, `testing::FakeAndroidHost`.
 - **`AndroidHost`**: `name`, `status`, `ensure_session(env, timeout)`,
-  `install(apk)`, `is_installed(pkg)`, `launch(pkg, activity)`,
+  `install(apk)`, `is_installed(pkg)`, `installed_packages()`,
+  `launch(pkg, activity)`,
   `is_running(pkg)`, `stop(pkg)`, `app_pid(pkg)`, `surface_client_pid()`.
   `ensure_session` takes the launch environment because
   `waydroid session start` needs the compositor's `WAYLAND_DISPLAY` and
@@ -287,7 +290,10 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   tab-separated `Session:`/`Container:` lines and the "not initialized"
   notice); `ensure_session` → detached `waydroid session start` in its own
   process group, then polls `status` until `RUNNING` (default 180 s, TCG);
-  `is_installed` → `waydroid app list` (`packageName:` lines); `launch` →
+  `is_installed` → `waydroid app list` (`packageName:` lines);
+  `installed_packages` → the same listing parsed into `Name:` /
+  `packageName:` / `categories:` blocks (an empty listing is an error: the
+  CLI prints nothing while the session is stopped); `launch` →
   `waydroid app launch <pkg>` or `waydroid shell -- am start -n
   <pkg>/<activity>`; `stop` → `waydroid shell -- am force-stop <pkg>`;
   `app_pid` → scan `/proc/*/cmdline` for `argv[0] == <pkg>` (zygote rewrites
@@ -363,16 +369,31 @@ ferrix_appd ──Runtime::launch──> AndroidRuntime ──AndroidHost──>
   ends `terminated` with exit code 0 (`app-task-closed`), not `crashed`; the
   next tap is a fresh `waydroid app launch`. Activating a running instance
   that has no window re-runs the launch (`app-reopen`) instead of raising a
-  surface that no longer exists. Limitations: a task Android opens for a
-  package without a running instance (an intent from another app) stays
-  withheld; the composer needle `graphics.composer` is still unverified on
-  hardware.
+  surface that no longer exists. Limitation: the composer needle
+  `graphics.composer` is still unverified on hardware.
+- **Installed APKs and adoption** (ADR-008 "Installed APKs"). The runtime
+  implements `Runtime::installed_apps` (launchable packages from
+  `installed_packages`, minus `HIDDEN_PACKAGES`: launchers, Settings and
+  its `FallbackHome`, System UI, setup wizards), each as an untrusted
+  `origin: "installed"` descriptor `apk.<package>` with the launch object
+  `{"package": …}`; `app_key` (the package, to skip packages a checked-in
+  descriptor covers); `window_app_id` (`waydroid.<package>`, `None` for
+  hidden packages); `shared_host_pids` (the composer pids, whether or not
+  an instance runs); and `attach`, which supervises a package Android
+  already started (record `android-app-attached`) without launching it.
+  `ferrix-appd` lists every 30 s (sooner while unavailable or on an unknown
+  composer window) and adopts an unclaimed composer toplevel whose
+  `app_id` names a launchable app, so a task opened by an intent from
+  another app becomes that app's window.
 
 - **Records**: `android-runtime-absent`, `android-session-failed`,
-  `android-app-not-installed`, `android-app-launched`, `android-app-reopened` (fields: `evidence`,
+  `android-app-not-installed`, `android-app-launched`, `android-app-attached`,
+  `android-app-reopened` (fields: `evidence`,
   `event`, `runtime`, `host`, `app`, `reason`/`package`/`pid`/
   `surface_client_pid`/`window_app_id`/`instance`/`reopens`).
-- **Tests** (`cargo test -p ferrix-runtime-android`, 22 tests, `mock`):
+- **Tests** (`cargo test -p ferrix-runtime-android`, 31 tests, `mock`; the
+  installed-app id scheme, labels, hidden packages, listing errors, attach,
+  and the `app list` block parser are among them):
   package/activity grammar; `launch` object parsing and unknown-field
   rejection; absent runtime → `RuntimeUnsupported`; failed session (both
   pre-existing `failed` status and a failing start) → `LaunchFailed`;

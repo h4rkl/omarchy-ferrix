@@ -1,5 +1,35 @@
 # Status
 
+## 2026-10-10 (Installed APKs as Ferrix apps; adopted task windows; mock)
+
+- **What:** every launchable package in the Android container is a
+  Ferrix app (ADR-008 "Installed APKs", owner decision (c)). The Android
+  adapter reads `waydroid app list`; `ferrix-appd` lists each launchable
+  package beside the checked-in catalog as `apk.<package>` (hashed suffix
+  for packages with uppercase or `_`), `origin: "installed"`, untrusted,
+  no capabilities, Android's label, a letter glyph in the steel tone.
+  Packages a checked-in descriptor covers are not duplicated (Jelly stays
+  "Browser"); launchers, Settings (`FallbackHome`), System UI and setup
+  wizards are never apps. The home grid appends them after the
+  first-party tiles.
+- **Refresh:** a `ferrix-appd` poller lists every 30 s (10 s while the
+  listing is unavailable, 300 s without Waydroid), woken early by an
+  unknown composer window or a `not-installed` launch; changes publish
+  `CatalogChanged` (record `installed-apps`, counts only).
+- **Adoption:** a composer toplevel no running instance claims is adopted
+  when its pid is one the runtime reports and its `app_id` names a
+  launchable app (`Runtime::attach`, no relaunch; `app-adopting`,
+  `android-app-attached`); raised when an Android app is in front (an
+  intent from it), otherwise backgrounded until opened. This replaces the
+  earlier limitation that such tasks stayed withheld.
+- **Evidence:** `mock` only: `cargo test --workspace` (new tests in
+  `ferrix-app-api`, `ferrix-runtime-android`, `ferrix-appd`,
+  `ferrix-basic-screen`). No QEMU or physical run has listed or adopted
+  an installed APK yet; the default `just qemu-check` route has no
+  Android runtime.
+- **Limitations:** letter icons, not Android's bitmap icons; the home grid
+  does not scroll; each poll is one `waydroid app list` subprocess.
+
 ## 2026-10-10 (Browser is LineageOS Jelly; Fulguris removed; Android launcher disabled; mock)
 
 - **Browser:** `org.ferrix.browser` now launches `org.lineageos.jelly`
