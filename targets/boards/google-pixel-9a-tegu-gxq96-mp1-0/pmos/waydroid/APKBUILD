@@ -5,11 +5,16 @@
 # 23.2 (Android 16) image needs (#19). Recipe follows Alpine aports
 # community/waydroid at 1.6.3; the OpenRC/nftables/desktop helpers are
 # fetched from aports commit 3c2c2436 (3.24-stable, identical on edge) and
-# checked by sha512. Drop this package once the pinned channel ships 1.6.3.
+# checked by sha512. 0001 backports upstream-candidate 63e2353 (TheKit,
+# 2026-08-04): `waydroid app launch` asks the image's IPlatform.showApp to
+# set the window mode and launch/raise the task in one call, so a failed
+# launch no longer leaves task-streams mode pointing at an app with no
+# window (#19). Drop this package once the pinned channel ships 1.6.3 and
+# showApp.
 maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 pkgname=waydroid
 pkgver=1.6.3
-pkgrel=0
+pkgrel=1
 _aports=3c2c2436e397ea23073cde73138f60e0d5c537b4
 _aux="https://gitlab.alpinelinux.org/alpine/aports/-/raw/$_aports/community/waydroid"
 pkgdesc="A container-based approach to boot a full Android system on a regular Linux system"
@@ -41,6 +46,7 @@ source="https://github.com/waydroid/waydroid/archive/$pkgver/waydroid-$pkgver.ta
 	waydroid-container.confd::$_aux/waydroid-container.confd
 	51_waydroid.nft::$_aux/51_waydroid.nft
 	waydroid-session.desktop::$_aux/waydroid-session.desktop
+	0001-app-ask-the-image-to-show-an-app.patch
 	"
 options="!check" # No tests
 
@@ -74,4 +80,5 @@ f319dde4f4bb365069dff2c1ddaa0a85d711c9e9d49011b15aec0d10da2ba0da39c464505d28cd7e
 b841282b96110ec59a7aa539db0737327b09549d55c78dc4b2c3b28b4a6ad1facf015b3175cb6d3a38f13e47aa6314ef3dc1514a4e60dd653a97409ec54ba706  waydroid-container.confd
 27cec579cfda197ff70d6328043755fc3d1719347bf4987edb86a07341bc4f02b99b65a6ef1fcde58b48a925176e6d770ed7cef304edff6a860bf4d408a62e06  51_waydroid.nft
 1848bf6b63ed51c635190c134ec3b0b1345915c13a3b721ea7dde44cb5808e632237bdba2ae12e6a9ba2f8978c07715998c357eb5bd7b7caff9d41142bae27e8  waydroid-session.desktop
+9253650beeb33776396fb060c796d6d99009c42a66c046962cb19be8b36f117f5f3a13505d6796ad53e7cea0db4caf609fcd1b193a419bbcc1476fee25cd9c1f  0001-app-ask-the-image-to-show-an-app.patch
 "

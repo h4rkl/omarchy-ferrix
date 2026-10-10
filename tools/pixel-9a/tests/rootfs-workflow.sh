@@ -786,7 +786,7 @@ cmp -s "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google
 cmp -s "$package_dir/s5300-userspace-sources.toml" \
 	"$staged/usr/share/ferrix/pixel-9a/s5300-userspace-sources.toml" || fail 'staged S5300 source metadata changed'
 
-if rg -n '^[[:space:]]*(adb|fastboot|pmbootstrap[[:space:]]+flasher)([[:space:]]|$)' "$script" >/dev/null; then
+if grep -En '^[[:space:]]*(adb|fastboot|pmbootstrap[[:space:]]+flasher)([[:space:]]|$)' "$script" >/dev/null; then
 	echo "FAIL: rootfs workflow contains device or flashing commands" >&2
 	exit 1
 fi

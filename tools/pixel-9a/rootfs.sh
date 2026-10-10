@@ -221,7 +221,7 @@ check_static_inputs() {
 	esac
 	[ "${#radio_split_contract_hash}" -eq 64 ] || die 'radio route split_artifact_contract_sha256 must contain 64 hexadecimal characters'
 	[ "$(hash_file "$radio_split_contract")" = "$radio_split_contract_hash" ] || die 'radio split-artifact contract hash differs from the radio route'
-	for package_path in "$exynos_package_dir/APKBUILD" "$modemmanager_package_dir/APKBUILD" "$modemmanager_package_dir/modemmanager.initd" "$modemmanager_package_dir/modemmanager.rules" "$waydroid_package_dir/APKBUILD" "$waydroid_package_dir/waydroid.trigger" "$waydroid_package_dir/waydroid.post-upgrade"; do
+	for package_path in "$exynos_package_dir/APKBUILD" "$modemmanager_package_dir/APKBUILD" "$modemmanager_package_dir/modemmanager.initd" "$modemmanager_package_dir/modemmanager.rules" "$waydroid_package_dir/APKBUILD" "$waydroid_package_dir/waydroid.trigger" "$waydroid_package_dir/waydroid.post-upgrade" "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"; do
 		required_file "$package_path"
 	done
 	target_pmaports_commit=$(pinned_pmaports_commit) || die 'target pmOS package is missing PMAPORTS_COMMIT'
@@ -291,6 +291,7 @@ preflight() {
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
 	manifest_artifact waydroid/APKBUILD "$waydroid_package_dir/APKBUILD"
+	manifest_artifact waydroid/0001-app-ask-the-image-to-show-an-app.patch "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"
 	manifest_artifact profile.toml "$profile_path"
 	manifest_finish
 	if [ "$android" = 1 ]; then
@@ -776,6 +777,7 @@ validate_inputs() {
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
 	manifest_artifact waydroid/APKBUILD "$waydroid_package_dir/APKBUILD"
+	manifest_artifact waydroid/0001-app-ask-the-image-to-show-an-app.patch "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"
 	manifest_artifact pmos/pins.env "$pmaports_pins"
 	manifest_artifact pmos/channels.cfg "$channels_cfg"
 	manifest_artifact profile.toml "$profile_path"
@@ -912,6 +914,7 @@ write_built_manifest() {
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
 	manifest_artifact waydroid/APKBUILD "$waydroid_package_dir/APKBUILD"
+	manifest_artifact waydroid/0001-app-ask-the-image-to-show-an-app.patch "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"
 	manifest_artifact profile.toml "$profile_path"
 	manifest_artifact firmware-manifest.tsv "$rootfs_out/firmware-manifest.tsv"
 	manifest_artifact radio-firmware-manifest.tsv "$rootfs_out/radio-firmware-manifest.tsv"
