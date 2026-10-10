@@ -82,6 +82,8 @@ pub enum Icon {
     Keyboard,
     // Navigation and actions.
     Home,
+    /// The app list entry on the home grid.
+    Apps,
     Back,
     Forward,
     More,
@@ -103,7 +105,7 @@ pub enum Icon {
     FileUnknown,
 }
 
-const SOURCES: [(Icon, &str); 48] = [
+const SOURCES: [(Icon, &str); 49] = [
     (Icon::Phone, "call"),
     (Icon::Messages, "chat"),
     (Icon::Contacts, "contacts"),
@@ -134,6 +136,7 @@ const SOURCES: [(Icon, &str); 48] = [
     (Icon::Brightness, "light_mode"),
     (Icon::Keyboard, "keyboard"),
     (Icon::Home, "home"),
+    (Icon::Apps, "apps"),
     (Icon::Back, "chevron_left"),
     (Icon::Forward, "chevron_right"),
     (Icon::More, "more_horiz"),
@@ -155,8 +158,8 @@ const SOURCES: [(Icon, &str); 48] = [
 ];
 
 impl Icon {
-    pub const ALL: [Icon; 48] = {
-        let mut all = [Icon::Phone; 48];
+    pub const ALL: [Icon; 49] = {
+        let mut all = [Icon::Phone; 49];
         let mut i = 0;
         while i < SOURCES.len() {
             all[i] = SOURCES[i].0;

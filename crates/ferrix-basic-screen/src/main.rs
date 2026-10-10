@@ -22,11 +22,14 @@
 //!   ferrix-basic-screen [profile.toml] [--core /run/ferrix/core.sock]
 //!                       [--ferrix_appd /run/ferrix/ferrix_appd.sock]   # guest: connect to Wayland
 //!   ferrix-basic-screen [profile.toml] --preview p.ppm [--page PAGE] [--size WxH]
-//!                                                        # any host: render PPM
+//!                       [--sample-apks]                  # any host: render PPM
 //!
-//! `PAGE` is `launcher` (default), `quick-settings`, `notifications`,
+//! `PAGE` is `launcher` (default), `apps` (the app list), `apps-end` (the
+//! app list scrolled to its end), `quick-settings`, `notifications`,
 //! `notifications-empty`, or the kind of a non-launchable catalog entry
-//! (`camera`) for its reference page. Launchable entries (Phone, Messages,
+//! (`camera`) for its reference page. `--sample-apks` appends the ten
+//! installed-APK labels seen on the Pixel 9a as mock installed entries, so a
+//! host preview shows a catalog with APKs (mock evidence, no Android). Launchable entries (Phone, Messages,
 //! Contacts, Settings, Files, Terminal) are real apps started by
 //! `ferrix-appd`, not pages of this surface. `--size` overrides the
 //! profile's panel size, e.g. `830x1800` for the narrow QEMU display window.
@@ -110,6 +113,8 @@ struct Args {
     page: String,
     /// Preview-only panel size override (`WxH`).
     size: Option<(u32, u32)>,
+    /// Preview-only: append [`catalog::sample_installed_tiles`].
+    sample_apks: bool,
 }
 
 fn parse_size(text: &str) -> Result<(u32, u32), String> {
@@ -127,6 +132,11 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
 fn preview_page(name: &str, state: &mut interaction::UiState) -> Result<Page, String> {
     match name {
         "launcher" => Ok(Page::Launcher),
+        "apps" => Ok(Page::Apps),
+        "apps-end" => {
+            state.apps_scroll = i32::MAX;
+            Ok(Page::Apps)
+        }
         "quick-settings" => Ok(Page::QuickSettings),
         "notifications" => Ok(Page::Notifications),
         "notifications-empty" => {
@@ -146,7 +156,7 @@ fn preview_page(name: &str, state: &mut interaction::UiState) -> Result<Page, St
                     .map(catalog::Tile::kind)
                     .collect();
                 format!(
-                    "unknown --page {name:?}; use launcher, quick-settings, notifications, notifications-empty, or a reference kind ({})",
+                    "unknown --page {name:?}; use launcher, apps, apps-end, quick-settings, notifications, notifications-empty, or a reference kind ({})",
                     kinds.join(", ")
                 )
             }),
@@ -166,6 +176,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         preview: None,
         page: "launcher".to_owned(),
         size: None,
+        sample_apks: false,
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -174,6 +185,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 parsed.preview = Some(it.next().ok_or("--preview requires an output path")?);
             }
             "--page" => parsed.page = it.next().ok_or("--page requires a page name")?,
+            "--sample-apks" => parsed.sample_apks = true,
             "--size" => {
                 parsed.size = Some(parse_size(&it.next().ok_or("--size requires WxH")?)?);
             }
@@ -207,7 +219,10 @@ fn run() -> Result<(), String> {
         let hw = session.services.snapshot();
         let ty = Type::load()?;
         let (wifi_on, bt_on) = ui_toggles(&hw);
-        let (app_dir, tiles) = catalog::load_descriptor_tiles()?;
+        let (app_dir, mut tiles) = catalog::load_descriptor_tiles()?;
+        if args.sample_apks {
+            tiles.extend(catalog::sample_installed_tiles());
+        }
         let mut state = interaction::UiState::new(wifi_on, bt_on, tiles);
         state.brightness = hw.display.brightness_percent;
         state.set_session(&session.target_id, session.capabilities.clone());
@@ -218,6 +233,9 @@ fn run() -> Result<(), String> {
         let (width, height) = args
             .size
             .unwrap_or((profile.display.width, profile.display.height));
+        if state.apps_scroll == i32::MAX {
+            state.apps_scroll = interaction::apps_max_scroll((width, height), state.tiles.len());
+        }
         let canvas = screen::compose(&hw, minute, &ty, width, height, &state);
         std::fs::write(&path, canvas.ppm_bytes()).map_err(|e| e.to_string())?;
         emit(format!(
@@ -300,6 +318,18 @@ mod tests {
     fn preview_pages_resolve_by_name_and_reference_kind() {
         let mut state = interaction::UiState::new(true, true, test_tiles());
         assert_eq!(preview_page("launcher", &mut state), Ok(Page::Launcher));
+        assert_eq!(preview_page("apps", &mut state), Ok(Page::Apps));
+        assert_eq!(preview_page("apps-end", &mut state), Ok(Page::Apps));
+        assert_eq!(
+            state.apps_scroll,
+            i32::MAX,
+            "resolved against the size later"
+        );
+        assert!(
+            parse_args(["--sample-apks".to_owned()])
+                .unwrap()
+                .sample_apks
+        );
         assert_eq!(
             preview_page("quick-settings", &mut state),
             Ok(Page::QuickSettings)

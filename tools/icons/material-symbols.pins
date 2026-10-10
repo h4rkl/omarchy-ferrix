@@ -30,6 +30,7 @@ ICON=terminal
 ICON=photo_camera
 ICON=language
 ICON=home
+ICON=apps
 # Status bar and quick settings.
 ICON=signal_wifi_off
 ICON=network_wifi_1_bar

@@ -12,7 +12,10 @@ use ferrix_ui::icons::{self, Icon};
 use ferrix_ui::{theme, widgets};
 
 use crate::catalog::{Tile, tone_color};
-use crate::interaction::{Page, Target, UiState, tile_rects};
+use crate::interaction::{
+    Page, Target, TileParts, UiState, app_row_rects, apps_max_scroll, apps_viewport, home_grid,
+    tile_parts,
+};
 
 /// Footer caption of the launcher. Says what this surface is, not what it
 /// wants to be.
@@ -504,16 +507,9 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     let size = (c.width() as u32, c.height() as u32);
-    let landscape = c.width() > c.height();
-    for (index, (tile, r)) in state
-        .tiles
-        .iter()
-        .zip(tile_rects(size, state.tiles.len()))
-        .enumerate()
-    {
-        if r.y >= c.height() {
-            break;
-        }
+    let grid = home_grid(state, size);
+    for (index, r) in grid.tiles {
+        let tile = &state.tiles[index];
         let accent = tone_color(tile.icon.tone);
         let pressed = state.pressed == Some(Target::App(index));
         // Terminal is Ferrix's terminal-first anchor: its deep rust panel is
@@ -527,18 +523,12 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
         } else {
             t.surface
         };
-        c.fill_rounded(r, s(10), fill);
-        c.stroke_rounded(
-            r,
-            s(10),
-            if pressed { s(3) } else { hairline(width) },
-            if pressed { t.rust } else { t.border },
-        );
+        tile_frame(c, r, fill, pressed);
         // A low-luminance oxidized-orange rule gives the Terminal a durable
         // place in the launcher without turning the whole grid into a bright
         // alert surface. It is decorative only; the tile rect stays the hit
         // target.
-        if tile.kind() == "terminal" {
+        if terminal {
             c.fill_rounded(
                 Rect {
                     x: r.x + s(10),
@@ -550,47 +540,204 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
                 t.rust_hi,
             );
         }
-        let icx = r.x + r.w / 2;
-        let icy = r.y + s(if landscape { 105 } else { 118 });
-        app_icon(c, ty, tile, accent, icx, icy);
+        let parts = tile_parts(r, size);
+        let (icx, icy) = (
+            parts.icon.x + parts.icon.w / 2,
+            parts.icon.y + parts.icon.h / 2,
+        );
+        app_icon(c, ty, tile, accent, icx, icy, parts.icon.w);
         let (label, color) = if tile.starting {
             ("starting".to_owned(), t.fg_dim)
         } else {
             (tile.name.clone(), t.fg)
         };
-        let label_style = Style::regular(s(if landscape { 28 } else { 30 }) as f32, color);
-        let lw = ty.width(label_style, &label);
-        ty.text(
-            c,
-            label_style,
-            &label,
-            icx - lw / 2,
-            r.y + r.h - s(if landscape { 38 } else { 44 }),
-        );
+        tile_label(c, ty, &label, color, parts);
         if tile.running {
             c.fill_circle(r.x + r.w - s(34), r.y + s(34), s(9), t.rust);
         }
     }
+    if let Some(r) = grid.apps {
+        let pressed = state.pressed == Some(Target::AllApps);
+        tile_frame(
+            c,
+            r,
+            if pressed { t.surface_hi } else { t.surface },
+            pressed,
+        );
+        let parts = tile_parts(r, size);
+        icons::draw(
+            c,
+            Icon::Apps,
+            parts.icon.x,
+            parts.icon.y,
+            parts.icon.w,
+            t.fg_dim,
+        );
+        tile_label(c, ty, "Apps", t.fg, parts);
+    }
+}
+
+fn tile_frame(c: &mut Canvas, r: Rect, fill: u32, pressed: bool) {
+    let t = theme::get();
+    let width = design_width(c);
+    let s = |v: i32| scale(v, width);
+    c.fill_rounded(r, s(10), fill);
+    c.stroke_rounded(
+        r,
+        s(10),
+        if pressed { s(3) } else { hairline(width) },
+        if pressed { t.rust } else { t.border },
+    );
+}
+
+/// One centred label line inside the tile's label box, ellipsized so it
+/// never runs past the tile edges or into a neighbour.
+fn tile_label(c: &mut Canvas, ty: &Type, label: &str, color: u32, parts: TileParts) {
+    let style = Style::regular(parts.label_px as f32, color);
+    let text = widgets::ellipsize(ty, style, label, parts.label.w);
+    let lw = ty.width(style, &text);
+    ty.text(
+        c,
+        style,
+        &text,
+        parts.label.x + (parts.label.w - lw) / 2,
+        parts.label_baseline,
+    );
+}
+
+/// The app list: every catalog entry, sorted by label, as rows with the
+/// tile's glyph (or letter) and the label. Android apps carry a quiet
+/// "Android" line so an APK named like a first-party app stays
+/// distinguishable. Rows scroll under the header; the viewport ends above
+/// the home zone.
+fn apps_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: &UiState) {
+    let t = theme::get();
+    let width = design_width(c);
+    let s = |v: i32| scale(v, width);
+    let size = (c.width() as u32, c.height() as u32);
+    let viewport = apps_viewport(size);
+    let entries = state.list_entries();
+    let rows = app_row_rects(size, entries.len(), state.apps_scroll);
+    for (r, index) in rows.iter().zip(&entries) {
+        if r.y + r.h <= viewport.y || r.y >= viewport.y + viewport.h {
+            continue;
+        }
+        let tile = &state.tiles[*index];
+        let pressed = state.pressed == Some(Target::App(*index));
+        c.fill_rounded(*r, s(10), if pressed { t.surface_hi } else { t.surface });
+        c.stroke_rounded(
+            *r,
+            s(10),
+            if pressed { s(3) } else { hairline(width) },
+            if pressed { t.rust } else { t.border },
+        );
+        let glyph = s(64);
+        let cx = r.x + s(32) + glyph / 2;
+        app_icon(
+            c,
+            ty,
+            tile,
+            tone_color(tile.icon.tone),
+            cx,
+            r.y + r.h / 2,
+            glyph,
+        );
+        let text_x = r.x + s(32) + glyph + s(28);
+        let mut right = r.x + r.w - s(32);
+        if tile.running {
+            c.fill_circle(right - s(9), r.y + r.h / 2, s(9), t.rust);
+            right -= s(40);
+        }
+        let max = right - text_x;
+        let title_style = Style::bold(s(34) as f32, if tile.starting { t.fg_dim } else { t.fg });
+        let title = if tile.starting {
+            "starting"
+        } else {
+            tile.name.as_str()
+        };
+        let subtitle = tile.installed.then_some("Android");
+        let title_base = if subtitle.is_some() {
+            r.y + r.h / 2 - s(4)
+        } else {
+            r.y + r.h / 2 + s(12)
+        };
+        ty.text(
+            c,
+            title_style,
+            &widgets::ellipsize(ty, title_style, title, max),
+            text_x,
+            title_base,
+        );
+        if let Some(subtitle) = subtitle {
+            let sub_style = Style::regular(s(26) as f32, t.fg_dim);
+            ty.text(c, sub_style, subtitle, text_x, r.y + r.h / 2 + s(36));
+        }
+    }
+    // Clip: rows scroll under the header and stop above the home zone.
+    c.fill_rect(
+        Rect {
+            x: 0,
+            y: 0,
+            w: c.width(),
+            h: viewport.y,
+        },
+        t.bg,
+    );
+    let bottom = viewport.y + viewport.h;
+    c.fill_rect(
+        Rect {
+            x: 0,
+            y: bottom,
+            w: c.width(),
+            h: c.height() - bottom,
+        },
+        t.bg,
+    );
+    status_bar(c, p, ty, clock, s(72), s(40), state);
+    let count = format!("{}", entries.len());
+    widgets::page_header(
+        c,
+        ty,
+        "Apps",
+        Some(&count),
+        state.pressed == Some(Target::Back),
+    );
+    // A quiet scroll thumb when the list is longer than the viewport.
+    let max = apps_max_scroll(size, entries.len());
+    if max > 0 && viewport.h > 0 {
+        let content = viewport.h + max;
+        let thumb_h = (viewport.h * viewport.h / content).max(s(48));
+        let travel = viewport.h - thumb_h;
+        let offset = state.apps_scroll.clamp(0, max) * travel / max;
+        c.fill_rounded(
+            Rect {
+                x: c.width() - s(18),
+                y: viewport.y + offset,
+                w: s(6),
+                h: thumb_h,
+            },
+            s(3),
+            t.border,
+        );
+    }
 }
 
 /// Tile artwork: first-party applications use their filled Material glyph
-/// (`ferrix_ui::icons`), 96 design px, in the descriptor tone. Any other app
+/// (`ferrix_ui::icons`) at `size` (96 design px on a tile, 64 in a list
+/// row), in the descriptor tone. Any other app
 /// shows its descriptor glyph when the face has it, else the first letter of
 /// its name (never a tofu box). The label under the tile always stays.
-fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32) {
-    let width = design_width(c);
-    let u = |v: i32| scale(v, width);
+fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32, size: i32) {
     if let Some(icon) = Icon::for_app(tile.kind()) {
-        icons::draw_centered(c, icon, cx, cy, u(96), accent);
+        icons::draw_centered(c, icon, cx, cy, size, accent);
         return;
     }
+    // Letter glyphs keep their 96 px proportions at any glyph size.
     let glyph = tile_glyph(ty, tile);
-    let style = Style::bold(
-        u(if glyph.chars().count() > 1 { 40 } else { 56 }) as f32,
-        accent,
-    );
+    let px = size * if glyph.chars().count() > 1 { 40 } else { 56 } / 96;
+    let style = Style::bold(px as f32, accent);
     let gw = ty.width(style, &glyph);
-    ty.text(c, style, &glyph, cx - gw / 2, cy + u(20));
+    ty.text(c, style, &glyph, cx - gw / 2, cy + size * 20 / 96);
 }
 
 /// The descriptor glyph when every character exists in the bold face, else
@@ -640,6 +787,7 @@ fn shell_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: 
     status_bar(c, p, ty, clock, s(72), s(40), state);
     match state.page {
         Page::Launcher => {}
+        Page::Apps => apps_page(c, p, ty, clock, state),
         Page::Reference(index) => reference_page(c, ty, state.tiles.get(index), state),
         Page::QuickSettings => quick_settings(c, ty, state),
         Page::Notifications => notifications(c, ty, state),
@@ -969,7 +1117,7 @@ fn wrap_text(c: &mut Canvas, ty: &Type, text: &str, x: i32, y: i32, max_width: i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interaction::CrashNotice;
+    use crate::interaction::{CrashNotice, tile_rects};
     use crate::status::Reach;
     use crate::test_tiles;
 
@@ -1171,6 +1319,52 @@ mod tests {
         state.page = Page::Reference(99);
         let c = compose(&p, 600, &ty, 1080, 2340, &state);
         assert_ne!(c.get(300, 500), t.bg);
+    }
+
+    #[test]
+    fn installed_apks_leave_the_home_frame_unchanged_and_fill_the_app_list() {
+        let t = theme::get();
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        for (w, h) in [(1080, 2340), (830, 1800)] {
+            let plain = state();
+            let mut apks = state();
+            apks.set_tiles({
+                let mut tiles = apks.tiles.clone();
+                tiles.extend(crate::catalog::sample_installed_tiles());
+                tiles
+            });
+            let home = compose(&p, 600, &ty, w, h, &plain);
+            let home_apks = compose(&p, 600, &ty, w, h, &apks);
+            assert!(
+                home.xrgb_bytes() == home_apks.xrgb_bytes(),
+                "{w}x{h}: APKs must not touch the home grid"
+            );
+            let mut list = apks.clone();
+            list.page = Page::Apps;
+            let c = compose(&p, 600, &ty, w, h, &list);
+            let viewport = apps_viewport((w, h));
+            // The first row's surface, the header rule, and a clipped strip
+            // under the viewport (rows never draw into the home zone).
+            let row = app_row_rects((w, h), list.tiles.len(), 0)[0];
+            assert_eq!(c.get(row.x + row.w / 2, row.y + s_at(8, w, h)), t.surface);
+            assert_eq!(c.get(w as i32 / 2, scale(230, w.min(h) as i32)), t.rust_dim);
+            assert_eq!(
+                c.get(w as i32 / 4, viewport.y + viewport.h + 2),
+                t.bg,
+                "{w}x{h}"
+            );
+            list.apps_scroll = i32::MAX;
+            let end = compose(&p, 600, &ty, w, h, &list);
+            assert!(
+                end.xrgb_bytes() != c.xrgb_bytes(),
+                "scrolling moves the rows"
+            );
+        }
+    }
+
+    fn s_at(v: i32, w: u32, h: u32) -> i32 {
+        scale(v, w.min(h) as i32)
     }
 
     #[test]

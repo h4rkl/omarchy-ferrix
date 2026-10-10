@@ -333,7 +333,8 @@ Rules:
 
 Subset (Material Symbols name): launcher `call` (Phone), `chat` (Messages),
 `contacts`, `settings`, `terminal`, `photo_camera` (Camera), `folder`
-(Files), `language` (Browser), `home`; status strip `signal_cellular_0_bar`
+(Files), `language` (Browser), `home`, `apps` (the home grid's app-list
+entry); status strip `signal_cellular_0_bar`
 to `signal_cellular_4_bar` (lit bars solid, unlit outlined), `signal_wifi_off`,
 `network_wifi_1_bar`, `network_wifi_2_bar`, `signal_wifi_4_bar`,
 `battery_android_0` to `battery_android_6` and `battery_android_full` (charge

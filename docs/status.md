@@ -203,7 +203,7 @@
   `google/material-design-icons`, Apache-2.0 (GitHub licence API and the
   `LICENSE` at the pin). Pinned commit
   `49d4db35df873165d6bd6ba09b063c7dafbac2f4`; style Rounded, weight 400,
-  grade 0, optical size 24, **FILL 1** for all 48 glyphs (none falls back to
+  grade 0, optical size 24, **FILL 1** for all 49 glyphs (none falls back to
   outlined; 27 have identical FILL 0/1 files upstream). Only the subset is
   vendored, under `crates/ferrix-ui/assets/icons/material-symbols/` with the
   upstream `LICENSE`, `SHA256SUMS` and a `README.md` notice. Pins:

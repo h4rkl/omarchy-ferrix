@@ -51,6 +51,42 @@ impl Tile {
     }
 }
 
+/// The ten installed APKs the Pixel 9a listed (Waydroid LineageOS image),
+/// as installed entries for host previews and layout tests. Mock data: no
+/// Android runtime is involved.
+pub fn sample_installed_tiles() -> Vec<Tile> {
+    [
+        ("org.lineageos.recorder", "Recorder"),
+        ("com.android.calculator2", "Calculator"),
+        ("org.lineageos.etar", "Calendar"),
+        ("org.lineageos.aperture", "Camera"),
+        ("com.android.deskclock", "Clock"),
+        ("com.android.contacts", "Contacts"),
+        ("com.android.documentsui", "Files"),
+        ("acr.browser.lightning", "Fulguris"),
+        ("org.lineageos.glimpse", "Gallery"),
+        ("org.lineageos.twelve", "Music"),
+    ]
+    .into_iter()
+    .map(|(package, name)| Tile {
+        id: AppId::new(format!(
+            "{}.{package}",
+            ferrix_app_api::INSTALLED_APP_PREFIX
+        ))
+        .expect("valid sample id"),
+        name: name.to_owned(),
+        icon: IconRef {
+            glyph: name[..1].to_owned(),
+            tone: IconTone::Blue,
+        },
+        launchable: true,
+        running: false,
+        starting: false,
+        installed: true,
+    })
+    .collect()
+}
+
 /// Maps a descriptor tone onto the active Ferrix theme (`docs/design.md`):
 /// the "blue" family is steel, the warm family is the rust accent, and the
 /// remaining tones are the status colors.

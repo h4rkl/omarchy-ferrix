@@ -17,10 +17,11 @@ mark.
 | Pins | `tools/icons/material-symbols.pins`; per-file SHA-256 in `SHA256SUMS` (enforced by `crates/ferrix-ui/build.rs`) |
 | Re-derive | `just icons-fetch` (rewrite) or `just icons-verify` (compare with the pinned commit, no changes) |
 
-## Icons (48)
+## Icons (49)
 
 Launcher: `call`, `chat`, `contacts`, `settings`, `terminal`, `photo_camera`,
-`language`, `home`; Files tile uses `folder`.
+`language`, `home`; Files tile uses `folder`; the home grid's app-list
+entry uses `apps`.
 
 Status bar and quick settings: `signal_wifi_off`, `network_wifi_1_bar`,
 `network_wifi_2_bar`, `signal_wifi_4_bar`, `signal_cellular_0_bar` to
