@@ -177,9 +177,44 @@ Recorded design, within decisions 1–3 above:
   the last known entries: the Pixel 9a logged `apps:0 removed:10` during a
   session restart before this.
 
-Limitations: icons are letter glyphs (Waydroid's PNG icons under the
-session user's data directory are not read; a bitmap icon path through
-the protocol and the software renderer is follow-up work); each
-poll costs one `waydroid app list` subprocess (event-driven refresh from
-Waydroid's package-state callback is follow-up work). Evidence is `mock`
-only (`cargo test`); no physical or QEMU run has exercised installed APKs.
+- **Icons (2026-10-11):** Waydroid's Android side writes one PNG per
+  package to Android's `/data/icons/`, which on the host is
+  `$XDG_DATA_HOME/waydroid/data/icons/<package>.png`
+  (`$XDG_DATA_HOME` defaulting to `~/.local/share`) of the account that ran
+  `waydroid session start`. Source, Waydroid 1.6.3:
+  `tools/config/__init__.py` (`waydroid_data = xdg_data_home +
+  "/waydroid/data"`), `tools/helpers/lxc.py` (binds it as the container's
+  `data`), `tools/services/user_manager.py` (`Icon=` of each desktop entry
+  is `<waydroid_data>/icons/<package>.png`). The Android adapter reads it
+  (`ferrix_runtime_android::icon`): the directory is
+  `FERRIX_WAYDROID_ICON_DIR` when set (for an appd account other than the
+  session user), else derived from `ferrix-appd`'s own `XDG_DATA_HOME` /
+  `HOME` once at start. On the Pixel 9a both `ferrix-appd` and the session
+  it starts run as `user` with `HOME=/home/user`, so the path is
+  `/home/user/.local/share/waydroid/data/icons/<package>.png`. The files are
+  container-written, untrusted input: the name comes from a validated
+  package only; the file must be a regular file and not a symlink, with the
+  same device and inode before and after opening; at most 1 MiB is read;
+  the maintained `png` crate (already in the tree) decodes it with an 8 MiB
+  memory limit, images larger than 1024 px per side are refused before
+  their pixels are allocated, and a box filter in premultiplied alpha
+  reduces it to at most 96x96. Fully transparent results are dropped.
+  `ferrix-appd` serves only installed entries (`Request::AppIcon`, any
+  role, like `Catalog`); first-party entries, including the Jelly-backed
+  Browser, always get `null`. The home fetches the bitmaps on a
+  short-lived background Home connection after each catalog update (at
+  most 64 per update), caches successes per id, retries failures at the
+  next catalog change, and draws the bitmap (bicubic, aspect kept) in the
+  same icon box; any failure leaves the letter glyph.
+
+Limitations: icon reads are unverified on the device: whether Waydroid
+wrote an icon for every listed package, the files' owner and mode under
+`/home/user/.local/share/waydroid/data/icons` (container-written, so
+`ferrix-appd` may lack read permission), and how they look at the Pixel's
+density are open. An app update that changes its icon shows the old
+bitmap until the app leaves the catalog or the home restarts (successes
+are cached per id). Android's adaptive-icon shape is whatever Waydroid
+rendered; Ferrix applies no mask. Each poll costs one `waydroid app list`
+subprocess (event-driven refresh from Waydroid's package-state callback
+is follow-up work). Evidence is `mock` only (`cargo test`, host preview);
+no physical or QEMU run has exercised installed APKs or their icons.

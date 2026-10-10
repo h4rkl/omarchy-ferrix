@@ -60,6 +60,52 @@ Framebuffer and host-webcam captures were inspected for every step below.
   - Bluetooth and audio inside Android were not checked.
   - No QEMU claim: QEMU runs no Android.
 
+## 2026-10-11 (Installed APKs show their Android launcher icon; mock/host evidence only)
+
+- **What:** rows for installed apps (`apk.<package>`) in the home app list
+  now draw the app's Android launcher bitmap in place of the letter glyph.
+  First-party tiles and rows are unchanged; any failure keeps the letter.
+- **Path:** the Android adapter reads Waydroid's
+  `$XDG_DATA_HOME/waydroid/data/icons/<package>.png` (default
+  `~/.local/share/...`; override `FERRIX_WAYDROID_ICON_DIR`), checked
+  against Waydroid 1.6.3's `tools/config/__init__.py`,
+  `tools/helpers/lxc.py` and `tools/services/user_manager.py`. On the
+  Pixel 9a this resolves to
+  `/home/user/.local/share/waydroid/data/icons/<package>.png` because
+  `ferrix-appd` runs as `user` with `HOME=/home/user`.
+- **Bounds:** validated package name only, regular non-symlink file with
+  the same device and inode before and after open, at most 1 MiB, `png`
+  crate with an 8 MiB limit, at most 1024 px per side, box-filtered to at
+  most 96x96 RGBA. `ferrix-appd` serves it through the new
+  `Request::AppIcon` / `Reply::AppIcon` (`AppIconBitmap`, base64 on the
+  wire, bounds checked again on decode) for installed entries only. The
+  home fetches on a background connection after each catalog update, at
+  most 64 per update, caches successes per id, and draws bicubic through
+  `Canvas::draw_rgba`. Design: ADR-008 "Installed APKs", "Icons".
+- **Evidence (mock/host only):** unit tests for the bitmap wire form and
+  bounds, PNG decoding (colour types, downscale, truncated, oversized,
+  transparent, garbage), file reads (missing, traversal, symlink,
+  directory, oversized), icon directory resolution, the adapter
+  (`FakeAndroidHost`), `ferrix-appd` (installed only, first-party `null`,
+  over the socket too), the home's icon cache (fetch once, bounded,
+  retry, prune, never first-party), and pixel checks that a row draws
+  the bitmap and falls back to the letter. A host preview
+  (`--preview --page apps --sample-apks --size 1080x2424`) was rendered
+  and inspected: nine sample APKs show synthetic disc icons and Calculator
+  shows the letter fallback. `cargo fmt --check`, clippy and `cargo test`
+  for the touched crates passed on macOS; `just linux-check` clippy
+  (`--workspace --all-targets --all-features -D warnings`) and tests for
+  the touched crates plus `ferrix-shell` and `ferrix-runtime-native`
+  passed. `just qemu-check` was not run (no Android runtime in QEMU, and
+  first-party rendering is unchanged).
+- **Limitations / device checks:** nothing ran on QEMU (no Android
+  runtime there) or on the Pixel 9a. Not yet verified on the device:
+  that Waydroid wrote the PNGs at that path for every listed package,
+  that `user` can read them (owner and mode are set by the container),
+  and how they look at the panel's density. A changed icon after an app
+  update stays cached until the app leaves the catalog or the home
+  restarts.
+
 ## 2026-10-11 (Home grid stays first-party; app list for every app; listing flap fixed; QEMU + mock)
 
 - **Why:** on the Pixel 9a (lead's screenshot, not re-run here) the home

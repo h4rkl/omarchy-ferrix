@@ -102,8 +102,13 @@ descriptor already launches is not listed twice (`org.lineageos.jelly` is
 capabilities or intents, and have no grants row. The list is refreshed by
 a poller (30 s; sooner while the runtime boots or when an unknown runtime
 window appears) and every change publishes `CatalogChanged`; the home
-surface appends them after the first-party tiles. Design and limitations:
-ADR-008 "Installed APKs".
+surface appends them after the first-party tiles. An installed app's
+launcher bitmap comes from `Request::AppIcon { id }` ->
+`Reply::AppIcon { id, icon }`: `icon` is a straight-alpha RGBA8
+`AppIconBitmap` of at most 96x96 pixels (base64 on the wire), decoded and
+bounded by the runtime adapter, or `null` (unknown id, a checked-in entry,
+or no usable icon), in which case the home draws the letter glyph. Design
+and limitations: ADR-008 "Installed APKs".
 
 ## Lifecycle
 
@@ -327,7 +332,7 @@ then gates by the verified role:
 
 | message | roles |
 |---|---|
-| `Catalog`, `Instances`, `Subscribe` | any |
+| `Catalog`, `Instances`, `AppIcon`, `Subscribe` | any |
 | `Home` | `compositor`, `home`, `application`, `tool` |
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
