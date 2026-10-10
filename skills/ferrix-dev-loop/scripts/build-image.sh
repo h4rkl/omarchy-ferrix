@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage: [KERNEL=1] [ANDROID=0|1] [WAYDROID_BUILT=dir MALI_OVERLAY=dir RENDERER=mali] [ROOTFS_MIB=n] build-image.sh
+# usage: [KERNEL=1] [ANDROID=0|1] [WAYDROID_BUILT=dir MALI_OVERLAY=dir RENDERER=mali [CODEC2_OVERLAY=dir CODECS=hardware]] [ROOTFS_MIB=n] build-image.sh
 # On the builder: optional Kleaf kernel build (about 11 minutes), product
 # build, dev-compose. Then fetch the image dir, verify every manifest hash,
 # and print the local image dir. Run builder-sync.sh first.
@@ -40,6 +40,10 @@ export FERRIX_PIXEL9A_DEV_ANDROID=${ANDROID:-1}
 export FERRIX_PIXEL9A_DEV_WAYDROID_BUILT_DIR='${WAYDROID_BUILT:-}'
 export FERRIX_PIXEL9A_DEV_MALI_OVERLAY_DIR='${MALI_OVERLAY:-}'
 export FERRIX_PIXEL9A_DEV_RENDERER='${RENDERER:-swiftshader}'
+# Optional stock Codec2 hardware video (needs RENDERER=mali): a
+# waydroid-codec2-overlay.sh output dir on the builder.
+export FERRIX_PIXEL9A_DEV_CODEC2_OVERLAY_DIR='${CODEC2_OVERLAY:-}'
+export FERRIX_PIXEL9A_DEV_CODECS='${CODECS:-software}'
 export FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB='${ROOTFS_MIB:-}'
 tools/pixel-9a/native-builder.sh run dev-compose build 2>&1 | grep -E 'PASS|FAIL|rror' | tail -3 >&2
 echo \$a > /tmp/ferrix-dev-attempt

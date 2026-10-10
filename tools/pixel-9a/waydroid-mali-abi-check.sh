@@ -1,7 +1,9 @@
 #!/bin/sh
-# Offline ABI check for the stock Mali overlay
-# (tools/pixel-9a/waydroid-mali-overlay.sh) against a Waydroid vendor image
-# (tools/android/waydroid-lineage-build.sh). Never touches a device.
+# Offline ABI check for the stock Mali and Codec2 overlays
+# (tools/pixel-9a/waydroid-mali-overlay.sh, waydroid-codec2-overlay.sh)
+# against a Waydroid vendor image (tools/android/waydroid-lineage-build.sh).
+# Never touches a device. Private library dirs (OVERLAY/lib64/ferrix-*, put
+# on their services' LD_LIBRARY_PATH) are searched first and never shadow.
 #
 #   sh tools/pixel-9a/waydroid-mali-abi-check.sh VENDOR_IMG OVERLAY_VENDOR_DIR [SYSTEM_LIB_DIRS]
 #
@@ -25,7 +27,7 @@
 # Needs debugfs and readelf (reported, never installed).
 set -eu
 die() { printf 'FAIL waydroid-mali-abi-check: %s\n' "$*" >&2; exit 1; }
-[ $# -ge 2 ] || { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 vendor_img=$1
 overlay=$2
 system_lib=${3:-}
@@ -45,7 +47,8 @@ debugfs -R "rdump /lib64 /bin $work/vendor" "$vendor_img" >/dev/null 2>&1 ||
   die "cannot read /lib64 and /bin from $vendor_img"
 # Search order: overlay first (it shadows), then the Waydroid vendor (with
 # its sphal hw/egl dirs), then the system dirs.
-search="$overlay/lib64:$overlay/lib64/hw:$overlay/lib64/egl:$work/vendor/lib64:$work/vendor/lib64/hw:$work/vendor/lib64/egl${system_lib:+:$system_lib}"
+private=$(find "$overlay/lib64" -mindepth 1 -maxdepth 1 -type d -name 'ferrix-*' | LC_ALL=C sort | tr '\n' ':')
+search="$private$overlay/lib64:$overlay/lib64/hw:$overlay/lib64/egl:$work/vendor/lib64:$work/vendor/lib64/hw:$work/vendor/lib64/egl${system_lib:+:$system_lib}"
 
 # Fields are read from the end: IFUNC types print as "<OS specific>: 10".
 defs() { readelf -W --dyn-syms "$1" 2>/dev/null | awk '$1 ~ /^[0-9]+:$/ && NF >= 8 && $(NF-1) != "UND" { n = $NF; sub(/@.*/, "", n); print n }' | sort -u; }

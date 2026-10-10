@@ -593,25 +593,46 @@ def verify_built_waydroid(built_dir):
     return images, manifest, combo
 
 
-def verify_mali_overlay(overlay_dir):
-    """A tools/pixel-9a/waydroid-mali-overlay.sh output: every overlay file and
-    the property file match its manifest.tsv; returns (source, dest) pairs."""
+def verify_vendor_overlay(overlay_dir, kind, label):
+    """A tools/pixel-9a/waydroid-<kind>-overlay.sh output: every overlay file
+    and the property file match its manifest.tsv; returns (source, dest)
+    pairs under /usr/share/ferrix/android/<kind>/ (ferrix-waydroid.sh)."""
     manifest = overlay_dir / "manifest.tsv"
+    share = f"/usr/share/ferrix/android/{kind}"
     files = []
     for row in read_manifest_rows(manifest, "file"):
         if len(row) != 4 or not row[1].startswith("vendor/") or ".." in row[1].split("/"):
-            die(f"malformed Mali overlay row: {row}")
-        verify_pinned_file(overlay_dir / "overlay" / row[1], row[2], row[3], f"Mali overlay {row[1]}")
-        files.append((overlay_dir / "overlay" / row[1], f"/usr/share/ferrix/android/mali/overlay/{row[1]}"))
-    prop = overlay_dir / "waydroid-mali.prop"
+            die(f"malformed {label} overlay row: {row}")
+        verify_pinned_file(overlay_dir / "overlay" / row[1], row[2], row[3], f"{label} overlay {row[1]}")
+        files.append((overlay_dir / "overlay" / row[1], f"{share}/overlay/{row[1]}"))
+    prop = overlay_dir / f"waydroid-{kind}.prop"
     prop_rows = read_manifest_rows(manifest, "prop")
-    if len(prop_rows) != 1 or sha256(prop) != prop_rows[0][2]:
-        die(f"Mali overlay property file differs from its manifest: {prop}")
-    files.append((prop, "/usr/share/ferrix/android/mali/waydroid-mali.prop"))
-    files.append((manifest, "/usr/share/ferrix/android/mali/manifest.tsv"))
+    if len(prop_rows) != 1 or prop_rows[0][1] != prop.name or not prop.is_file() \
+            or sha256(prop) != prop_rows[0][2]:
+        die(f"{label} overlay property file differs from its manifest: {prop}")
+    files.append((prop, f"{share}/{prop.name}"))
+    files.append((manifest, f"{share}/manifest.tsv"))
     if not files[:-2]:
-        die(f"Mali overlay is empty: {overlay_dir}")
+        die(f"{label} overlay is empty: {overlay_dir}")
     return files
+
+
+def verify_mali_overlay(overlay_dir):
+    """A tools/pixel-9a/waydroid-mali-overlay.sh output."""
+    return verify_vendor_overlay(overlay_dir, "mali", "Mali")
+
+
+def verify_codec2_overlay(overlay_dir):
+    """A tools/pixel-9a/waydroid-codec2-overlay.sh output."""
+    return verify_vendor_overlay(overlay_dir, "codec2", "Codec2")
+
+def check_codecs(codecs, renderer, staged):
+    """Hardware Codec2 needs its overlay and the Mali renderer (gchips buffers)."""
+    if codecs == "hardware" and not staged:
+        die("--codecs hardware needs --codec2-overlay")
+    if codecs == "hardware" and renderer != "mali":
+        die("--codecs hardware needs --renderer mali")
+
 
 def installed_packages(image, work):
     """Package names and apk provides from the rootfs database (merged /usr aware)."""
@@ -690,7 +711,7 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
         (helper, "/usr/lib/ferrix/ferrix-waydroid.sh", 0o755),
     ]
     staged += [(source, dest, 0o755 if "/bin/" in dest else 0o644)
-               for source, dest in inputs.get("mali", [])]
+               for source, dest in inputs.get("mali", []) + inputs.get("codec2", [])]
     needed = sum(source.stat().st_size for source, _, _ in staged)
     # Keep at least 1 GiB for Android /data, logs, and the dalvik cache.
     if free_bytes(image) < needed + (1 << 30):
@@ -701,6 +722,7 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
         editor.put_file(source, dest, mode)
     editor.mkdir_p("/var/lib/waydroid")
     editor.put(f"{inputs.get('renderer', 'swiftshader')}\n".encode(), "/etc/ferrix/waydroid-renderer", 0o644)
+    editor.put(f"{inputs.get('codecs', 'software')}\n".encode(), "/etc/ferrix/waydroid-codecs", 0o644)
     if debugfs_type(image, f"/etc/init.d/{ANDROID_SERVICE}") != "regular":
         die(f"/etc/init.d/{ANDROID_SERVICE} is missing from the integrated rootfs")
     editor.symlink(f"/etc/runlevels/default/{ANDROID_SERVICE}", f"/etc/init.d/{ANDROID_SERVICE}")
@@ -716,6 +738,7 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
     run("e2fsck", "-fn", image, capture=True)
     rows = [f"android\twaydroid\t{inputs['channel']}\t{inputs['build']}",
             f"android_renderer\t{inputs.get('renderer', 'swiftshader')}",
+            f"android_codecs\t{inputs.get('codecs', 'software')}",
             f"rootfs_size_mib\t{size_mib}"]
     for source, dest, _ in staged:
         rows.append(f"android_file\t{dest}\t{source.stat().st_size}\t{sha256(source)}")
@@ -780,6 +803,12 @@ def main():
     parser.add_argument("--renderer", choices=["swiftshader", "mali"],
                         default=env("FERRIX_PIXEL9A_DEV_RENDERER", "swiftshader"),
                         help="Waydroid renderer written to /etc/ferrix/waydroid-renderer")
+    parser.add_argument("--codec2-overlay", type=Path, default=env("FERRIX_PIXEL9A_DEV_CODEC2_OVERLAY_DIR"),
+                        help="tools/pixel-9a/waydroid-codec2-overlay.sh output to stage")
+    parser.add_argument("--codecs", choices=["software", "hardware"],
+                        default=env("FERRIX_PIXEL9A_DEV_CODECS", "software"),
+                        help="Android video codecs written to /etc/ferrix/waydroid-codecs "
+                             "(hardware needs --renderer mali)")
     parser.add_argument("--rootfs-size-mib", type=int,
                         default=int(env("FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB", "0") or 0),
                         help=f"grow the rootfs image to this size (--android default "
@@ -845,7 +874,11 @@ def main():
             android_inputs["mali"] = verify_mali_overlay(args.mali_overlay)
         if args.renderer == "mali" and "mali" not in android_inputs:
             die("--renderer mali needs --mali-overlay")
+        if args.codec2_overlay is not None:
+            android_inputs["codec2"] = verify_codec2_overlay(args.codec2_overlay)
+        check_codecs(args.codecs, args.renderer, "codec2" in android_inputs)
         android_inputs["renderer"] = args.renderer
+        android_inputs["codecs"] = args.codecs
     args.out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".tegu-dev.", dir=args.out.parent))
     try:

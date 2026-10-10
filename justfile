@@ -237,6 +237,7 @@ pixel-9a-dev-compose *args:
 # staging; on a host with e2fsprogs it also stages into a scratch ext4 image.
 pixel-9a-dev-compose-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/dev-compose-android-contract.py"
+    @sh "{{root}}/tools/pixel-9a/tests/waydroid-codec2-xml.sh"
 
 # Device-free boot composition for the independent radio-first kernel route.
 # Its output directory is separate from the canonical Google Kleaf route and
