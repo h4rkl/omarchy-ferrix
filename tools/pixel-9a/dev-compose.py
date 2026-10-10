@@ -658,52 +658,20 @@ def grow_rootfs(image, size_mib):
     run("e2fsck", "-fn", image, capture=True)
 
 
-# Waydroid 1.6.2 picks the aidl3 service manager protocol for every image
-# from API 33 up, but Android 15/16 changed the service manager interface
-# (getService2), so host calls such as `waydroid app install` never find
-# waydroidplatform. container_manager reruns set_aidl_version on every
-# start, so the table itself is edited, to upstream Waydroid's later
-# mapping (API 35: aidl5, 36+: aidl6; the image's libgbinder 1.1.45 knows
-# both). Exact-hash guarded on both sides; older images keep aidl3.
+# Android 15/16 changed the service manager interface (getService2); host
+# calls such as `waydroid app install` only reach waydroidplatform when
+# Waydroid selects aidl5/aidl6 for those images. That is Waydroid 1.6.3+,
+# which the base rootfs gets from the target-local backport
+# (targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/waydroid).
 WAYDROID_PROTOCOL_PY = "/usr/lib/waydroid/tools/helpers/protocol.py"
-WAYDROID_PROTOCOL_SHA256 = {
-    "pinned": "884ae8dcfbc198c8ea7128657c45d1c6e4a10a45e1afc9b48743afa1739fdb6a",
-    "patched": "f9148359faf9a79a3e3f27f2058a29e85e2ed6b82195f5e4562ca850072c2303",
-}
-WAYDROID_PROTOCOL_FROM = (
-    '    else:\n'
-    '        binder_protocol = "aidl3"\n'
-    '        sm_protocol =     "aidl3"\n'
-)
-WAYDROID_PROTOCOL_TO = (
-    '    elif android_api < 35:\n'
-    '        binder_protocol = "aidl3"\n'
-    '        sm_protocol =     "aidl3"\n'
-    '    elif android_api < 36:\n'
-    '        binder_protocol = "aidl3"\n'
-    '        sm_protocol =     "aidl5"\n'
-    '    else:\n'
-    '        binder_protocol = "aidl3"\n'
-    '        sm_protocol =     "aidl6"\n'
-)
 
 
-def patch_waydroid_protocol(editor):
-    """Apply the Android 15/16 service manager protocol table; returns its row."""
-    before = editor.read(WAYDROID_PROTOCOL_PY).encode()
-    digest = hashlib.sha256(before).hexdigest()
-    if digest == WAYDROID_PROTOCOL_SHA256["patched"]:
-        return f"android_waydroid_protocol\tpatched\t{digest}"
-    if digest != WAYDROID_PROTOCOL_SHA256["pinned"]:
-        die(f"{WAYDROID_PROTOCOL_PY} is not the pinned Waydroid 1.6.2 file ({digest}); "
-            "review the protocol table before staging an Android 15+ image")
-    after = before.decode().replace(WAYDROID_PROTOCOL_FROM, WAYDROID_PROTOCOL_TO, 1).encode()
-    patched = hashlib.sha256(after).hexdigest()
-    if patched != WAYDROID_PROTOCOL_SHA256["patched"]:
-        die(f"patched {WAYDROID_PROTOCOL_PY} hash {patched} is not the expected one")
-    editor.put(after, WAYDROID_PROTOCOL_PY, 0o644)
-    editor.remove("/usr/lib/waydroid/tools/helpers/__pycache__/protocol.cpython-314.pyc")
-    return f"android_waydroid_protocol\tpatched\t{patched}"
+def check_waydroid_protocol(editor):
+    """Refuse to stage a built Android 15+ image onto a Waydroid without aidl6."""
+    if '"aidl6"' not in editor.read(WAYDROID_PROTOCOL_PY):
+        die("the base rootfs Waydroid predates 1.6.3 (no aidl6 service manager for Android 16); "
+            "rebuild it with the target-local Waydroid backport")
+    return "android_waydroid_protocol\taidl6"
 
 
 def stage_android(image, work, repo, target_dir, inputs, size_mib):
@@ -736,9 +704,8 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
     if debugfs_type(image, f"/etc/init.d/{ANDROID_SERVICE}") != "regular":
         die(f"/etc/init.d/{ANDROID_SERVICE} is missing from the integrated rootfs")
     editor.symlink(f"/etc/runlevels/default/{ANDROID_SERVICE}", f"/etc/init.d/{ANDROID_SERVICE}")
-    # Only built (Android 15+) images need the newer table; the pinned
-    # LineageOS 20 images keep Waydroid's own.
-    protocol_row = patch_waydroid_protocol(editor) if inputs.get("built") else None
+    # Only built (Android 15+) images need the newer protocols.
+    protocol_row = check_waydroid_protocol(editor) if inputs.get("built") else None
     editor.commit()
     for source, dest, _ in staged:
         info = run("debugfs", "-R", f"stat {dest}", image, capture=True)

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refresh the generated Waydroid configuration after an upgrade (as Alpine's package does).
+waydroid upgrade -o
+exit 0

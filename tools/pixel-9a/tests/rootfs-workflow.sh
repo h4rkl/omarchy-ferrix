@@ -75,6 +75,10 @@ grep -q 'fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952' "$pmos
 	fail 'exynos-modem recipe archive hash is missing'
 grep -q '9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb97265' "$pmos_dir/modemmanager-samsung-sit/APKBUILD" ||
 	fail 'ModemManager recipe archive hash is missing'
+[ -f "$pmos_dir/waydroid/APKBUILD" ] || fail 'missing the Waydroid 1.6.3 backport recipe'
+grep -q '^pkgver=1\.6\.3$' "$pmos_dir/waydroid/APKBUILD" || fail 'Waydroid backport is not 1.6.3'
+grep -q '^_aports=3c2c2436e397ea23073cde73138f60e0d5c537b4$' "$pmos_dir/waydroid/APKBUILD" ||
+	fail 'Waydroid backport helper files are not pinned to an aports commit'
 if grep -q 'rm -f .cargo/config.toml' "$pmos_dir/exynos-modem/APKBUILD"; then
 	fail 'exynos-modem recipe removes the reviewed target configuration'
 fi
@@ -528,6 +532,8 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'if [ "$action" = init ]; then mkdir -p "$build_work"; printf "%s\\n" 6 >"$build_work/version"; exit 0; fi' \
 		'[ -f "$aports/device/testing/exynos-modem/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/modemmanager-samsung-sit/APKBUILD" ]' \
+		'[ -f "$aports/device/testing/waydroid/APKBUILD" ]' \
+		'grep -q "^pkgver=1.6.3$" "$aports/device/testing/waydroid/APKBUILD"' \
 		'[ -f "$aports/device/testing/device-google-tegu/s5300-userspace-sources.toml" ]' \
 		'[ -f "$aports/device/testing/device-google-tegu/modules-initfs-radio" ]' \
 		'awk '\''! /^[[:space:]]*#/ && NF { bad=1 } END { exit bad }'\'' "$aports/device/testing/device-google-tegu/modules-initfs"' \
