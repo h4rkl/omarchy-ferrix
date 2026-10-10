@@ -383,6 +383,20 @@ The glyph and label identify the application. Running, starting, and crashed
 states add a compact state cue without moving the tile. The catalog gets one
 rust anchor—the Terminal—not a rainbow of equal accents.
 
+### App list
+
+The home grid is the first-party peer set plus one Apps tile; it never
+shrinks to fit installed packages. The app list holds every entry (first-party
+and installed APKs) as rows sorted by label: leading glyph (the Material glyph,
+or the letter glyph for an APK), the label, and for an installed APK a quiet
+`fg_dim` "Android" line, so same-named apps stay distinguishable without
+colour. It opens from the Apps tile or an upward swipe on home (above the
+home zone; the compositor's bottom-edge gesture is unaffected), scrolls by
+touch drag with a hairline `border` thumb, and closes when an entry launches,
+like a mobile app drawer. A tile label is one line, ellipsized inside the
+tile; a grid that cannot fit tiles of at least 240 design px drops rows
+rather than letting labels collide with glyphs.
+
 ### Rows and controls
 
 Rows use a stable label edge and place the current value or affordance opposite

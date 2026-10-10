@@ -1,5 +1,58 @@
 # Status
 
+## 2026-10-11 (Home grid stays first-party; app list for every app; listing flap fixed; QEMU + mock)
+
+- **Why:** on the Pixel 9a (lead's screenshot, not re-run here) the home
+  grid squeezed 8 first-party tiles and 10 APKs into one area, so the tiles
+  shrank and labels overlapped their glyphs, and Android's Contacts, Files
+  and Camera sat beside the first-party apps with the same names. During a
+  Waydroid session restart `ferrix-appd` also logged
+  `installed-apps apps:0 removed:10 unavailable:false`, then re-added all
+  ten a refresh later.
+- **Home:** the grid holds the first-party entries at the designed tile
+  size (312 px at 1080 wide) plus an **Apps** tile (pinned Material Symbols
+  `apps`, now 49 glyphs). Installed APKs never change the grid; a unit test
+  compares the composed home frame with and without ten APKs, byte for byte.
+  `tile_rects` no longer shrinks tiles below 240 design px: it drops rows,
+  and the Apps tile keeps the last slot. Tile labels are ellipsized inside
+  the tile.
+- **App list:** `Page::Apps` (`ui-state` page `Apps`) lists every entry
+  sorted by label (first-party before an Android app of the same name).
+  Each row has the Material glyph or the APK's letter glyph and the label;
+  installed APKs add a quiet `fg_dim` "Android" line. Open it with the Apps
+  tile or an upward swipe on home that starts above the bottom 8% (the
+  compositor's home gesture starts in the bottom 3% and is unchanged).
+  Touch drag scrolls within clamped bounds and never taps; a hairline thumb
+  shows the position; back is the header chevron or an edge swipe; tapping
+  a row launches through `ferrix-appd` as the grid does and closes the list.
+- **Listing flap:** `AndroidRuntime::installed_apps` returns "unavailable"
+  unless the session is `RUNNING` before and after the listing,
+  `sys.boot_completed` is `1` (when `waydroid shell` answers; unknown falls
+  back to the status), and at least one launchable package comes back.
+  `ferrix-appd` also treats an empty `Ok` listing as unavailable. Either
+  way it keeps the last known entries and publishes no `CatalogChanged`.
+- **Evidence (QEMU, TCG, headless 1080x2340):** `just qemu-build`,
+  `just qemu-check` (`check-passed`) and `just qemu-gesture-check`
+  (`gesture-check-passed`: minimize, both edge yields, close) all passed
+  with a fresh `FERRIX_OUT_DIR`. In a `qemu-agent-start` session the frames
+  were captured and inspected: the home grid (8 tiles plus Apps), the Apps
+  tile tap, back by edge swipe, the list opened by an upward swipe, Terminal
+  launched from its row (`home-launch` ok), and home again with the grid
+  and Terminal's running dot. **mock:** host previews
+  (`--page apps|apps-end --sample-apks`) at 1080x2340, 830x1800 and
+  2340x1080 with the ten Pixel APK labels; `cargo test --workspace`,
+  `just linux-check`, fmt and clippy pass. New tests cover grid and tile
+  geometry with no glyph/label overlap at 1080x2340, 1080x2215, 830x1800
+  and landscape, row geometry and scroll bounds, drag versus tap,
+  viewport-limited hit testing, and the flap at both layers.
+- **Limitations:** QEMU has no Android runtime, so the QEMU list shows the
+  8 first-party entries only. The 18-entry list and its scrolling are
+  host-preview and unit-test evidence (`mock`), and nothing has been run
+  on the Pixel 9a. The `sys.boot_completed` probe is one extra
+  `waydroid shell` call per poll and is unverified on the device. There is
+  no fling or inertia: scrolling follows the finger only. APK icons are
+  still letter glyphs.
+
 ## 2026-10-11 (Android apps survive a ferrix-shell restart; host tests only)
 
 - **Problem (physical `google-pixel-9a-tegu-gxq96-mp1-0`):** after

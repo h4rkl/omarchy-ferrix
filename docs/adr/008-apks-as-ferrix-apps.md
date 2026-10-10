@@ -161,14 +161,25 @@ Recorded design, within decisions 1–3 above:
   in front is itself an Android app (the intent's origin); otherwise it
   waits in the background until the person opens it. Android's later
   raise requests reach it through `xdg_activation_v1` as before.
-- **Launcher:** installed apps are appended after every first-party tile,
-  ordered by label. They never borrow a first-party glyph or reference
-  page.
+- **Launcher (revised 2026-10-11):** installed apps are not home grid
+  tiles. The grid keeps the first-party entries at the designed tile size
+  plus an Apps tile; the app list (Apps tile or an upward swipe on home)
+  holds every entry sorted by label, and installed apps carry a quiet
+  "Android" line so an APK named like a first-party app (Contacts, Files,
+  Camera) stays distinguishable. Appending them to the grid (the first
+  cut) shrank all 18 tiles on the Pixel 9a until labels overlapped glyphs.
+  They never borrow a first-party glyph or reference page.
+- **Unavailable listings (2026-10-11):** the Android runtime answers a
+  listing only while the session is `RUNNING` before and after it,
+  `sys.boot_completed` is `1` (when `waydroid shell` can tell), and at
+  least one launchable package comes back; anything else is an error.
+  `ferrix-appd` also treats an empty `Ok` listing as unavailable. Both keep
+  the last known entries: the Pixel 9a logged `apps:0 removed:10` during a
+  session restart before this.
 
 Limitations: icons are letter glyphs (Waydroid's PNG icons under the
 session user's data directory are not read; a bitmap icon path through
-the protocol and the software renderer is follow-up work); the home grid
-does not scroll, so tiles beyond one screen are not reachable yet; each
+the protocol and the software renderer is follow-up work); each
 poll costs one `waydroid app list` subprocess (event-driven refresh from
 Waydroid's package-state callback is follow-up work). Evidence is `mock`
 only (`cargo test`); no physical or QEMU run has exercised installed APKs.
