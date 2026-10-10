@@ -100,6 +100,13 @@ Base images: LineageOS (Waydroid's patch target), plain AOSP, GrapheneOS.
 - YouTube (m.youtube.com) in Jelly plays (software `c2.ffmpeg.vp9.decoder`,
   640x360; 97% of the video area changed between captures 3 s apart).
 
+- 2026-10-11, clean flash (`docs/status.md`):
+  - Provisioning, the Browser tile, keep-awake and shell-restart adoption
+    all verified.
+  - Installed-APK icons and Apps-list fling verified on the device.
+  - Hardware VP9 YouTube runs at about 30 % CPU.
+  - YouTube feed scroll: p50/p95 12/21 ms, 5.7 % janky.
+
 ## Claim boundary
 
 This records one physical target and revision. It does not claim general

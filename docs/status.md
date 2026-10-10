@@ -101,13 +101,45 @@ Framebuffer and host-webcam captures were inspected for every step below.
     (`c2.ffmpeg`) and with hardware VP9 (`c2.exynos.vp9.decoder`, which
     needs `mfc_fw.bin`), at about 23 % CPU busy during hardware playback.
   - Android used about 1.26 GB PSS; disabling Launcher3 saves 62 MB.
+- **After rejoining Wi-Fi (same image, owner-provided network):**
+  - YouTube in Jelly plays with hardware VP9 (`c2.exynos.vp9.decoder`) at
+    about 30 % of 8 CPUs busy.
+  - YouTube feed scroll, 12 swipes, with a preview autoplaying in the feed:
+    1682 frames, p50/p90/p95/p99 12/18/21/28 ms, 5.7 % janky, GPU p50/p99
+    2/8 ms. Before the output-enter fix this test recorded 0 frames.
+- **Apps list, deployed with `deploy-product.sh` (merges of `apps-fling`
+  and `apk-icons`):**
+  - Installed APKs show their Android launcher icons (`app-icon`
+    `found:true`, 96x96, read from
+    `/home/user/.local/share/waydroid/data/icons`). First-party rows keep
+    their glyphs.
+  - Fling: a 150 px flick logged `apps-fling` at 2399 px/s and glided to
+    the end of the list (`apps-fling-end` scroll 619, the list's maximum)
+    with no bounce.
+- **Hardware AV1, opt-in test only:** the earlier "no picture" came from
+  the codec list. The default list excludes `c2.google.*`, and Ferrix
+  reinstalls the packaged overlay on every container start, so a hand edit
+  under `/var/lib/waydroid/overlay` never took effect. With the AV1 list
+  installed in the packaged overlay, WebView picks
+  `c2.google.av1.decoder`, and 360p and 720p clips play with correct
+  colour. However, a smeared strip runs down the left edge and a green
+  line sits at the top. The decoder logs "AFBC is enabled by framework",
+  and `vendor.google.av1dec.afbc=0` does not change that. AV1 stays
+  excluded by default.
+- **Audio:** the Waydroid stream reaches PipeWire, but the host has no sound
+  card. `sound-aoc` stays in deferred probe and the AoC DSP never reports
+  ready. This is host bring-up, separate from Android; `capabilities.toml`
+  still lists audio as unsupported.
+- **Bluetooth inside Android:** off (`state: OFF`). Ferrix owns the
+  controller and Waydroid passes none through, so Android apps see no
+  Bluetooth. The earlier crash loop is gone: the crash buffer is empty.
 - **Limitations:**
-  - The flash reset user data, so Wi-Fi was disconnected; hardware VP9 and
-    the YouTube feed scroll test were not repeated on this image.
-  - AV1 hardware decode (BigWave) decodes but shows no picture in Chromium,
-    so it is excluded by default (`FERRIX_CODEC2_AV1=1` opts in).
-  - APK icons are letter glyphs, and the Apps list has no fling.
-  - Bluetooth and audio inside Android were not checked.
+  - AV1 edge artifacts (above).
+  - No speaker or headset audio.
+  - No Bluetooth for Android apps.
+  - The checked-in `pixel-9a-radios-connect-wifi` recipe needs USB-network
+    SSH, which this image does not expose. Wi-Fi was joined with `nmcli`
+    over the dev-loop serial shell instead.
   - No QEMU claim: QEMU runs no Android.
 
 ## 2026-10-11 (Installed APKs show their Android launcher icon; mock/host evidence only)
