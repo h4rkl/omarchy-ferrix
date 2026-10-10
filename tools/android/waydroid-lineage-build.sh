@@ -72,7 +72,33 @@ do_tools() {
     install -m 0755 "$(find "$tmp" -type f -name git-lfs | head -n 1)" "$tools/bin/git-lfs"
     rm -rf "$tmp"
   fi
-  printf 'PASS waydroid-lineage tools: repo %s (%s), %s\n' "$tag" "$commit" "$(git-lfs version)"
+  mesa_host_tools
+  printf 'PASS waydroid-lineage tools: repo %s (%s), %s, meson %s\n' "$tag" "$commit" \
+    "$(git-lfs version)" "$("$mesa_bin/meson" --version)"
+}
+
+# Mesa's Android makefile runs host meson and python3 (with mako) under a
+# hard-coded PATH; the Ferrix mesa3d patch puts FERRIX_MESA_HOST_PATH first.
+mesa_bin="$tools/mesa-host/path"
+mesa_host_tools() {
+  req="$here/waydroid-mesa-host.requirements"
+  stamp="$tools/mesa-host/.requirements.sha256"
+  if [ "$(cat "$stamp" 2>/dev/null)" != "$(sha256_of "$req")" ]; then
+    rm -rf "$tools/mesa-host"
+    python3 -m venv "$tools/mesa-host"
+    "$tools/mesa-host/bin/pip" install -q --disable-pip-version-check \
+      --require-hashes --no-deps --only-binary=:all: -r "$req"
+    sha256_of "$req" >"$stamp"
+  fi
+  mkdir -p "$mesa_bin"
+  ln -sf ../bin/meson "$mesa_bin/meson"
+  ln -sf ../bin/python3 "$mesa_bin/python3"
+  # Mesa's own ninja step; Soong ships a prebuilt ninja.
+  if [ -x "$src/prebuilts/build-tools/linux-x86/bin/ninja" ]; then
+    ln -sf "$src/prebuilts/build-tools/linux-x86/bin/ninja" "$mesa_bin/ninja"
+  fi
+  FERRIX_MESA_HOST_PATH=$mesa_bin
+  export FERRIX_MESA_HOST_PATH
 }
 
 repo_flags() {

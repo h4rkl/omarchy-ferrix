@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ferrix <ferrix@invalid>
+Date: Sat, 10 Oct 2026 15:39:59 +1300
+Subject: [PATCH] android: let the build put a pinned host meson first on PATH
+
+---
+ android/mesa3d_cross.mk | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/android/mesa3d_cross.mk b/android/mesa3d_cross.mk
+index 53e8870..d5fc04e 100644
+--- a/android/mesa3d_cross.mk
++++ b/android/mesa3d_cross.mk
+@@ -86,8 +86,13 @@ MESA3D_GLES_BINS += \
+     $($(M_TARGET_PREFIX)MESA3D_GALLIUM_BIN)
+ endif
+ 
++# Soong replaces PATH with its allowlist, so host meson and python-mako
++# cannot come from the caller's PATH; FERRIX_MESA_HOST_PATH (exported by the
++# Ferrix build script) names a pinned venv bin directory to put first.
++MESON_HOST_PATH := $(if $(FERRIX_MESA_HOST_PATH),$(FERRIX_MESA_HOST_PATH):)
++
+ MESON_GEN_NINJA := \
+-	cd $(MESON_OUT_DIR) && PATH=~/.cargo/bin:/usr/bin:/usr/local/bin:$$PATH meson ./build     \
++	cd $(MESON_OUT_DIR) && PATH=$(MESON_HOST_PATH)~/.cargo/bin:/usr/bin:/usr/local/bin:$$PATH meson ./build     \
+ 	--cross-file $(call relative-to-absolute,$(MESON_GEN_DIR))/aosp_cross        \
+ 	--buildtype=release                                                          \
+ 	-Dplatforms=android                                                          \
+@@ -107,7 +112,7 @@ MESON_GEN_NINJA := \
+ 	-Dxmlconfig=enabled															 \
+ 	$(BOARD_MESA3D_MESON_ARGS)                                                   \
+ 
+-MESON_BUILD := PATH=/usr/bin:/bin:/sbin:$$PATH ninja -C $(MESON_OUT_DIR)/build
++MESON_BUILD := PATH=$(MESON_HOST_PATH)/usr/bin:/bin:/sbin:$$PATH ninja -C $(MESON_OUT_DIR)/build
+ 
+ $(MESON_GEN_FILES_TARGET): MESON_CPU_FAMILY := $(subst arm64,aarch64,$(TARGET_$(M_TARGET_PREFIX)ARCH))
+ 

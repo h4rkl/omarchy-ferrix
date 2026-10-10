@@ -1,0 +1,9 @@
+# Host Python tools for Mesa's meson build inside the Waydroid LineageOS 23.2
+# tree (external/mesa3d/android/mesa3d_cross.mk). Installed by
+# tools/android/waydroid-lineage-build.sh into a venv under the tools cache
+# with --require-hashes --no-deps --only-binary; never system-wide. The
+# MarkupSafe wheel matches the builder's CPython 3.14 x86_64.
+meson==1.12.1 --hash=sha256:930bc7542cbd9f57009e182fd014eba48cf1a0180a7b9006d2d32d8f168d8b02
+mako==1.4.3 --hash=sha256:723296007c870bfd6b3f0c3230dba7198096e5269297ebf5e4eff9e7ffa39d4f
+markupsafe==3.0.3 --hash=sha256:457a69a9577064c05a97c41f4e65148652db078a3a509039e64d3467b9e7ef97
+packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
