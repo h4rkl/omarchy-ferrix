@@ -6,6 +6,7 @@
 #   sh tools/android/waydroid-lineage-build.sh tools     # pinned repo + git-lfs (user-local)
 #   sh tools/android/waydroid-lineage-build.sh init      # repo init (shallow, LFS)
 #   sh tools/android/waydroid-lineage-build.sh sync      # Waydroid manifests + repo sync
+#   sh tools/android/waydroid-lineage-build.sh lfs       # fetch LFS prebuilts (part of sync)
 #   sh tools/android/waydroid-lineage-build.sh patch     # Waydroid + Ferrix patches
 #   sh tools/android/waydroid-lineage-build.sh build     # systemimage + vendorimage
 #   sh tools/android/waydroid-lineage-build.sh all
@@ -167,7 +168,27 @@ do_sync() {
     printf 'repo sync pass %s after a failure; waiting 120s\n' "$pass" >&2
     sleep 120
   done
+  lfs_pull
   printf 'PASS waydroid-lineage sync: %s\n' "$src"
+}
+
+# `repo init --git-lfs` does not install the lfs filter into every project
+# checkout, so LFS-tracked prebuilts (external/chromium-webview's
+# webview.apk) can stay as pointer files and fail late in the build. Pull
+# them explicitly; git-lfs checks each object against its pointer's oid.
+lfs_pull() {
+  # shellcheck disable=SC2016
+  repo forall -c 'if grep -qs "filter=lfs" .gitattributes; then
+      git lfs install --local >/dev/null && git lfs pull || exit 1
+    fi' || die "git lfs pull failed"
+  lfs_check
+}
+
+lfs_check() {
+  pointers=$(repo forall -c 'if grep -qs "filter=lfs" .gitattributes; then
+      git lfs ls-files 2>/dev/null | awk -v p="$REPO_PATH" "\$2 == \"-\" { print p \"/\" \$3 }"
+    fi')
+  [ -z "$pointers" ] || die "LFS objects not fetched (run the sync phase): $pointers"
 }
 
 apply_ferrix_patches() {
@@ -222,6 +243,7 @@ target_release() {
 
 do_build() {
   cd "$src"
+  lfs_check
   release=$(target_release)
   [ -n "$release" ] || die "cannot resolve the release config; set FERRIX_WAYDROID_LINEAGE_RELEASE"
   combo="$(pin LUNCH_PRODUCT)-$release-$(pin LUNCH_VARIANT)"
@@ -253,6 +275,7 @@ case $phase in
   tools) do_tools ;;
   init) do_tools; do_init ;;
   sync) do_tools; do_sync ;;
+  lfs) do_tools; cd "$src"; lfs_pull ;;
   patch) do_tools; do_patch ;;
   build) do_tools; do_build ;;
   all) do_tools; do_init; do_sync; do_patch; do_build ;;
