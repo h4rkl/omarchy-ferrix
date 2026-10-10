@@ -44,7 +44,8 @@ use smithay::{
     delegate_xdg_shell,
     desktop::{
         LayerSurface, PopupKind, PopupManager, Window, WindowSurfaceType, find_popup_root_surface,
-        get_popup_toplevel_coords, layer_map_for_output, utils::send_frames_surface_tree,
+        get_popup_toplevel_coords, layer_map_for_output, space::SpaceElement,
+        utils::send_frames_surface_tree,
     },
     input::{Seat, SeatHandler, SeatState, keyboard::XkbConfig, pointer::CursorImageStatus},
     output::Output,
@@ -649,8 +650,19 @@ impl Shell {
     /// stack no longer contains it, so focus moves to the next mapped window.
     fn refocus(&mut self) {
         let focused = self.windows.focused().cloned();
+        // Overlap is window-local: the front window covers the client area.
+        let overlap = Rectangle::from_size(self.client_area().size);
         for window in self.windows.iter() {
             let active = focused.as_ref() == Some(window);
+            // Only the front window is on the output. Clients that track
+            // their own visibility rely on wl_surface.enter/leave: Waydroid's
+            // hwcomposer puts Android to sleep when none of its windows has
+            // entered an output, and a sleeping Android never draws.
+            if active {
+                window.output_enter(&self.output, overlap);
+            } else {
+                window.output_leave(&self.output);
+            }
             if window.set_activated(active)
                 && let Some(toplevel) = window.toplevel()
                 && toplevel.is_initial_configure_sent()
