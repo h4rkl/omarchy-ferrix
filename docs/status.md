@@ -1,5 +1,35 @@
 # Status
 
+## 2026-10-12 (Pixel 9a AoC online; TAS25xx blocks ALSA; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- PR #58 merged the bounded AoC firmware loader. On native Linux, the
+  hash-pinned factory `vendor.img:/firmware/aoc.bin` was staged and recorded
+  as a 29,076,160-byte file in the firmware manifest. A new postmarketOS
+  rootfs at merged commit `b75ba84` contains the OpenRC service, runlevel
+  link, image, and manifest. This attempt reused the previously built Google
+  Kleaf kernel and Ferrix product from source `f49a460`; it did not rebuild
+  those unchanged inputs. The newly composed seven-image bundle has manifest
+  SHA-256 `13ebefb76b37e2c5f4ce8939d0986cd75fd004e1bf042eb60dd392322b9e754b`;
+  all transferred image sizes and hashes matched it.
+- The exact-device `pixel-9a-dev-flash` preflight rechecked one unlocked
+  `tegu`/`GXQ96`/`MP1.0` device on slot B and the tested, hash-pinned stock
+  restore archive. Its token-bound run successfully wrote `boot_b`,
+  `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`, `vbmeta_b`,
+  and shared `userdata`, then rebooted without a slot switch. The Ferrix
+  CDC-ACM port appeared, disappeared before the first inventory, and later
+  returned. The port interruption has no established cause. No panel image
+  was captured for this attempt.
+- The merged read-only audio inventory verified the exact guest device tree.
+  AoC now reports online and `ferrix-aoc-firmware` reports started, but ALSA
+  still has zero cards and PCMs. Kernel logs show TAS25xx repeatedly failing
+  to load `tismartpa_driver_tuning.bin` with `-2`, followed by
+  `aoc_snd_card_probe: snd register fail -2`. PipeWire/WirePlumber have no
+  ALSA sink or source. No playback, microphone capture, mixer, or route was
+  exercised. Issue #55's AoC slice is complete; #59 owns the TAS25xx source
+  and firmware decision; #2 remains open. `[audio]` stays `unsupported`.
+  Redacted physical inventory and build/flash logs remain ignored under
+  `out/pixel-9a/`.
+
 ## 2026-10-12 (fresh Pixel 9a development boot and read-only inventories; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - A new attempt from reviewed source `f49a460` built the Google Kleaf kernel,
