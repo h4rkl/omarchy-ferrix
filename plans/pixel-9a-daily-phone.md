@@ -79,8 +79,9 @@ the project must not silently call that a fully functioning Pixel 9a.
   on the exact device. Its bootloader, radio, and `fastboot -w update` stages
   all returned success, including all 29 `super` chunks. Its redacted ignored
   transcript is `out/pixel-9a/restore/20261011T201345Z.txt`. The phone
-  rebooted, but fresh same-device Android boot remains **unverified**: the
-  first read-only discovery saw neither ADB nor Fastboot. #25 remains open.
+  rebooted. ADB subsequently appeared with the same serial, but property
+  queries returned `error: closed`; stock build and slot remain **unverified**.
+  #25 remains open.
   The S5300 source route decision was merged in
   [PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
 - [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37) is closed by
