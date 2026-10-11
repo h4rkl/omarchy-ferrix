@@ -909,6 +909,16 @@ stub-tested only
 (`just pixel-9a-radios-test`); no radio has been observed working on the
 physical device, and it never edits `capabilities.toml`.
 
+## Audio route
+
+Audio stays `unsupported`. [`audio-route-decision.md`](audio-route-decision.md)
+is an offline record, with no physical evidence. It records what the checked-in
+kernel, firmware, service, and adapter inputs prove and what they do not. It
+assigns the remaining work to target layers (Kleaf modules, firmware policy,
+observed-only UCM). It also sets out the read-only exact-device inventory and
+its pass/fail criteria. That inventory runs only after the issue #25 restore
+and recovery proof.
+
 ## Agent playbook
 
 Any LLM agent provisioning this or another phone follows
