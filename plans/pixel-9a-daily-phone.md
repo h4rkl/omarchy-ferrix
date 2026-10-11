@@ -68,39 +68,45 @@ the project must not silently call that a fully functioning Pixel 9a.
   blanking, suspend/resume, real Bluetooth pairing, GNSS, NFC, fingerprint,
   safe charging/thermal behaviour, and release-grade updates lack physical
   evidence. A software-rendered UI alone is not the performance gate.
-- The newest [restore record](../docs/status.md) says the 2026-10-11 pinned
+- The 2026-10-11 [restore record](../docs/status.md) says the pinned
   factory restore ran out of host disk space during `vendor.img` extraction.
   The device stayed in ordinary Fastboot on slot B; stock Android boot after
-  that attempt is **unverified**. The wrapper's false success marker was
-  fixed locally with offline tests, but that run is not recovery proof. The
-  worktree contains user changes in `docs/status.md`,
-  `tools/pixel-9a/factory-restore.sh`, and its test; preserve them. Start
-  physical work with [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25).
-- On 2026-10-12, #25's offline recovery-script hardening is in
-  [draft PR #36](https://github.com/h4rkl/omarchy-ferrix/pull/36);
-  the host still has only about 12–13 GiB free, so the factory restore has
-  not been rerun and stock boot remains unverified. The owner reports running only
-  `fastboot -w`; read-only discovery afterward still found the exact device
-  in ordinary Fastboot on slot B. That wipe is not factory restore evidence.
-  The S5300 source route decision is
-  in [draft PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
-- The Rust CI job fails existing native sandbox integration tests on its
-  unprivileged hosted runner. [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
-  and [draft PR #41](https://github.com/h4rkl/omarchy-ferrix/pull/41)
-  track a real privileged test gate and bounded Unix socket paths. The local
-  privileged container still failed one required user-namespace test; GitHub
-  runner proof is pending. Unrelated PRs must not be called green while that
-  gate fails.
-- The QEMU CI job also failed before kernel boot because the arm64 runner
-  lacked `efi-virtio.rom`. [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38)
-  and [draft PR #39](https://github.com/h4rkl/omarchy-ferrix/pull/39)
-  track the explicit Ubuntu ROM dependency and guest-cache permissions. The
-  first attempt to suppress ROM loading failed on arm64 and was reverted;
-  local TCG passed, corrected arm64 CI proof is pending.
-- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) and
-  [draft PR #40](https://github.com/h4rkl/omarchy-ferrix/pull/40)
-  provide an offline fail-closed calibration-mount gate. Exact-device
-  filesystem inventory and mountinfo proof remain before any CP node open.
+  that attempt was **unverified**. The wrapper's false success marker was
+  fixed with offline tests. That failed run was not recovery proof.
+- On 2026-10-12, #25's offline recovery-script hardening was merged in
+  [PR #36](https://github.com/h4rkl/omarchy-ferrix/pull/36);
+  after the owner freed host space, the checked-in pinned factory restore ran
+  on the exact device. Its bootloader, radio, and `fastboot -w update` stages
+  all returned success, including all 29 `super` chunks. Its redacted ignored
+  transcript is `out/pixel-9a/restore/20261011T201345Z.txt`. The phone
+  rebooted, but fresh same-device Android boot remains **unverified**: the
+  first read-only discovery saw neither ADB nor Fastboot. #25 remains open.
+  The S5300 source route decision was merged in
+  [PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
+- [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37) is closed by
+  [merged PR #41](https://github.com/h4rkl/omarchy-ferrix/pull/41): hosted
+  Rust, strict arm64 sandbox, and headless QEMU CI all passed. The sandbox
+  gate ran all 15 integration tests with no skips.
+- [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38) is closed by
+  [merged PR #39](https://github.com/h4rkl/omarchy-ferrix/pull/39): the
+  GitHub arm64 QEMU job recorded `check-passed` and saved its guest cache.
+  This is QEMU/mock evidence only.
+- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) has an offline
+  fail-closed calibration-mount gate merged in
+  [PR #40](https://github.com/h4rkl/omarchy-ferrix/pull/40). Rootfs and CI
+  passed, but exact-device filesystem inventory and mountinfo proof remain
+  before any CP node open; the issue stays open.
+- [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42) is closed by
+  [merged PR #43](https://github.com/h4rkl/omarchy-ferrix/pull/43), aligning
+  the Pixel rootfs runtime allowlist with two already staged optional Mali
+  firmware aliases. This is no GPU hardware evidence.
+- [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) has an offline
+  audio source and inventory decision merged in
+  [PR #44](https://github.com/h4rkl/omarchy-ferrix/pull/44).
+  A read-only audio inventory workflow is in
+  [draft PR #45](https://github.com/h4rkl/omarchy-ferrix/pull/45), with mock
+  tests passing. Speaker, microphone, route, and mute evidence remain absent
+  on the phone.
 
 ## Working structure
 
@@ -170,6 +176,12 @@ body/comment, rather than relying on board order as a dependency graph.
 The order follows evidence dependencies, not numeric issue order. Work that
 can run off-device may proceed while the phone is being restored, but it
 cannot promote a physical claim.
+
+CI and offline prerequisites: [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
+owns the merged strict native sandbox gate; [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38)
+has closed with a passing arm64 QEMU job; [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42)
+has closed with the Pixel rootfs firmware handoff fixture and allowlist repair. These
+gates make other PR checks meaningful but do not satisfy any phone capability.
 
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
