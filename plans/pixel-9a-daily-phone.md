@@ -98,10 +98,13 @@ the project must not silently call that a fully functioning Pixel 9a.
   fail-closed calibration-mount gate merged in
   [PR #40](https://github.com/h4rkl/omarchy-ferrix/pull/40). Rootfs and CI
   passed. A read-only S5300 source filesystem inventory was merged in
-  [PR #49](https://github.com/h4rkl/omarchy-ferrix/pull/49). It originally
-  required SSH while the Pixel rootfs has `--no-sshd`; [#52](https://github.com/h4rkl/omarchy-ferrix/issues/52)
-  repairs that transport over the Ferrix CDC-ACM shell. Exact-device filesystem
-  inventory and mountinfo proof remain before any CP node open; #34 stays open.
+  [PR #49](https://github.com/h4rkl/omarchy-ferrix/pull/49). Its SSH path
+  was replaced with the CDC-ACM shell in
+  [PR #54](https://github.com/h4rkl/omarchy-ferrix/pull/54). The physical
+  read-only run found `modem_b` ext4 and `efs`, `persist`, and
+  `modem_userdata` f2fs, all unmounted and uniquely resolved. On-device
+  journal-recovery suppression remains unproved, so CP boot stays blocked
+  and #34 stays open.
 - [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42) is closed by
   [merged PR #43](https://github.com/h4rkl/omarchy-ferrix/pull/43), aligning
   the Pixel rootfs runtime allowlist with two already staged optional Mali
@@ -111,9 +114,11 @@ the project must not silently call that a fully functioning Pixel 9a.
   [PR #44](https://github.com/h4rkl/omarchy-ferrix/pull/44).
   A read-only audio inventory workflow was merged in
   [PR #45](https://github.com/h4rkl/omarchy-ferrix/pull/45), with mock tests
-  and CI passing. Its original SSH path is unusable on the checked-in guest;
-  #52 repairs the transport. It still awaits a Ferrix guest run. Speaker,
-  microphone, route, and mute evidence remain absent on the phone.
+  and CI passing; #54 supplied the CDC-ACM transport. The physical run found
+  no ALSA card or PCM and an `Offline` AoC with deferred sound-card probe.
+  [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55) owns a bounded
+  pinned-factory AoC firmware experiment. Speaker, microphone, route, and
+  mute evidence remain absent; #2 was reopened after an incorrect closure.
 - [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed by
   [merged PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48), which
   makes an ADB or Fastboot identity-query failure explicit. The successful
@@ -127,6 +132,13 @@ the project must not silently call that a fully functioning Pixel 9a.
   changes. A fresh build uses an isolated worktree at reviewed GitHub main;
   the older branch and ignored artifacts remain intact pending issue-linked
   PR review.
+- A fresh `f49a460` source attempt passed kernel, product, firmware, pmOS
+  rootfs, and development-image builds; all seven transferred image hashes
+  matched the bundle manifest. The checked-in recovery-invariant flash on
+  slot B succeeded, and an inspected host webcam capture shows Ferrix Home
+  on the physical panel. The CDC-ACM guest shell and both read-only physical
+  inventories ran. This is boot and diagnosis evidence, not a daily-phone
+  acceptance result; details and limits are in `docs/status.md`.
 
 ## Working structure
 
@@ -209,8 +221,8 @@ is closed after the independent networkd CI test race fix.
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
 | 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25): pinned stock restore, truthful failure handling, and same-device Android 17 boot verified on 2026-10-12; physical evidence is in PR #47. Recheck the recovery invariant before every new device load. |
-| 0a. Physical inventory transport | #2 and #34 read-only inventories | [#52](https://github.com/h4rkl/omarchy-ferrix/issues/52): replace their unusable SSH path with bounded CDC-ACM probes, then run them on a booted exact-device Ferrix guest before promoting any capability. |
-| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): prevent recovery writes when mounting modem calibration partitions; blocks CP boot. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
+| 0a. Physical inventory transport | #2 and #34 read-only inventories | [#52](https://github.com/h4rkl/omarchy-ferrix/issues/52) / PR #54: CDC-ACM transport merged and both inventories ran on the booted exact device. Carry their findings into #34 and #55; neither inventory promotes a capability. |
+| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): prove recovery-safe modem calibration mounts before CP boot. [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55): load pinned AoC firmware and re-inventory ALSA. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
 | 2. Power and radios | [#9](https://github.com/h4rkl/omarchy-ferrix/issues/9) power key, blanking, suspend/wake, sensors; [#24](https://github.com/h4rkl/omarchy-ferrix/issues/24) Wi-Fi hardening; [#5](https://github.com/h4rkl/omarchy-ferrix/issues/5) Bluetooth pairing; [#7](https://github.com/h4rkl/omarchy-ferrix/issues/7) hidden Wi-Fi; [#8](https://github.com/h4rkl/omarchy-ferrix/issues/8) time/RTC | [#26](https://github.com/h4rkl/omarchy-ferrix/issues/26): charge/thermal/endurance, with screen-off drain dependent on #9. |
 | 3. Camera, location and other hardware | [#3](https://github.com/h4rkl/omarchy-ferrix/issues/3) camera; #9 owns orientation/proximity/ambient sensors | [#28](https://github.com/h4rkl/omarchy-ferrix/issues/28) GNSS/location; [#29](https://github.com/h4rkl/omarchy-ferrix/issues/29) NFC/fingerprint feasibility and proof. |
 | 4. App and shell usability | [#19](https://github.com/h4rkl/omarchy-ferrix/issues/19) browser performance/video/screen fit; [#4](https://github.com/h4rkl/omarchy-ferrix/issues/4) optional GPU; [#12](https://github.com/h4rkl/omarchy-ferrix/issues/12), [#21](https://github.com/h4rkl/omarchy-ferrix/issues/21), [#22](https://github.com/h4rkl/omarchy-ferrix/issues/22), [#23](https://github.com/h4rkl/omarchy-ferrix/issues/23) shell/navigation/notifications; [#14](https://github.com/h4rkl/omarchy-ferrix/issues/14) text; [#16](https://github.com/h4rkl/omarchy-ferrix/issues/16) pmOS QEMU graphics | No duplicate browser or shell issue. Keep browser usability evidence distinct from hardware GPU support. |

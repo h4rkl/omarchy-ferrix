@@ -1,5 +1,44 @@
 # Status
 
+## 2026-10-12 (fresh Pixel 9a development boot and read-only inventories; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- A new attempt from reviewed source `f49a460` built the Google Kleaf kernel,
+  Ferrix product, pinned-factory firmware stage, postmarketOS rootfs, and
+  seven-image development bundle on native Linux. The bundle manifest SHA-256
+  is `2079b4f0ef7ce86acd2dbf25cc404bf226eaaf9e062b996893e304a61ce35a98`.
+  Every transferred image matched its manifest size and SHA-256 on the Mac.
+  The build logs and images remain under ignored `out/pixel-9a/`.
+- The checked-in development route entered ordinary Fastboot after exact
+  Android identity checks. Flash preflight verified one unlocked
+  `tegu`/`GXQ96`/`MP1.0` device on slot B and the hash-pinned, previously
+  tested stock factory restore archive. A token-bound plan flashed only
+  `boot_b`, `init_boot_b`, `vendor_boot_b`, `vendor_kernel_boot_b`, `dtbo_b`,
+  `vbmeta_b`, and shared `userdata`; every Fastboot write returned success.
+  It requested reboot without a slot change. Ferrix then enumerated its USB
+  gadget and the CDC-ACM shell reported kernel
+  `6.1.124-android14-11-ga4662a84a15f`. An inspected host webcam image
+  shows Ferrix Home on the physical panel. This proves a graphical boot for
+  this attempt, not the remaining daily-phone functions.
+- The merged read-only audio inventory (#45/#54) passed its exact device-tree
+  gate over CDC-ACM. ALSA has no cards or PCMs; PipeWire/WirePlumber are
+  reachable but have no ALSA sink/source, and ferrix-core reports audio
+  unsupported. Kernel logs repeatedly defer `sound-aoc` while waiting for
+  AoC output control and show `cs40l26.wmfw` missing (`-2`). A separate
+  read-only check found the AoC `revision` at `Offline` and its firmware
+  sysfs control present. No sound was played or recorded. #55 owns the
+  pinned-factory AoC loading experiment; #2 stays open.
+- The merged read-only S5300 source inventory (#49/#54) resolved four unique,
+  unmounted source partitions on slot B: `modem_b` is ext4; `efs`, `persist`,
+  and `modem_userdata` are f2fs. They match the offline mount service's
+  accepted types. Whether this kernel suppresses journal replay/recovery on
+  an actual mount remains unknown; the probe returned
+  `issue34_safety_gate=owner-review-required`. The modem mount service stays
+  disabled and no CP node was opened. #34 remains open.
+- Raw webcam, flash, and probe transcripts remain ignored. The board audio,
+  telephony, and lifecycle capability claims are unchanged. Wi-Fi, Bluetooth,
+  touch, endurance, and the rest of the daily-phone gate were not retested in
+  this attempt.
+
 ## 2026-10-12 (Pixel 9a CDC-ACM guest probe transport; mock)
 
 - Issue #52: the Ferrix dev rootfs is built with `--no-sshd`, so
