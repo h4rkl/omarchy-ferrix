@@ -909,6 +909,40 @@ stub-tested only
 (`just pixel-9a-radios-test`); no radio has been observed working on the
 physical device, and it never edits `capabilities.toml`.
 
+## S5300 source partition inventory (issue #34)
+
+`just pixel-9a-s5300-source-inventory` is a read-only check of the four
+partitions that `ferrix-s5300-mounts` reads: the active-slot `modem_a` or
+`modem_b`, plus `efs`, `persist`, and `modem_userdata`. It uses the same SSH
+settings as the radios workflow. The guest probe
+(`tools/pixel-9a/s5300-source-inventory-remote.sh`) first checks the exact tegu
+device tree. It then selects the slot with the same rule as the service and
+resolves each `/dev/disk/by-partlabel` link and kernel `PARTNAME` uevent. Next
+it reads the superblock type with util-linux
+`blkid -c /dev/null -p -o value -s TYPE`, using a non-interactive root, `doas -n`, or
+`sudo -n` prefix. Finally it copies any `/proc/self/mountinfo` line for the
+device or its `/mnt/vendor` destination. It never mounts, writes, or dumps
+partition data, and it does not collect filesystem UUIDs or LABEL values or
+device serials. The GPT partition names are recorded because they are the
+exact inputs to the mount service.
+
+For each source, the host reports the raw type and resolution. Resolution is
+unique, missing, duplicate, device mismatch, or slot unresolved. Type is ext4,
+f2fs, no signature, ambivalent, unsupported, or unknown. The host also checks
+existing mounts against the service's `verify_mount` contract. The redacted
+transcript, labelled `physical:google-pixel-9a-tegu-gxq96-mp1-0` (or `mock`
+under `FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE=mock`), is written to ignored
+`out/pixel-9a/s5300-source-inventory/`. A clean physical run reports
+`issue34_safety_gate=owner-review-required`, never passed. Whether ext4
+`noload` and f2fs `norecovery` suppress every write on this kernel stays
+`unknown`. Whether the kernel shows those flags in mountinfo is also unknown
+until an observed mount shows them.
+
+This workflow is offline fixture-tested only
+(`just pixel-9a-s5300-source-inventory-test`). The issue #25 pinned stock
+recovery proof is established; a physical run still needs a Ferrix boot on
+this exact device.
+
 ## Audio route
 
 Audio stays `unsupported`. [`audio-route-decision.md`](audio-route-decision.md)
