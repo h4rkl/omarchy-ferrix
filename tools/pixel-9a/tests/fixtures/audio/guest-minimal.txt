@@ -1,5 +1,5 @@
 probe=read-only
-probe_version=1
+probe_version=2
 identity=verified
 dt_model=ZUMA PRO TEGU MP on ZUMA PRO
 dt_compatible=google,ZUMA PRO TEGU
@@ -43,6 +43,11 @@ deferred_audio_devices=unknown
 audio_firmware_files=0
 ## begin audio-firmware-files
 ## end audio-firmware-files exit=0
+aoc_device=absent
+aoc_revision=absent
+aoc_firmware_control=absent
+aoc_firmware_image=absent
+aoc_firmware_manifest_rows=unknown
 ucm_dir=unavailable
 ucm_conf_files=unknown
 ucm_matched_card_profiles=unknown
@@ -54,6 +59,7 @@ process_wireplumber=unknown
 process_pipewire_pulse=unknown
 pipewire_graph=wpctl-unavailable
 ferrix_audio_backend=unknown
+service_ferrix_aoc_firmware=unknown
 service_ferrix_pipewire=unknown
 service_ferrix_audio=unknown
 service_ferrix_core=unknown

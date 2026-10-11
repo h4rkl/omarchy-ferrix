@@ -66,6 +66,10 @@ check "static: probe writes nothing except to /dev/null" [ -z "$offending" ]
 [ -z "$offending" ] || printf '%s\n' "$offending"
 check "static: rc-service is only used for status" \
   sh -c '! grep -E "rc-service" "$1" | grep -vE "have rc-service|rc-service \"\\\$service\" status"' sh "$probe"
+check "static: AoC firmware control is only tested for existence" \
+  sh -c '! grep -v "^[[:space:]]*#" "$1" | grep -F "aoc_device/firmware" | grep -vF "[ -e \"\$aoc_device/firmware\" ]"' sh "$probe"
+check "static: AoC revision text is classified, never printed" \
+  sh -c '! grep -v "^[[:space:]]*#" "$1" | grep -E "(echo|printf).*aoc_state"' sh "$probe"
 check "static: identity gate precedes the first audio probe" \
   sh -c 'gate=$(grep -n "exit 4" "$1" | head -n 1 | cut -d: -f1); first=$(grep -nE "asound|wpctl status" "$1" | grep -v "^[0-9]*:#" | head -n 1 | cut -d: -f1); [ -n "$gate" ] && [ -n "$first" ] && [ "$gate" -lt "$first" ]' sh "$probe"
 
@@ -134,6 +138,9 @@ check "inventory: ALSA playback and capture PCMs enumerated" tsv_row "$tsv" alsa
 check "inventory: ALSA evidence records counts" grep -q 'cards=1 pcms=3 playback=2 capture=1' "$tsv"
 check "inventory: kernel audio surface present without logged failures" tsv_row "$tsv" kernel-audio audio-kernel-surface-present-no-probe-failure-logged
 check "inventory: firmware files present" tsv_row "$tsv" audio-firmware audio-firmware-files-present-no-load-failure-logged
+check "inventory: AoC online is classified" tsv_row "$tsv" aoc-dsp aoc-reports-online
+check "inventory: AoC evidence records control, image, manifest row, and loader" \
+  grep -q 'device=present revision=online firmware_control=present image=regular manifest_rows=1 loader=started; revision text is classified, not recorded; no sysfs write' "$tsv"
 check "inventory: UCM card profile present" tsv_row "$tsv" ucm-and-tools ucm-card-profile-present
 check "inventory: tool availability is recorded" grep -q 'aplay=present .* alsactl=unavailable .* speaker_test=unavailable' "$tsv"
 check "inventory: PipeWire sinks and sources present" tsv_row "$tsv" pipewire-graph graph-sinks-and-sources-present
@@ -145,7 +152,7 @@ check "inventory: summary row stays inventory-only" tsv_row "$tsv" audio invento
 check "inventory: status column is unsupported only" \
   awk -F '\t' '!/^#/ && $1 != "subsystem" && $2 != "unsupported" { bad = 1 } END { exit bad }' "$tsv"
 check "inventory: every row carries the mock label" \
-  sh -c 'test "$(grep -vc "^#" "$1")" -eq 8 && test "$(grep -c "	mock: stubbed transport for $2 (not physical evidence); " "$1")" -eq 7' sh "$tsv" "$target_id"
+  sh -c 'test "$(grep -vc "^#" "$1")" -eq 9 && test "$(grep -c "	mock: stubbed transport for $2 (not physical evidence); " "$1")" -eq 8' sh "$tsv" "$target_id"
 check "inventory: mock run never claims physical evidence" sh -c '! grep -q "physical: $2" "$1" "$3"' sh "$tsv" "$target_id" "$transcript"
 check "inventory: transcript labels mock" grep -q "^# evidence: mock: stubbed transport for $target_id" "$transcript"
 check "inventory: transcript keeps raw sections" \
@@ -171,6 +178,8 @@ check "minimal: firmware log unavailable" tsv_row "$tsv" audio-firmware audio-fi
 check "minimal: UCM data unavailable" tsv_row "$tsv" ucm-and-tools ucm-data-unavailable
 check "minimal: wpctl unavailable" tsv_row "$tsv" pipewire-graph wpctl-unavailable
 check "minimal: core socket absent" tsv_row "$tsv" ferrix-audio-adapter ferrix-core-socket-absent
+check "minimal: AoC device absent" tsv_row "$tsv" aoc-dsp aoc-device-absent
+check "minimal: unknown AoC manifest and loader stay unknown" grep -q 'manifest_rows=unknown loader=unknown' "$tsv"
 check "minimal: unknown counts stay unknown" grep -q 'cards=unknown pcms=unknown' "$tsv"
 check "minimal: service manager absence is unknown" grep -q 'ferrix-audio=unknown' "$tsv"
 
@@ -186,6 +195,14 @@ variant failures -e 's/^audio_dt_unbound=0$/audio_dt_unbound=1/' -e 's/^dmesg_au
 variant graph_down -e 's/^pipewire_graph=reachable$/pipewire_graph=unreachable/' -e '/^graph_/d'
 variant no_socat -e 's/^core_state=observed$/core_state=socket-client-unavailable/' -e '/^core_audio_/d'
 variant no_route -e 's/^core_audio_route=speaker$/core_audio_route=absent/'
+# The shape of the 2026-10-11 exact-device finding, with synthetic values:
+# no card, AoC Offline, firmware control present, nothing staged or loaded.
+variant aoc_offline -e 's/^alsa_cards=1$/alsa_cards=0/' -e 's/^aoc_revision=online$/aoc_revision=offline/' \
+  -e 's/^aoc_firmware_image=regular$/aoc_firmware_image=absent/' -e 's/^aoc_firmware_manifest_rows=1$/aoc_firmware_manifest_rows=0/' \
+  -e 's/^service_ferrix_aoc_firmware=started$/service_ferrix_aoc_firmware=not-started/'
+variant aoc_no_control -e 's/^aoc_revision=online$/aoc_revision=offline/' -e 's/^aoc_firmware_control=present$/aoc_firmware_control=absent/'
+variant aoc_unreadable -e 's/^aoc_revision=online$/aoc_revision=unreadable/'
+variant aoc_missing -e '/^aoc_/d'
 export STUB_FIXTURES="$work/fixtures"
 
 export STUB_GUEST=failures
@@ -209,6 +226,31 @@ export STUB_GUEST=no_route
 run_audio no_route inventory
 check "adapter: core state without audio is not promoted" \
   tsv_row "$work/no_route/pixel-9a/audio/audio-evidence-latest.tsv" ferrix-audio-adapter core-state-without-audio
+
+export STUB_GUEST=aoc_offline
+run_audio aoc_offline inventory
+tsv="$work/aoc_offline/pixel-9a/audio/audio-evidence-latest.tsv"
+check "aoc: offline DSP with a firmware control is classified" tsv_row "$tsv" aoc-dsp aoc-offline-firmware-control-present
+check "aoc: missing image, manifest row, and loader are recorded" \
+  grep -q 'revision=offline firmware_control=present image=absent manifest_rows=0 loader=not-started' "$tsv"
+check "aoc: offline DSP leaves ALSA without cards" tsv_row "$tsv" alsa no-alsa-cards
+check "aoc: summary row stays inventory-only" tsv_row "$tsv" audio inventory-only-playback-capture-not-exercised
+
+export STUB_GUEST=aoc_no_control
+run_audio aoc_no_control inventory
+check "aoc: offline DSP without a firmware control is distinct" \
+  tsv_row "$work/aoc_no_control/pixel-9a/audio/audio-evidence-latest.tsv" aoc-dsp aoc-offline-firmware-control-absent
+
+export STUB_GUEST=aoc_unreadable
+run_audio aoc_unreadable inventory
+check "aoc: unreadable revision is not promoted" \
+  tsv_row "$work/aoc_unreadable/pixel-9a/audio/audio-evidence-latest.tsv" aoc-dsp aoc-revision-unavailable
+
+export STUB_GUEST=aoc_missing
+run_audio aoc_missing inventory
+tsv="$work/aoc_missing/pixel-9a/audio/audio-evidence-latest.tsv"
+check "aoc: missing fields are unknown, not absent" tsv_row "$tsv" aoc-dsp aoc-state-unknown
+check "aoc: missing manifest count is unknown, not zero" grep -q 'manifest_rows=unknown' "$tsv"
 export STUB_FIXTURES="$fixtures"
 
 # --- identity refusals ---
@@ -261,7 +303,7 @@ unset STUB_FLOOD
 unset FERRIX_PIXEL9A_AUDIO_EVIDENCE
 run_audio physical_label inventory
 check "label: default run labels the exact physical target" \
-  sh -c 'test "$(grep -c "	physical: $2; " "$1")" -eq 7' sh "$work/physical_label/pixel-9a/audio/audio-evidence-latest.tsv" "$target_id"
+  sh -c 'test "$(grep -c "	physical: $2; " "$1")" -eq 8' sh "$work/physical_label/pixel-9a/audio/audio-evidence-latest.tsv" "$target_id"
 export FERRIX_PIXEL9A_AUDIO_EVIDENCE=qemu
 run_audio bad_label inventory
 check "label: only physical or mock labels are accepted" sh -c 'test "$1" -eq 2 && test "$2" -eq 0' sh "$status" "$runs"

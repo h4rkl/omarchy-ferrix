@@ -31,7 +31,7 @@ if [ "$model" != "$expected_model" ] ||
 fi
 
 echo probe=read-only
-echo probe_version=1
+echo probe_version=2
 echo identity=verified
 printf 'dt_model=%s\n' "$model"
 printf 'dt_compatible=%s\n' "$expected_compatible"
@@ -220,6 +220,46 @@ firmware_files=$(printf '%s' "$firmware_files" | sed '/^$/d')
 printf 'audio_firmware_files=%s\n' "$(count_lines "$firmware_files")"
 raw_text audio-firmware-files "$firmware_files"
 
+# --- AoC DSP (issue #55) -------------------------------------------------------
+
+# Presence and state only. The revision text is classified as offline/online
+# and never printed; the firmware control is tested for existence and never
+# opened. The staged image and its manifest row are checked by name only.
+aoc_device=/sys/devices/platform/17000000.aoc
+if [ -d "$aoc_device" ]; then
+  echo aoc_device=present
+  aoc_state=$(head -n 1 "$aoc_device/revision" 2>/dev/null)
+  [ -n "$aoc_state" ] || aoc_state=$(as_root head -n 1 "$aoc_device/revision" 2>/dev/null)
+  if [ ! -e "$aoc_device/revision" ]; then
+    echo aoc_revision=absent
+  elif [ -z "$aoc_state" ]; then
+    echo aoc_revision=unreadable
+  elif [ "$aoc_state" = Offline ]; then
+    echo aoc_revision=offline
+  else
+    echo aoc_revision=online
+  fi
+  if [ -e "$aoc_device/firmware" ]; then echo aoc_firmware_control=present; else echo aoc_firmware_control=absent; fi
+else
+  echo aoc_device=absent
+  echo aoc_revision=absent
+  echo aoc_firmware_control=absent
+fi
+if [ -L /lib/firmware/aoc.bin ]; then
+  echo aoc_firmware_image=symlink
+elif [ -f /lib/firmware/aoc.bin ]; then
+  echo aoc_firmware_image=regular
+else
+  echo aoc_firmware_image=absent
+fi
+firmware_manifest=/usr/share/ferrix/pixel-9a/firmware-manifest.tsv
+if [ -r "$firmware_manifest" ]; then
+  aoc_rows=$(awk -F '\t' '$1 == "firmware" && $2 == "audio-aoc" && $4 == "/firmware/aoc.bin" && $5 == "lib/firmware/aoc.bin" { count++ } END { print count + 0 }' "$firmware_manifest" 2>/dev/null)
+  printf 'aoc_firmware_manifest_rows=%s\n' "${aoc_rows:-unknown}"
+else
+  echo aoc_firmware_manifest_rows=unknown
+fi
+
 # --- UCM -------------------------------------------------------------------
 
 ucm_dir=unavailable
@@ -307,7 +347,7 @@ fi
 
 backend=$(sed -n 's/^FERRIX_AUDIO_BACKEND=//p' /etc/ferrix/backends.env 2>/dev/null | sed -n '1p')
 printf 'ferrix_audio_backend=%s\n' "${backend:-unknown}"
-for service in ferrix-pipewire ferrix-audio ferrix-core; do
+for service in ferrix-aoc-firmware ferrix-pipewire ferrix-audio ferrix-core; do
   key=$(printf '%s' "$service" | tr '-' '_')
   if have rc-service; then
     rc-service "$service" status >/dev/null 2>&1

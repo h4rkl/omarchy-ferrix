@@ -1,13 +1,15 @@
 # Audio route decision — google-pixel-9a-tegu-gxq96-mp1-0
 
-Status: **offline decision record, 2026-10-12.** Nothing here is physical
-audio evidence. `capabilities.toml` keeps `[audio] status = "unsupported"`
-(`capabilities.toml:27-29`). It is written for issue #2. Its inventory plan
-runs only after issue #25's stock restore and recovery proof pass.
+Status: **offline decision record, 2026-10-12, with one read-only physical
+inventory finding (2026-10-11, [below](#physical-finding-2026-10-11-aoc-offline)).**
+Nothing here is physical audio playback or capture evidence.
+`capabilities.toml` keeps `[audio] status = "unsupported"`
+(`capabilities.toml:27-29`). It is written for issue #2; the AoC firmware
+slice is issue #55.
 
-Repository claims below cite checked-in paths and lines. Upstream source trees
-were not fetched for this record. Where only an upstream file could settle a
-question, it is listed under [Unknowns](#unknowns) and not stated as fact.
+Repository claims below cite checked-in paths and lines. The pinned AoC
+source was inspected for the firmware-loading decision below; other upstream
+audio sources and generated module lists still need review where noted.
 
 ## What the repository proves today
 
@@ -18,8 +20,9 @@ question, it is listed under [Unknowns](#unknowns) and not stated as fact.
 | Required modules | `pmos/device-google-tegu/modules-initfs:25-26` requires `cs40l26-i2c` and `snd-soc-cs40l26`, copied from the stock vendor-ramdisk list (lines 7-11). `kernel.sh:214-224` fails the build if Kleaf does not emit them. | That `cs40l26` is a speaker, earpiece, or microphone path. Its role is unverified (see Unknowns). |
 | Loaded modules (dev route) | `initramfs-init-kleaf:371-378` loads all of Kleaf's generated `system_dlkm.modules.load` and `vendor_dlkm.modules.load`. Firmware lookup points at the rootfs while they load. `tools/pixel-9a/dev-compose.py:203-218` copies those lists unfiltered from the Kleaf archives. | Which audio modules are in those generated lists, or whether they probe. The lists are build outputs and are not checked in. |
 | Radio-first route | `modules-vendor-dlkm:1-4` and `modules-system-dlkm:1-3` select no loadable modules. | Applies only to the native radio route. The Kleaf dev route above is a different route. |
-| Firmware | The `display-audio-touch` controller lists `runtime_paths = ["firmware", "dsp", "audio"]` but `required_names = []` (`firmware-policy.toml:80-85`). The runtime allowlist has no audio-controller rows (`pmos/device-google-tegu/firmware-allowlist.tsv`). `allow_unlisted_paths = false` (`firmware-policy.toml:91`). | Which DSP, AoC, or amplifier firmware names Linux requests. No audio-controller firmware bytes are staged, and this record stages none. |
+| Firmware | Issue #55 adds one `audio-aoc` controller to `firmware-policy.toml` and one stage row, `vendor.img:/firmware/aoc.bin` → `lib/firmware/aoc.bin` (`firmware-stage-allowlist.tsv`), with an optional runtime row (`pmos/device-google-tegu/firmware-allowlist.tsv`). The `display-audio-touch` controller still has `required_names = []`. `allow_unlisted_paths = false`, and the stage workflow refuses persist or `*calib*` rows. | That the factory `aoc.bin` boots AoC on this kernel. Amplifier (TAS25xx) and haptics (CS40L26) firmware are not staged. No bytes are in Git. |
 | Userspace | The device package depends on `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD:23-25`). It enables `ferrix-pipewire` and `ferrix-audio` (`APKBUILD:131-138`). It does not depend on `alsa-utils` or `alsa-ucm-conf`. No UCM file exists under the target or `tools/pixel-9a`. | That `aplay`, `arecord`, `amixer`, or `alsaucm` are present in the image, or that UCM is loaded. |
+| AoC loader | `pmos/device-google-tegu/ferrix-aoc-firmware.initd` is a fail-open OpenRC one-shot, ordered before `ferrix-pipewire`, `ferrix-audio`, and `ferrix-core`. Nothing `need`s it. It writes `aoc.bin` to the AoC `firmware` control once, and only when `revision` reads `Offline` and the staged image matches its manifest row. It has bounded waits. | That the write brings AoC online or lets the sound card bind. Offline tests only (`tools/pixel-9a/tests/aoc-firmware-runtime.sh`). |
 | Services | `ferrix-pipewire.initd:6-18` runs PipeWire as `user` after `ferrix-radio-firmware`. `ferrix-audio.initd:13-49` runs WirePlumber and waits up to 10 s for `wpctl status`. `docs/status.md:517-521` records only that both are supervised and respawn. | Any ALSA node in the PipeWire graph. A running daemon is not an audio device. |
 | Android audio | Waydroid audio goes through `pipewire-pulse` (`pmos/android/packages:11-23`). | Any hardware output. With no ALSA sink, it reaches only whatever PipeWire offers. |
 | Ferrix adapter | `ferrix-backends.env:15` selects `wireplumber`. The target adapter composes `WirePlumberAudio::connect()` and falls back to `UnavailableHardware` on error (`adapter/src/lib.rs:837-841`, `292-302`). `connect` fails when no classified default sink exists (`crates/ferrix-audio-wireplumber/src/lib.rs:71`, `157-174`). | That a route works. Without an ALSA sink, the product sees `unsupported`. |
@@ -43,9 +46,9 @@ comes only after voice calls (`linux-plan.md:827-829`, `837-840`).
    instead if it already matches the reported card name.
 3. **Layer ownership** once a card exists:
    - kernel modules and DT: Kleaf config in this target package;
-   - firmware names: update the existing `display-audio-touch` policy only
-     after verifying the kernel request, pinned factory source, and exact
-     staging paths;
+   - firmware names: add a narrowly scoped controller to the existing
+     policy only after verifying the driver request path, pinned factory
+     source, and exact staging paths;
    - mixer and enable sequences: target UCM under `pmos/device-google-tegu/`;
    - node naming and priority: a target WirePlumber rule, if needed;
    - `ferrix-audio-wireplumber`: changes only if UCM exposes speaker and
@@ -60,6 +63,56 @@ comes only after voice calls (`linux-plan.md:827-829`, `837-840`).
 4. **`capabilities.toml` stays `unsupported`** until every pass criterion
    below holds and audible speaker output is captured on camera or by a host
    microphone.
+
+## Physical finding 2026-10-11: AoC offline
+
+`physical: google-pixel-9a-tegu-gxq96-mp1-0`, Kleaf/pmOS dev image at source
+commit `f49a460`, read-only. These are the redacted findings. Raw
+transcripts stay in ignored `out/`.
+
+- The merged inventory (#54) verified the guest identity. ALSA has no cards
+  and no PCMs. `dmesg` shows `aoc_snd_card_probe` repeatedly waiting for the
+  AoC output control. TAS25xx probes on I2C, but no audio firmware file is
+  present. The WirePlumber/PipeWire graph is reachable but has no ALSA sink.
+  `ferrix-core` reports audio `unsupported`.
+- A targeted read-only sysfs probe found
+  `/sys/devices/platform/17000000.aoc/revision`. It reads `Offline`. The
+  device's `firmware` control exists. Nothing was written.
+- `cs40l26.wmfw` fails a direct firmware load with `-2`. That is a separate
+  haptics follow-up and is not handled here.
+
+### Why explicit AoC firmware loading is now justified
+
+Decision 3 above allowed a firmware policy update only after verifying the
+kernel request, the pinned factory source, and the exact staging path. The
+kernel logged **no** direct-firmware-load request for an AoC image. The
+pinned `private/google-modules/aoc/aoc.c` at revision
+`ac69293d11343b47f0b2b758b0df9f936360dbd4` sets
+`aoc_autoload_firmware = false` by default and names `aoc.bin` as the
+default image. Its `firmware_store` accepts a filename in the existing
+sysfs control and calls `request_firmware_nowait`; its `revision_show`
+returns `Offline` until the DSP is ready. Ferrix currently never writes the
+control. That explains the absent firmware request and waiting sound card
+without assuming that the firmware itself will boot successfully.
+
+The slice stays narrow:
+
+- one factory file, `vendor.img:/firmware/aoc.bin`, staged under its own
+  name through the existing hash-verified factory workflow (archive
+  size/SHA-256 pin, per-file manifest bytes/SHA-256, rootfs re-hash, runtime
+  radio-gate re-hash);
+- one target OpenRC one-shot that names it once while AoC reads `Offline`;
+- no TAS25xx or CS40L26 firmware, no per-unit calibration, no UCM, no mixer
+  writes, and no adapter or `ferrix-hardware-api` change.
+
+The audio inventory probe (version 2) now reports the AoC device, a
+classified revision (`offline`/`online`/`unreadable`/`absent`, never the raw
+text), firmware-control presence, the staged image, its manifest row count,
+and the loader service state. The host records them as the `aoc-dsp` row,
+which stays `unsupported`.
+
+`[audio]` stays `unsupported`. AoC reporting online would be progress
+toward A1, not sound. The pass criteria below are unchanged.
 
 ## Exact-device read-only inventory plan
 
@@ -137,8 +190,15 @@ amplifier is identified. Call audio stays blocked on telephony.
 - Whether the pinned `aoc` tree builds an ALSA/ASoC machine driver for tegu,
   and under which module names. Settle this with the pinned upstream
   `aoc/BUILD.bazel` or Kbuild and the generated `vendor_dlkm.modules.load`.
-- Whether AoC audio needs AoC firmware loaded by Linux, and by what name.
-  Settle this with the inventory's step 7.
+- Whether naming the factory `aoc.bin` in the AoC `firmware` control brings
+  AoC online on this kernel. That includes whether the driver accepts the
+  write, authenticates the image, and leaves `Offline`. Whether the AoC sound
+  card then binds without the CS40L26 haptics back end is also unknown.
+  The 2026-10-11 finding settles the earlier question of whether Linux must
+  start AoC (it stays `Offline` otherwise). It does not settle these. Settle
+  them with the next physical inventory after an image that carries #55. The
+  `aoc_core` is loaded in the physical inventory; its inclusion in the
+  generated module list can still be checked independently.
 - The role of `cs40l26` / `snd-soc-cs40l26` (`modules-initfs:25-26`). The
   name suggests a Cirrus Logic haptics part with an ASoC component. Treat
   that as unverified until the pinned `amplifiers` source and tegu DT are

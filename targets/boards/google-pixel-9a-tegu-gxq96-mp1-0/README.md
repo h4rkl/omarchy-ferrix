@@ -690,6 +690,14 @@ manifest rows; symlinks, special files, unsafe components, and empty bundles
 fail closed. `FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST` may point to a separately
 reviewed replacement, but extraction still requires the explicit firmware
 confirmation and the exact factory hash.
+Issue #55 adds one optional `audio-aoc` row: `vendor.img:/firmware/aoc.bin`
+to `lib/firmware/aoc.bin`. The fail-open `ferrix-aoc-firmware` OpenRC
+one-shot names it in the AoC `firmware` control only while AoC reads
+`Offline`, and only after re-checking the image against its manifest row. It
+is ordered before the audio session, and nothing needs it. The stage
+workflow refuses persist or `*calib*` rows; per-unit calibration is never
+staged. See [`audio-route-decision.md`](audio-route-decision.md). Audio stays
+`unsupported`.
 The pinned BCM4383 module name, firmware request basenames, and platform
 variant lookup contract are recorded in
 [`wifi-firmware-source-evidence.md`](wifi-firmware-source-evidence.md);
@@ -971,6 +979,11 @@ probe records:
 - audio-named modules, device-tree bindings (bound/unbound), deferred devices,
   and `dmesg` probe and firmware-load failures;
 - audio-named firmware files;
+- the AoC DSP (probe version 2, issue #55): device presence, a classified
+  `revision` (`offline`/`online`/`unreadable`/`absent`; the raw text is never
+  recorded), `firmware`-control presence (never opened), the staged
+  `lib/firmware/aoc.bin`, its manifest row count, and the
+  `ferrix-aoc-firmware` service state, as the `aoc-dsp` TSV row;
 - UCM data and `alsaucm listcards`;
 - whether ALSA and PipeWire tools are installed;
 - the PipeWire/WirePlumber graph (`wpctl status`, the adapter's

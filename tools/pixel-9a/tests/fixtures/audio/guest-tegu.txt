@@ -1,5 +1,5 @@
 probe=read-only
-probe_version=1
+probe_version=2
 identity=verified
 dt_model=ZUMA PRO TEGU MP on ZUMA PRO
 dt_compatible=google,ZUMA PRO TEGU
@@ -73,6 +73,11 @@ audio_firmware_files=1
 ## begin audio-firmware-files
 | /lib/firmware/synth_audio.bin
 ## end audio-firmware-files exit=0
+aoc_device=present
+aoc_revision=online
+aoc_firmware_control=present
+aoc_firmware_image=regular
+aoc_firmware_manifest_rows=1
 ucm_dir=/usr/share/alsa/ucm2
 ucm_conf_files=120
 ucm_card_drivers=1
@@ -133,6 +138,7 @@ adapter_list_sinks_exit=1
 | Host Name: ferrix-synth-host
 ## end pactl-info exit=0
 ferrix_audio_backend=wireplumber
+service_ferrix_aoc_firmware=started
 service_ferrix_pipewire=started
 service_ferrix_audio=started
 service_ferrix_core=started

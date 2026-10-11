@@ -61,6 +61,7 @@ source="
 	ferrix-android.initd
 	ferrix-s5300-mounts.initd
 	ferrix-radio-firmware.initd
+	ferrix-aoc-firmware.initd
 	ferrix-bluetooth-uart.initd
 	ferrix-contactsd.initd
 	exynos-modem.initd
@@ -118,6 +119,8 @@ package() {
 		"$pkgdir"/etc/init.d/ferrix-s5300-mounts
 	install -Dm755 "$srcdir"/ferrix-radio-firmware.initd \
 		"$pkgdir"/etc/init.d/ferrix-radio-firmware
+	install -Dm755 "$srcdir"/ferrix-aoc-firmware.initd \
+		"$pkgdir"/etc/init.d/ferrix-aoc-firmware
 	install -Dm755 "$srcdir"/ferrix-bluetooth-uart.initd \
 		"$pkgdir"/etc/init.d/ferrix-bluetooth-uart
 	install -Dm755 "$srcdir"/ferrix-contactsd.initd \
@@ -133,8 +136,10 @@ package() {
 	# WirePlumber run through ferrix-audio because their Alpine packages are
 	# user-session processes rather than system daemons. UPower is D-Bus
 	# activated and deliberately has no OpenRC runlevel link on Alpine.
+	# ferrix-aoc-firmware is a fail-open one-shot ordered before the audio
+	# session; no service needs it.
 	mkdir -p "$pkgdir"/etc/runlevels/default
-	for service in dbus udev ferrix-radio-firmware networkmanager ferrix-s5300-mounts exynos-modem sit-proxy modemmanager ferrix-bluetooth-uart bluetooth seatd ferrix-core ferrix-networkd ferrix-telephonyd ferrix-contactsd ferrix-pipewire ferrix-audio ferrix-product; do
+	for service in dbus udev ferrix-radio-firmware ferrix-aoc-firmware networkmanager ferrix-s5300-mounts exynos-modem sit-proxy modemmanager ferrix-bluetooth-uart bluetooth seatd ferrix-core ferrix-networkd ferrix-telephonyd ferrix-contactsd ferrix-pipewire ferrix-audio ferrix-product; do
 		ln -sf /etc/init.d/$service "$pkgdir"/etc/runlevels/default/$service
 	done
 }
@@ -147,7 +152,7 @@ fd547fdc076400df560f3306d6f9a4dd180377b1f87606ec49a431ded2186b2a70b38b98cd52df70
 e65a0eabb14073c13b2f7d47690b681caa3ca596fbd4d8710329ed54e48672c0c0968cf87b4bf9b01655c1bffc09350350d7048a9142671d9c5425a32bc1a82f  modules-initfs-radio
 354705ce6a636ea4e7788763254626283eecfbf3cbfd59df739d5f25a615caf50b1003ec1e97325fe444ebe98d0e873ffeb3a0a9153303062dc28bf516b74269  boot-layout.toml
 43bc74815c185874f81ac278ca330c951c00aa77acf82bb71c1c0926d3e3011ac086e9584b84d2bad94b303a07855f858c0454a8137eb2b23d0c815716b75cee  firmware-policy.toml
-01f8f06026447005df9ffada82fa65709f33797c34d152b5239ed1265cd2e0f3c9c5a349f976744bebfa6e1f3f754ac402fac495ea64c6498616cba06a97b9bd  firmware-allowlist.tsv
+f236123e4d35eac230ecd74c62414fa09c0f2d796b1eef00be083c6604bce98e4fdfdaf281066ed8d89e552a9e7dfb569f3ba9ec901aec909f74e51181f31bb6  firmware-allowlist.tsv
 cd5b12e611748eb07ccee10c1935c7da112876c9fcc8a88d199eb5f29b6ecbdf5b0c709f4ce27096aaffd7faba30b47d3cf80833795206908cc0eb6906aab1f4  s5300-channels.toml
 e3ae71127500de5c6e745807ef49deb6aca1d1b1718270d1e9e31035c4b72611c2f9af7531676e82d1408c987d8e1af4fd9c2f5d4523818f0553a964288c7e3a  s5300-userspace-sources.toml
 64d8f0cfdfe042327b66a88007cc4ace5a7d39270e2d8bd6c02223b1dd2171f065a6aae4b3f82c5cbae16e39f67556a17e2bc38f8114d5ed8c0a5289c8eb417f  ferrix-backends.env
@@ -163,6 +168,7 @@ a26cd676321a658c719f9b53fcf6099031c22bbd874794f79d551966f6680683ce2f37674bbd284d
 077e2dcdc7b4de4698914f4b8eb83508555e18c125639f58c69bc9ea278a2915b6f6eb56220f3c5bf057d75628b6a7086b424ccea386b8d2b137de253c5543e0  ferrix-android.initd
 af8e3299a878d60158215a61e501243b4639b5709220faecb89a026a7d22ce6c7511446f46be35254265ee58ba320e89ad4be6d6c72323baeba8bad6c265a934  ferrix-s5300-mounts.initd
 c4e81f9a0e463d25fdcd69ab635838e29f5a95f389ef52bb978864daeeeabd220e4fafccf9ff85149e38d2166530881cc24eb3bc2d21c7293c52febe5c4df36a  ferrix-radio-firmware.initd
+8a0f69d78f6baba274f8c6c9c79612afeb52949d363aa19fa55ec8fa586adafe368fe7565df91964c456f858c12217a6c93c7a0a7d0e80f8f4063db0f29f3373  ferrix-aoc-firmware.initd
 399c310705ec2412a190a958592213234dcbedd4d84b4405e18441d3d9560a545721b1ea53c5a24346d071131cf1692a08cf76ef9b3b90c61e135716f9328cdb  ferrix-bluetooth-uart.initd
 4f238070884a16c0df4f2a83652c0735a08c8f881fb7b9e59c5a6a594b69cbb5b7338c13b53042e3d3ba2b73e85d91c2d9f3e968024bfd750aafeba6b20dbc12  ferrix-contactsd.initd
 391987e6cd7692efe7440bcadb7089f71b3edb0dd4c3c23c72986ea214aa9deb607055d23f84a97db59265bdcf9025be2f4af18faf6599b63349deb844ed35fe  exynos-modem.initd
