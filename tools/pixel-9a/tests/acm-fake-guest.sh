@@ -8,7 +8,10 @@
 #   acm_guest_stop              stop it
 #   acm_guest_ctl NAME VALUE    set a per-case control: fixture, exit, sleep,
 #                               flood (bytes), real (run the decoded probe
-#                               with the host /bin/sh)
+#                               with the host /bin/sh), fixture.N / exit.N
+#                               (only the Nth run), header_lines (accept
+#                               that many generated lines before PROBE;
+#                               each run's header is kept as header.N)
 #
 # The fake guest (acm-fake-guest.py) runs a real interactive /bin/sh on a pty
 # bridged to the port that tools/pixel-9a/acm-probe.py opens, so the
@@ -29,13 +32,28 @@ acm_guest_init() {
 ctl=$ACM_GUEST_CTL
 cat >"$ctl/stdin"
 printf 'run\n' >>"$ctl/calls"
-cmp -s "$ctl/stdin" "$ACM_GUEST_PROBE" || { echo 'stub: probe bytes differ'; exit 97; }
+n=$(wc -l <"$ctl/calls" | tr -d ' ')
+cp "$ctl/stdin" "$ctl/stdin.$n"
+body=$ctl/stdin
+if [ -f "$ctl/header_lines" ]; then
+	# The host prepends a fixed number of generated lines to PROBE.
+	h=$(cat "$ctl/header_lines")
+	head -n "$h" "$ctl/stdin" >"$ctl/header.$n"
+	tail -n +"$((h + 1))" "$ctl/stdin" >"$ctl/body.$n"
+	body=$ctl/body.$n
+fi
+cmp -s "$body" "$ACM_GUEST_PROBE" || { echo 'stub: probe bytes differ'; exit 97; }
 [ ! -f "$ctl/sleep" ] || sleep "$(cat "$ctl/sleep")"
 [ ! -f "$ctl/flood" ] || awk -v n="$(cat "$ctl/flood")" \
 	'BEGIN { line = sprintf("%063d", 0); for (i = 0; i < n; i += 64) print line }'
 [ ! -f "$ctl/real" ] || exec /bin/sh "$ctl/stdin"
-[ ! -f "$ctl/fixture" ] || cat "$(cat "$ctl/fixture")"
-exit "$(cat "$ctl/exit" 2>/dev/null || echo 0)"
+# fixture.N / exit.N answer only the Nth run of this guest.
+fixture=$ctl/fixture
+[ ! -f "$ctl/fixture.$n" ] || fixture=$ctl/fixture.$n
+[ ! -f "$fixture" ] || cat "$(cat "$fixture")"
+status=$ctl/exit
+[ ! -f "$ctl/exit.$n" ] || status=$ctl/exit.$n
+exit "$(cat "$status" 2>/dev/null || echo 0)"
 STUB
 	chmod 0755 "$acm_guest_dir/bin/sh"
 	# Busybox provides sha256sum on the guest; some hosts only have shasum.

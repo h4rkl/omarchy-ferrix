@@ -962,6 +962,157 @@ This workflow is offline fixture-tested only
 recovery proof is established; a physical run still needs a Ferrix boot on
 this exact device.
 
+## S5300 source mount proof (issue #34)
+
+This section records source review, not physical evidence. Line numbers refer
+to the pinned GKI source (`kernel/common` `a4662a84a15f`, Linux 6.1.124). The
+mount service's options alone do not stop every write:
+
+- ext4 `noload` (alias `norecovery`) skips loading the journal, and ext4
+  refuses `noload` without `ro` when recovery is needed. Orphan cleanup
+  (`fs/ext4/orphan.c` `ext4_orphan_cleanup`) still clears `SB_RDONLY` for a
+  while on a read-only mount. With the journal not loaded, those writes go
+  straight to the device. Error handling (`ext4_handle_error`) also commits
+  the superblock on a read-only mount.
+- f2fs `norecovery` requires `ro` and skips roll-forward. Orphan inode
+  recovery (`f2fs_recover_orphan_inodes`) still runs on a read-only mount.
+  `f2fs_handle_error` and `f2fs_handle_stop` also commit the superblock
+  unless the block device itself is read-only.
+- Each of those paths is skipped only when `bdev_read_only()` of the mounted
+  device is true (`fs/ext4/orphan.c:398`, `fs/ext4/super.c:667,1021`,
+  `fs/f2fs/f2fs.h:4486` `f2fs_hw_is_readonly`).
+- `BLKROSET` (`blockdev --setro`) on the partition makes `bdev_read_only()`
+  true, but it is not a write barrier. The block layer only warns
+  (`block/blk-core.c:498-507` `bio_check_ro`: "Trying to write to read-only
+  block-device") and then submits the bio. A filesystem bug or a path that
+  skips the check would still reach the partition.
+
+A loop device attached read-only is a kernel write barrier for I/O sent
+through it (`drivers/block/loop.c`, `CONFIG_BLK_DEV_LOOP=y` in the GKI
+`gki_defconfig`; the Ferrix fragment does not change it):
+
+- `loop_configure()` sets `LO_FLAGS_READ_ONLY` when asked (losetup
+  `--read-only`), and also whenever the backing file is not open for writing
+  (`:1048-1050`). It then calls `set_disk_ro()` with that flag (`:1066`). So
+  `bdev_read_only()` of the loop is true, and ext4 and f2fs mounted on it take
+  their read-only-device branches. A read-only loop never enables the queue's
+  write cache (`:1074`), so empty flushes complete in `submit_bio_noacct`
+  without reaching the driver (`block/blk-core.c:754-760`).
+- `loop_handle_cmd()` fails every request with `op_is_write()` with `-EIO`
+  while `LO_FLAGS_READ_ONLY` is set, before `do_req_filebacked()` runs
+  (`:1889-1891`). That covers `REQ_OP_WRITE`, `REQ_OP_DISCARD`, and
+  `REQ_OP_WRITE_ZEROES` (`include/linux/blk_types.h:370-378,490-492`). This
+  check matters because the loop's discard and write-zeroes path calls the
+  backing `fallocate` directly (`:304-322`), and the 6.1 block-device
+  `blkdev_fallocate` does not check `FMODE_WRITE` (`block/fops.c:625`).
+- The backing writes are also blocked in a second way. Writes would go
+  through `vfs_iter_write()`, which fails with `-EBADF` without `FMODE_WRITE`
+  (`fs/read_write.c:848`). Block-device `write_iter` fails with `-EPERM` on a
+  read-only partition (`block/fops.c:534`). The first holds only if losetup
+  opened the backing file read-only. util-linux does that for `--read-only`
+  (2.40.2 `lib/loopdev.c` `loopcxt_setup_device`), but the guest's
+  util-linux version is not pinned and the kernel does not expose the open
+  mode. The second holds because `BLKROSET`
+  is set first.
+- `LOOP_SET_STATUS` cannot clear the flag (`:1288-1293`;
+  `LOOP_SET_STATUS_SETTABLE_FLAGS` is only `AUTOCLEAR|PARTSCAN`).
+  `LOOP_CHANGE_FD` needs it set (`:585`). The loop has no
+  `set_read_only` operation, and `BLKROSET` 0 on the loop clears only
+  `bd_read_only`, not the disk-level flag (`block/ioctl.c:361-378`,
+  `include/linux/blkdev.h:787-796`).
+- Detaching never clears the disk-level flag (`__loop_clr_fd`, `:1131-1212`).
+  An unbound loop can therefore still read `ro=1` from an earlier read-only
+  use. The proof uses only an unbound loop whose `ro` reads 0, so `ro=1` after
+  attaching can only come from the read-only configuration.
+- Rejected requests are still counted in the loop's `stat` (they complete
+  with an error; `block/blk-mq.c:977-995`) and trigger `bio_check_ro`'s
+  warning for the loop. That makes the loop counters a detector of attempted
+  writes. The partition counters detect writes that reached it.
+
+The barrier covers I/O through the loop only. It does not stop other writers
+of the same sectors: a second opener of the partition node through a
+bio-level path, the whole-disk node (`BLKROSET` on the partition does not
+cover `/dev/sda`), device-mapper or md, SCSI/UFS passthrough (SG_IO, BSG,
+RPMB), or the UFS device itself. The proof excludes them only by checks that
+nothing holds or mounts the partition, that the service and modem are in no
+runlevel, and that it runs on a dev boot. It does not exclude them by kernel
+enforcement. Partition `stat` counters count non-passthrough requests started
+while the queue's `iostats` was on, against the partition the bio named.
+Unchanged counters are consistent with no write; they do not prove it. Not
+reviewed: Android vendor hooks or GKI modules, and whether the running
+`vmlinux` was built exactly from `a4662a84a15f` (matched by release string
+only).
+
+`just pixel-9a-s5300-mount-proof` (`tools/pixel-9a/s5300-mount-proof.sh`)
+uses the same CDC-ACM transport. With no argument it is a read-only
+preflight. It checks:
+
+- the exact device tree and the pinned kernel release;
+- that `ferrix-s5300-mounts` and `exynos-modem` are in no runlevel;
+- that nothing is mounted under `/mnt/vendor`;
+- that util-linux `losetup` and an unbound loop device with `ro` 0 exist;
+- for each role: unique partition resolution, the util-linux `blkid -p`
+  type against the physical inventory (`modem_<slot>` ext4; `efs`,
+  `persist`, `modem_userdata` f2fs), the `ro` flag, queue `iostats`,
+  holders, mounts, and `stat`.
+
+The preflight mounts nothing and changes no state.
+
+`just pixel-9a-s5300-mount-proof mount ROLE` is a separate run for one role.
+It needs a typed phrase, `FERRIX_PIXEL9A_S5300_MOUNT_PROOF_CONFIRM='mount ROLE
+read-only on google-pixel-9a-tegu-gxq96-mp1-0'`. For the per-unit
+partitions that the factory image does not rewrite (`efs`, `persist`,
+`modem_userdata`), it also needs the recorded owner decision,
+`FERRIX_PIXEL9A_S5300_PER_UNIT_DECISION=owner-approved-issue34-per-unit-ro-mount`.
+The run then:
+
+1. Runs a fresh preflight and prints the bound partition.
+2. Opens a second session, which refuses unless the same `major:minor`,
+   name, and type are still unique and unmounted.
+3. Writes a marker to the kernel log and applies `blockdev --setro`, then
+   checks `/sys/class/block/<dev>/ro`.
+4. Picks an unbound loop whose `ro` reads 0, re-checks it, and runs
+   `losetup --read-only` onto it. It then checks from sysfs that the loop
+   now reads `ro=1` and has major 7. It also checks that the
+   loop's backing file is the bound partition node, that offset and
+   sizelimit are 0, that the size equals the partition's, and that
+   `blkid -p` on the loop reports the same type. Nothing is mounted
+   otherwise.
+5. Mounts the loop, never the partition, once at
+   `/run/ferrix-s5300-mount-proof/ROLE` with the service's exact options. It
+   reads the directory tree, waits, unmounts, and detaches the loop.
+
+The host compares the write, discard, and flush counters of the partition
+from before `BLKROSET` to after detach, and of the loop from before the mount
+to after unmount. It checks that the mountinfo line meets `verify_mount` on
+the loop's `major:minor` and scans kernel log lines after the marker. Any of
+these stops the run:
+
+- an unverified barrier;
+- a partition counter change (a write reached it);
+- a loop counter change or a read-only-loop warning (a write attempt that the
+  loop failed, which still needs review);
+- a read-only-partition warning, or an I/O or filesystem error;
+- orphan-cleanup or recovery messages;
+- the loop left bound.
+
+The partition's `ro` flag stays set until the next boot.
+
+`ferrix-s5300-mounts` does not yet mount through a read-only loop. The
+workflow statically checks the checked-in service. Until the service applies
+`BLKROSET` and mounts only from a loop it attached with `--read-only` and
+verified as above, every physical result reports `issue34_safety_gate=blocked`
+with `issue34_gate_blocker=service-mounts-without-read-only-loop`. A proof run
+covers only the path that the service itself uses. After the service changes,
+the best result is `mount_observation=no-write-observed` with
+`issue34_safety_gate=owner-review-required`; no run reports a passed gate.
+Changing the service also changes its `verify_mount` (the mount source
+becomes the loop), the device package's depends (util-linux `losetup`), and
+the APKBUILD checksum; that is a separate reviewed change. Transcripts go to
+ignored `out/pixel-9a/s5300-mount-proof/`. The workflow is offline
+fixture-tested only (`just pixel-9a-s5300-mount-proof-test`); no mount has
+been run.
+
 ## Audio route
 
 Audio stays `unsupported`. [`audio-route-decision.md`](audio-route-decision.md)
