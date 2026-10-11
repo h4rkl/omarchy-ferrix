@@ -85,6 +85,11 @@ the project must not silently call that a fully functioning Pixel 9a.
   unprivileged hosted runner. [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
   tracks a real privileged test gate and bounded Unix socket paths; unrelated
   PRs must not be called green while that gate fails.
+- The QEMU CI job also failed before kernel boot because the arm64 runner
+  lacked `efi-virtio.rom`. [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38)
+  and [draft PR #39](https://github.com/h4rkl/omarchy-ferrix/pull/39)
+  track the portable direct-kernel-boot correction; local TCG passed, arm64
+  CI proof is pending.
 
 ## Working structure
 
@@ -170,9 +175,10 @@ the newer icon evidence in `docs/status.md` before scheduling more icon work.
 Closed issues #6, #13, #15, and #17 are historical inputs, not proof of Pixel
 daily-phone acceptance. Do not open duplicates for work already owned above.
 
-Cross-cutting delivery gate [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
-restores meaningful native sandbox CI before merging implementation PRs. It
-does not itself promote a phone capability.
+Cross-cutting delivery gates [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
+and [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38) restore
+meaningful native sandbox and QEMU CI before merging implementation PRs.
+Neither promotes a phone capability.
 
 ## Physical-device invariant and evidence rules
 
