@@ -1,0 +1,149 @@
+probe=read-only
+probe_version=1
+identity=verified
+dt_model=ZUMA PRO TEGU MP on ZUMA PRO
+dt_compatible=google,ZUMA PRO TEGU
+kernel_release=6.1.162-ferrix-synthetic
+os_id=postmarketos
+uid=1000
+priv=doas
+tool_aplay=present
+tool_arecord=present
+tool_amixer=present
+tool_alsactl=unavailable
+tool_alsaucm=present
+tool_speaker_test=unavailable
+tool_wpctl=present
+tool_pw_cli=present
+tool_pw_dump=present
+tool_pactl=present
+tool_pipewire=present
+tool_wireplumber=present
+tool_pipewire_pulse=present
+tool_socat=present
+alsa_proc=present
+alsa_cards=1
+## begin proc-asound-cards
+|  0 [synthaoc       ]: synth-aoc - synthetic-aoc-card
+|                       synthetic-aoc-card longname
+## end proc-asound-cards exit=0
+alsa_pcm_total=3
+alsa_pcm_playback=2
+alsa_pcm_capture=1
+## begin proc-asound-pcm
+| 00-00: synthetic speaker : synthetic speaker : playback 1
+| 00-01: synthetic earpiece : synthetic earpiece : playback 1
+| 00-02: synthetic mic : synthetic mic : capture 1
+## end proc-asound-pcm exit=0
+dev_snd_nodes=5
+dev_snd_control=1
+dev_snd_pcm_playback=2
+dev_snd_pcm_capture=1
+## begin dev-snd
+| controlC0
+| pcmC0D0p
+| pcmC0D1p
+| pcmC0D2c
+| timer
+## end dev-snd exit=0
+kernel_config_snd=CONFIG_SND=y CONFIG_SND_SOC=y
+audio_modules=2
+## begin audio-modules
+| synth_aoc_alsa
+| snd_soc_synth
+## end audio-modules exit=0
+audio_dt_nodes=2
+audio_dt_bound=2
+audio_dt_unbound=0
+## begin audio-dt-nodes
+| bound synth-aoc google,synth-aoc
+| bound 8-0040 synth,cs35l-amp
+## end audio-dt-nodes exit=0
+sys_class_sound=4
+dmesg_access=ok-privileged
+dmesg_audio_lines=2
+dmesg_audio_failure_lines=0
+dmesg_audio_firmware_failures=0
+## begin dmesg-audio
+| [    5.000000] synth-aoc: registered synthetic sound card
+| [    5.100000] snd_soc_synth: codec ready serial SYNAUD0001
+## end dmesg-audio exit=0
+deferred_audio_devices=0
+audio_firmware_files=1
+## begin audio-firmware-files
+| /lib/firmware/synth_audio.bin
+## end audio-firmware-files exit=0
+ucm_dir=/usr/share/alsa/ucm2
+ucm_conf_files=120
+ucm_card_drivers=1
+ucm_matched_card_profiles=1
+## begin alsaucm-listcards
+| 0: hw:0
+|   synthetic-aoc-card
+## end alsaucm-listcards exit=0
+alsaucm_listcards_exit=0
+pipewire_socket=present
+pulse_socket=present
+process_pipewire=running
+process_wireplumber=running
+process_pipewire_pulse=running
+## begin wpctl-status
+| PipeWire 'pipewire-0' [1.2.7, user@ferrix-synth-host, cookie:1234567890]
+|  └─ Clients:
+|         33. WirePlumber                         [1.2.7, user@ferrix-synth-host, pid:900]
+|
+| Audio
+|  ├─ Devices:
+|  │      42. synthetic-aoc-card                  [alsa]
+|  │      43. Synthetic Headset                   [bluez5]
+|  │
+|  ├─ Sinks:
+|  │  *   45. synthetic speaker                   [vol: 0.40]
+|  │      46. bluez_output.AA_BB_CC_DD_EE_01.1    [vol: 0.50]
+|  │
+|  ├─ Sources:
+|  │  *   47. synthetic mic                       [vol: 1.00]
+|  │
+|  ├─ Filters:
+|  │
+|  └─ Streams:
+|
+| Video
+|  ├─ Devices:
+|  │      60. synthetic camera                    [v4l2]
+## end wpctl-status exit=0
+pipewire_graph=reachable
+graph_devices=2
+graph_sinks=2
+graph_sources=1
+graph_default_sink=marked
+graph_default_source=marked
+## begin wpctl-list-audio-sinks
+| wpctl: unknown command 'list'
+## end wpctl-list-audio-sinks exit=1
+adapter_list_sinks_exit=1
+## begin wpctl-inspect-default-sink
+| id 45, type PipeWire:Interface:Node
+|   * media.class = "Audio/Sink"
+|   * device.serial = "SYNSERIAL42"
+## end wpctl-inspect-default-sink exit=0
+## begin pactl-info
+| Server String: /run/user/1000/pulse/native
+| Cookie: 6f6f:aa11
+| Host Name: ferrix-synth-host
+## end pactl-info exit=0
+ferrix_audio_backend=wireplumber
+service_ferrix_pipewire=started
+service_ferrix_audio=started
+service_ferrix_core=started
+core_socket=present
+## begin ferrix-core-state
+| {"reply":"state","schema_version":1,"capabilities":{"audio":"unsupported"},"state":{"audio":{"route":"speaker","available":["speaker"]}}}
+## end ferrix-core-state exit=0
+core_state=observed
+core_audio_capability=unsupported
+core_audio_route=speaker
+## begin ferrix-core-audio-log
+| ferrix-core: audio backend wireplumber ready
+## end ferrix-core-audio-log exit=0
+probe_complete=yes

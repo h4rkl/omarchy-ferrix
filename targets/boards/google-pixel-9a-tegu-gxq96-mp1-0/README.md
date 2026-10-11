@@ -919,6 +919,48 @@ observed-only UCM). It also sets out the read-only exact-device inventory and
 its pass/fail criteria. That inventory runs only after the issue #25 restore
 and recovery proof.
 
+## Read-only audio inventory
+
+`just pixel-9a-audio-inventory` (`tools/pixel-9a/audio-inventory.sh
+inventory`) uses the radios SSH transport and environment
+(`FERRIX_PIXEL9A_SSH_HOST`/`_USER`/`_PORT`/`_SSH_OPTS`). One SSH session pipes
+the checked-in `tools/pixel-9a/audio-inventory-remote.sh` probe to `sh -s`.
+The probe's first action is the exact device-tree gate: model
+`ZUMA PRO TEGU MP on ZUMA PRO` and compatible line `google,ZUMA PRO TEGU`.
+QEMU exits 5 and any other board exits 4. The host then checks the
+identity that comes back before it parses anything. Exit 3 means SSH is
+unreachable, and probe output without the completion marker fails. The probe
+records:
+
+- ALSA cards, PCMs and `/dev/snd` nodes;
+- audio-named modules, device-tree bindings (bound/unbound), deferred devices,
+  and `dmesg` probe and firmware-load failures;
+- audio-named firmware files;
+- UCM data and `alsaucm listcards`;
+- whether ALSA and PipeWire tools are installed;
+- the PipeWire/WirePlumber graph (`wpctl status`, the adapter's
+  `wpctl list audio sinks`, and default sink/source inspection);
+- the Ferrix audio backend, the `ferrix-pipewire`/`ferrix-audio`/
+  `ferrix-core` service states, and the `/run/ferrix/core.sock` audio state.
+
+A missing command or interface is recorded as `unavailable`, `absent` or
+`unknown`, never as success. Playback, capture and mixer tools are only
+checked for presence. Nothing opens a PCM, changes a mixer, route or default
+sink, loads a module, mounts, writes sysfs, or starts a service.
+
+The redacted transcript and `audio-evidence-latest.tsv` go under ignored
+`out/pixel-9a/audio/` and are labelled
+`physical: google-pixel-9a-tegu-gxq96-mp1-0`. Redaction reuses the radios
+redactor and also covers underscore-form Bluetooth MACs, PipeWire/Pulse
+cookies and host names. Every row stays `unsupported`. Enumeration is not
+speaker playback, microphone capture, or Ferrix route-change evidence, and
+the workflow never edits `capabilities.toml`.
+
+**Physical execution is gated by issue #25.** Do not run it against the phone
+until the stock restore and recovery proof are re-established. So far it is
+stub-tested only (`just pixel-9a-audio-inventory-test`, labelled mock), and no
+audio state has been read from the physical device.
+
 ## Agent playbook
 
 Any LLM agent provisioning this or another phone follows
