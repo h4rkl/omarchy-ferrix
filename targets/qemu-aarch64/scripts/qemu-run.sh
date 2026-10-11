@@ -67,10 +67,7 @@ telephony_socket=${FERRIX_QEMU_TELEPHONY_SOCKET:-"$session_dir/telephony-control
 network_socket=${FERRIX_QEMU_NETWORK_SOCKET:-"$session_dir/network-control.sock"}
 mkdir -p "$session_dir" "$(dirname "$telephony_socket")" "$(dirname "$network_socket")"
 rm -f "$control_socket" "$telephony_socket" "$network_socket"
-# Direct kernel boot never executes a PCI option ROM. Suppress QEMU's default
-# efi-virtio.rom lookup so the headless contract works on hosts that package
-# QEMU without iPXE ROMs (including the Ubuntu arm64 CI runner).
-set -- "$@" -device virtio-serial-pci,romfile= \
+set -- "$@" -device virtio-serial-pci \
   -chardev "socket,id=omctl,path=$control_socket,server=on,wait=off" -device virtserialport,chardev=omctl,name=ferrix.control \
   -chardev "socket,id=omtel,path=$telephony_socket,server=on,wait=off" -device virtserialport,chardev=omtel,name=ferrix.telephony \
   -chardev "socket,id=omnet,path=$network_socket,server=on,wait=off" -device virtserialport,chardev=omnet,name=ferrix.network

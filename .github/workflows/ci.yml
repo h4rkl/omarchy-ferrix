@@ -126,12 +126,13 @@ jobs:
       # qemu-run.sh needs qemu-system-aarch64 (Ubuntu ships it in
       # qemu-system-arm); qemu-build.sh needs cpio (gzip, tar, awk, shasum
       # via perl, python3 and Docker are already on the runner image).
-      # --no-install-recommends keeps the GUI/firmware extras out: the check
-      # is headless (-nographic / -display none) and boots the kernel directly.
+      # Ubuntu's QEMU still loads efi-virtio.rom for the virtio-serial PCI
+      # device during direct kernel boot. --no-install-recommends omits the
+      # ipxe-qemu package that provides it, so name that prerequisite here.
       - name: Install host prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm cpio
+          sudo apt-get install -y --no-install-recommends qemu-system-arm cpio ipxe-qemu
 
       - name: Install just
         uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
@@ -145,6 +146,7 @@ jobs:
           done
           docker version --format 'docker {{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})'
           qemu-system-aarch64 --version | head -1
+          test -r /usr/lib/ipxe/qemu/efi-virtio.rom || { echo "missing ipxe-qemu efi-virtio.rom" >&2; exit 2; }
           just --version
           python3 --version
 
@@ -165,6 +167,15 @@ jobs:
 
       - name: just qemu-check
         run: just qemu-check
+
+      # The pinned builder runs as root in Docker and leaves cache files owned
+      # by root. The runner must be able to read them before actions/cache.
+      - name: Make guest cache readable by the runner
+        if: always() && steps.guest-cache.outputs.cache-hit != 'true'
+        run: |
+          if [ -d .cache/ferrix ]; then
+            sudo chown -R "$(id -u):$(id -g)" .cache/ferrix
+          fi
 
       - name: Save guest build cache
         if: always() && steps.guest-cache.outputs.cache-hit != 'true'
