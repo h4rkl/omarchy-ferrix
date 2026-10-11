@@ -187,6 +187,7 @@ pixel-9a-firmware-stage:
 
 pixel-9a-firmware-test:
     @sh "{{root}}/tools/pixel-9a/tests/firmware-workflow.sh"
+    @sh "{{root}}/tools/pixel-9a/tests/aoc-firmware-runtime.sh"
 
 # Pixel product build for the exact target. The product stage is isolated from
 # QEMU in its own target-scoped Cargo/cache/output roots and runs on the

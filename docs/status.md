@@ -43,6 +43,29 @@
   touch, endurance, and the rest of the daily-phone gate were not retested in
   this attempt.
 
+## 2026-10-12 (Pixel 9a AoC firmware loader, issue #55; mock)
+
+- The read-only audio inventory found AoC `Offline` on
+  `physical:google-pixel-9a-tegu-gxq96-mp1-0` (2026-10-11). Its `firmware`
+  control exists, there is no ALSA card, and the AoC sound card keeps
+  deferring. The guest probe (now version 2) and host evidence add an
+  `aoc-dsp` row. It reports device presence, a classified revision (never the
+  raw text), firmware-control presence, the staged image, its manifest row,
+  and the loader state. Nothing is written.
+- The firmware stage and runtime allowlists add only the factory
+  `vendor.img:/firmware/aoc.bin`, through the existing hash-verified
+  workflow. Stage rows naming persist or `*calib*` data are refused.
+- The postmarketOS target adds `ferrix-aoc-firmware`. This fail-open, bounded
+  OpenRC one-shot is ordered before `ferrix-pipewire`, `ferrix-audio`, and
+  `ferrix-core`. It writes `aoc.bin` to the AoC control once, and only while
+  AoC reads `Offline` and the image matches its manifest row.
+  `audio-route-decision.md` records why this is justified without a kernel
+  firmware request.
+- Evidence is **mock** only: fixture and synthetic-sysfs tests. No image
+  carrying this change has booted, AoC has not been observed online, and
+  `[audio]` stays `unsupported`. TAS25xx and CS40L26 firmware, UCM, and
+  product changes are out of scope.
+
 ## 2026-10-12 (Pixel 9a CDC-ACM guest probe transport; mock)
 
 - Issue #52: the Ferrix dev rootfs is built with `--no-sshd`, so

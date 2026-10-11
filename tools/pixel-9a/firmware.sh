@@ -108,6 +108,15 @@ validate_allowlist() {
     seen[$4]++ { duplicate = 1 }
     END { exit(bad || duplicate) }
   ' "$allowlist_file" || die "firmware stage allowlist must contain four fields, or five fields ending in bundle, and unique runtime paths: $allowlist_file"
+  # Per-unit calibration (persist-partition data such as the speaker
+  # calibration, or any *calib* file) is device data, not factory firmware.
+  # Fail closed even though such paths are absent from the allowed images.
+  awk -F '\t' '
+    /^[[:space:]]*#/ || NF == 0 { next }
+    $3 ~ /(^|\/)persist(\/|$)/ || $3 ~ /calib/ || $3 ~ /speaker[.]cal$/ ||
+      $4 ~ /calib/ || $4 ~ /speaker[.]cal$/ { bad = 1 }
+    END { exit bad }
+  ' "$allowlist_file" || die "firmware stage allowlist names per-unit calibration data: $allowlist_file"
   count=$(awk -F '\t' '$0 !~ /^[[:space:]]*#/ && (NF == 4 || (NF == 5 && $5 == "bundle")) { count++ } END { print count + 0 }' "$allowlist_file")
   [ "$count" -gt 0 ] || die "firmware stage allowlist is empty: $allowlist_file"
 }

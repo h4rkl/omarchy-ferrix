@@ -78,6 +78,27 @@ runtime_paths = ["mali"]
 required_names = ["mali_csffw-r51p0.bin"]
 
 [[controller]]
+id = "audio-aoc"
+# Always-on Compute (AoC) DSP behind the Tegu AoC sound card. On
+# physical:google-pixel-9a-tegu-gxq96-mp1-0 (2026-10-11, read-only) the
+# platform device's `revision` reads `Offline`, its `firmware` control exists,
+# no ALSA card exists, and `aoc_snd_card_probe` keeps waiting for the AoC
+# output control; no kernel request for an AoC image was logged. Pinned AoC
+# source ac69293d11343b47f0b2b758b0df9f936360dbd4 sets autoload=false;
+# its firmware_store starts request_firmware_nowait on a sysfs write. Ferrix
+# stages only
+# the factory vendor.img:/firmware/aoc.bin, and the target's
+# ferrix-aoc-firmware service names it once while AoC reads Offline (see
+# audio-route-decision.md). `aoc_core` was loaded in the physical inventory;
+# its generated module-list entry remains to be checked. Per-unit audio
+# calibration (for example the persist partition's speaker calibration) is
+# device data and is never staged.
+kernel_driver = "aoc_core"
+source_images = ["vendor.img"]
+runtime_paths = ["aoc"]
+required_names = ["aoc.bin"]
+
+[[controller]]
 id = "display-audio-touch"
 kernel_driver = "tegu-board-kernel"
 source_images = ["vendor.img", "vendor_dlkm.img"]

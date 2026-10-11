@@ -47,7 +47,8 @@ usage() {
 usage: tools/pixel-9a/audio-inventory.sh inventory
 
   inventory   verify the exact tegu guest identity, then record ALSA cards and
-              PCMs, audio modules/bindings/probe and firmware failures, UCM and
+              PCMs, audio modules/bindings/probe and firmware failures, the
+              AoC DSP state and firmware-control presence, UCM and
               ALSA tool availability, the PipeWire/WirePlumber graph, and the
               Ferrix audio adapter state; writes a redacted transcript and
               audio-evidence-latest.tsv under out/pixel-9a/audio/
@@ -153,7 +154,7 @@ inventory() {
 
   # Re-verify what the guest reported; a probe that skipped its own gate or a
   # truncated session must not yield target evidence.
-  [ "$(field probe)" = read-only ] && [ "$(field probe_version)" = 1 ] ||
+  [ "$(field probe)" = read-only ] && [ "$(field probe_version)" = 2 ] ||
     die "guest probe did not report the reviewed read-only probe version" 4
   [ "$(field identity)" = verified ] && [ "$(field dt_model)" = "$dt_model" ] &&
     [ "$(field dt_compatible)" = "$dt_compatible" ] ||
@@ -221,6 +222,19 @@ inventory() {
     fw_progress=no-audio-firmware-files-found
   fi
   fw_evidence="audio-named firmware files=$fw_files firmware failure lines=$fw_fail (dmesg=$dmesg_access); files are not hash-verified against a pinned audio manifest"
+
+  aoc_device=$(field aoc_device)
+  aoc_revision=$(field aoc_revision)
+  aoc_control=$(field aoc_firmware_control)
+  case "$aoc_device:$aoc_revision:$aoc_control" in
+    absent:*) aoc_progress=aoc-device-absent ;;
+    present:online:*) aoc_progress=aoc-reports-online ;;
+    present:offline:present) aoc_progress=aoc-offline-firmware-control-present ;;
+    present:offline:*) aoc_progress=aoc-offline-firmware-control-absent ;;
+    present:unreadable:*|present:absent:*) aoc_progress=aoc-revision-unavailable ;;
+    *) aoc_progress=aoc-state-unknown ;;
+  esac
+  aoc_evidence="device=$aoc_device revision=$aoc_revision firmware_control=$aoc_control image=$(field aoc_firmware_image) manifest_rows=$(count "$(field aoc_firmware_manifest_rows)") loader=$(field service_ferrix_aoc_firmware); revision text is classified, not recorded; no sysfs write"
 
   ucm_dir=$(field ucm_dir)
   ucm_conf=$(count "$(field ucm_conf_files)")
@@ -293,6 +307,7 @@ inventory() {
     printf 'alsa\tunsupported\t%s\t%s; %s; %s\n' "$alsa_progress" "$evidence_label" "$stamp" "$alsa_evidence"
     printf 'kernel-audio\tunsupported\t%s\t%s; %s; %s\n' "$kernel_progress" "$evidence_label" "$stamp" "$kernel_evidence"
     printf 'audio-firmware\tunsupported\t%s\t%s; %s; %s\n' "$fw_progress" "$evidence_label" "$stamp" "$fw_evidence"
+    printf 'aoc-dsp\tunsupported\t%s\t%s; %s; %s\n' "$aoc_progress" "$evidence_label" "$stamp" "$aoc_evidence"
     printf 'ucm-and-tools\tunsupported\t%s\t%s; %s; %s\n' "$ucm_progress" "$evidence_label" "$stamp" "$ucm_evidence"
     printf 'pipewire-graph\tunsupported\t%s\t%s; %s; %s\n' "$pw_progress" "$evidence_label" "$stamp" "$pw_evidence"
     printf 'ferrix-audio-adapter\tunsupported\t%s\t%s; %s; %s\n' "$adapter_progress" "$evidence_label" "$stamp" "$adapter_evidence"
@@ -303,6 +318,7 @@ inventory() {
   printf 'alsa=unsupported progress=%s\n' "$alsa_progress"
   printf 'kernel_audio=unsupported progress=%s\n' "$kernel_progress"
   printf 'audio_firmware=unsupported progress=%s\n' "$fw_progress"
+  printf 'aoc_dsp=unsupported progress=%s\n' "$aoc_progress"
   printf 'ucm_and_tools=unsupported progress=%s\n' "$ucm_progress"
   printf 'pipewire_graph=unsupported progress=%s\n' "$pw_progress"
   printf 'ferrix_audio_adapter=unsupported progress=%s\n' "$adapter_progress"

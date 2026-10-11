@@ -1,0 +1,140 @@
+#!/sbin/openrc-run
+
+# Starts the Always-on Compute (AoC) DSP so the Tegu AoC sound card can bind.
+# On the exact target AoC stays `Offline` after boot: nothing names its image,
+# so the sound card keeps waiting for the AoC output control and no ALSA card
+# appears (audio-route-decision.md). This one-shot names the reviewed factory
+# `aoc.bin` in the platform device's existing `firmware` control, once, and
+# only while `revision` reads `Offline` and the staged image matches its
+# hash-verified manifest row.
+#
+# Fail-open: nothing `need`s this service. A failure is reported and leaves
+# the service failed; PipeWire, WirePlumber, ferrix-core, and the rest of the
+# boot continue. It never loads modules, touches mixers, reads per-unit
+# calibration, or writes anything but the one control.
+#
+# Shell, not Rust: like ferrix-radio-firmware and ferrix-bluetooth-uart this
+# is an OpenRC one-shot that checks one file and writes one existing sysfs
+# attribute; there is no protocol or product logic to own.
+
+name="Ferrix Pixel 9a AoC firmware"
+description="Names the reviewed aoc.bin in the AoC firmware control while AoC is Offline"
+
+# Tests point these at a synthetic tree; the target uses the real paths.
+aoc_device=${FERRIX_AOC_DEVICE:-/sys/devices/platform/17000000.aoc}
+firmware_root=${FERRIX_PIXEL9A_FIRMWARE_ROOT:-/}
+firmware_manifest=${FERRIX_PIXEL9A_FIRMWARE_MANIFEST:-/usr/share/ferrix/pixel-9a/firmware-manifest.tsv}
+# Bounds in 0.1 s steps. aoc_core is a first-stage module, so its control
+# normally exists before OpenRC runs; the online bound covers the DSP boot.
+device_wait=${FERRIX_AOC_DEVICE_WAIT:-50}
+online_wait=${FERRIX_AOC_ONLINE_WAIT:-100}
+firmware_name=aoc.bin
+runtime_path=lib/firmware/aoc.bin
+source_path=/firmware/aoc.bin
+tab=$(printf '\t')
+
+depend() {
+	after udev ferrix-radio-firmware
+	# Only ordering: the card can only appear after AoC is online, so try
+	# before the audio session and the adapter compose. Never a `need`.
+	before ferrix-pipewire ferrix-audio ferrix-core
+}
+
+aoc_fail() {
+	eerror "AoC firmware: $*"
+	return 1
+}
+
+bounded_steps() {
+	case "$1" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$1" -le 600 ]
+}
+
+wait_for() {
+	steps=$1
+	shift
+	while ! "$@"; do
+		[ "$steps" -gt 0 ] || return 1
+		sleep 0.1
+		steps=$((steps - 1))
+	done
+}
+
+aoc_revision() {
+	head -n 1 "$aoc_device/revision" 2>/dev/null
+}
+
+aoc_control_present() {
+	[ -e "$aoc_device/firmware" ] && [ -r "$aoc_device/revision" ]
+}
+
+aoc_reports_online() {
+	state=$(aoc_revision)
+	[ -n "$state" ] && [ "$state" != Offline ]
+}
+
+hash_file() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{ print $1 }'
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | awk '{ print $1 }'
+	else
+		return 1
+	fi
+}
+
+# The staged image must be the one reviewed factory row: exactly one manifest
+# row for the runtime path, from vendor.img:/firmware/aoc.bin under the
+# audio-aoc controller, with matching byte count and SHA-256.
+verify_image() {
+	image="$firmware_root/$runtime_path"
+	[ -f "$image" ] && [ ! -L "$image" ] ||
+		aoc_fail "$image is not a staged regular file (audio-aoc firmware row)" || return 1
+	[ -f "$firmware_manifest" ] ||
+		aoc_fail "missing firmware manifest: $firmware_manifest" || return 1
+	row=$(awk -F "$tab" -v runtime="$runtime_path" '
+		$1 == "firmware" && $5 == runtime { count++; line = $0 }
+		END { if (count != 1) exit 1; print line }
+	' "$firmware_manifest") ||
+		aoc_fail "firmware manifest must contain exactly one $runtime_path row" || return 1
+	IFS="$tab" read -r kind controller image_name row_source row_runtime bytes expected extra <<EOF
+$row
+EOF
+	[ "$controller" = audio-aoc ] && [ "$image_name" = vendor.img ] &&
+		[ "$row_source" = "$source_path" ] && [ -z "${extra:-}" ] ||
+		aoc_fail "$runtime_path row is not the reviewed vendor.img:$source_path audio-aoc row" || return 1
+	case "$bytes" in ''|*[!0-9]*) aoc_fail "$runtime_path row has an invalid byte count"; return 1 ;; esac
+	case "$expected" in ''|*[!0-9a-f]*) aoc_fail "$runtime_path row has an invalid sha256"; return 1 ;; esac
+	[ "${#expected}" -eq 64 ] || aoc_fail "$runtime_path row has an invalid sha256 length" || return 1
+	[ "$(wc -c <"$image" | tr -d '[:space:]')" = "$bytes" ] ||
+		aoc_fail "$image byte count differs from the manifest" || return 1
+	actual=$(hash_file "$image") || aoc_fail "sha256sum is required" || return 1
+	[ "$actual" = "$expected" ] || aoc_fail "$image hash differs from the manifest" || return 1
+}
+
+aoc_load() {
+	bounded_steps "$device_wait" && bounded_steps "$online_wait" ||
+		aoc_fail "wait bounds must be integers from 0 to 600" || return 1
+	wait_for "$device_wait" aoc_control_present ||
+		aoc_fail "$aoc_device has no firmware control and readable revision (aoc_core not bound)" || return 1
+	state=$(aoc_revision)
+	case "$state" in
+		Offline) ;;
+		'') aoc_fail "AoC revision is unreadable; not writing the firmware control"; return 1 ;;
+		*) einfo "AoC already reports online; not reloading $firmware_name"; return 0 ;;
+	esac
+	verify_image || return 1
+	printf '%s' "$firmware_name" >"$aoc_device/firmware" 2>/dev/null ||
+		aoc_fail "writing $firmware_name to $aoc_device/firmware failed" || return 1
+	wait_for "$online_wait" aoc_reports_online ||
+		aoc_fail "AoC did not report online within the bound; check dmesg for aoc errors" || return 1
+	einfo "AoC reports online"
+}
+
+start() {
+	ebegin "Starting $name"
+	aoc_load
+	eend $? "AoC audio stays offline; the rest of the boot continues"
+}

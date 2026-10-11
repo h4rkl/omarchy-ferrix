@@ -1,5 +1,5 @@
 probe=read-only
-probe_version=1
+probe_version=2
 identity=verified
 dt_model=ZUMA PRO TEGU MP on ZUMA PRO
 dt_compatible=google,ZUMA PRO TEGU

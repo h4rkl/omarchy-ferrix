@@ -25,7 +25,9 @@ grep -q '^kernel_driver = "bcmdhd4383"$' "$policy"
 grep -q '^kernel_driver = "nitrous"$' "$policy"
 grep -q '^kernel_driver = "cpif"$' "$policy"
 grep -q '^kernel_driver = "mali_kbase"$' "$policy"
-awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 13 ? 0 : 1) }' "$allowlist"
+grep -q '^kernel_driver = "aoc_core"$' "$policy"
+grep -q '^id = "audio-aoc"$' "$policy"
+awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 14 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 5 && $5 == "bundle" { count++ } END { exit(count == 2 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && (NF == 4 || (NF == 5 && $5 == "bundle")) { if (seen[$4]++) bad=1 } END { exit(bad ? 1 : 0) }' "$allowlist"
 awk -F '\t' '$1 == "bluetooth-broadcom" && $2 == "vendor.img" && $3 == "/firmware/brcm/BCM.hcd" && $4 == "lib/firmware/brcm/BCM.hcd" { found=1 } END { exit(found ? 0 : 1) }' \
@@ -36,6 +38,14 @@ awk -F '\t' '$1 == "wifi-bcm4383" && $2 == "vendor.img" && $3 == "/firmware/bcmd
   "$allowlist" >/dev/null
 awk -F '\t' '$1 == "gpu-mali" && $2 == "vendor.img" && $3 == "/firmware/mali_csffw-r51p0.bin" && ($4 == "lib/firmware/mali_csffw-r52p0.bin" || $4 == "lib/firmware/mali_csffw.bin") { count++ } END { exit(count == 2 ? 0 : 1) }' \
   "$allowlist" >/dev/null
+# Exactly one AoC row: the factory DSP image under its own name. No other
+# audio data (TAS/CS40L26 tuning, UCM, per-unit calibration) is staged here.
+awk -F '\t' '$1 == "audio-aoc" { count++; if ($2 == "vendor.img" && $3 == "/firmware/aoc.bin" && $4 == "lib/firmware/aoc.bin" && NF == 4) ok++ } END { exit(count == 1 && ok == 1 ? 0 : 1) }' \
+  "$allowlist" >/dev/null
+if grep -Eq 'speaker\.cal|calib|/persist|tismartpa|ti_sp_tuning|cs40l26|tas25' "$allowlist"; then
+  echo 'firmware stage allowlist names calibration or out-of-scope audio data' >&2
+  exit 1
+fi
 awk -F '\t' '$1 == "modem-s5300" && $2 == "vendor.img" && $3 == "/firmware/carrierconfig" && $4 == "lib/firmware/carrierconfig" && $5 == "bundle" { found=1 } END { exit(found ? 0 : 1) }' \
   "$allowlist" >/dev/null
 awk -F '\t' '$1 == "modem-s5300" && $2 == "vendor.img" && $3 == "/firmware/uecapconfig" && $4 == "lib/firmware/uecapconfig" && $5 == "bundle" { found=1 } END { exit(found ? 0 : 1) }' \
@@ -63,6 +73,19 @@ if FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware \
   exit 1
 fi
 grep -q 'unique runtime paths' "$work/duplicate-stderr"
+for row in \
+  '/persist/audio/speaker.cal lib/firmware/speaker.cal' \
+  '/firmware/aoc_calib.bin lib/firmware/aoc_calib.bin'; do
+  set -- $row
+  printf 'audio-aoc\tvendor.img\t%s\t%s\n' "$1" "$2" > "$work/calibration.tsv"
+  if FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware \
+    FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST="$work/calibration.tsv" \
+    FERRIX_PIXEL9A_FIRMWARE_OUT="$work/out-calibration" "$workflow" stage >"$work/calibration-stdout" 2>"$work/calibration-stderr"; then
+    echo "per-unit calibration row was accepted: $row" >&2
+    exit 1
+  fi
+  grep -q 'per-unit calibration' "$work/calibration-stderr"
+done
 
 # Exercise directory bundles with a fake ext4/debugfs surface. This remains
 # device-free while covering regular-file extraction and fail-closed handling
