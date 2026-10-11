@@ -116,9 +116,10 @@ the project must not silently call that a fully functioning Pixel 9a.
   [merged PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48), which
   makes an ADB or Fastboot identity-query failure explicit. The successful
   later discovery has complete identity, build, and slot fields.
-- [#50](https://github.com/h4rkl/omarchy-ferrix/issues/50) tracks a CI test
-  race: the network event receiver can observe an event before its wake
-  callback runs. This is a test reliability issue, not phone evidence.
+- [#50](https://github.com/h4rkl/omarchy-ferrix/issues/50) is closed by
+  [merged PR #51](https://github.com/h4rkl/omarchy-ferrix/pull/51), which
+  waits for the network event wake callback in the daemon test. This fixed a
+  CI race and adds no phone evidence.
 
 ## Working structure
 
@@ -196,7 +197,7 @@ has closed with the Pixel rootfs firmware handoff fixture and allowlist repair. 
 gates make other PR checks meaningful but do not satisfy any phone capability.
 [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed after
 the Pixel identity-query failure fix. [#50](https://github.com/h4rkl/omarchy-ferrix/issues/50)
-tracks the independent networkd CI test race.
+is closed after the independent networkd CI test race fix.
 
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
