@@ -79,9 +79,11 @@ the project must not silently call that a fully functioning Pixel 9a.
   on the exact device. Its bootloader, radio, and `fastboot -w update` stages
   all returned success, including all 29 `super` chunks. Its redacted ignored
   transcript is `out/pixel-9a/restore/20261011T201345Z.txt`. The phone
-  rebooted. ADB subsequently appeared with the same serial, but property
-  queries returned `error: closed`; stock build and slot remain **unverified**.
-  #25 remains open.
+  rebooted. Initial ADB property queries returned `error: closed` while
+  Android started; fresh checked-in discovery later verified the same Pixel
+  9a on stock Android 17 build `CP3A.260905.009`, slot B, unlocked/orange.
+  [PR #47](https://github.com/h4rkl/omarchy-ferrix/pull/47) records the
+  redacted physical evidence for #25.
   The S5300 source route decision was merged in
   [PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
 - [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37) is closed by
@@ -104,10 +106,14 @@ the project must not silently call that a fully functioning Pixel 9a.
 - [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) has an offline
   audio source and inventory decision merged in
   [PR #44](https://github.com/h4rkl/omarchy-ferrix/pull/44).
-  A read-only audio inventory workflow is in
-  [draft PR #45](https://github.com/h4rkl/omarchy-ferrix/pull/45), with mock
-  tests passing. Speaker, microphone, route, and mute evidence remain absent
-  on the phone.
+  A read-only audio inventory workflow was merged in
+  [PR #45](https://github.com/h4rkl/omarchy-ferrix/pull/45), with mock tests
+  and CI passing. It still awaits a Ferrix guest run. Speaker, microphone,
+  route, and mute evidence remain absent on the phone.
+- [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) tracks the
+  discovery false-success found during early stock boot. Its offline fix is
+  in [PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48); the successful
+  later discovery has complete identity, build, and slot fields.
 
 ## Working structure
 
@@ -174,19 +180,22 @@ body/comment, rather than relying on board order as a dependency graph.
 
 ## Ordered work and issue map
 
-The order follows evidence dependencies, not numeric issue order. Work that
-can run off-device may proceed while the phone is being restored, but it
-cannot promote a physical claim.
+The order follows evidence dependencies, not numeric issue order. Offline
+work can proceed while a physical gate is pending, but cannot promote a
+physical claim.
 
 CI and offline prerequisites: [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
 owns the merged strict native sandbox gate; [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38)
 has closed with a passing arm64 QEMU job; [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42)
 has closed with the Pixel rootfs firmware handoff fixture and allowlist repair. These
 gates make other PR checks meaningful but do not satisfy any phone capability.
+[#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) tracks truthful
+Pixel identity-query failure reporting after early Android boot exposed a
+false `result=ok`.
 
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
-| 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25): finish/verify stock restore, truthful failure handling, exact-device boot. This gates further device loading. |
+| 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25): pinned stock restore, truthful failure handling, and same-device Android 17 boot verified on 2026-10-12; physical evidence is in PR #47. Recheck the recovery invariant before every new device load. |
 | 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): prevent recovery writes when mounting modem calibration partitions; blocks CP boot. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
 | 2. Power and radios | [#9](https://github.com/h4rkl/omarchy-ferrix/issues/9) power key, blanking, suspend/wake, sensors; [#24](https://github.com/h4rkl/omarchy-ferrix/issues/24) Wi-Fi hardening; [#5](https://github.com/h4rkl/omarchy-ferrix/issues/5) Bluetooth pairing; [#7](https://github.com/h4rkl/omarchy-ferrix/issues/7) hidden Wi-Fi; [#8](https://github.com/h4rkl/omarchy-ferrix/issues/8) time/RTC | [#26](https://github.com/h4rkl/omarchy-ferrix/issues/26): charge/thermal/endurance, with screen-off drain dependent on #9. |
 | 3. Camera, location and other hardware | [#3](https://github.com/h4rkl/omarchy-ferrix/issues/3) camera; #9 owns orientation/proximity/ambient sensors | [#28](https://github.com/h4rkl/omarchy-ferrix/issues/28) GNSS/location; [#29](https://github.com/h4rkl/omarchy-ferrix/issues/29) NFC/fingerprint feasibility and proof. |
