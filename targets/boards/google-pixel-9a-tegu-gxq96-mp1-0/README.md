@@ -698,6 +698,16 @@ is ordered before the audio session, and nothing needs it. The stage
 workflow refuses persist or `*calib*` rows; per-unit calibration is never
 staged. See [`audio-route-decision.md`](audio-route-decision.md). Audio stays
 `unsupported`.
+Issue #59 adds one optional `audio-tas25xx` row:
+`vendor.img:/firmware/tismartpa_driver_tuning.bin` to
+`lib/firmware/tismartpa_driver_tuning.bin`. That is the exact name the pinned
+`snd-soc-tas25xx` driver requests. The source review classifies it as
+generic, chip-revision-selected register and profile tuning, not per-unit
+data. The driver loads it itself, so there is no loader service. The TAS
+per-unit calibration paths (`smartamp_calib.bin`, `speaker.cal`) and the
+Android HAL's `ti_sp_tuning.bin` are not staged. Neither is CS40L26 haptics
+firmware. No image with this row has booted. TAS initialisation and an ALSA
+card remain unproved.
 The pinned BCM4383 module name, firmware request basenames, and platform
 variant lookup contract are recorded in
 [`wifi-firmware-source-evidence.md`](wifi-firmware-source-evidence.md);

@@ -99,6 +99,26 @@ runtime_paths = ["aoc"]
 required_names = ["aoc.bin"]
 
 [[controller]]
+id = "audio-tas25xx"
+# TI TAS25xx speaker amplifier. On physical:google-pixel-9a-tegu-gxq96-mp1-0
+# (2026-10-11, after #58, read-only) the driver on I2C 19-0048 repeatedly
+# requested `tismartpa_driver_tuning.bin`, got -2, and the AoC sound card
+# registration then failed -2. Pinned amplifiers source
+# 33976d763bc0ace11603e7ecb207fc2b6e3f2608 hard-codes that name
+# (tas25xx/src/tas25xx-regbin-parser.c TAS25XX_BINFILE_NAME, with no DT
+# override) and parses it as generic register/profile tuning selected by chip
+# revision ID, not by unit. Its module Makefile leaves the algo/ calibration
+# interfaces (TAS25XX_ALGO, TISA_BIN_INTF, TISA_KBIN_INTF) unset, so the
+# `smartamp_calib.bin` calibration paths are not built. Ferrix stages only the
+# factory vendor.img file under its own name.
+# Per-unit speaker calibration and the Android HAL's tuning file are never
+# staged (see audio-route-decision.md).
+kernel_driver = "snd-soc-tas25xx"
+source_images = ["vendor.img"]
+runtime_paths = ["tas25xx"]
+required_names = ["tismartpa_driver_tuning.bin"]
+
+[[controller]]
 id = "display-audio-touch"
 kernel_driver = "tegu-board-kernel"
 source_images = ["vendor.img", "vendor_dlkm.img"]

@@ -1,11 +1,12 @@
 # Audio route decision — google-pixel-9a-tegu-gxq96-mp1-0
 
-Status: **offline decision record, 2026-10-12, with one read-only physical
-inventory finding (2026-10-11, [below](#physical-finding-2026-10-11-aoc-offline)).**
+Status: **offline decision record, 2026-10-12, with read-only physical
+inventory findings (2026-10-11, [AoC offline](#physical-finding-2026-10-11-aoc-offline);
+after #58, [TAS25xx tuning missing](#physical-finding-after-58-tas25xx-tuning-missing)).**
 Nothing here is physical audio playback or capture evidence.
 `capabilities.toml` keeps `[audio] status = "unsupported"`
 (`capabilities.toml:27-29`). It is written for issue #2; the AoC firmware
-slice is issue #55.
+slice is issue #55 and the TAS25xx tuning slice is issue #59.
 
 Repository claims below cite checked-in paths and lines. The pinned AoC
 source was inspected for the firmware-loading decision below; other upstream
@@ -20,9 +21,9 @@ audio sources and generated module lists still need review where noted.
 | Required modules | `pmos/device-google-tegu/modules-initfs:25-26` requires `cs40l26-i2c` and `snd-soc-cs40l26`, copied from the stock vendor-ramdisk list (lines 7-11). `kernel.sh:214-224` fails the build if Kleaf does not emit them. | That `cs40l26` is a speaker, earpiece, or microphone path. Its role is unverified (see Unknowns). |
 | Loaded modules (dev route) | `initramfs-init-kleaf:371-378` loads all of Kleaf's generated `system_dlkm.modules.load` and `vendor_dlkm.modules.load`. Firmware lookup points at the rootfs while they load. `tools/pixel-9a/dev-compose.py:203-218` copies those lists unfiltered from the Kleaf archives. | Which audio modules are in those generated lists, or whether they probe. The lists are build outputs and are not checked in. |
 | Radio-first route | `modules-vendor-dlkm:1-4` and `modules-system-dlkm:1-3` select no loadable modules. | Applies only to the native radio route. The Kleaf dev route above is a different route. |
-| Firmware | Issue #55 adds one `audio-aoc` controller to `firmware-policy.toml` and one stage row, `vendor.img:/firmware/aoc.bin` → `lib/firmware/aoc.bin` (`firmware-stage-allowlist.tsv`), with an optional runtime row (`pmos/device-google-tegu/firmware-allowlist.tsv`). The `display-audio-touch` controller still has `required_names = []`. `allow_unlisted_paths = false`, and the stage workflow refuses persist or `*calib*` rows. | That the factory `aoc.bin` boots AoC on this kernel. Amplifier (TAS25xx) and haptics (CS40L26) firmware are not staged. No bytes are in Git. |
+| Firmware | Issue #55 adds one `audio-aoc` controller to `firmware-policy.toml` and one stage row, `vendor.img:/firmware/aoc.bin` → `lib/firmware/aoc.bin` (`firmware-stage-allowlist.tsv`), with an optional runtime row (`pmos/device-google-tegu/firmware-allowlist.tsv`). The physical #58 image brought AoC online. Issue #59 adds the same shape for `audio-tas25xx`: `vendor.img:/firmware/tismartpa_driver_tuning.bin` → `lib/firmware/tismartpa_driver_tuning.bin`, optional at runtime. The `display-audio-touch` controller still has `required_names = []`. `allow_unlisted_paths = false`, and the stage workflow refuses persist or `*calib*` rows. | That the factory TAS tuning parses and initialises the amplifier on this kernel. Haptics (CS40L26) firmware is not staged. No bytes are in Git. |
 | Userspace | The device package depends on `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD:23-25`). It enables `ferrix-pipewire` and `ferrix-audio` (`APKBUILD:131-138`). It does not depend on `alsa-utils` or `alsa-ucm-conf`. No UCM file exists under the target or `tools/pixel-9a`. | That `aplay`, `arecord`, `amixer`, or `alsaucm` are present in the image, or that UCM is loaded. |
-| AoC loader | `pmos/device-google-tegu/ferrix-aoc-firmware.initd` is a fail-open OpenRC one-shot, ordered before `ferrix-pipewire`, `ferrix-audio`, and `ferrix-core`. Nothing `need`s it. It writes `aoc.bin` to the AoC `firmware` control once, and only when `revision` reads `Offline` and the staged image matches its manifest row. It has bounded waits. | That the write brings AoC online or lets the sound card bind. Offline tests only (`tools/pixel-9a/tests/aoc-firmware-runtime.sh`). |
+| AoC loader | `pmos/device-google-tegu/ferrix-aoc-firmware.initd` is a fail-open OpenRC one-shot, ordered before `ferrix-pipewire`, `ferrix-audio`, and `ferrix-core`. Nothing `need`s it. It writes `aoc.bin` to the AoC `firmware` control once, and only when `revision` reads `Offline` and the staged image matches its manifest row. It has bounded waits. The physical #58 inventory found the service started and AoC online. | That the sound card binds or audio works. Offline tests also cover the service failure paths (`tools/pixel-9a/tests/aoc-firmware-runtime.sh`). |
 | Services | `ferrix-pipewire.initd:6-18` runs PipeWire as `user` after `ferrix-radio-firmware`. `ferrix-audio.initd:13-49` runs WirePlumber and waits up to 10 s for `wpctl status`. `docs/status.md:517-521` records only that both are supervised and respawn. | Any ALSA node in the PipeWire graph. A running daemon is not an audio device. |
 | Android audio | Waydroid audio goes through `pipewire-pulse` (`pmos/android/packages:11-23`). | Any hardware output. With no ALSA sink, it reaches only whatever PipeWire offers. |
 | Ferrix adapter | `ferrix-backends.env:15` selects `wireplumber`. The target adapter composes `WirePlumberAudio::connect()` and falls back to `UnavailableHardware` on error (`adapter/src/lib.rs:837-841`, `292-302`). `connect` fails when no classified default sink exists (`crates/ferrix-audio-wireplumber/src/lib.rs:71`, `157-174`). | That a route works. Without an ALSA sink, the product sees `unsupported`. |
@@ -114,6 +115,121 @@ which stays `unsupported`.
 `[audio]` stays `unsupported`. AoC reporting online would be progress
 toward A1, not sound. The pass criteria below are unchanged.
 
+## Physical finding after #58: TAS25xx tuning missing
+
+`physical: google-pixel-9a-tegu-gxq96-mp1-0`, dev image carrying #58,
+read-only, reported by the PM. The raw, redacted inventory stays in ignored
+`out/pixel-9a/audio/`.
+
+- AoC is online and the `ferrix-aoc-firmware` service started.
+- ALSA still has zero cards and zero PCMs. PipeWire has no ALSA sink or
+  source.
+- The TAS25xx driver on I2C `19-0048` repeatedly requests
+  `tismartpa_driver_tuning.bin` and gets `-2` each time. `aoc_snd_card_probe`
+  registration then fails with `-2`.
+
+### Source review (issue #59)
+
+Pinned `google-modules/amplifiers` revision
+`33976d763bc0ace11603e7ecb207fc2b6e3f2608` (`kernel-sources.toml:69-72`),
+`tas25xx/` subtree, read-only:
+
+- **Exact name.** `src/tas25xx-regbin-parser.c` defines
+  `TAS25XX_BINFILE_NAME "tismartpa_driver_tuning.bin"`.
+  `tas25xx_load_firmware` passes it to `request_firmware_nowait` and retries
+  while the file is absent. Nothing reads a DT property for the name, so the
+  Linux path must be `lib/firmware/tismartpa_driver_tuning.bin`.
+- **When it is requested.** The only callers are in `src/tas25xx-codec.c`.
+  The ASoC component probe calls `tas25xx_start_fw_load(p_tas25xx, 20)`, and
+  `hw_params` plus three other paths retry with 3. The I2C probe does not
+  request it. The request therefore happens when the AoC card binds its
+  components. That is after AoC is online, which on this image is after
+  `switch_root`, so the default `/lib/firmware` search path applies.
+- **Failure path.** A missing file ends as `-ENOENT` (`-2`), which matches
+  the observed `-2` per request. However, the component probe maps
+  `-ENOENT` to `0` (`if (ret == -ENOENT) ret = 0;`), so a missing tuning
+  file alone does not fail that probe. The firmware stays unloaded and
+  `hw_params` retries later. The AoC card's own `-2` is therefore **not**
+  shown to be caused by the missing file. The file is still needed before
+  the amplifier can be initialised for playback.
+- **Content and selection.** `tas25xx_fw_ready` parses an optional `MDATA`
+  table that picks one sub-image by the chip's silicon revision ID. The ID is
+  read from `TAS25XX_REVID_REG` in `src/tas25xx-regmap.c`. A `HEADR` block
+  follows: version ≤ `SUPPORTED_BIN_VERSION` 7, name, timestamp, channel
+  count, I2C addresses, IV width and Vbat monitor. Then come per-channel
+  `INITP` register sequences, `HWPRM` format options, `PROFP` profiles,
+  `INTRP` interrupt handling and `BLKOP` operation blocks. Last are the
+  `KCNTR` mixer controls and an optional `ALGOP` block. The `BLKOP` `CLINI`
+  and `CLDIN` entries are register sequences that put the amplifier into and
+  out of calibration mode on request. They are not measured values. Nothing
+  in the format is keyed to a unit serial or a per-unit measurement.
+- **Calibration is a separate path.** TI's per-unit speaker calibration is
+  `SMARTAMP_SPEAKER_CALIBDATA_FILE "/persist/audio/smartamp_calib.bin"`
+  (`algo/inc/tas_smart_amp_v2.h:44`, opened with `filp_open` in
+  `algo/src/tas25xx-algo-bin-intf.c`). A second copy is requested as
+  `smartamp_calib.bin` in `algo/src/tas25xx-algo-kbin-intf.c`. Both are under
+  `algo/` and need `TAS25XX_ALGO`, `TISA_BIN_INTF` or `TISA_KBIN_INTF`. The
+  module `Makefile` enables only `SND_SOC_TAS25XX`, `TAS25XX_MISC`,
+  `TAS25XX_CODEC` and `TAS25XX_IRQ_BD`; the `ALGO` and `KBIN` lines are
+  commented out. The driver source contains no `speaker.cal` or
+  `ti_sp_tuning.bin` reference. Those are consumed outside the kernel.
+- **Provenance.** The PM independently verified a prior hash-pinned
+  extraction: `vendor.img:/firmware/tismartpa_driver_tuning.bin` is a
+  23,160-byte regular file, SHA-256
+  `da10e6bc27db8b339a28636534404b1d4068ac91de2c2118d7f02ca28059e6fe`. It
+  came from the factory archive with SHA-256
+  `0c2f9053bf064b09483c937cf16f4824371afe92fa057029d6f9237668d1c0d7`.
+  `vendor.img` is one build-wide image flashed to every unit, so it cannot
+  carry this unit's measurements. This is existence and provenance, not
+  proof that the file loads.
+
+Conclusion: the request name and source path are justified, and the file is
+generic, revision-selected factory tuning rather than per-unit data. The
+slice mirrors #55:
+
+- one `audio-tas25xx` controller in `firmware-policy.toml`;
+- one stage row, `vendor.img:/firmware/tismartpa_driver_tuning.bin` →
+  `lib/firmware/tismartpa_driver_tuning.bin`, through the same hash-verified
+  factory workflow and manifest;
+- one optional runtime row (`required = 0`), so a missing file cannot block
+  the radio gate or boot;
+- no loader or service: the driver requests the file itself;
+- no `speaker.cal`, `smartamp_calib.bin`, `ti_sp_tuning.bin`, CS40L26
+  firmware, UCM, mixer writes, adapter change, or `ferrix-hardware-api`
+  change.
+
+Offline tests cover the single stage row, staging it through the synthetic
+factory archive, the rejection of TAS-controller calibration rows, and the
+rootfs and manifest handoff. **No image carrying this change has booted.**
+TAS initialisation, the ALSA card and PipeWire nodes all remain unproved.
+`[audio]` stays `unsupported`.
+
+### Open questions for the next physical inventory
+
+- Whether the factory file's `MDATA` table has an entry for this unit's TAS
+  silicon revision. A miss logs `metadata parse failure` and yields `-EINVAL`
+  rather than `-2`.
+- Whether the file's `HEADR` version is ≤ 7. A newer version is rejected
+  after the header is read.
+- What actually returns `-2` from `aoc_snd_card_probe`. The TAS component
+  probe swallows `-ENOENT`, so another component, link or resource may be
+  missing. Record the first error before the card failure. Staging the
+  tuning file may not by itself let the card register.
+- Whether the requests happen at card bind after `switch_root`, as the
+  source implies. If dmesg shows them before `mounting`, the firmware search
+  path matters, and staging alone would not be enough.
+- Whether the Google Kleaf build passes extra `CONFIG_TAS25XX_*` options
+  beyond the module `Makefile`. The checked copy is only the `tas25xx/`
+  subtree. If `TAS25XX_ALGO` were enabled, a later `smartamp_calib.bin`
+  request would appear in dmesg. It must still not be staged.
+- The exact amplifier part and the second channel's address (`0x49` in the
+  driver's sample DT). Record them from the probe log.
+- Whether the AoC card then registers, or next waits on the CS40L26 haptics
+  back end (`cs40l26.wmfw -2`). CS40L26 firmware stays out of this slice
+  until a physical inventory shows that it blocks the card.
+- The parser does no bounds checking on the file. Only the hash-pinned
+  factory bytes that Android ships may reach it.
+
 ## Exact-device read-only inventory plan
 
 **Preconditions (all required):**
@@ -203,8 +319,11 @@ amplifier is identified. Call audio stays blocked on telephony.
   name suggests a Cirrus Logic haptics part with an ASoC component. Treat
   that as unverified until the pinned `amplifiers` source and tegu DT are
   read. Do not count it as a speaker path.
-- The speaker and earpiece amplifier part, its DT node, and whether it needs
-  calibration or speaker protection before safe playback.
+- The exact speaker and earpiece amplifier part, and whether it needs
+  calibration or speaker protection before safe playback. After #58 a
+  `snd-soc-tas25xx` device probes at I2C `19-0048` (see
+  [above](#physical-finding-after-58-tas25xx-tuning-missing)). The exact TAS
+  part number is not yet recorded.
 - Whether Pixel audio on this SoC is reachable from Linux without Android's
   AoC audio HAL. If it is not, a project-owned adapter would be needed. That
   is a plan-level decision, not a target tweak, and it needs `plans/` review.

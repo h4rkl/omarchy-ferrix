@@ -27,7 +27,9 @@ grep -q '^kernel_driver = "cpif"$' "$policy"
 grep -q '^kernel_driver = "mali_kbase"$' "$policy"
 grep -q '^kernel_driver = "aoc_core"$' "$policy"
 grep -q '^id = "audio-aoc"$' "$policy"
-awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 14 ? 0 : 1) }' "$allowlist"
+grep -q '^kernel_driver = "snd-soc-tas25xx"$' "$policy"
+grep -q '^id = "audio-tas25xx"$' "$policy"
+awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 15 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 5 && $5 == "bundle" { count++ } END { exit(count == 2 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && (NF == 4 || (NF == 5 && $5 == "bundle")) { if (seen[$4]++) bad=1 } END { exit(bad ? 1 : 0) }' "$allowlist"
 awk -F '\t' '$1 == "bluetooth-broadcom" && $2 == "vendor.img" && $3 == "/firmware/brcm/BCM.hcd" && $4 == "lib/firmware/brcm/BCM.hcd" { found=1 } END { exit(found ? 0 : 1) }' \
@@ -38,11 +40,21 @@ awk -F '\t' '$1 == "wifi-bcm4383" && $2 == "vendor.img" && $3 == "/firmware/bcmd
   "$allowlist" >/dev/null
 awk -F '\t' '$1 == "gpu-mali" && $2 == "vendor.img" && $3 == "/firmware/mali_csffw-r51p0.bin" && ($4 == "lib/firmware/mali_csffw-r52p0.bin" || $4 == "lib/firmware/mali_csffw.bin") { count++ } END { exit(count == 2 ? 0 : 1) }' \
   "$allowlist" >/dev/null
-# Exactly one AoC row: the factory DSP image under its own name. No other
-# audio data (TAS/CS40L26 tuning, UCM, per-unit calibration) is staged here.
+# Exactly one AoC row: the factory DSP image under its own name.
 awk -F '\t' '$1 == "audio-aoc" { count++; if ($2 == "vendor.img" && $3 == "/firmware/aoc.bin" && $4 == "lib/firmware/aoc.bin" && NF == 4) ok++ } END { exit(count == 1 && ok == 1 ? 0 : 1) }' \
   "$allowlist" >/dev/null
-if grep -Eq 'speaker\.cal|calib|/persist|tismartpa|ti_sp_tuning|cs40l26|tas25' "$allowlist"; then
+# Exactly one TAS25xx row: the generic factory driver tuning under the name
+# snd-soc-tas25xx requests. No other row may name TAS25xx data.
+awk -F '\t' '$1 == "audio-tas25xx" { count++; if ($2 == "vendor.img" && $3 == "/firmware/tismartpa_driver_tuning.bin" && $4 == "lib/firmware/tismartpa_driver_tuning.bin" && NF == 4) ok++ } END { exit(count == 1 && ok == 1 ? 0 : 1) }' \
+  "$allowlist" >/dev/null
+awk -F '\t' '/^[[:space:]]*#/ { next } /tismartpa|tas25/ && $1 != "audio-tas25xx" { bad = 1 } END { exit bad }' \
+  "$allowlist" || {
+  echo 'firmware stage allowlist names TAS25xx data outside the audio-tas25xx row' >&2
+  exit 1
+}
+# Per-unit calibration, the Android HAL's TAS tuning, and CS40L26 haptics
+# firmware are never staged here.
+if grep -Eq 'speaker\.cal|calib|/persist|ti_sp_tuning|cs40l26' "$allowlist"; then
   echo 'firmware stage allowlist names calibration or out-of-scope audio data' >&2
   exit 1
 fi
@@ -74,10 +86,13 @@ if FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware \
 fi
 grep -q 'unique runtime paths' "$work/duplicate-stderr"
 for row in \
-  '/persist/audio/speaker.cal lib/firmware/speaker.cal' \
-  '/firmware/aoc_calib.bin lib/firmware/aoc_calib.bin'; do
+  'audio-aoc /persist/audio/speaker.cal lib/firmware/speaker.cal' \
+  'audio-aoc /firmware/aoc_calib.bin lib/firmware/aoc_calib.bin' \
+  'audio-tas25xx /mnt/vendor/persist/audio/speaker.cal lib/firmware/speaker.cal' \
+  'audio-tas25xx /persist/audio/smartamp_calib.bin lib/firmware/smartamp_calib.bin' \
+  'audio-tas25xx /firmware/tismartpa_driver_tuning.bin lib/firmware/smartamp_calib.bin'; do
   set -- $row
-  printf 'audio-aoc\tvendor.img\t%s\t%s\n' "$1" "$2" > "$work/calibration.tsv"
+  printf '%s\tvendor.img\t%s\t%s\n' "$1" "$2" "$3" > "$work/calibration.tsv"
   if FERRIX_PIXEL9A_FIRMWARE=I-understand-this-extracts-verified-firmware \
     FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST="$work/calibration.tsv" \
     FERRIX_PIXEL9A_FIRMWARE_OUT="$work/out-calibration" "$workflow" stage >"$work/calibration-stdout" 2>"$work/calibration-stderr"; then
@@ -155,6 +170,29 @@ awk -F '\t' \
    $1 == "firmware" && $2 == "modem-s5300" && $3 == "vendor.img" && $4 == "/firmware/carrierconfig/confseqs_symbolic_link_mapping" && $5 == "lib/firmware/carrierconfig/confseqs_symbolic_link_mapping" { sibling=1 } \
    END { exit(nested && sibling ? 0 : 1) }' \
   "$work/bundle-nested-sibling-out/firmware-manifest.tsv"
+# Stage the exact checked-in TAS25xx row through the synthetic archive. The
+# controller must resolve in the real policy and the manifest row must carry
+# the destination, byte count and SHA-256 that rootfs and runtime re-check.
+awk -F '\t' '$1 == "audio-tas25xx"' "$allowlist" >"$work/tas25xx.tsv"
+[ "$(wc -l <"$work/tas25xx.tsv" | tr -d '[:space:]')" = 1 ] ||
+  { echo 'checked-in TAS25xx stage row is missing or duplicated' >&2; exit 1; }
+FERRIX_PIXEL9A_PINS="$work/recovery.pins" \
+FERRIX_PIXEL9A_FACTORY_ARCHIVE="$work/factory.zip" \
+FERRIX_PIXEL9A_FIRMWARE="$confirmation" \
+FERRIX_PIXEL9A_FIRMWARE_ALLOWLIST="$work/tas25xx.tsv" \
+FERRIX_PIXEL9A_FIRMWARE_OUT="$work/tas25xx-out" \
+PATH="$fake_bin:$PATH" "$workflow" stage >/dev/null
+[ -f "$work/tas25xx-out/staged/lib/firmware/tismartpa_driver_tuning.bin" ] ||
+  { echo 'TAS25xx tuning was not staged at its driver request name' >&2; exit 1; }
+awk -F '\t' \
+  '$1 == "firmware" { rows++ } \
+   $1 == "firmware" && NF == 7 && $2 == "audio-tas25xx" && $3 == "vendor.img" && $4 == "/firmware/tismartpa_driver_tuning.bin" && $5 == "lib/firmware/tismartpa_driver_tuning.bin" && $6 ~ /^[0-9]+$/ && $7 ~ /^[0-9a-f]+$/ && length($7) == 64 { ok++ } \
+   END { exit(rows == 1 && ok == 1 ? 0 : 1) }' \
+  "$work/tas25xx-out/firmware-manifest.tsv" ||
+  { echo 'TAS25xx manifest row is not the single destination-aware row' >&2; exit 1; }
+find "$work/tas25xx-out/staged" -type f ! -name firmware-manifest.tsv >"$work/tas25xx-staged"
+[ "$(wc -l <"$work/tas25xx-staged" | tr -d '[:space:]')" = 1 ] ||
+  { echo 'TAS25xx stage produced files beyond the tuning file' >&2; exit 1; }
 FERRIX_FAKE_BUNDLE_MODE=regular \
 FERRIX_PIXEL9A_PINS="$work/recovery.pins" \
 FERRIX_PIXEL9A_FACTORY_ARCHIVE="$work/factory.zip" \
