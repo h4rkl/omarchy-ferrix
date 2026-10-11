@@ -1,5 +1,35 @@
 # Status
 
+## 2026-10-12 (Pixel 9a recovery follow-up; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The owner reports running only `fastboot -w`, which wipes user data; no
+  factory image update or Android boot result was reported. This is an owner
+  report, not an agent-run restore transcript.
+- Checked-in read-only discovery afterward found one exact unlocked
+  `tegu`/`GXQ96`/`MP1.0` device in ordinary bootloader Fastboot on slot B,
+  with the expected stock bootloader and baseband versions. Stock Android
+  boot remains **unverified**. No agent mutation was performed.
+- The host had about 12–13 GiB free. The pinned factory restore has not been
+  rerun because the preceding update ran out of host storage. Offline
+  failure-reporting hardening is in draft PR #36 and passes
+  `just pixel-9a-tools-test`; this is not recovery proof.
+
+## 2026-10-11 (Pixel 9a stock restore attempt; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The pinned `CP3A.260905.009` factory restore preflight passed for the single
+  unlocked `tegu`/`GXQ96`/`MP1.0` device in bootloader Fastboot on slot B.
+  The pinned factory and OTA archives matched their recorded hashes.
+- The stock bootloader and radio stages completed and their versions matched
+  the factory requirements after each reboot. `fastboot -w update` then failed
+  while extracting `vendor.img` because the host ran out of disk space. The
+  device remained in ordinary Fastboot on slot B; stock Android boot is
+  **unverified**. The ignored redacted transcript is
+  `out/pixel-9a/restore/20261011T074408Z.txt`.
+- The restore wrapper incorrectly emitted `factory-restore-complete` because
+  its failure-status file could not be written on the full disk. The workflow
+  now captures Fastboot's exit status in the shell through a log pipe; its
+  offline restore tests pass. The failed hardware run is not recovery proof.
+
 ## 2026-10-10 (Icon set: filled Remix Icon v4.7.0 glyphs, issue #20; QEMU/host preview only)
 
 - **Licence:** Remix Icon is under the non-OSI Remix Icon License v1.0 from
