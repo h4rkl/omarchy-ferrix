@@ -120,9 +120,12 @@ the project must not silently call that a fully functioning Pixel 9a.
   after [PR #58](https://github.com/h4rkl/omarchy-ferrix/pull/58) and a
   physical image brought AoC online. ALSA still has no card: TAS25xx cannot
   load `tismartpa_driver_tuning.bin`, and the sound-card probe fails `-2`.
-  [#59](https://github.com/h4rkl/omarchy-ferrix/issues/59) owns that next
-  target firmware/probe slice. Speaker, microphone, route, and mute evidence
-  remain absent; #2 stays open.
+  [#59](https://github.com/h4rkl/omarchy-ferrix/issues/59) delivered that
+  target firmware/probe slice through PR #61 and a fresh physical image
+  loaded the pinned TAS tuning file; the AoC ALSA card now exposes 34 PCM
+  entries. PipeWire still has no audio endpoints because the card lacks a
+  matching UCM profile. Speaker, microphone, route, and mute evidence remain
+  absent; #2 stays open.
 - [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed by
   [merged PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48), which
   makes an ADB or Fastboot identity-query failure explicit. The successful
