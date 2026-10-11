@@ -78,18 +78,29 @@ the project must not silently call that a fully functioning Pixel 9a.
   physical work with [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25).
 - On 2026-10-12, #25's offline recovery-script hardening is in
   [draft PR #36](https://github.com/h4rkl/omarchy-ferrix/pull/36);
-  the host still has only 13 GiB free, so the factory restore has not been
-  rerun and stock boot remains unverified. The S5300 source route decision is
+  the host still has only about 12–13 GiB free, so the factory restore has
+  not been rerun and stock boot remains unverified. The owner reports running only
+  `fastboot -w`; read-only discovery afterward still found the exact device
+  in ordinary Fastboot on slot B. That wipe is not factory restore evidence.
+  The S5300 source route decision is
   in [draft PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
 - The Rust CI job fails existing native sandbox integration tests on its
   unprivileged hosted runner. [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
-  tracks a real privileged test gate and bounded Unix socket paths; unrelated
-  PRs must not be called green while that gate fails.
+  and [draft PR #41](https://github.com/h4rkl/omarchy-ferrix/pull/41)
+  track a real privileged test gate and bounded Unix socket paths. The local
+  privileged container still failed one required user-namespace test; GitHub
+  runner proof is pending. Unrelated PRs must not be called green while that
+  gate fails.
 - The QEMU CI job also failed before kernel boot because the arm64 runner
   lacked `efi-virtio.rom`. [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38)
   and [draft PR #39](https://github.com/h4rkl/omarchy-ferrix/pull/39)
-  track the portable direct-kernel-boot correction; local TCG passed, arm64
-  CI proof is pending.
+  track the explicit Ubuntu ROM dependency and guest-cache permissions. The
+  first attempt to suppress ROM loading failed on arm64 and was reverted;
+  local TCG passed, corrected arm64 CI proof is pending.
+- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) and
+  [draft PR #40](https://github.com/h4rkl/omarchy-ferrix/pull/40)
+  provide an offline fail-closed calibration-mount gate. Exact-device
+  filesystem inventory and mountinfo proof remain before any CP node open.
 
 ## Working structure
 
