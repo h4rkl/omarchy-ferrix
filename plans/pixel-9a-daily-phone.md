@@ -136,9 +136,12 @@ the project must not silently call that a fully functioning Pixel 9a.
   rootfs, and development-image builds; all seven transferred image hashes
   matched the bundle manifest. The checked-in recovery-invariant flash on
   slot B succeeded, and an inspected host webcam capture shows Ferrix Home
-  on the physical panel. The CDC-ACM guest shell and both read-only physical
-  inventories ran. This is boot and diagnosis evidence, not a daily-phone
-  acceptance result; details and limits are in `docs/status.md`.
+  on the physical panel. The inspected DRM framebuffer identifies that Home
+  as the `ferrix-basic-screen` reference surface, not the product shell;
+  #12 and related shell issues remain. The CDC-ACM guest shell and both
+  read-only physical inventories ran. This is boot and diagnosis evidence,
+  not a daily-phone acceptance result; details and limits are in
+  `docs/status.md`.
 
 ## Working structure
 

@@ -17,8 +17,12 @@
   It requested reboot without a slot change. Ferrix then enumerated its USB
   gadget and the CDC-ACM shell reported kernel
   `6.1.124-android14-11-ga4662a84a15f`. An inspected host webcam image
-  shows Ferrix Home on the physical panel. This proves a graphical boot for
-  this attempt, not the remaining daily-phone functions.
+  shows Ferrix Home on the physical panel. A separate DRM framebuffer capture
+  was retrieved and inspected; its caption identifies this as the
+  `ferrix-basic-screen` reference surface, **not the product shell**. This
+  proves a graphical boot for this attempt, not product-shell completion or
+  the remaining daily-phone functions. The framebuffer capture remains under
+  ignored `out/pixel-9a/`.
 - The merged read-only audio inventory (#45/#54) passed its exact device-tree
   gate over CDC-ACM. ALSA has no cards or PCMs; PipeWire/WirePlumber are
   reachable but have no ALSA sink/source, and ferrix-core reports audio
