@@ -47,11 +47,11 @@ adb -s "$serial" shell getprop "$1" </dev/null | tr -d '\r'
 fastboot -s "$serial" getvar "$variable" 2>&1 | awk -v key="$variable" '
 [ "$(adb -s "$serial" get-state </dev/null | tr -d '\r')" = device ] || {
 adb -s "$serial" reboot bootloader
-fastboot -s "$serial" flash bootloader "$image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-fastboot -s "$serial" flash radio "$image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-fastboot -s "$serial" reboot-bootloader </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-fastboot -s "$serial" -w update "$stage_image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-fastboot -s "$serial" update "$stage_image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
+fastboot -s "$serial" flash bootloader "$image" </dev/null >"$log_pipe" 2>&1; then
+fastboot -s "$serial" flash radio "$image" </dev/null >"$log_pipe" 2>&1; then
+fastboot -s "$serial" reboot-bootloader </dev/null >"$log_pipe" 2>&1; then
+fastboot -s "$serial" -w update "$stage_image" </dev/null >"$log_pipe" 2>&1; then
+fastboot -s "$serial" update "$stage_image" </dev/null >"$log_pipe" 2>&1; then
 EOF
 offending=$(grep -nE '(^[[:space:]]*|[(|{;&`][[:space:]]*)(adb|fastboot)([[:space:]]|$)' "$script" \
   | grep -vE '^[0-9]+:[[:space:]]*#' \
@@ -228,6 +228,22 @@ cat > "$work/bin/fastboot" <<'STUB'
 printf 'fastboot\t' >> "$STUB_CALLS"
 printf '%s\t' "$@" >> "$STUB_CALLS"
 printf '\n' >> "$STUB_CALLS"
+# Model the 2026-10-11 failure class while update extracts images: the host
+# storage stops accepting restore output (no new files, no transcript
+# appends), or the transcript logger fails. Only the case's own ignored
+# output directory is touched.
+update_side_effects() {
+  [ "${STUB_TEE_FAIL_ON:-}" != update ] || : > "$STUB_STATE/tee-fail"
+  restore_dir="$FERRIX_OUT_DIR/pixel-9a/restore"
+  case "${STUB_FULL_STORAGE_ON_UPDATE:-}" in
+    readonly) chmod a-w "$restore_dir"/*.txt "$restore_dir" ;;
+    enospc)
+      for transcript in "$restore_dir"/*.txt; do
+        rm -f "$transcript" && ln -s /dev/full "$transcript"
+      done
+      ;;
+  esac
+}
 case "$1" in
   devices)
     [ "$#" -eq 2 ] && [ "$2" = -l ] || exit 99
@@ -274,6 +290,7 @@ case "$1" in
         ;;
       flash)
         [ "$#" -eq 5 ] && [ -f "$5" ] || exit 99
+        [ "${STUB_TEE_FAIL_ON:-}" != "flash-$4" ] || : > "$STUB_STATE/tee-fail"
         case "$4" in
           bootloader) : > "$STUB_STATE/flashed-bootloader" ;;
           radio) : > "$STUB_STATE/flashed-radio" ;;
@@ -288,11 +305,13 @@ case "$1" in
       update)
         [ "$#" -eq 4 ] && [ -f "$4" ] || exit 99
         printf 'stub update %s\n' "$4" >&2
+        update_side_effects
         exit "${STUB_UPDATE_EXIT:-0}"
         ;;
       -w)
         [ "$#" -eq 5 ] && [ "$4" = update ] && [ -f "$5" ] || exit 99
         printf 'stub -w update %s\n' "$5" >&2
+        update_side_effects
         exit "${STUB_UPDATE_EXIT:-0}"
         ;;
       *) echo "stub: unexpected fastboot -s verb $3" >&2; exit 99 ;;
@@ -301,8 +320,28 @@ case "$1" in
   *) echo "stub: unexpected fastboot verb $1" >&2; exit 99 ;;
 esac
 STUB
-chmod 0755 "$work/bin/adb" "$work/bin/fastboot"
-export PATH="$work/bin:$PATH" STUB_CALLS="$calls" STUB_STATE="$work/state"
+# tee and df pass through to the host tools unless a case asks them to model
+# a logger failure or a nearly full host disk.
+cat > "$work/bin/tee" <<'STUB'
+#!/bin/sh
+"$STUB_REAL_TEE" "$@"
+status=$?
+[ ! -f "$STUB_STATE/tee-fail" ] || exit 1
+exit "$status"
+STUB
+cat > "$work/bin/df" <<'STUB'
+#!/bin/sh
+if [ -n "${STUB_DF_AVAILABLE_KIB:-}" ]; then
+  printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+  printf 'stubfs 1000000 999000 %s 100%% /\n' "$STUB_DF_AVAILABLE_KIB"
+  exit 0
+fi
+exec "$STUB_REAL_DF" "$@"
+STUB
+STUB_REAL_TEE=$(command -v tee)
+STUB_REAL_DF=$(command -v df)
+chmod 0755 "$work/bin/adb" "$work/bin/fastboot" "$work/bin/tee" "$work/bin/df"
+export PATH="$work/bin:$PATH" STUB_CALLS="$calls" STUB_STATE="$work/state" STUB_REAL_TEE STUB_REAL_DF
 export FERRIX_PIXEL9A_SETTLE_SECONDS=0 FERRIX_PIXEL9A_FASTBOOT_WAIT_SECONDS=2
 
 serial='SYN.00[1]/&$'
@@ -312,7 +351,8 @@ reset_stub() {
   : > "$calls"
   unset STUB_ADB_DEVICES STUB_ADB_DEVICES_AFTER_REBOOT STUB_FASTBOOT_DEVICES \
     STUB_FASTBOOT_DEVICES_AFTER_REBOOT STUB_HW_REVISION STUB_VARIANT STUB_UNLOCKED \
-    STUB_IS_USERSPACE STUB_ALREADY_CURRENT STUB_UPDATE_EXIT STUB_REVISION
+    STUB_IS_USERSPACE STUB_ALREADY_CURRENT STUB_UPDATE_EXIT STUB_REVISION \
+    STUB_TEE_FAIL_ON STUB_FULL_STORAGE_ON_UPDATE STUB_DF_AVAILABLE_KIB
   export FERRIX_PIXEL9A_TARGET_DIR="$work/target"
   export FERRIX_PIXEL9A_PINS="$work/target/recovery.pins"
   export FERRIX_PIXEL9A_FACTORY_INVENTORY="$work/inventory/inventory.json"
@@ -583,10 +623,92 @@ run_case update_fail --confirm-restore
 check "execute: failed update exits 1" [ "$status" -eq 1 ]
 check "execute: failed update reports result=failed" grep -q '^result=failed$' "$work/update_fail/stdout"
 check "execute: stage directory is removed after a failed update" [ -z "$(stage_dirs_of update_fail)" ]
+check "execute: failed update stdout never claims completion" sh -c "! grep -q 'factory-restore-complete' '$work/update_fail/stdout'"
 
 bad_calls=$(grep -vE '^adb\tdevices\t-l\t$|^adb\t-s\t[^[:space:]]+\tshell\tgetprop\t[^[:space:]]+\t$|^adb\t-s\t[^[:space:]]+\tget-state\t$|^adb\t-s\t[^[:space:]]+\treboot\tbootloader\t$|^fastboot\tdevices\t-l\t$|^fastboot\t-s\t[^[:space:]]+\tgetvar\t(product|variant|hw-revision|current-slot|slot-count|unlocked|serialno|version-bootloader|version-baseband|is-userspace|secure)\t$|^fastboot\t-s\t[^[:space:]]+\tflash\t(bootloader|radio)\t[^[:space:]]+\t$|^fastboot\t-s\t[^[:space:]]+\treboot-bootloader\t$|^fastboot\t-s\t[^[:space:]]+\t(-w\t)?update\t[^[:space:]]+\t$' "$calls" || true)
 check "dynamic: the last run used only allow-listed verbs" [ -z "$bad_calls" ]
 [ -z "$bad_calls" ] || printf '%s\n' "$bad_calls"
+
+# --- execution: full host storage and logger failures (2026-10-11 class) ---
+# Fastboot's status stays in the shell, so a status file that cannot be
+# written must not matter; a transcript that cannot be written must stop the
+# run nonzero, and no completion line may reach stdout or the transcript.
+phrase_stage1="CONFIRM PIXEL 9A FLASH BOOTLOADER AND RADIO (WIPES ALL USER DATA)"
+phrase_stage2="CONFIRM PIXEL 9A FASTBOOT UPDATE (WIPES ALL USER DATA)"
+# Regular transcript files only: a log FIFO left in a read-only directory
+# would block a reader.
+never_complete() {
+  never_transcript=$(transcript_of "$1")
+  ! grep -q 'factory-restore-complete' "$work/$1/stdout" &&
+    { [ -z "$never_transcript" ] || ! grep -q 'factory-restore-complete' "$never_transcript"; }
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+  for update_exit in 1 0; do
+    case_name="full_storage_readonly_exit$update_exit"
+    reset_stub
+    export STUB_FASTBOOT_DEVICES="$fastboot_one" STUB_UPDATE_EXIT=$update_exit STUB_FULL_STORAGE_ON_UPDATE=readonly
+    feed "$case_name" "$phrase_stage1" "$phrase_stage2"
+    run_case "$case_name" --confirm-restore
+    chmod -R u+w "$work/$case_name"
+    check "full storage: update exit $update_exit with unwritable restore output exits nonzero" [ "$status" -ne 0 ]
+    check "full storage: update exit $update_exit reached the update mutation" [ "$(mutations)" = "$expected_wipe" ]
+    check "full storage: update exit $update_exit never reports factory-restore-complete" never_complete "$case_name"
+    # Depending on whether the logger opened the transcript before or after
+    # the storage failed, either the status line or the logger refuses; both
+    # must carry Fastboot's real status.
+    check "full storage: update exit $update_exit refusal names the real Fastboot status" \
+      grep -Eq "while recording: update_exit_status=$update_exit\$|^REFUSING: fastboot -w update exited with status $update_exit," "$work/$case_name/stderr"
+  done
+else
+  printf 'skip full storage (read-only model): running as root ignores file modes\n'
+fi
+
+if [ -c /dev/full ]; then
+  reset_stub
+  export STUB_FASTBOOT_DEVICES="$fastboot_one" STUB_UPDATE_EXIT=1 STUB_FULL_STORAGE_ON_UPDATE=enospc
+  feed full_storage_enospc "$phrase_stage1" "$phrase_stage2"
+  run_case full_storage_enospc --confirm-restore
+  check "full storage: ENOSPC transcript with failed update exits nonzero" [ "$status" -ne 0 ]
+  check "full storage: ENOSPC transcript never reports factory-restore-complete" \
+    sh -c "! grep -q 'factory-restore-complete' '$work/full_storage_enospc/stdout'"
+  check "full storage: ENOSPC refusal names the real Fastboot status" \
+    grep -Eq 'while recording: update_exit_status=1$|^REFUSING: fastboot -w update exited with status 1,' "$work/full_storage_enospc/stderr"
+else
+  printf 'skip full storage (ENOSPC model): /dev/full is unavailable on this host\n'
+fi
+
+reset_stub
+export STUB_FASTBOOT_DEVICES="$fastboot_one" STUB_TEE_FAIL_ON=update
+feed logger_fail_update "$phrase_stage1" "$phrase_stage2"
+run_case logger_fail_update --confirm-restore
+check "logger: successful update with a failed transcript logger exits 1" [ "$status" -eq 1 ]
+check "logger: failed logger reports result=failed" grep -q '^result=failed$' "$work/logger_fail_update/stdout"
+check "logger: failed logger never reports factory-restore-complete" never_complete logger_fail_update
+check "logger: refusal keeps the real Fastboot status and names the logger" \
+  grep -q 'REFUSING: fastboot -w update exited with status 0, but its output could not be recorded' "$work/logger_fail_update/stderr"
+check "logger: no log pipe remains after the run" \
+  [ -z "$(find "$work/logger_fail_update/pixel-9a/restore" -name '*.fifo' 2>/dev/null)" ]
+
+reset_stub
+export STUB_FASTBOOT_DEVICES="$fastboot_one" STUB_TEE_FAIL_ON=flash-bootloader
+feed logger_fail_bootloader "$phrase_stage1" "$phrase_stage2"
+run_case logger_fail_bootloader --confirm-restore
+check "logger: failed bootloader-stage logger exits 1" [ "$status" -eq 1 ]
+check "logger: failed bootloader-stage logger stops before any further mutation" \
+  [ "$(mutations)" = "$(printf 'fastboot\tflash\tbootloader\tbootloader-tegu-fake.img')" ]
+check "logger: failed bootloader-stage logger never reports completion" never_complete logger_fail_bootloader
+
+# --- staging space: deterministic necessary condition ----------------------
+check "space: preflight reports the exact staging requirement" \
+  grep -q '^stage_required_kib=[1-9][0-9]*$' "$work/preflight/stdout"
+reset_stub
+export STUB_FASTBOOT_DEVICES="$fastboot_one" STUB_DF_AVAILABLE_KIB=0
+feed no_stage_space
+run_case no_stage_space --confirm-restore
+check "space: insufficient staging space refuses" [ "$status" -eq 1 ]
+check "space: refusal names required and free KiB" grep -q '^REFUSING: staging needs [0-9]* KiB under .* but only 0 KiB is free' "$work/no_stage_space/stderr"
+check "space: refusal happens before any device call" [ ! -s "$calls" ]
 
 # Explicit first-test mode resolves the recovery-test bootstrap without
 # promoting any target gate or weakening normal restore.

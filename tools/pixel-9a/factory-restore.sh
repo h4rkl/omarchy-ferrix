@@ -85,6 +85,7 @@ need adb
 need fastboot
 need unzip
 need awk
+need df
 if command -v shasum >/dev/null 2>&1; then
   hash_tool=shasum
 else
@@ -139,11 +140,27 @@ mkdir -p "$out"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 transcript="$out/$stamp.txt"
 stage="$out/stage-$stamp"
+log_pipe="$out/.fastboot-$stamp-$$.fifo"
+log_pid=""
 serial=""
 cleanup() {
-  rm -rf "$stage"
+  # A reader still blocked opening the FIFO would otherwise outlive the
+  # script and hold the caller's stdout open.
+  [ -z "$log_pid" ] || kill "$log_pid" 2>/dev/null || true
+  rm -f "$log_pipe" || true
+  rm -rf "$stage" || printf 'WARNING: could not remove staged images under %s\n' "$stage" >&2
 }
-trap cleanup EXIT HUP INT TERM
+# A signal ends the run. It must never return into the next mutation with the
+# stage removed underneath it, and it never reports a restore result.
+interrupted() {
+  printf 'REFUSING: interrupted by SIG%s; no restore result is reported\n' "$1" >&2
+  printf 'REFUSING: interrupted by SIG%s\n' "$1" 2>/dev/null >> "$transcript" || true
+  exit "$2"
+}
+trap cleanup EXIT
+trap 'interrupted HUP 129' HUP
+trap 'interrupted INT 130' INT
+trap 'interrupted TERM 143' TERM
 {
   printf '# Google Pixel 9a Fastboot factory restore (%s), %s UTC, host %s\n' "$mode" "$stamp" "$(uname -s) $(uname -m)"
   printf '# Serial numbers are replaced by a SHA-256 prefix. Never commit this file.\n'
@@ -157,13 +174,24 @@ redact() {
   fi
 }
 
-record() {
-  printf '%s\n' "$1" | redact >> "$transcript"
+# A transcript write can fail when the host disk is full. Stop at once with a
+# nonzero status; never fall through to a later result line.
+transcript_failed() {
+  printf 'REFUSING: could not write the restore transcript %s (host disk full or not writable?) while recording: %s\n' "$transcript" "$1" >&2
+  printf 'REFUSING: no restore result is reported; inspect the device state before retrying\n' >&2
+  exit 1
 }
 
+record() {
+  record_line=$(printf '%s\n' "$1" | redact) || transcript_failed 'a line that could not be redacted'
+  printf '%s\n' "$record_line" >> "$transcript" || transcript_failed "$record_line"
+}
+
+# Record before printing, so stdout never shows a line (in particular a
+# result) that the transcript failed to keep.
 emit() {
-  printf '%s=%s\n' "$1" "$2"
   record "$1=$2"
+  printf '%s=%s\n' "$1" "$2"
 }
 
 say() {
@@ -360,6 +388,44 @@ read_vendor_sequence() {
   emit bootloader_member "$bootloader_member"
   emit radio_member "$radio_member"
   emit image_member "$image_member"
+  archive_listing=$(unzip -l "$factory_path") || die "could not list member sizes of $factory_path"
+}
+
+# Uncompressed byte count of one outer archive member, from the archive's own
+# central directory listing.
+member_size() {
+  printf '%s\n' "$archive_listing" | awk -v wanted="$1" '
+    $NF == wanted && $1 ~ /^[0-9]+$/ { size = $1; count++ }
+    END {
+      if (count != 1) exit 1
+      print size
+    }'
+}
+
+# Staging writes exactly the three uncompressed members below $out, so less
+# free space there means staging cannot succeed; this is a necessary
+# condition, not a guess. Fastboot's own temporary extraction of update images
+# (under ${TMPDIR:-/tmp}) depends on its version and is deliberately not
+# predicted or gated here.
+check_stage_space() {
+  stage_required_bytes=0
+  for stage_space_member in "$bootloader_member" "$radio_member" "$image_member"; do
+    stage_space_bytes=$(member_size "$stage_space_member") || die "could not read the uncompressed size of $stage_space_member from $factory_path"
+    stage_required_bytes=$((stage_required_bytes + stage_space_bytes))
+  done
+  stage_required_kib=$(( (stage_required_bytes + 1023) / 1024 ))
+  # POSIX df -P: the field before Capacity is the available 1024-byte blocks.
+  stage_available_kib=$(df -Pk "$out" | awk 'NR == 2 {
+      for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+%$/) { print $(i - 1); exit }
+    }') || true
+  case "$stage_available_kib" in
+    ''|*[!0-9]*) die "could not read free space for $out from df -Pk" ;;
+  esac
+  emit stage_required_kib "$stage_required_kib"
+  emit stage_available_kib "$stage_available_kib"
+  [ "$stage_available_kib" -ge "$stage_required_kib" ] || {
+    die "staging needs $stage_required_kib KiB under $out but only $stage_available_kib KiB is free; free host disk space before restoring"
+  }
 }
 
 count_rows() {
@@ -546,6 +612,7 @@ preflight() {
   verify_artifact ota
   read_inventory_requirements
   read_vendor_sequence
+  check_stage_space
   stock_image_compatibility=verified-pinned-vendor-inputs
   read_all_gates
   [ "$first_recovery_test" -eq 0 ] || require_first_test_contract
@@ -689,6 +756,11 @@ stage_member() {
   unzip -p "$factory_path" "$member" > "$destination" || die "could not extract $member"
   member_hash=$(sha256_of "$destination")
   member_bytes=$(wc -c < "$destination" | tr -d '[:space:]')
+  # A full disk can truncate the extraction; never flash a short image.
+  member_expected_bytes=$(member_size "$member") || die "could not read the uncompressed size of $member from $factory_path"
+  [ "$member_bytes" = "$member_expected_bytes" ] || {
+    die "staged $2 is $member_bytes bytes but archive member $member is $member_expected_bytes bytes; host disk full?"
+  }
   emit "staged_${2}_path" "$destination"
   emit "staged_${2}_bytes" "$member_bytes"
   emit "staged_${2}_sha256" "$member_hash"
@@ -713,7 +785,53 @@ verify_staged_member() {
   printf '%s\n' "$actual_hash"
 }
 
+# Keep Fastboot's exit status in this shell. A status file can fail to be
+# written when Fastboot fills the host disk while extracting update images.
+#
+# The reader opens the FIFO in its own process, so cleanup can stop it if the
+# script exits before a writer appears. This shell then holds the write end on
+# fd 3 until finish_fastboot_log: the reader cannot see EOF early, and it is
+# never left blocked if Fastboot's own redirection fails. SIGPIPE is ignored
+# only while Fastboot runs, so a dead logger cannot kill Fastboot partway
+# through a flash; its exit status is kept and the logger failure is reported.
+start_fastboot_log() {
+  [ -z "$log_pid" ] || die "a Fastboot log reader is already active"
+  mkfifo -m 600 "$log_pipe" || die "could not create Fastboot log pipe"
+  (
+    exec < "$log_pipe"
+    redact | tee -a "$transcript"
+  ) &
+  log_pid=$!
+  exec 3> "$log_pipe" || die "could not open Fastboot log pipe"
+  trap '' PIPE
+}
+
+# A successful command whose output could not be recorded is not a success.
+finish_fastboot_log() {
+  log_command=$1
+  log_command_status=$2
+  trap - PIPE
+  exec 3>&-
+  [ -n "$log_pid" ] || die "no Fastboot log reader is active"
+  if wait "$log_pid"; then
+    log_status=0
+  else
+    log_status=$?
+  fi
+  log_pid=""
+  rm -f "$log_pipe" || true
+  [ "$log_status" -ne 0 ] || return 0
+  # Name Fastboot's real status before any transcript write, which may fail.
+  log_failure="$log_command exited with status $log_command_status, but its output could not be recorded (logger status $log_status); the device state is unverified"
+  printf 'REFUSING: %s\n' "$log_failure" >&2
+  emit result failed
+  record "REFUSING: $log_failure"
+  record "transcript=$transcript"
+  exit 1
+}
+
 stage_archive() {
+  check_stage_space
   mkdir -p "$stage"
   say "Staging archive members under $stage (removed on exit)."
   stage_member "$bootloader_member" bootloader
@@ -746,20 +864,22 @@ run_fastboot_flash() {
   verify_staged_member "$image" "$image_hash" "$image_bytes" "$partition" >/dev/null
   recheck_fastboot_identity "$partition" "$image_hash"
   emit mutation "fastboot flash $partition ${image##*/}"
-  status_file="$out/.status-$stamp"
-  rm -f "$status_file"
+  start_fastboot_log
   if [ "$partition" = bootloader ]; then
-    {
-      fastboot -s "$serial" flash bootloader "$image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-    } | redact | tee -a "$transcript"
+    if fastboot -s "$serial" flash bootloader "$image" </dev/null >"$log_pipe" 2>&1; then
+      flash_status=0
+    else
+      flash_status=$?
+    fi
   else
-    {
-      fastboot -s "$serial" flash radio "$image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-    } | redact | tee -a "$transcript"
+    if fastboot -s "$serial" flash radio "$image" </dev/null >"$log_pipe" 2>&1; then
+      flash_status=0
+    else
+      flash_status=$?
+    fi
   fi
-  if [ -f "$status_file" ]; then
-    flash_status=$(cat "$status_file")
-    rm -f "$status_file"
+  finish_fastboot_log "fastboot flash $partition" "$flash_status"
+  if [ "$flash_status" -ne 0 ]; then
     emit result failed
     die "fastboot flash $partition exited with status $flash_status; the device remains in Fastboot"
   fi
@@ -769,14 +889,14 @@ reboot_bootloader_and_wait() {
   verify_artifact factory
   recheck_fastboot_identity bootloader-control none
   emit mutation "fastboot reboot-bootloader"
-  status_file="$out/.status-$stamp"
-  rm -f "$status_file"
-  {
-    fastboot -s "$serial" reboot-bootloader </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-  } | redact | tee -a "$transcript"
-  if [ -f "$status_file" ]; then
-    reboot_status=$(cat "$status_file")
-    rm -f "$status_file"
+  start_fastboot_log
+  if fastboot -s "$serial" reboot-bootloader </dev/null >"$log_pipe" 2>&1; then
+    reboot_status=0
+  else
+    reboot_status=$?
+  fi
+  finish_fastboot_log "fastboot reboot-bootloader" "$reboot_status"
+  if [ "$reboot_status" -ne 0 ]; then
     emit result failed
     die "fastboot reboot-bootloader exited with status $reboot_status"
   fi
@@ -845,31 +965,36 @@ confirm_phrase \
 verify_artifact factory
 verify_staged_member "$stage_image" "$staged_image_hash" "$staged_image_bytes" update >/dev/null
 recheck_fastboot_identity fastboot-update "$staged_image_hash"
-status_file="$out/.status-$stamp"
-rm -f "$status_file"
 if [ "$wipe" -eq 1 ]; then
-  emit mutation "fastboot -w update $image_name"
-  {
-    fastboot -s "$serial" -w update "$stage_image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-  } | redact | tee -a "$transcript"
+  update_command="fastboot -w update"
 else
-  emit mutation "fastboot update $image_name"
-  {
-    fastboot -s "$serial" update "$stage_image" </dev/null 2>&1 || printf '%s' "$?" > "$status_file"
-  } | redact | tee -a "$transcript"
+  update_command="fastboot update"
 fi
-if [ -f "$status_file" ]; then
-  update_status=$(cat "$status_file")
-  rm -f "$status_file"
+# Nothing that can fail may run between starting the log reader and Fastboot.
+emit mutation "$update_command $image_name"
+start_fastboot_log
+if [ "$wipe" -eq 1 ]; then
+  if fastboot -s "$serial" -w update "$stage_image" </dev/null >"$log_pipe" 2>&1; then
+    update_status=0
+  else
+    update_status=$?
+  fi
 else
-  update_status=0
+  if fastboot -s "$serial" update "$stage_image" </dev/null >"$log_pipe" 2>&1; then
+    update_status=0
+  else
+    update_status=$?
+  fi
 fi
+finish_fastboot_log "$update_command" "$update_status"
 emit update_exit_status "$update_status"
 if [ "$update_status" -eq 0 ]; then
-  emit result factory-restore-complete
+  # The completion result is the last write, so no later transcript failure
+  # can follow it with a nonzero exit.
   emit stock_boot_verification pending-fresh-same-device-android-discovery
   say "fastboot update finished; the device reboots into stock Android by itself (vendor default)."
   say "transcript (serial redacted): $transcript"
+  emit result factory-restore-complete
 else
   emit result failed
   say "fastboot update exited with status $update_status; inspect the device state before retrying."
