@@ -595,10 +595,11 @@ fn socket_client_round_trip_with_full_grants() {
     // Subscribe: snapshot first, then the pushed delta.
     let subscription = client.subscribe().unwrap();
     assert_eq!(subscription.state, boot_state());
-    let wake_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let woken = wake_count.clone();
+    // The reader sends the event before calling `wake`, so `recv` can return
+    // first; wait (bounded) for the wake signal instead of sampling a counter.
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel();
     let (state, rx) = subscription.spawn(Arc::new(move || {
-        woken.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = wake_tx.send(());
     }));
     assert_eq!(state, boot_state());
     backend.push(BackendEvent::Changed(NetworkEvent::RadioChanged {
@@ -611,7 +612,9 @@ fn socket_client_round_trip_with_full_grants() {
             radio: RadioState::Disabled
         }
     );
-    assert!(wake_count.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+    wake_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wake called after event delivery");
 }
 
 #[test]
