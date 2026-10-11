@@ -16,3 +16,6 @@ bcm4383	lib/firmware/bcmdhd_txcap.blob_4383_a3	1
 bluetooth-broadcom	lib/firmware/brcm/BCM.hcd	1
 modem-s5300	lib/firmware/carrierconfig	1
 modem-s5300	lib/firmware/uecapconfig	1
+# Optional aliases for the one Mali CSF blob already pinned by the stage allowlist.
+gpu-mali	lib/firmware/mali_csffw-r52p0.bin	0
+gpu-mali	lib/firmware/mali_csffw.bin	0
