@@ -76,7 +76,8 @@ the project must not silently call that a fully functioning Pixel 9a.
   worktree contains user changes in `docs/status.md`,
   `tools/pixel-9a/factory-restore.sh`, and its test; preserve them. Start
   physical work with [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25).
-- On 2026-10-12, #25's offline recovery-script hardening is under review;
+- On 2026-10-12, #25's offline recovery-script hardening is in
+  [draft PR #36](https://github.com/h4rkl/omarchy-ferrix/pull/36);
   the host still has only 13 GiB free, so the factory restore has not been
   rerun and stock boot remains unverified. The S5300 source route decision is
   in [draft PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
