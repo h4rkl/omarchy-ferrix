@@ -35,3 +35,9 @@ tools/pixel-9a/devtest/shell-get.py /tmp/fb.ppm out/pixel-9a/devtest/fb.ppm
 ```
 
 Keep captures under the ignored `out/` tree; they may show personal data.
+
+The read-only inventory workflows (`just pixel-9a-audio-inventory`,
+`just pixel-9a-s5300-source-inventory`) use the same port through
+`tools/pixel-9a/acm-probe.py`, which adds exact-byte transfer, a guest-side
+hash check, nonce framing, exit status and bounds. Only one process may use
+the port at a time.

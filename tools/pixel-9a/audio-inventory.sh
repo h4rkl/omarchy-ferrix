@@ -2,17 +2,21 @@
 set -eu
 
 # Read-only audio inventory for a Google Pixel 9a (tegu / GXQ96 / MP1.0) that
-# is ALREADY running Ferrix on the postmarketOS substrate and is reachable over
-# the pmOS USB network with SSH. It uses the transport, exact device-tree
-# identity, and redaction rules of radios.sh and guest-evidence.py: one SSH
-# session runs the checked-in guest probe (audio-inventory-remote.sh), whose
-# first action is the exact tegu device-tree gate. No Android tooling, storage,
-# slot, bootloader, module, sysfs, mixer, stream, or service change is made.
+# is ALREADY running a Ferrix dev image on the postmarketOS substrate, reached
+# over its USB CDC-ACM bring-up shell (issue #52; the rootfs has no sshd). It
+# uses the exact device-tree identity and redaction rules of radios.sh and
+# guest-evidence.py: one tools/pixel-9a/acm-probe.py session sends the exact
+# bytes of the checked-in guest probe (audio-inventory-remote.sh), whose first
+# action is the exact tegu device-tree gate. No Android tooling, storage, slot,
+# bootloader, module, sysfs, mixer, stream, or service change is made.
 #
 #   tools/pixel-9a/audio-inventory.sh inventory
 #
 # Physical execution is gated by issue #25: do not run this against the phone
 # until the stock restore and recovery proof are re-established on the host.
+#
+# FERRIX_SHELL selects the host CDC-ACM node (default
+# /dev/cu.usbmodemferrix_tegu3); it is never printed or retained.
 #
 # Evidence policy: the redacted transcript and audio-evidence-latest.tsv are
 # written under ignored out/pixel-9a/audio/ and every line carries
@@ -23,29 +27,20 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
-target="$root/targets/boards/$target_id"
-pmos_cfg="$target/pmos/pmbootstrap.cfg"
 remote_probe="$root/tools/pixel-9a/audio-inventory-remote.sh"
+transport="$root/tools/pixel-9a/acm-probe.py"
 radios="$root/tools/pixel-9a/radios.sh"
 out="${FERRIX_OUT_DIR:-$root/out}/pixel-9a/audio"
 dt_model='ZUMA PRO TEGU MP on ZUMA PRO'
 dt_compatible='google,ZUMA PRO TEGU'
+max_output=1048576
+acm_timeout=${FERRIX_PIXEL9A_ACM_TIMEOUT:-180}
 
 case "${FERRIX_PIXEL9A_AUDIO_EVIDENCE:-physical}" in
   physical) evidence_label="physical: $target_id" ;;
   mock) evidence_label="mock: stubbed transport for $target_id (not physical evidence)" ;;
   *) printf 'FAIL pixel-9a-audio: FERRIX_PIXEL9A_AUDIO_EVIDENCE must be physical or mock\n' >&2; exit 2 ;;
 esac
-
-ssh_host=${FERRIX_PIXEL9A_SSH_HOST:-172.16.42.1}
-ssh_port=${FERRIX_PIXEL9A_SSH_PORT:-22}
-ssh_opts=${FERRIX_PIXEL9A_SSH_OPTS:-}
-if [ -z "${FERRIX_PIXEL9A_SSH_USER:-}" ]; then
-  ssh_user=$(sed -n 's/^user = *//p' "$pmos_cfg" 2>/dev/null | head -n 1)
-  ssh_user=${ssh_user:-user}
-else
-  ssh_user=$FERRIX_PIXEL9A_SSH_USER
-fi
 
 usage() {
   cat >&2 <<'USAGE'
@@ -59,9 +54,8 @@ usage: tools/pixel-9a/audio-inventory.sh inventory
 
 Physical execution is gated by issue #25 (stock restore/recovery proof).
 
-environment: FERRIX_PIXEL9A_SSH_HOST (172.16.42.1) FERRIX_PIXEL9A_SSH_USER
-             (pmbootstrap.cfg user) FERRIX_PIXEL9A_SSH_PORT (22)
-             FERRIX_PIXEL9A_SSH_OPTS FERRIX_OUT_DIR (out)
+environment: FERRIX_SHELL (CDC-ACM node, /dev/cu.usbmodemferrix_tegu3)
+             FERRIX_PIXEL9A_ACM_TIMEOUT (seconds, 180) FERRIX_OUT_DIR (out)
 USAGE
   exit 2
 }
@@ -89,11 +83,13 @@ redact() {
     "$radios" redact
 }
 
-# The only SSH invocation in this workflow; options match radios.sh and
-# guest-evidence.py. The checked-in probe is the remote command's stdin.
+# The only guest session in this workflow. The transport sends the probe's
+# exact bytes, runs them only if the guest-side SHA-256 matches, merges guest
+# stderr into the framed output, bounds time and output, and exits with the
+# probe's status (255: transport failure, with one sanitised reason token on
+# stderr).
 remote() {
-  # shellcheck disable=SC2086 # FERRIX_PIXEL9A_SSH_OPTS is intentionally word-split.
-  ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p "$ssh_port" $ssh_opts "$ssh_user@$ssh_host" 'sh -s' < "$remote_probe"
+  python3 "$transport" --probe "$remote_probe" --timeout "$acm_timeout" --max-bytes "$max_output" --stderr merge 2> "$transport_log"
 }
 
 field() {
@@ -117,33 +113,37 @@ gt0() {
 }
 
 inventory() {
-  need ssh
+  need python3
   need awk
   need sed
   [ -x "$radios" ] || die "missing redactor: $radios"
   [ -f "$remote_probe" ] && [ ! -L "$remote_probe" ] || die "guest probe is missing or linked: $remote_probe"
-  printf '%s' "$ssh_host" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.:-]*$' || die "SSH host is malformed" 2
-  printf '%s' "$ssh_port" | grep -Eq '^[0-9]{1,5}$' || die "SSH port is malformed" 2
-  printf '%s' "$ssh_user" | grep -Eq '^[A-Za-z_][A-Za-z0-9_-]*$' || die "SSH user is malformed" 2
+  [ -f "$transport" ] && [ ! -L "$transport" ] || die "CDC-ACM transport is missing or linked: $transport"
+  case "$acm_timeout" in ''|*[!0-9]*) die "FERRIX_PIXEL9A_ACM_TIMEOUT is malformed" 2 ;; esac
+  [ "$acm_timeout" -ge 1 ] && [ "$acm_timeout" -le 3600 ] || die "FERRIX_PIXEL9A_ACM_TIMEOUT is out of range" 2
 
   mkdir -p "$out"
+  transport_log=$(mktemp "${TMPDIR:-/tmp}/pixel-9a-audio-transport.XXXXXX")
+  trap 'rm -f "$transport_log"' EXIT HUP INT TERM
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   transcript="$out/inventory-$stamp.txt"
   {
     printf '# Google Pixel 9a audio inventory, %s UTC, host %s\n' "$stamp" "$(uname -s) $(uname -m)"
     printf '# evidence: %s\n' "$evidence_label"
-    printf '# guest endpoint redacted; probe sha256 %s\n' \
+    printf '# transport cdc-acm, guest port redacted; probe sha256 %s\n' \
       "$( (shasum -a 256 "$remote_probe" 2>/dev/null || sha256sum "$remote_probe") | cut -c1-64)"
     printf '# read-only: no stream, mixer, module, sysfs, service, storage, or slot change.\n'
     printf '# MAC, IMEI/IMSI/ICCID, serial, SSID, IPv6, cookie, and host values are redacted. Never commit this file.\n'
   } > "$transcript"
 
   probe_status=0
-  probe_out=$(remote 2>&1) || probe_status=$?
+  probe_out=$(remote) || probe_status=$?
   printf '%s\n[exit %s]\n' "$probe_out" "$probe_status" | redact >> "$transcript"
   case "$probe_status" in
     0) ;;
-    255) die "guest unreachable over SSH; transcript $transcript" 3 ;;
+    255) reason=$(sed -n 's/^ferrix-acm: .* reason=\([a-z-]*\)$/\1/p' "$transport_log" | sed -n '1p')
+         printf '[transport cdc-acm failed: %s]\n' "${reason:-unknown}" >> "$transcript"
+         die "guest CDC-ACM shell transport failed (${reason:-unknown}); transcript $transcript" 3 ;;
     5) printf 'guest_identity=refused-qemu\n'
        die "guest is a QEMU virt machine; QEMU provides no physical audio evidence" 5 ;;
     4) printf 'guest_identity=mismatch\n'

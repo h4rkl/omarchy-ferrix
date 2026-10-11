@@ -1,5 +1,6 @@
 #!/bin/sh
-# Sent over SSH by s5300-source-inventory.sh. Read-only probe of the four
+# Sent over the CDC-ACM shell (acm-probe.py, piped to the guest `sh`) by
+# s5300-source-inventory.sh. Read-only probe of the four
 # S5300 modem source partitions on the exact tegu guest. It never mounts,
 # writes, or reads partition contents: util-linux `blkid -p` reads only the
 # superblock signature and prints only TYPE (never UUID or LABEL). The paths

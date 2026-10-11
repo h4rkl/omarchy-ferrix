@@ -106,6 +106,12 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+      - name: Pixel CDC-ACM inventory contracts (mock)
+        run: |
+          sh tools/pixel-9a/tests/acm-probe.sh
+          sh tools/pixel-9a/tests/audio-inventory-workflow.sh
+          sh tools/pixel-9a/tests/s5300-source-inventory.sh
+
   sandbox-check:
     name: Native sandbox (privileged container, arm64)
     runs-on: ${{ inputs.qemu_runner || 'ubuntu-24.04-arm' }}

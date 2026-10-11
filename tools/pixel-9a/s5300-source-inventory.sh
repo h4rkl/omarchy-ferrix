@@ -3,9 +3,10 @@ set -eu
 
 # Read-only filesystem inventory of the four S5300 modem source partitions
 # (active-slot modem, efs, persist, modem_userdata) on an ALREADY booted
-# Google Pixel 9a (tegu / GXQ96 / MP1.0) Ferrix guest reachable over the pmOS
-# USB network with SSH (issue #34). The guest probe
-# (s5300-source-inventory-remote.sh) checks the exact device tree, then
+# Google Pixel 9a (tegu / GXQ96 / MP1.0) Ferrix dev guest, reached over the
+# USB CDC-ACM bring-up shell (issues #34 and #52; the rootfs has no sshd).
+# tools/pixel-9a/acm-probe.py sends the exact bytes of the guest probe
+# (s5300-source-inventory-remote.sh), which checks the exact device tree, then
 # resolves each by-partlabel link and kernel PARTNAME uevent, reads the
 # superblock type with util-linux `blkid -p`, and copies matching
 # /proc/self/mountinfo lines. Nothing is mounted, written, or dumped.
@@ -16,36 +17,29 @@ set -eu
 # `owner-review-required`, and whether ext4 `noload` / f2fs `norecovery`
 # really suppress every write on this kernel stays unknown until observed.
 #
-# Uses the same SSH settings as radios.sh. Set
+# FERRIX_SHELL selects the host CDC-ACM node (default
+# /dev/cu.usbmodemferrix_tegu3); it is never printed or retained. Set
 # FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE=mock for stubbed runs; the default
 # label is the exact physical target. Transcripts go to ignored
 # out/pixel-9a/s5300-source-inventory/ and contain no serials, UUIDs, labels,
-# or partition bytes.
+# port names, or partition bytes.
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
-pmos_cfg="$root/targets/boards/$target_id/pmos/pmbootstrap.cfg"
 probe="$root/tools/pixel-9a/s5300-source-inventory-remote.sh"
+transport="$root/tools/pixel-9a/acm-probe.py"
 out="${FERRIX_OUT_DIR:-$root/out}/pixel-9a/s5300-source-inventory"
 mount_root=/mnt/vendor
 roles='modem_img efs persist modem_userdata'
 dt_model='ZUMA PRO TEGU MP on ZUMA PRO'
 dt_compatible='google,ZUMA PRO TEGU'
-
-ssh_host=${FERRIX_PIXEL9A_SSH_HOST:-172.16.42.1}
-ssh_port=${FERRIX_PIXEL9A_SSH_PORT:-22}
-ssh_opts=${FERRIX_PIXEL9A_SSH_OPTS:-}
-if [ -z "${FERRIX_PIXEL9A_SSH_USER:-}" ]; then
-	ssh_user=$(sed -n 's/^user = *//p' "$pmos_cfg" 2>/dev/null | head -n 1)
-	ssh_user=${ssh_user:-user}
-else
-	ssh_user=$FERRIX_PIXEL9A_SSH_USER
-fi
+max_output=65536
+acm_timeout=${FERRIX_PIXEL9A_ACM_TIMEOUT:-60}
 
 usage() {
 	printf 'usage: tools/pixel-9a/s5300-source-inventory.sh\n' >&2
-	printf 'environment: FERRIX_PIXEL9A_SSH_HOST FERRIX_PIXEL9A_SSH_USER FERRIX_PIXEL9A_SSH_PORT\n' >&2
-	printf '             FERRIX_PIXEL9A_SSH_OPTS FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE (physical|mock) FERRIX_OUT_DIR\n' >&2
+	printf 'environment: FERRIX_SHELL (CDC-ACM node) FERRIX_PIXEL9A_ACM_TIMEOUT (seconds, default 60)\n' >&2
+	printf '             FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE (physical|mock) FERRIX_OUT_DIR\n' >&2
 	exit 2
 }
 
@@ -55,6 +49,8 @@ case "${FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE:-physical}" in
 	mock) evidence=mock ;;
 	*) usage ;;
 esac
+case "$acm_timeout" in ''|*[!0-9]*) usage ;; esac
+[ "$acm_timeout" -ge 1 ] && [ "$acm_timeout" -le 3600 ] || usage
 
 transcript=''
 die() {
@@ -66,38 +62,46 @@ die() {
 	exit "$code"
 }
 
-for tool in ssh awk sed; do
+for tool in python3 awk sed; do
 	command -v "$tool" >/dev/null 2>&1 || die "missing host tool '$tool'; install it explicitly"
 done
 [ -f "$probe" ] && [ ! -L "$probe" ] || die 'guest probe script is missing or linked'
+[ -f "$transport" ] && [ ! -L "$transport" ] || die 'CDC-ACM transport is missing or linked'
 
 mkdir -p "$out"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 transcript="$out/inventory-$stamp-$$.txt"
 raw=$(mktemp "${TMPDIR:-/tmp}/pixel-9a-s5300-inventory.XXXXXX")
-trap 'rm -f "$raw"' EXIT HUP INT TERM
+transport_log=$(mktemp "${TMPDIR:-/tmp}/pixel-9a-s5300-transport.XXXXXX")
+trap 'rm -f "$raw" "$transport_log"' EXIT HUP INT TERM
 {
 	printf '# Pixel 9a S5300 source partition read-only inventory, %s UTC\n' "$stamp"
 	printf '# evidence: %s\n' "$evidence"
-	printf '# No serials, filesystem UUIDs/labels, or partition contents are collected. Never commit this file.\n'
-	printf 'target_id=%s\nevidence=%s\nsource=ssh-read-only\n' "$target_id" "$evidence"
+	printf '# No serials, port names, filesystem UUIDs/labels, or partition contents are collected. Never commit this file.\n'
+	printf 'target_id=%s\nevidence=%s\nsource=cdc-acm-read-only\n' "$target_id" "$evidence"
+	printf 'probe_sha256=%s\n' "$( (shasum -a 256 "$probe" 2>/dev/null || sha256sum "$probe") | cut -c1-64)"
 } >"$transcript"
 
-# The only SSH invocation. The probe is fed on stdin to a remote `sh -s`.
-# shellcheck disable=SC2086 # FERRIX_PIXEL9A_SSH_OPTS is intentionally word-split.
-ssh_status=0
-ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p "$ssh_port" $ssh_opts \
-	"$ssh_user@$ssh_host" 'sh -s' <"$probe" >"$raw" 2>/dev/null || ssh_status=$?
-case "$ssh_status" in
+# The only guest session. The transport sends the probe's exact bytes, runs
+# them only if the guest-side SHA-256 matches, discards guest stderr, bounds
+# time and output, and exits with the probe's status (255: transport failure,
+# with one sanitised reason token on stderr).
+transport_status=0
+python3 "$transport" --probe "$probe" --timeout "$acm_timeout" --max-bytes "$max_output" --stderr discard \
+	>"$raw" 2>"$transport_log" || transport_status=$?
+case "$transport_status" in
 	0) ;;
-	255) die 'guest unreachable over SSH' 3 ;;
+	255)
+		reason=$(sed -n 's/^ferrix-acm: .* reason=\([a-z-]*\)$/\1/p' "$transport_log" | sed -n '1p')
+		die "guest CDC-ACM shell transport failed (${reason:-unknown})" 3
+		;;
 	4) die 'guest is not the exact tegu board (device-tree gate refused)' 4 ;;
-	*) die "guest probe failed (exit $ssh_status)" 3 ;;
+	*) die "guest probe failed (exit $transport_status)" 3 ;;
 esac
 
 # --- validate the probe output ----------------------------------------------
 
-[ "$(wc -c <"$raw" | tr -d ' ')" -le 65536 ] || die 'probe output exceeds the reviewed size limit' 5
+[ "$(wc -c <"$raw" | tr -d ' ')" -le "$max_output" ] || die 'probe output exceeds the reviewed size limit' 5
 awk -v roles="$roles" '
 	BEGIN {
 		split("probe dt_model dt_compatible kernel_release uid privilege blkid_impl slot_source slot_value_count slot_suffix mountinfo_readable probe_complete", g, " ")

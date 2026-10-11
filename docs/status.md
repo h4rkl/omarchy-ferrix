@@ -1,5 +1,26 @@
 # Status
 
+## 2026-10-12 (Pixel 9a CDC-ACM guest probe transport; mock)
+
+- Issue #52: the Ferrix dev rootfs is built with `--no-sshd`, so
+  `just pixel-9a-audio-inventory` and `just pixel-9a-s5300-source-inventory`
+  now use `tools/pixel-9a/acm-probe.py` over the USB CDC-ACM bring-up shell
+  instead of SSH. It is Python standard library only. The transport sends the
+  probe's exact bytes as base64 lines. The guest runs them only after its
+  SHA-256 matches. Output is returned only from a nonce-framed BEGIN/END
+  section, and the probe's own exit status passes through, so each
+  device-tree gate is unchanged. Runs are bounded by a timeout and a byte cap.
+  Transport failures exit 255 with one sanitised reason token, which the
+  wrappers map to exit 3. Port paths and serials are never printed or
+  retained.
+- Evidence is **mock** only: `just pixel-9a-acm-probe-test`,
+  `just pixel-9a-audio-inventory-test` and
+  `just pixel-9a-s5300-source-inventory-test` drive the real transport
+  against a pty-bridged real `/bin/sh` with a stub probe runner. They cover
+  exact bytes, exit status, refusal, timeout, truncation, hash mismatch, a
+  silent port and privacy. No phone was contacted; the transport has not run
+  on `physical:google-pixel-9a-tegu-gxq96-mp1-0`.
+
 ## 2026-10-12 (Pixel 9a pinned stock recovery verified; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The owner freed host space; `df -h .` showed 61 GiB available. The checked-in

@@ -1,9 +1,11 @@
 #!/bin/sh
-# Offline (mock) proof for the Pixel 9a read-only audio inventory. `ssh` is
-# replaced by a stub that checks it received the checked-in guest probe on
-# stdin and answers from synthetic fixtures, so this test never contacts a
-# device. It checks the static read-only allow-list, the exact-target
-# identity gates (QEMU, mismatch, forged, truncated, unreachable), explicit
+# Offline (mock) proof for the Pixel 9a read-only audio inventory. The real
+# CDC-ACM transport talks to a fake guest (acm-fake-guest.sh): a real
+# interactive shell on a pty whose final `sh` is a stub that checks it got the
+# exact checked-in probe bytes and answers from synthetic fixtures, so this
+# test never contacts a device. It checks the static read-only allow-list,
+# the exact-target identity gates (QEMU, mismatch, forged, truncated,
+# unreachable), transport timeout and output bounds, explicit
 # unavailable/unknown outcomes, unsupported-only statuses, mock/physical
 # labelling, and redaction of the transcript and TSV.
 set -eu
@@ -14,6 +16,8 @@ probe="$root/tools/pixel-9a/audio-inventory-remote.sh"
 fixtures="$root/tools/pixel-9a/tests/fixtures/audio"
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
 fails=0
+status_before=$(cksum <"$root/docs/status.md")
+capabilities_before=$(cksum <"$root/targets/boards/$target_id/capabilities.toml")
 
 check() {
   name=$1
@@ -30,16 +34,16 @@ check() {
 check "static: host workflow POSIX syntax" sh -n "$audio"
 check "static: guest probe POSIX syntax" sh -n "$probe"
 
-# Exactly one executable ssh line, inside remote(), sending the probe on stdin.
-ssh_lines=$(grep -nE '^[[:space:]]*[^#]*(^|[^A-Za-z0-9_./-])ssh([[:space:]]|$)' "$audio" \
-  | grep -vE '^[0-9]+:[[:space:]]*#' \
-  | grep -vE '^[0-9]+:[[:space:]]*need ssh$' || true)
-ssh_count=$(printf '%s\n' "$ssh_lines" | awk 'NF { count++ } END { print count + 0 }')
-check "static: exactly one ssh invocation" [ "$ssh_count" -eq 1 ]
-check "static: ssh uses the radios.sh options and sends the probe on stdin" \
-  sh -c 'printf "%s\n" "$1" | grep -qE "^[0-9]+:[[:space:]]+ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new .*.sh -s. < \"\\\$remote_probe\"$"' sh "$ssh_lines"
-check "static: ssh line lives inside remote()" \
-  sh -c 'awk "/^remote\\(\\) \\{/{inside=1} inside && /^}/{inside=0} inside && /^[[:space:]]+ssh /{found=1} END{exit !found}" "$1"' sh "$audio"
+# Exactly one executable transport line, inside remote(), sending the probe.
+transport_lines=$(grep -v '^[[:space:]]*#' "$audio" | grep -E 'python3 "\$transport"' || true)
+transport_count=$(printf '%s\n' "$transport_lines" | awk 'NF { count++ } END { print count + 0 }')
+check "static: exactly one CDC-ACM transport invocation" [ "$transport_count" -eq 1 ]
+check "static: transport sends the checked-in probe with bounds and merged stderr" \
+  sh -c 'printf "%s\n" "$1" | grep -qE "^[[:space:]]+python3 \"\\\$transport\" --probe \"\\\$remote_probe\" --timeout \"\\\$acm_timeout\" --max-bytes \"\\\$max_output\" --stderr merge "' sh "$transport_lines"
+check "static: transport line lives inside remote()" \
+  sh -c 'awk "/^remote\\(\\) \\{/{inside=1} inside && /^}/{inside=0} inside && /^[[:space:]]+python3 /{found=1} END{exit !found}" "$1"' sh "$audio"
+check "static: no SSH or other network transport" \
+  sh -c '! grep -v "^[[:space:]]*#" "$1" | grep -nwE "ssh|scp|nc|telnet|curl"' sh "$audio"
 check "static: redaction reuses the radios.sh redactor" grep -q '"$radios" redact$' "$audio"
 for file in "$audio" "$probe"; do
   offending=$(grep -nwE 'adb|fastboot|flash|erase|format|reboot|sideload|unlock|dd|mkfs|modprobe|insmod|rmmod|rc-update|systemctl' "$file" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
@@ -73,38 +77,37 @@ check "probe: refuses a non-tegu host with exit 4 or 5" sh -c '[ "$1" -eq 4 ] ||
 check "probe: refusal prints no audio fields" \
   sh -c '! printf "%s\n" "$1" | grep -Eq "^(alsa_|tool_|pipewire|probe=)"' sh "$local_out"
 
+command -v python3 >/dev/null 2>&1 || { echo 'python3 is required for the CDC-ACM transport test' >&2; exit 1; }
 work=$(mktemp -d "${TMPDIR:-/tmp}/pixel-9a-audio-test.XXXXXX")
-trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/bin"
-calls="$work/calls.log"
-
-cat > "$work/bin/ssh" <<'STUB'
-#!/bin/sh
-# Stub: require BatchMode and `sh -s`, require the exact checked-in probe on
-# stdin, then answer from a synthetic fixture.
-[ "$1" = -o ] && [ "$2" = BatchMode=yes ] || { echo "stub: ssh without BatchMode" >&2; exit 98; }
-for arg; do last=$arg; done
-[ "$last" = 'sh -s' ] || { echo "stub: unexpected remote command: $last" >&2; exit 99; }
-printf '%s\n' "$*" >> "$STUB_CALLS"
-cat > "$STUB_CALLS.stdin"
-cmp -s "$STUB_CALLS.stdin" "$STUB_PROBE" || { echo "stub: stdin is not the checked-in probe" >&2; exit 97; }
-[ "${STUB_UNREACHABLE:-0}" = 1 ] && { echo "ssh: connect to host 172.16.42.1 port 22: No route to host" >&2; exit 255; }
-cat "$STUB_FIXTURES/$STUB_GUEST.txt"
-exit "${STUB_EXIT:-0}"
-STUB
-chmod 0755 "$work/bin/ssh"
-export PATH="$work/bin:$PATH" STUB_CALLS="$calls" STUB_FIXTURES="$fixtures" STUB_PROBE="$probe"
-unset FERRIX_PIXEL9A_SSH_HOST FERRIX_PIXEL9A_SSH_USER FERRIX_PIXEL9A_SSH_PORT FERRIX_PIXEL9A_SSH_OPTS 2>/dev/null || true
+. "$root/tools/pixel-9a/tests/acm-fake-guest.sh"
+trap 'acm_guest_stop; rm -rf "$work"' EXIT
+acm_guest_init "$root" "$work" "$probe"
+STUB_FIXTURES=$fixtures
+unset FERRIX_PIXEL9A_ACM_TIMEOUT 2>/dev/null || true
 export FERRIX_PIXEL9A_AUDIO_EVIDENCE=mock
 
+# One fresh fake guest per case. STUB_GUEST/STUB_EXIT pick the fixture and
+# probe status; STUB_UNREACHABLE=1 gives a port with no shell, STUB_SLEEP a
+# wedged probe and STUB_FLOOD an oversized one. `runs` counts probe runs.
 run_audio() {
   case_name=$1
   shift
   mkdir -p "$work/$case_name"
   export FERRIX_OUT_DIR="$work/$case_name"
-  : > "$calls"
+  if [ "${STUB_UNREACHABLE:-0}" = 1 ]; then
+    acm_guest_start --silent
+  else
+    acm_guest_start
+    acm_guest_ctl fixture "$STUB_FIXTURES/$STUB_GUEST.txt"
+    acm_guest_ctl exit "${STUB_EXIT:-0}"
+    [ -z "${STUB_SLEEP:-}" ] || acm_guest_ctl sleep "$STUB_SLEEP"
+    [ -z "${STUB_FLOOD:-}" ] || acm_guest_ctl flood "$STUB_FLOOD"
+  fi
+  case_port=$FERRIX_SHELL
   status=0
   "$audio" "$@" > "$work/$case_name/stdout" 2> "$work/$case_name/stderr" || status=$?
+  runs=$(acm_guest_runs)
+  acm_guest_stop
 }
 
 tsv_row() {
@@ -118,8 +121,12 @@ run_audio full inventory
 tsv="$work/full/pixel-9a/audio/audio-evidence-latest.tsv"
 transcript=$(find "$work/full/pixel-9a/audio" -name 'inventory-*.txt' -type f | head -n 1)
 check "inventory: succeeds" [ "$status" -eq 0 ]
-check "inventory: one SSH session to the pmOS default endpoint" \
-  sh -c 'test "$(wc -l < "$1" | tr -d " ")" -eq 1 && grep -q "user@172.16.42.1 sh -s$" "$1"' sh "$calls"
+check "inventory: the probe ran exactly once over CDC-ACM" [ "$runs" -eq 1 ]
+check "inventory: the guest received the exact checked-in probe bytes" cmp -s "$ACM_GUEST_CTL/stdin" "$probe"
+check "inventory: transcript names the transport, not the port" \
+  sh -c 'grep -q "^# transport cdc-acm, guest port redacted; probe sha256 [0-9a-f]\{64\}$" "$1" && ! grep -rFq "$2" "$3"' sh "$transcript" "$case_port" "$work/full"
+check "privacy: guest prompt and bootstrap echo are not retained" \
+  sh -c '! grep -rEq "fake-guest-host|FERRIXACM|base64 -d" "$1"' sh "$work/full"
 check "inventory: identity verified" grep -q '^guest_identity=verified$' "$work/full/stdout"
 check "inventory: writes the TSV and transcript" sh -c '[ -f "$1" ] && [ -n "$2" ] && [ -f "$2" ]' sh "$tsv" "$transcript"
 check "inventory: header has subsystem/status/progress/evidence" grep -q "^subsystem	status	progress	evidence$" "$tsv"
@@ -149,7 +156,9 @@ check "privacy: serials are removed" sh -c '! grep -Eq "SYNSERIAL42|SYNAUD0001" 
 check "privacy: cookies are removed" sh -c '! grep -Eq "1234567890|6f6f:aa11" "$1"' sh "$transcript"
 check "privacy: host names are removed" sh -c '! grep -q "ferrix-synth-host" "$1"' sh "$transcript"
 check "inventory: capabilities.toml and status.md are untouched" \
-  sh -c 'cd "$1" && git diff --quiet -- "targets/boards/$2/capabilities.toml" docs/status.md' sh "$root" "$target_id"
+  sh -c '[ "$1" = "$(cksum <"$3")" ] && [ "$2" = "$(cksum <"$4")" ]' sh \
+    "$status_before" "$capabilities_before" "$root/docs/status.md" \
+    "$root/targets/boards/$target_id/capabilities.toml"
 
 # --- every interface absent: explicit unavailable/unknown, never success ---
 export STUB_GUEST=guest-minimal
@@ -225,10 +234,28 @@ run_audio truncated inventory
 check "truncated: incomplete probe output fails" [ "$status" -eq 1 ]
 check "truncated: no evidence TSV written" [ ! -f "$work/truncated/pixel-9a/audio/audio-evidence-latest.tsv" ]
 
-export STUB_GUEST=guest-tegu STUB_UNREACHABLE=1
+export STUB_GUEST=guest-tegu STUB_UNREACHABLE=1 FERRIX_PIXEL9A_ACM_TIMEOUT=3
 run_audio unreachable inventory
-check "unreachable: SSH transport failure exits 3" [ "$status" -eq 3 ]
+check "unreachable: CDC-ACM transport failure exits 3" [ "$status" -eq 3 ]
+check "unreachable: sanitised reason is reported" grep -Fq 'transport failed (no-shell-response)' "$work/unreachable/stderr"
+check "unreachable: no evidence TSV written" [ ! -f "$work/unreachable/pixel-9a/audio/audio-evidence-latest.tsv" ]
+check "privacy: port path is neither printed nor retained" \
+  sh -c '! grep -rFq "$1" "$2"' sh "$case_port" "$work/unreachable"
 unset STUB_UNREACHABLE
+
+export STUB_SLEEP=30
+run_audio timeout inventory
+check "timeout: wedged probe exits 3" [ "$status" -eq 3 ]
+check "timeout: reason is timeout" grep -Fq 'transport failed (timeout)' "$work/timeout/stderr"
+check "timeout: no evidence TSV written" [ ! -f "$work/timeout/pixel-9a/audio/audio-evidence-latest.tsv" ]
+unset STUB_SLEEP FERRIX_PIXEL9A_ACM_TIMEOUT
+
+export STUB_FLOOD=1100000
+run_audio overrun inventory
+check "truncation: output over 1 MiB exits 3" [ "$status" -eq 3 ]
+check "truncation: reason is output-limit" grep -Fq 'transport failed (output-limit)' "$work/overrun/stderr"
+check "truncation: no evidence TSV written" [ ! -f "$work/overrun/pixel-9a/audio/audio-evidence-latest.tsv" ]
+unset STUB_FLOOD
 
 # --- labels and usage ---
 unset FERRIX_PIXEL9A_AUDIO_EVIDENCE
@@ -237,14 +264,14 @@ check "label: default run labels the exact physical target" \
   sh -c 'test "$(grep -c "	physical: $2; " "$1")" -eq 7' sh "$work/physical_label/pixel-9a/audio/audio-evidence-latest.tsv" "$target_id"
 export FERRIX_PIXEL9A_AUDIO_EVIDENCE=qemu
 run_audio bad_label inventory
-check "label: only physical or mock labels are accepted" sh -c 'test "$1" -eq 2 && test ! -s "$2"' sh "$status" "$calls"
+check "label: only physical or mock labels are accepted" sh -c 'test "$1" -eq 2 && test "$2" -eq 0' sh "$status" "$runs"
 export FERRIX_PIXEL9A_AUDIO_EVIDENCE=mock
-export FERRIX_PIXEL9A_SSH_HOST='172.16.42.1;id'
-run_audio bad_host inventory
-check "usage: malformed SSH host is refused before SSH" sh -c 'test "$1" -eq 2 && test ! -s "$2"' sh "$status" "$calls"
-unset FERRIX_PIXEL9A_SSH_HOST
+export FERRIX_PIXEL9A_ACM_TIMEOUT='5;id'
+run_audio bad_timeout inventory
+check "usage: malformed transport timeout is refused before any session" sh -c 'test "$1" -eq 2 && test "$2" -eq 0' sh "$status" "$runs"
+unset FERRIX_PIXEL9A_ACM_TIMEOUT
 run_audio usage bogus
-check "usage: unknown command exits 2 without contacting the guest" sh -c 'test "$1" -eq 2 && test ! -s "$2"' sh "$status" "$calls"
+check "usage: unknown command exits 2 without contacting the guest" sh -c 'test "$1" -eq 2 && test "$2" -eq 0' sh "$status" "$runs"
 
 if [ "$fails" -eq 0 ]; then
   echo '{"event":"pixel-9a-audio-inventory-test","evidence":"mock","status":"passed"}'
