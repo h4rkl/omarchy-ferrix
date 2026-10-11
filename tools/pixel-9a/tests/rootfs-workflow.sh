@@ -310,7 +310,9 @@ lib/firmware/bcmdhd.cal_4383_a3
 lib/firmware/bcmdhd_clm.blob_4383_a3
 lib/firmware/fw_bcmdhd.map_4383_a3
 lib/firmware/bcmdhd_txcap.blob_4383_a3
-lib/firmware/brcm/BCM.hcd'
+lib/firmware/brcm/BCM.hcd
+lib/firmware/mali_csffw-r52p0.bin
+lib/firmware/mali_csffw.bin'
 firmware_paths="$stage_file_paths
 lib/firmware/carrierconfig/carrier.conf
 lib/firmware/carrierconfig/carrier-extra.conf
@@ -331,13 +333,21 @@ cmp -s "$work/expected-bundles" "$work/allowlist-bundles" ||
 while IFS="$tab" read -r component path required; do
 	case "$component" in ''|'#'*) continue ;; esac
 	case "$component" in
-		bcm4383|bluetooth-broadcom) ;;
+		bcm4383|bluetooth-broadcom|gpu-mali) ;;
 		modem-s5300) continue ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
-	[ "$required" = 1 ] || fail "firmware fixture is not required: $path"
+	case "$component:$required" in
+		gpu-mali:0|bcm4383:1|bluetooth-broadcom:1) ;;
+		*) fail "unexpected firmware requirement: $component $path $required" ;;
+	esac
 	mkdir -p "$firmware/$(dirname -- "$path")"
-	printf 'fixture-%s\n' "$path" >"$firmware/$path"
+	if [ "$component" = gpu-mali ]; then
+		# Both runtime aliases refer to the same allowlisted source blob.
+		printf 'fixture-mali-csffw-r51p0\n' >"$firmware/$path"
+	else
+		printf 'fixture-%s\n' "$path" >"$firmware/$path"
+	fi
 	hash=$(hash_file "$firmware/$path")
 	printf 'firmware\t%s\t%s\t%s\n' "$path" "$(wc -c <"$firmware/$path" | tr -d '[:space:]')" "$hash" >>"$firmware/firmware-manifest.tsv"
 done <"$allowlist"
@@ -365,12 +375,13 @@ while IFS="$tab" read -r component source_image source_path path entry_type extr
 	case "$component" in ''|'#'*) continue ;; esac
 	case "$component" in modem-s5300) continue ;; esac
 	[ "${entry_type:-file}" = file ] || fail "unexpected non-file firmware staging row: $component $source_path"
-	hash=$(hash_file "$firmware/$path")
 	case "$component" in
 		wifi-bcm4383|bcm4383) manifest_controller=wifi-bcm4383 ;;
 		bluetooth-broadcom) manifest_controller=$component ;;
+		gpu-mali) manifest_controller=$component ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
+	hash=$(hash_file "$firmware/$path")
 	printf 'firmware\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 		"$manifest_controller" "$source_image" "$source_path" "$path" \
 		"$(wc -c <"$firmware/$path" | tr -d '[:space:]')" "$hash" \
@@ -387,13 +398,13 @@ for path in lib/firmware/carrierconfig/carrier.conf lib/firmware/carrierconfig/c
 done
 awk -F "$tab" '
 	$1 == "firmware" {
-			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300)$/ || $3 != "vendor.img" ||
+			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300|gpu-mali)$/ || $3 != "vendor.img" ||
 			index($4, "/firmware/") != 1 || index($5, "lib/firmware/") != 1 ||
 			$4 == $5 || $4 ~ /[[:space:]]/ || $5 ~ /[[:space:]]/ ||
 			$6 !~ /^[0-9]+$/ || length($7) != 64 || $7 ~ /[^0-9a-f]/) exit 1
 		count++
 	}
-		END { exit(count == 14 ? 0 : 1) }
+		END { exit(count == 16 ? 0 : 1) }
 ' "$firmware/firmware-manifest.tsv"
 awk -F "$tab" '$1 == "firmware" { print $5 }' "$firmware/firmware-manifest.tsv" >"$work/manifest-firmware-paths"
 cmp -s "$work/expected-firmware-paths" "$work/manifest-firmware-paths" ||
