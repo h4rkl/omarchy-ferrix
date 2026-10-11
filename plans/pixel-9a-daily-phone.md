@@ -82,8 +82,8 @@ the project must not silently call that a fully functioning Pixel 9a.
   rebooted. Initial ADB property queries returned `error: closed` while
   Android started; fresh checked-in discovery later verified the same Pixel
   9a on stock Android 17 build `CP3A.260905.009`, slot B, unlocked/orange.
-  [PR #47](https://github.com/h4rkl/omarchy-ferrix/pull/47) records the
-  redacted physical evidence for #25.
+  [Merged PR #47](https://github.com/h4rkl/omarchy-ferrix/pull/47) records the
+  redacted physical evidence, and #25 is closed.
   The S5300 source route decision was merged in
   [PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
 - [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37) is closed by
@@ -97,8 +97,10 @@ the project must not silently call that a fully functioning Pixel 9a.
 - [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) has an offline
   fail-closed calibration-mount gate merged in
   [PR #40](https://github.com/h4rkl/omarchy-ferrix/pull/40). Rootfs and CI
-  passed, but exact-device filesystem inventory and mountinfo proof remain
-  before any CP node open; the issue stays open.
+  passed. A read-only S5300 source filesystem inventory was merged in
+  [PR #49](https://github.com/h4rkl/omarchy-ferrix/pull/49). Exact-device
+  filesystem inventory and mountinfo proof remain before any CP node open;
+  the issue stays open.
 - [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42) is closed by
   [merged PR #43](https://github.com/h4rkl/omarchy-ferrix/pull/43), aligning
   the Pixel rootfs runtime allowlist with two already staged optional Mali
@@ -110,10 +112,13 @@ the project must not silently call that a fully functioning Pixel 9a.
   [PR #45](https://github.com/h4rkl/omarchy-ferrix/pull/45), with mock tests
   and CI passing. It still awaits a Ferrix guest run. Speaker, microphone,
   route, and mute evidence remain absent on the phone.
-- [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) tracks the
-  discovery false-success found during early stock boot. Its offline fix is
-  in [PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48); the successful
+- [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed by
+  [merged PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48), which
+  makes an ADB or Fastboot identity-query failure explicit. The successful
   later discovery has complete identity, build, and slot fields.
+- [#50](https://github.com/h4rkl/omarchy-ferrix/issues/50) tracks a CI test
+  race: the network event receiver can observe an event before its wake
+  callback runs. This is a test reliability issue, not phone evidence.
 
 ## Working structure
 
@@ -189,9 +194,9 @@ owns the merged strict native sandbox gate; [#38](https://github.com/h4rkl/omarc
 has closed with a passing arm64 QEMU job; [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42)
 has closed with the Pixel rootfs firmware handoff fixture and allowlist repair. These
 gates make other PR checks meaningful but do not satisfy any phone capability.
-[#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) tracks truthful
-Pixel identity-query failure reporting after early Android boot exposed a
-false `result=ok`.
+[#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed after
+the Pixel identity-query failure fix. [#50](https://github.com/h4rkl/omarchy-ferrix/issues/50)
+tracks the independent networkd CI test race.
 
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
