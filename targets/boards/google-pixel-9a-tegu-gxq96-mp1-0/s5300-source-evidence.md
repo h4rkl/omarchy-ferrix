@@ -325,6 +325,9 @@ we choose between:
 - a target-local kernel/ModemManager integration whose ABI and licensing are
   reviewed and pinned.
 
+Issue #1's route comparison, recommended first route, and staged stop/go
+gates are in [`s5300-route-decision.md`](s5300-route-decision.md).
+
 Neither route may import Android framework, Google RIL, Android HAL, or
 Waydroid into Ferrix. The stock bootloader and controller firmware remain
 hardware interfaces only; the operating environment stays native Linux.

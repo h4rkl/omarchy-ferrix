@@ -426,6 +426,9 @@ workflow alone.
   [`ubuntu-touch-radio-correlation.md`](ubuntu-touch-radio-correlation.md)
 - Associated GNSS/NFC/UWB route audit (source comparison, not runtime evidence):
   [`associated-radio-audit.md`](associated-radio-audit.md)
+- S5300 cellular route decision for issue #1 (Kleaf CPIF bridge vs radio-first
+  WWAN/SIT; staged gates, not runtime evidence):
+  [`s5300-route-decision.md`](s5300-route-decision.md)
 
 The target-local postmarketOS `device-google-tegu` package and the typed
 Ferrix adapter composition are now checked in under `pmos/device-google-tegu/`
