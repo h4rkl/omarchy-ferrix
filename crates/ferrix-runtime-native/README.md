@@ -24,7 +24,8 @@ ferrix-appd -> ferrix-sandbox (stage 1) -> ferrix-sandbox --init (stage 2, PID 1
   `unshare(CLONE_NEWPID)` the kernel refuses new threads, so signals are
   drained from the main thread (SIGCHLD wakes the final wait).
 - Stage 2 is PID 1 of the new PID namespace: it makes mount propagation
-  private, mounts a fresh `/proc` and (with `private_tmp`) a tmpfs on `/tmp`,
+  private, starts a short lived child to mount a fresh `/proc`, and mounts
+  (with `private_tmp`) a tmpfs on `/tmp`,
   builds the socket-directory view (below) when `run_dir.mode` is not
   `inherit`, sets `no_new_privs`, runs the application, forwards TERM/INT/HUP
   to it, reaps zombies, and exits with the application's shell status
