@@ -394,6 +394,7 @@ mod tests {
             audio: AudioState {
                 route: AudioRoute::Speaker,
                 available: AudioRouteAvailability::ALL,
+                output: None,
             },
             telephony: TelephonyState {
                 registration: ModemRegistration::Registered,

@@ -52,6 +52,7 @@ pub fn compose(
         Page::Bluetooth => bluetooth(&mut c, ty, &l, model, input),
         Page::Mobile => mobile(&mut c, ty, &l, model, input),
         Page::Display => display(&mut c, ty, &l, model, input),
+        Page::Sound => sound(&mut c, ty, &l, model, input),
         Page::Keyboard => crate::keyboard::draw(&mut c, ty, &l, model, input.pressed),
         Page::Radios => radios(&mut c, ty, &l, model, input),
         Page::About => about(&mut c, ty, &l, model),
@@ -808,6 +809,75 @@ fn display(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
     );
 }
 
+/// Sound: the output volume rail, playback mute, and the active output.
+fn sound(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
+    let t = theme::get();
+    let s = |v| l.s(v);
+    section_label(c, ty, "volume", s(96), s(360));
+    let enabled = model.sound_block().is_ok();
+    let value = model.volume();
+    slider(c, l.volume_rect(), value.unwrap_or(0), enabled);
+    let label = match value {
+        Some(_) if model.muted() => "muted".to_owned(),
+        Some(v) => format!("{v}%"),
+        None => "unknown".to_owned(),
+    };
+    ty.text(
+        c,
+        Style::bold(s(34) as f32, if enabled { t.fg } else { t.fg_dim }),
+        &label,
+        s(96),
+        s(590),
+    );
+    let style = Style::regular(s(26) as f32, t.fg_dim);
+    let sub = model.source_caption("audio output", Capability::Audio);
+    let sub = ellipsize(ty, style, &sub, c.width() - s(260) - s(48));
+    ty.text(c, style, &sub, s(260), s(590));
+    let pressed = input.pressed == Some(Target::Mute);
+    match model.sound_block() {
+        Ok(()) => toggle_row(
+            c,
+            ty,
+            l.mute_rect(),
+            "Mute",
+            if model.muted() {
+                "playback muted"
+            } else {
+                "playback on"
+            },
+            model.muted(),
+            pressed,
+        ),
+        Err(reason) => list_row(
+            c,
+            ty,
+            l.mute_rect(),
+            "Mute",
+            reason,
+            Some(("unavailable", Tone::Warn)),
+            pressed,
+        ),
+    }
+    list_row(
+        c,
+        ty,
+        l.output_route_rect(),
+        "Output",
+        &model.output_route_label(),
+        None,
+        false,
+    );
+    error_notice(c, ty, l, model, 1070);
+    caption(
+        c,
+        ty,
+        l,
+        "Volume and mute go through ferrix-core to the target's audio service, which \
+         also chooses the output. Microphone mute is in Phone during a call.",
+        1230,
+    );
+}
+
 fn connection_tone(model: &Model) -> Tone {
     use ferrix_network_api::ConnectionState as C;
     match model.net.as_ref().map(|n| &n.connection) {
@@ -1346,6 +1416,19 @@ mod tests {
         let rail = l.brightness_rect();
         assert_eq!(c.get(rail.x + 4, rail.y + rail.h / 2), t.rust, "rail fill");
         assert!(outlined(&c, l.auto_rotate_rect(), t.border));
+        m.show(Page::Sound);
+        let c = compose(&ty, size, 600, &m, &Input::default());
+        let rail = l.volume_rect();
+        assert_eq!(
+            c.get(rail.x + 4, rail.y + rail.h / 2),
+            t.rust,
+            "volume fill"
+        );
+        assert!(outlined(&c, l.mute_rect(), t.border));
+        assert_eq!(
+            c.get(l.output_route_rect().x + 8, l.output_route_rect().y + 8),
+            t.surface
+        );
         // Bluetooth without a controller: a warn chip, no device list.
         let mut hw = crate::system::preview_hardware();
         hw.bluetooth.present = false;

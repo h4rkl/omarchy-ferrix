@@ -294,10 +294,19 @@ mod linux {
             AudioState {
                 route: AudioRoute::Speaker,
                 available: AudioRouteAvailability::default(),
+                output: None,
             }
         }
 
         fn set_audio_route(&self, _route: AudioRoute) -> Result<AudioState, HardwareError> {
+            Err(HardwareError::unsupported(Capability::Audio))
+        }
+
+        fn set_audio_volume(&self, _percent: u8) -> Result<AudioState, HardwareError> {
+            Err(HardwareError::unsupported(Capability::Audio))
+        }
+
+        fn set_audio_muted(&self, _muted: bool) -> Result<AudioState, HardwareError> {
             Err(HardwareError::unsupported(Capability::Audio))
         }
     }

@@ -887,15 +887,34 @@ impl AudioRouteAvailability {
     }
 }
 
+/// Playback level of the active output route, as reported by the system
+/// audio policy service. `volume_percent` is the service's user-facing
+/// volume scale clamped to `0..=100`; it is not a hardware gain or loudness.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AudioOutputLevel {
+    pub volume_percent: u8,
+    pub muted: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AudioState {
     pub route: AudioRoute,
     pub available: AudioRouteAvailability,
+    /// The active output's level, or `None` when the target exposes no
+    /// controllable output level. Absent in older snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<AudioOutputLevel>,
 }
 
 pub trait Audio: Send + Sync {
     fn audio_state(&self) -> AudioState;
     fn set_audio_route(&self, route: AudioRoute) -> Result<AudioState, HardwareError>;
+    /// Sets the active output's volume (`0..=100`). Fails with
+    /// `unsupported` when [`AudioState::output`] is `None`.
+    fn set_audio_volume(&self, percent: u8) -> Result<AudioState, HardwareError>;
+    /// Mutes or unmutes the active output. Fails with `unsupported` when
+    /// [`AudioState::output`] is `None`.
+    fn set_audio_muted(&self, muted: bool) -> Result<AudioState, HardwareError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,6 +1208,14 @@ pub enum HardwareCommand {
     SetAudioRoute {
         route: AudioRoute,
     },
+    /// Volume of the active output route, `0..=100`.
+    SetAudioVolume {
+        percent: u8,
+    },
+    /// Mute of the active output route (playback, not microphone).
+    SetAudioMuted {
+        muted: bool,
+    },
     Suspend,
 }
 
@@ -1261,6 +1288,7 @@ mod tests {
             audio: AudioState {
                 route: AudioRoute::Speaker,
                 available: AudioRouteAvailability::ALL,
+                output: None,
             },
             telephony: TelephonyState {
                 registration: ModemRegistration::Searching,
@@ -1284,6 +1312,32 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&HardwareCommand::SetRotationLock { locked: true }).unwrap(),
             r#"{"command":"set-rotation-lock","locked":true}"#
+        );
+    }
+
+    #[test]
+    fn audio_output_level_is_optional_and_omitted_when_absent() {
+        let old = r#"{"route":"speaker","available":{"speaker":true,"earpiece":false,"headphones":false,"bluetooth":false}}"#;
+        let state: AudioState = serde_json::from_str(old).unwrap();
+        assert_eq!(state.output, None);
+        assert_eq!(serde_json::to_string(&state).unwrap(), old);
+        let state = AudioState {
+            output: Some(AudioOutputLevel {
+                volume_percent: 40,
+                muted: true,
+            }),
+            ..state
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.ends_with(r#""output":{"volume_percent":40,"muted":true}}"#));
+        assert_eq!(serde_json::from_str::<AudioState>(&json).unwrap(), state);
+        assert_eq!(
+            serde_json::to_string(&HardwareCommand::SetAudioVolume { percent: 40 }).unwrap(),
+            r#"{"command":"set-audio-volume","percent":40}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&HardwareCommand::SetAudioMuted { muted: true }).unwrap(),
+            r#"{"command":"set-audio-muted","muted":true}"#
         );
     }
 

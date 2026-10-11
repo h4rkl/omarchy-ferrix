@@ -1,4 +1,5 @@
-//! Settings state that comes from `ferrix-core` (Display, Bluetooth) and the
+//! Settings state that comes from `ferrix-core` (Display, Sound, Bluetooth)
+//! and the
 //! SIM/mobile half of the telephony snapshot (Mobile network). Pure state,
 //! like `model.rs`: the session owner feeds [`Model::apply_core`] and
 //! [`Model::set_bluetooth_devices`] and drains `Model::pending`.
@@ -255,6 +256,106 @@ impl Model {
         }
     }
 
+    // -- sound ---------------------------------------------------------------
+
+    /// Why the output volume and mute cannot be changed, if they cannot. A
+    /// target whose audio service reports a level is controllable even while
+    /// its matrix still says `unsupported`; the source caption keeps that
+    /// status visible instead of upgrading it.
+    pub fn sound_block(&self) -> Result<(), &'static str> {
+        let Some(hw) = self.core_ready() else {
+            return Err("core \u{b7} unavailable");
+        };
+        if hw.audio.output.is_some() {
+            return Ok(());
+        }
+        if self.capability_status(Capability::Audio) == CapabilityStatus::Unsupported {
+            return Err("audio \u{b7} not supported on this target");
+        }
+        Err("volume \u{b7} not exposed by this target")
+    }
+
+    /// The volume shown: the drag preview, else the core's value.
+    pub fn volume(&self) -> Option<u8> {
+        self.volume_drag.or_else(|| {
+            self.hw
+                .as_ref()
+                .and_then(|hw| hw.audio.output)
+                .map(|level| level.volume_percent)
+        })
+    }
+
+    pub fn muted(&self) -> bool {
+        self.hw
+            .as_ref()
+            .and_then(|hw| hw.audio.output)
+            .is_some_and(|level| level.muted)
+    }
+
+    pub fn drag_volume(&mut self, percent: u8) {
+        if self.sound_block().is_ok() {
+            self.volume_drag = Some(percent.min(100));
+        }
+    }
+
+    /// Commits the dragged value; the core reconciles through
+    /// `audio-changed`, so the preview is dropped once it is sent.
+    pub fn commit_volume(&mut self) {
+        let dragged = self.volume_drag.take();
+        if let Err(reason) = self.sound_block() {
+            self.last_error = Some(reason.to_owned());
+            return;
+        }
+        if let Some(percent) = dragged {
+            self.last_error = None;
+            self.pending.push(Action::SetVolume(percent));
+        }
+    }
+
+    pub fn toggle_mute(&mut self) {
+        match self.sound_block() {
+            Ok(()) => {
+                self.last_error = None;
+                self.pending.push(Action::SetMuted(!self.muted()));
+            }
+            Err(reason) => self.last_error = Some(reason.to_owned()),
+        }
+    }
+
+    /// The active output route, as the audio service reports it.
+    pub fn output_route_label(&self) -> String {
+        match self.core_ready() {
+            None => self.core_label(),
+            Some(hw) => format!("{} \u{b7} set by the audio service", hw.audio.route.name()),
+        }
+    }
+
+    pub fn sound_summary(&self) -> String {
+        match (self.sound_block(), self.hw.as_ref()) {
+            (Ok(()), Some(hw)) => match hw.audio.output {
+                Some(level) if level.muted => format!("muted \u{b7} {}", hw.audio.route.name()),
+                Some(level) => {
+                    format!("{}% \u{b7} {}", level.volume_percent, hw.audio.route.name())
+                }
+                None => self.core_label(),
+            },
+            (Err(reason), _) => reason.to_owned(),
+            (_, None) => self.core_label(),
+        }
+    }
+
+    pub fn sound_state_name(&self) -> String {
+        match self.core_ready().map(|hw| hw.audio.output) {
+            None => "unavailable".to_owned(),
+            Some(None) => "no-output-level".to_owned(),
+            Some(Some(level)) => format!(
+                "volume-{}-{}",
+                level.volume_percent,
+                if level.muted { "muted" } else { "unmuted" }
+            ),
+        }
+    }
+
     // -- bluetooth -----------------------------------------------------------
 
     pub fn bluetooth_block(&self) -> Result<(), BluetoothBlock> {
@@ -492,6 +593,10 @@ pub fn preview_hardware() -> HardwareState {
         audio: AudioState {
             route: AudioRoute::Speaker,
             available: AudioRouteAvailability::ALL,
+            output: Some(ferrix_hardware_api::AudioOutputLevel {
+                volume_percent: 40,
+                muted: false,
+            }),
         },
         telephony: TelephonyState {
             registration: ModemRegistration::Registered,
@@ -545,6 +650,95 @@ mod tests {
         t.capabilities = [TelephonyFeature::Data].into_iter().collect();
         f(&mut t);
         Update::Snapshot(StateView::Redacted(t.redacted()))
+    }
+
+    fn audio_level(volume_percent: u8, muted: bool) -> HardwareEvent {
+        let mut audio = preview_hardware().audio;
+        audio.output = Some(ferrix_hardware_api::AudioOutputLevel {
+            volume_percent,
+            muted,
+        });
+        HardwareEvent::AudioChanged(audio)
+    }
+
+    #[test]
+    fn volume_drag_previews_commits_once_and_reconciles_from_core() {
+        let mut m = with_core();
+        m.show(Page::Sound);
+        assert_eq!(m.volume(), Some(40));
+        assert_eq!(m.sound_state_name(), "volume-40-unmuted");
+        m.drag_volume(65);
+        assert_eq!(m.volume(), Some(65), "preview while dragging");
+        m.commit_volume();
+        assert_eq!(m.pending, vec![Action::SetVolume(65)]);
+        assert_eq!(m.volume(), Some(40), "core stays authoritative");
+        m.commit_volume();
+        assert_eq!(m.pending.len(), 1, "a release without a drag sends nothing");
+        m.apply_core(CoreFeed::Event(audio_level(65, false)));
+        assert_eq!(m.volume(), Some(65));
+        assert_eq!(m.sound_summary(), "65% \u{b7} speaker");
+    }
+
+    #[test]
+    fn mute_toggles_from_the_reported_state() {
+        let mut m = with_core();
+        m.toggle_mute();
+        assert_eq!(m.pending.pop(), Some(Action::SetMuted(true)));
+        assert!(!m.muted(), "nothing changes until the core reports it");
+        m.apply_core(CoreFeed::Event(audio_level(40, true)));
+        assert!(m.muted());
+        assert_eq!(m.sound_state_name(), "volume-40-muted");
+        assert_eq!(m.sound_summary(), "muted \u{b7} speaker");
+        m.toggle_mute();
+        assert_eq!(m.pending.pop(), Some(Action::SetMuted(false)));
+    }
+
+    #[test]
+    fn sound_controls_name_why_they_cannot_act() {
+        // No output level and the matrix says unsupported (the Pixel today
+        // until WirePlumber exposes a sink).
+        let mut hw = preview_hardware();
+        hw.audio.output = None;
+        let unsupported =
+            preview_capabilities().with(Capability::Audio, CapabilityStatus::Unsupported);
+        let mut m = Model::new();
+        m.apply_core(snapshot(hw, unsupported.clone()));
+        m.drag_volume(10);
+        assert_eq!(m.volume_drag, None, "no preview without a level");
+        m.toggle_mute();
+        m.commit_volume();
+        assert!(m.pending.is_empty());
+        assert_eq!(
+            m.last_error.as_deref(),
+            Some("audio \u{b7} not supported on this target")
+        );
+        assert_eq!(m.sound_state_name(), "no-output-level");
+
+        // Mocked audio without a level (the QEMU profile today).
+        let mut m = Model::new();
+        m.apply_core(snapshot(hw, preview_capabilities()));
+        assert_eq!(
+            m.sound_block(),
+            Err("volume \u{b7} not exposed by this target")
+        );
+
+        // A reported level stays controllable while the matrix still says
+        // unsupported, and the caption keeps that status visible.
+        let mut m = Model::new();
+        m.apply_core(snapshot(preview_hardware(), unsupported));
+        m.toggle_mute();
+        assert_eq!(m.pending, vec![Action::SetMuted(true)]);
+        assert_eq!(
+            m.source_caption("audio", Capability::Audio),
+            "audio \u{b7} unsupported \u{b7} qemu-aarch64"
+        );
+
+        // Losing the core blocks everything.
+        m.apply_core(CoreFeed::Disconnected {
+            reason: "gone".into(),
+        });
+        assert_eq!(m.sound_block(), Err("core \u{b7} unavailable"));
+        assert_eq!(m.sound_state_name(), "unavailable");
     }
 
     #[test]

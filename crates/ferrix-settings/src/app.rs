@@ -331,6 +331,13 @@ impl Settings {
                 "set-rotation-lock",
                 HardwareCommand::SetRotationLock { locked },
             ),
+            Action::SetVolume(percent) => self.core_action(
+                "set-audio-volume",
+                HardwareCommand::SetAudioVolume { percent },
+            ),
+            Action::SetMuted(muted) => {
+                self.core_action("set-audio-muted", HardwareCommand::SetAudioMuted { muted })
+            }
             Action::SetKeyboardLayout(id) => self.save_keyboard_layout(&id),
             Action::Back => self.yield_foreground(),
             Action::SetRadio(enabled) => self.network_action("set-radio", |c| c.set_radio(enabled)),
