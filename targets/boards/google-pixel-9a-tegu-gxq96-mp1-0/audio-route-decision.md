@@ -1,9 +1,10 @@
 # Audio route decision — google-pixel-9a-tegu-gxq96-mp1-0
 
-Status: **offline decision record, 2026-10-12, with read-only physical
+Status: **source decision record, 2026-10-12, with physical
 inventory findings (2026-10-11, [AoC offline](#physical-finding-2026-10-11-aoc-offline);
 after #58, [TAS25xx tuning missing](#physical-finding-after-58-tas25xx-tuning-missing);
-after #61, [ALSA card bound](#physical-finding-after-61-alsa-card-bound)).**
+after #61, [ALSA card bound](#physical-finding-after-61-alsa-card-bound))
+and a [temporary UCM/route probe](#discovery-only-ucm-profile-issue-2).**
 Nothing here is physical audio playback or capture evidence.
 `capabilities.toml` keeps `[audio] status = "unsupported"`
 (`capabilities.toml:27-29`). It is written for issue #2; the AoC firmware
@@ -23,7 +24,7 @@ audio sources and generated module lists still need review where noted.
 | Loaded modules (dev route) | `initramfs-init-kleaf:371-378` loads all of Kleaf's generated `system_dlkm.modules.load` and `vendor_dlkm.modules.load`. Firmware lookup points at the rootfs while they load. `tools/pixel-9a/dev-compose.py:203-218` copies those lists unfiltered from the Kleaf archives. | Which audio modules are in those generated lists, or whether they probe. The lists are build outputs and are not checked in. |
 | Radio-first route | `modules-vendor-dlkm:1-4` and `modules-system-dlkm:1-3` select no loadable modules. | Applies only to the native radio route. The Kleaf dev route above is a different route. |
 | Firmware | Issue #55 adds one `audio-aoc` controller to `firmware-policy.toml` and one stage row, `vendor.img:/firmware/aoc.bin` → `lib/firmware/aoc.bin` (`firmware-stage-allowlist.tsv`), with an optional runtime row (`pmos/device-google-tegu/firmware-allowlist.tsv`). The physical #58 image brought AoC online. Issue #59 adds the same shape for `audio-tas25xx`: `vendor.img:/firmware/tismartpa_driver_tuning.bin` → `lib/firmware/tismartpa_driver_tuning.bin`, optional at runtime. The `display-audio-touch` controller still has `required_names = []`. `allow_unlisted_paths = false`, and the stage workflow refuses persist or `*calib*` rows. | That the factory TAS tuning parses and initialises the amplifier on this kernel. Haptics (CS40L26) firmware is not staged. No bytes are in Git. |
-| Userspace | The device package depends on `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD:23-25`). It enables `ferrix-pipewire` and `ferrix-audio` (`APKBUILD:131-138`). It does not depend on `alsa-utils` or `alsa-ucm-conf`. No UCM file exists under the target or `tools/pixel-9a`. | That `aplay`, `arecord`, `amixer`, or `alsaucm` are present in the image, or that UCM is loaded. |
+| Userspace | The device package depends on `alsa-ucm-conf`, `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD:24-27`). It enables `ferrix-pipewire` and `ferrix-audio` (`APKBUILD:150`). It does not depend on `alsa-utils`. Issue #2 adds a discovery-only UCM profile (`APKBUILD:137-141`, [below](#discovery-only-ucm-profile-issue-2)). | A fresh image loading the profile, working speaker/mic routes, or audio streams. The temporary physical profile parse and graph trial are recorded below. |
 | AoC loader | `pmos/device-google-tegu/ferrix-aoc-firmware.initd` is a fail-open OpenRC one-shot, ordered before `ferrix-pipewire`, `ferrix-audio`, and `ferrix-core`. Nothing `need`s it. It writes `aoc.bin` to the AoC `firmware` control once, and only when `revision` reads `Offline` and the staged image matches its manifest row. It has bounded waits. The physical #58 inventory found the service started and AoC online. | That the sound card binds or audio works. Offline tests also cover the service failure paths (`tools/pixel-9a/tests/aoc-firmware-runtime.sh`). |
 | Services | `ferrix-pipewire.initd:6-18` runs PipeWire as `user` after `ferrix-radio-firmware`. `ferrix-audio.initd:13-49` runs WirePlumber and waits up to 10 s for `wpctl status`. `docs/status.md:517-521` records only that both are supervised and respawn. | Any ALSA node in the PipeWire graph. A running daemon is not an audio device. |
 | Android audio | Waydroid audio goes through `pipewire-pulse` (`pmos/android/packages:11-23`). | Any hardware output. With no ALSA sink, it reaches only whatever PipeWire offers. |
@@ -252,6 +253,123 @@ inventory. Redacted raw transcript remains in ignored `out/pixel-9a/audio/`.
   `ferrix-core` still reports audio `unsupported`. No stream, mixer setting,
   speaker, microphone, headset, or call route has been tested. Issue #2 owns
   UCM, route selection, and physical playback/capture proof.
+
+## Discovery-only UCM profile (issue #2)
+
+The PM's read-only inventory of an image at `9c3c13d` reported the
+ALSA card `aoc-snd-card` with 34 PCMs, a reachable PipeWire graph with no
+audio device, and `alsaucm listcards` with no matching profile. Its control
+list (`amixer -c 0 contents`, read only) is in ignored `out/pixel-9a/audio/`.
+That inventory and the pinned sources below informed a discovery-only profile.
+No Android mixer XML was translated. The later temporary physical probe below
+tested the profile without flashing a new image.
+
+### Source review
+
+- **Card match.** The pinned `aoc` revision `ac69293d…` sets
+  `card->driver_name = AOC_SND_CARD`, and `alsa/aoc_alsa.h` defines it as
+  `"aoc-snd-card"`. The `alsa-ucm-conf` `ucm.conf` searches
+  `conf.d/${CardDriver}/${CardLongName}.conf` first, then
+  `conf.d/${CardDriver}/${CardDriver}.conf`. The long name is the generic
+  `google,aoc-snd-card`, so the profile uses the driver-name file. Every AoC
+  Pixel has the same driver name, so the file guards itself (below).
+- **Speaker back end.** Pinned tegu `dts/zumapro-tegu-audio-common-tas2572.dtsi`
+  (`6276884d…`) binds `dai_be_tdm0_rx` and `dai_be_tdm0_tx` to `tas25xx` on
+  `hsi2c_19` at `0x48`, with `ti,channel-0 = <0x48>` and `ti,channel-1 = <0x49>`.
+  `zumapro-tegu-common.dtsi` includes it. Tegu does not include the
+  CS35L41 `zumapro-ripcurrentpro-audio.dtsi`.
+- **Front ends and PCM numbers.** Pinned zuma `dts/gs101-audio.dtsi`
+  (`42395e8a…`), included through `zumapro.dtsi`, defines `fe_ep1_rx`
+  (`audio_playback0`, stream `EP1 playback`) and `fe_ep1_tx`
+  (`audio_capture0`, stream `EP1 capture`) as `dynamic` DPCM links.
+  `be_internal_mic_tx` is the internal-mic back end. The PM inventory lists
+  them as PCM `00-00` and `00-08`.
+- **Routing.** `alsa/aoc_alsa_path.c` connects a front end to a back end only
+  through the DAPM mixer switches. `TDM_0_RX Mixer EP1` routes EP1 to the
+  speaker TDM, and `EP1 TX Mixer INTERNAL_MIC_TX` routes the internal mic to
+  EP1. Each `put` calls `aoc_audio_path_open`/`_close`, which sends an AoC
+  command. `be_prepare` for `INTERNAL_MIC_TX` triggers the AoC capture
+  endpoints. All of these switches read `off` in the inventory.
+- **No route means no prepare.** In pinned GKI `sound/soc/soc-pcm.c`
+  (`a4662a84…`), `dpcm_fe_dai_prepare` returns `-EINVAL` with "no backend
+  DAIs enabled" when a front end has no back-end client. alsa-lib
+  (upstream `v1.2.14`, `src/pcm/pcm.c`) `snd_pcm_hw_params` calls
+  `snd_pcm_prepare`. PipeWire's ACP UCM probe (upstream `1.6.0`,
+  `spa/plugins/alsa/acp/alsa-ucm.c` `ucm_probe_profile_set` →
+  `mapping_open_pcm`) opens and sets hardware parameters on each mapping PCM
+  after it sets the verb. The image reports PipeWire 1.6.8; its exact
+  alsa-lib version is not recorded.
+- **When sequences run.** ACP sets the verb, which runs its
+  `EnableSequence`, while it probes. `acp.c` `setup_mixer` →
+  `pa_alsa_ucm_set_port` → `ucm_device_enable` runs a device's sequence when
+  a port is selected at session start. Any route write in the profile would
+  therefore run at boot.
+
+### What the profile does
+
+- `ucm-aoc-snd-card.conf` (Syntax 4) defines `SectionUseCase."HiFi"` only if
+  `${sys:firmware/devicetree/base/model}` is exactly
+  `ZUMA PRO TEGU MP on ZUMA PRO` and the `TAS25XX ASI Switch` control exists.
+  Otherwise alsa-lib finds no verb, and PipeWire keeps its non-UCM fallback.
+- `ucm-tegu-HiFi.conf` defines `Speaker` (`PlaybackPCM "hw:${CardId},0"`) and
+  `Mic` (`CapturePCM "hw:${CardId},8"`), each 2 channels at 48000 Hz. Those
+  values match the observed `TDM_0_RX` and `INTERNAL_MIC_TX` defaults
+  (`Chan Two`, `SR_48K`). `Speaker` classifies as `AudioRoute::Speaker` in
+  `ferrix-audio-wireplumber`.
+- The profile has no enable, disable, transition or boot sequence. It has no
+  `cset`, `exec` or `sysw`, and no `PlaybackVolume`, `CaptureVolume` or
+  mixer element. Without a hardware volume, PipeWire uses software volume
+  at WirePlumber's default. The TAS `PLAYBACK_VOLUME` controls (observed
+  `110` of `116`) and the AoC `PCM Playback Volume` (observed `1000` of
+  `1000`) are never written.
+- The device package installs both files and depends on `alsa-ucm-conf` for
+  `ucm.conf`. `dev-compose.py` stages them at the same paths. The target
+  pmbootstrap configuration selects the PipeWire UI audio backend for every
+  rootfs; `rootfs.sh` rejects the PulseAudio WirePlumber package that disables
+  hardware audio monitoring.
+  `just pixel-9a-audio-ucm-test` checks the package wiring, hashes, guard, PCM
+  numbers and the no-write policy offline.
+
+The profile makes `alsaucm` find the card but writes no route. A newly built
+image is still required to test the full package integration.
+
+### Why routes are not enabled here
+
+`TDM_0_RX Mixer EP1 on` would let the probe prepare the speaker back end. The
+pinned DPCM prepare path then sends `SND_SOC_DAPM_STREAM_START` and runs the
+TAS25xx prepare on every WirePlumber start. Speaker protection and the TAS
+`CODEC PROFILE`/`ASI Switch` policy are unmeasured on Linux. This slice keeps
+automatic route changes out of the UCM profile until physical sound and
+speaker-protection behavior are understood.
+
+### Temporary physical probe after the #61 image
+
+`physical: google-pixel-9a-tegu-gxq96-mp1-0`, reviewed #61 image and
+temporary guest-side UCM copies, no new image flash. The exact-device audio
+inventory passed its identity gate. Raw logs remain ignored under
+`out/pixel-9a/audio/`.
+
+- Guest SHA-256s matched the reviewed UCM source files. `alsaucm -c hw:0`
+  parsed them and listed `HiFi`, `Speaker`, and `Mic`. The session user is in
+  the audio group and `/dev/snd` nodes are group-readable/writable.
+- The installed `pulseaudio-wireplumber` package supplied
+  `/usr/share/wireplumber/wireplumber.conf.d/51-pulseaudio.conf`, which sets
+  `hardware.audio = disabled` and `hardware.bluetooth = disabled` in the
+  `main` profile. Temporarily moving that fragment and restarting
+  `ferrix-audio` changed the graph from zero audio devices to `Built-in Audio`
+  and an ALSA compress-offload device. With both route switches off, it still
+  had no sink or source.
+- `TDM_0_RX Mixer EP1` alone set `on` produced no sink after a WirePlumber
+  restart. With `EP1 TX Mixer INTERNAL_MIC_TX` also `on`, the graph exposed
+  speaker and internal-mic nodes for both the built-in and compress-offload
+  devices. The `TAS25XX ASI Switch` remained `off`, and no stream was opened.
+  Both route switches were returned to `off`, the PulseAudio fragment
+  restored, the UCM copies removed, and `ferrix-audio` restarted.
+
+This proves UCM parsing and graph enumeration under controlled switches.
+Speaker playback, non-silent microphone capture, safe amplifier settings,
+route policy, and service startup behavior in a clean PipeWire-rootfs image
+remain to be demonstrated. `[audio]` stays `unsupported`.
 
 ## Exact-device read-only inventory plan
 

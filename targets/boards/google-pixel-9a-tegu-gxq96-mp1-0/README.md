@@ -965,12 +965,32 @@ this exact device.
 ## Audio route
 
 Audio stays `unsupported`. [`audio-route-decision.md`](audio-route-decision.md)
-is an offline record, with no physical evidence. It records what the checked-in
-kernel, firmware, service, and adapter inputs prove and what they do not. It
+records the source review and exact-device physical inventories and temporary
+UCM/route probe. It states what the checked-in kernel, firmware, service, and
+adapter inputs prove and what they do not. It
 assigns the remaining work to target layers (Kleaf modules, firmware policy,
 observed-only UCM). It also sets out the read-only exact-device inventory and
 its pass/fail criteria. That inventory runs only after the issue #25 restore
 and recovery proof.
+
+The device package ships a discovery-only ALSA UCM profile for the AoC card
+(issue #2). `ucm-aoc-snd-card.conf` installs as
+`/usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf`.
+`ucm-tegu-HiFi.conf` installs as `/usr/share/alsa/ucm2/Google/tegu/HiFi.conf`.
+`dev-compose.py` stages both at the same paths, and the package now depends on
+`alsa-ucm-conf`. The `HiFi` use case is defined only when the device-tree model
+is the exact tegu string and the `TAS25XX ASI Switch` control exists. It names
+a `Speaker` on PCM 0 (`EP1 playback`) and a `Mic` on PCM 8 (`EP1 capture`). It
+writes no mixer control, has no enable/disable/boot sequence, and binds no
+hardware volume, so no speaker or microphone route is enabled at session start.
+The front ends are DPCM links, so no sink or source is exposed without the
+observed back-end mixer routes. The default console UI audio provider also
+installed a PulseAudio WirePlumber fragment that disabled hardware audio
+monitoring; the target pmbootstrap configuration now selects the PipeWire
+provider and `rootfs.sh` rejects that conflicting package. A temporary copy
+of the UCM files parsed on the exact device, and a controlled, silent route
+trial exposed PipeWire nodes; see the decision record. A fresh image carrying
+this package change has not booted, and no playback or capture was proven.
 
 ## Read-only audio inventory
 

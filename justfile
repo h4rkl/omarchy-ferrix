@@ -476,6 +476,10 @@ pixel-9a-audio-inventory:
 pixel-9a-audio-inventory-test:
     @sh "{{root}}/tools/pixel-9a/tests/audio-inventory-workflow.sh"
 
+# Offline package and policy checks for the discovery-only AoC UCM profile.
+pixel-9a-audio-ucm-test:
+    @sh "{{root}}/tools/pixel-9a/tests/audio-ucm-profile.sh"
+
 # Read-only issue #34 filesystem inventory of the four S5300 modem source
 # partitions on a booted exact Ferrix dev guest over its CDC-ACM bring-up
 # shell. Never mounts or writes, and never reports the safety gate as passed.

@@ -769,9 +769,11 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'grep -q "634e8eb404c3fcf959dce6a0b0d97b33ba0fc346" "$aports/device/testing/exynos-modem/APKBUILD"' \
 		'grep -q "14a0013a28e5d5eec513c65e75d7549678ecc61e" "$aports/device/testing/modemmanager-samsung-sit/APKBUILD"' \
 		'grep -q "^build_pkgs_on_install = True$" "$config"' \
+		'grep -qx "postmarketos-base-ui-audio-backend = postmarketos-base-ui-audio-backend-pipewire" "$config"' \
 		'mkdir -p "$build_work/chroot_rootfs_test/lib/apk/db"' \
 		'extra=$(sed -n "s/^extra_packages = //p" "$config")${FAKE_EXTRA_INSTALLED:+,$FAKE_EXTRA_INSTALLED}' \
-		'for package in $(printf "%s" "$extra" | tr , " "); do printf "P:%s\\nV:1-r0\\n\\n" "$package"; done >"$build_work/chroot_rootfs_test/lib/apk/db/installed"'
+		'for package in $(printf "%s" "$extra" | tr , " "); do printf "P:%s\\nV:1-r0\\n\\n" "$package"; done >"$build_work/chroot_rootfs_test/lib/apk/db/installed"' \
+		'printf "P:postmarketos-base-ui-audio-backend-pipewire\\nV:1-r0\\n\\n" >>"$build_work/chroot_rootfs_test/lib/apk/db/installed"'
 } >"$fake_bin/pmbootstrap"
 {
 	printf '%s\n' '#!/bin/sh' 'set -eu' 'while [ "$#" -gt 0 ]; do' \
@@ -931,6 +933,11 @@ if FAKE_EXTRA_INSTALLED=waydroid-nftrules ROUTE=kleaf-dev android_build "$work/a
 	fail 'Android rootfs with waydroid-nftrules installed was accepted'
 fi
 grep -q 'contains waydroid-nftrules, which the GKI cannot use' "$work/android-nft.err" || { cat "$work/android-nft.err" >&2; fail 'nftables refusal reason'; }
+if FAKE_EXTRA_INSTALLED=pulseaudio-wireplumber ROUTE=kleaf-dev android_build "$work/android-pulse-out" >/dev/null 2>"$work/android-pulse.err"; then
+	fail 'rootfs containing the PulseAudio WirePlumber hardware-monitor override was accepted'
+fi
+grep -q 'contains PulseAudio WirePlumber hardware-monitor override' "$work/android-pulse.err" ||
+	fail 'PulseAudio WirePlumber override refusal reason'
 if grep -Eqx '(nftables|waydroid-nftrules)' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/android/packages"; then
 	fail 'Android package set lists an nftables package'
 fi

@@ -1,5 +1,35 @@
 # Status
 
+## 2026-10-12 (Pixel 9a temporary UCM and PipeWire route probe; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- On the running, exact-device verified #61 TAS image, two reviewed
+  discovery-only AoC UCM files were copied temporarily to the guest. Their
+  hashes matched the source files. `alsaucm -c hw:0` parsed them and listed
+  `HiFi`, `Speaker`, and `Mic`; the checked-in read-only inventory then found
+  one matching UCM profile. This is a temporary guest probe, not a rebuilt
+  image or audible audio evidence.
+- WirePlumber initially still listed zero audio devices. The installed
+  `pulseaudio-wireplumber` package owns `51-pulseaudio.conf`, which sets
+  `hardware.audio = disabled` (and `hardware.bluetooth = disabled`) in its
+  `main` profile. The default pmbootstrap console UI had selected the
+  PulseAudio provider even though Ferrix launches PipeWire/WirePlumber.
+  Temporarily moving that fragment and restarting `ferrix-audio` made
+  WirePlumber enumerate `Built-in Audio` and an ALSA compress-offload device,
+  with no sink or source at first. The target rootfs now pins the PipeWire UI
+  audio provider and refuses the conflicting installed packages; a fresh
+  image carrying this correction has not yet booted.
+- The physically observed `TDM_0_RX Mixer EP1` and
+  `EP1 TX Mixer INTERNAL_MIC_TX` switches were initially `off`. With the
+  TAS25XX ASI switch kept `off`, toggling the first route alone exposed no
+  sink. Toggling both and restarting WirePlumber exposed `Built-in Audio`
+  speaker and internal-mic nodes, plus compress-offload duplicates. This
+  proves graph enumeration only. Both route switches were returned to `off`,
+  the PulseAudio fragment restored, temporary UCM files removed, and
+  `ferrix-audio` restarted. The TAS25XX ASI switch remained `off` throughout.
+  No speaker playback, mic capture, mixer volume, or call route was proven;
+  `[audio]` remains `unsupported`. Raw logs remain ignored under
+  `out/pixel-9a/audio/`.
+
 ## 2026-10-12 (Pixel 9a TAS25xx tuning binds ALSA; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - PR #61 merged the hash-pinned, target-scoped factory TAS25xx tuning stage at
