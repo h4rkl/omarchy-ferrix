@@ -462,12 +462,21 @@ pixel-9a-radios-test:
 # Read-only audio inventory of a Pixel 9a already running Ferrix/pmOS over the
 # USB network (same SSH transport and exact device-tree gate as the radios).
 # Never plays, records, changes mixers/routes, loads modules, or starts
-# services. Physical execution is gated by issue #25; stub-tested only.
+# services. Physical execution requires the recovery proof from issue #25.
 pixel-9a-audio-inventory:
     @"{{root}}/tools/pixel-9a/audio-inventory.sh" inventory
 
 pixel-9a-audio-inventory-test:
     @sh "{{root}}/tools/pixel-9a/tests/audio-inventory-workflow.sh"
+
+# Read-only issue #34 filesystem inventory of the four S5300 modem source
+# partitions on a booted exact Ferrix guest over SSH. Never mounts or writes,
+# and never reports the safety gate as passed.
+pixel-9a-s5300-source-inventory:
+    @sh "{{root}}/tools/pixel-9a/s5300-source-inventory.sh"
+
+pixel-9a-s5300-source-inventory-test:
+    @sh "{{root}}/tools/pixel-9a/tests/s5300-source-inventory.sh"
 
 # Generic, vendor-agnostic read-only device front door. Discovery only uses
 # adb devices/getprop and fastboot devices/getvar; matching, proposing, and
