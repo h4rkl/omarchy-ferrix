@@ -4,7 +4,7 @@
 //! interface.  Sink properties are read with `wpctl inspect` because the list
 //! output intentionally exposes only a display name.  The default sink's
 //! mixer level comes from `wpctl get-volume`, which prints
-//! `Volume: 0.40 [MUTED]` on WirePlumber's cubic (user-facing) scale and
+//! `Volume: 0.40 [MUTED]` on WirePlumber's reported scale and
 //! prints nothing on stdout for a node without volume.  The transport polls
 //! the same snapshot for changes; `wpctl` does not provide a subscription
 //! command.
@@ -128,10 +128,10 @@ impl WpctlTransport {
         // `--limit 1.0` keeps WirePlumber from amplifying past 100%.
         self.run([
             OsStr::new("set-volume"),
-            OsStr::new("--limit"),
-            OsStr::new("1.0"),
             OsStr::new(id),
             OsStr::new(&volume),
+            OsStr::new("--limit"),
+            OsStr::new("1.0"),
         ])
         .map(|_| ())
     }
@@ -709,8 +709,8 @@ esac
         assert!(transport.set_volume("51", 101).is_err());
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "set-volume --limit 1.0 51 0.07\n\
-             set-volume --limit 1.0 51 1.00\n\
+            "set-volume 51 0.07 --limit 1.0\n\
+             set-volume 51 1.00 --limit 1.0\n\
              set-mute 51 1\n\
              set-mute 51 0\n"
         );

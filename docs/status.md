@@ -10,8 +10,8 @@
   `SetAudioMuted { muted }` (`set-audio-volume`/`set-audio-muted`) through
   `ferrix-core`. A target with no level returns `unsupported`.
 - **WirePlumber adapter:** reads the default sink's level with
-  `wpctl get-volume <id>` (cubic scale, clamped 0–100; no `Volume:` line means
-  no mixer). It writes `wpctl set-volume --limit 1.0 <id> 0.NN` and
+  `wpctl get-volume <id>` (reported scale, clamped 0–100; no `Volume:` line means
+  no mixer). It writes `wpctl set-volume <id> 0.NN --limit 1.0` and
   `wpctl set-mute <id> 1|0` only to the current default sink's numeric ID. Each
   write is re-read authoritatively, and a write WirePlumber did not apply
   becomes a typed `failed`. External level changes arrive as `audio-changed`

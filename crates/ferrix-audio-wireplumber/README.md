@@ -14,10 +14,10 @@ coarse speaker, earpiece, headphones, and Bluetooth routes.
 
 The default sink's mixer level is read with `wpctl get-volume <id>` and
 reported as `AudioState::output` (`volume_percent`, `muted`). That is
-WirePlumber's cubic, user-facing volume, clamped to 0–100. A node with no
+WirePlumber's reported volume, clamped to 0–100. A node with no
 mixer volume reports `output: None`, and the volume and mute setters then
-return `unsupported`. `set_audio_volume` runs `wpctl set-volume --limit 1.0 <id>
-<0.00–1.00>` and `set_audio_muted` runs `wpctl set-mute <id> 1|0`, always on the
+return `unsupported`. `set_audio_volume` runs `wpctl set-volume <id> <0.00–1.00>
+--limit 1.0` and `set_audio_muted` runs `wpctl set-mute <id> 1|0`, always on the
 current default sink's numeric ID. Each write is re-read; a level WirePlumber
 did not apply is a typed `failed` error, and the reported state is kept.
 

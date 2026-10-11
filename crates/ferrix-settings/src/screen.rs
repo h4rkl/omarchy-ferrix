@@ -873,7 +873,7 @@ fn sound(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) {
         ty,
         l,
         "Volume and mute go through ferrix-core to the target's audio service, which \
-         also chooses the output. Microphone mute is in Phone during a call.",
+         also chooses the output. In-call microphone mute depends on phone support.",
         1230,
     );
 }

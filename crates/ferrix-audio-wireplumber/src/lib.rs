@@ -43,8 +43,8 @@ enum TransportEvent {
 trait WirePlumberTransport: Send + Sync {
     fn endpoints(&self) -> Result<Vec<RouteEndpoint>, String>;
     fn set_default(&self, id: &str) -> Result<(), String>;
-    /// Sets the node's mixer volume, `0..=100` on WirePlumber's cubic
-    /// (user-facing) scale, never above 100%.
+    /// Sets the node's mixer volume, `0..=100` on the scale reported by
+    /// WirePlumber, never above 100%.
     fn set_volume(&self, id: &str, percent: u8) -> Result<(), String>;
     fn set_muted(&self, id: &str, muted: bool) -> Result<(), String>;
     #[cfg(any(feature = "production", test))]
@@ -172,7 +172,7 @@ impl Audio for WirePlumberAudio {
         let sink = self.level_target()?;
         self.transport.set_volume(&sink, percent).map_err(failed)?;
         let audio = self.refresh()?;
-        // wpctl reports two decimals of the cubic volume; allow one step.
+        // wpctl reports two decimals of its volume value; allow one step.
         match audio.output {
             Some(level) if level.volume_percent.abs_diff(percent) <= 1 => Ok(audio),
             _ => Err(failed(format!(
