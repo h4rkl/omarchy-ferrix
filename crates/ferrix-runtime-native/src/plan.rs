@@ -188,6 +188,8 @@ pub enum SandboxMode {
     Init,
     /// `--probe`: try the policy and report, never start anything.
     Probe,
+    /// Internal one-shot procfs mount helper for stage 2.
+    MountProc,
 }
 
 /// Parsed `ferrix-sandbox` command line.
@@ -227,6 +229,7 @@ impl SandboxArgs {
             match arg.as_str() {
                 "--init" => parsed.mode = SandboxMode::Init,
                 "--probe" => parsed.mode = SandboxMode::Probe,
+                "--mount-proc" => parsed.mode = SandboxMode::MountProc,
                 "--policy" => {
                     let text = it.next().ok_or("--policy needs JSON")?;
                     parsed.policy =
@@ -249,7 +252,9 @@ impl SandboxArgs {
                 other => return Err(format!("unknown argument {other:?}\n{}", Self::USAGE)),
             }
         }
-        if parsed.mode != SandboxMode::Probe && parsed.exec.is_empty() {
+        if (parsed.mode == SandboxMode::Launch || parsed.mode == SandboxMode::Init)
+            && parsed.exec.is_empty()
+        {
             return Err(format!("missing program after --\n{}", Self::USAGE));
         }
         Ok(parsed)
@@ -311,6 +316,10 @@ mod tests {
         assert_eq!(probe.mode, SandboxMode::Probe);
         assert_eq!(probe.evidence, "QEMU");
         assert_eq!(probe.policy, IsolationPolicy::default());
+        assert_eq!(
+            SandboxArgs::parse(["--mount-proc"]).unwrap().mode,
+            SandboxMode::MountProc
+        );
 
         let init = SandboxArgs::parse([
             "--init",

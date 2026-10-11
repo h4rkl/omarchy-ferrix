@@ -1,7 +1,18 @@
 # Linux CI for the emulator-first project (see AGENTS.md and plans/baseline.md).
 #
-# Three jobs:
+# Four jobs, each its own required check (none depends on another except
+# qemu-scenario-check on qemu-check):
 #   rust                - host toolchain checks (fmt, clippy, test) on ubuntu-latest.
+#                         The hosted runner denies uid_map/setgroups and mounts in
+#                         an unprivileged user namespace, so the real-namespace
+#                         tests in crates/ferrix-runtime-native/tests/sandbox.rs
+#                         probe as degraded and print `sandbox-test-skipped`
+#                         here; every other test runs normally.
+#   sandbox-check       - those sandbox tests for real: `just linux-check test -p
+#                         ferrix-runtime-native` in the pinned privileged arm64
+#                         builder container with FERRIX_SANDBOX_TESTS=required,
+#                         so any skip fails the job. Evidence label: mock
+#                         (container on the runner kernel, not QEMU, not hardware).
 #   qemu-check          - the SAME headless contract used locally: `just qemu-build`
 #                         followed by `just qemu-check`, run under TCG with no display,
 #                         no KVM, no physical device. Evidence label: QEMU.
@@ -12,7 +23,7 @@
 #                         carries the `scenarios` label, so the PR gate keeps
 #                         qemu-check's cost.
 #
-# Runner choice for qemu-check: GitHub's arm64 hosted runner
+# Runner choice for qemu-check and sandbox-check: GitHub's arm64 hosted runner
 # (`ubuntu-24.04-arm`, free for public repositories). qemu-build.sh runs
 # `--platform linux/arm64` Docker containers to cross-build the guest Rust
 # binaries and assemble the initramfs; on an arm64 runner those containers run
@@ -35,7 +46,7 @@ on:
   workflow_dispatch:
     inputs:
       qemu_runner:
-        description: Runner label for the qemu-check job
+        description: Runner label for the qemu-check, qemu-scenario-check and sandbox-check jobs
         type: choice
         default: ubuntu-24.04-arm
         options:
@@ -90,8 +101,69 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # Portable tests. The native sandbox integration tests skip here with
+      # `sandbox-test-skipped` records; sandbox-check is their gate.
       - name: cargo test
         run: cargo test --workspace
+
+  sandbox-check:
+    name: Native sandbox (privileged container, arm64)
+    runs-on: ${{ inputs.qemu_runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: ${{ inputs.qemu_runner == 'ubuntu-latest' && 120 || 30 }}
+    env:
+      # Every sandbox test must run: a skip (degraded probe, no /run access)
+      # is a failure, so this check cannot pass vacuously.
+      FERRIX_SANDBOX_TESTS: required
+      # Cargo registry + linux-check target directory used by the container.
+      FERRIX_CACHE_DIR: ${{ github.workspace }}/.cache/ferrix
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # x86 fallback only, as in qemu-check: linux-check.sh runs the pinned
+      # linux/arm64 builder image.
+      - name: Register arm64 binfmt handlers (x86 fallback only)
+        if: runner.arch != 'ARM64'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: linux/arm64
+
+      - name: Install just
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: just@1.58.0
+
+      - name: Restore linux-check cache
+        id: linux-check-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/ferrix/cargo-registry
+            .cache/ferrix/linux-check-target
+          key: ferrix-linux-check-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'targets/qemu-aarch64/scripts/linux-check.sh') }}
+          restore-keys: |
+            ferrix-linux-check-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: just linux-check test -p ferrix-runtime-native
+        run: just linux-check test -p ferrix-runtime-native
+
+      # The privileged builder writes cache files as root. Let the runner
+      # read them before actions/cache/save, including after a failing test.
+      - name: Make linux-check cache readable by the runner
+        if: always() && steps.linux-check-cache.outputs.cache-hit != 'true'
+        run: |
+          if [ -d .cache/ferrix ]; then
+            sudo chown -R "$(id -u):$(id -g)" .cache/ferrix
+          fi
+
+      - name: Save linux-check cache
+        if: always() && steps.linux-check-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/ferrix/cargo-registry
+            .cache/ferrix/linux-check-target
+          key: ${{ steps.linux-check-cache.outputs.cache-primary-key }}
 
   qemu-check:
     name: QEMU headless contract (TCG)

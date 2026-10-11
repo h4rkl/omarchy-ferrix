@@ -8,8 +8,9 @@
 //! Stage 1 (this invocation) unshares the namespaces the policy asks for,
 //! sets up the user-namespace mappings and hostname, and starts itself again
 //! as `--init`, which becomes PID 1 of the new PID namespace. Stage 2 makes
-//! the mount namespace private, mounts a fresh `/proc` and (optionally) a
-//! private `/tmp`, sets `no_new_privs`, runs the application, reaps zombies,
+//! the mount namespace private, mounts a fresh `/proc` through a short lived
+//! helper child, and optionally mounts a private `/tmp`. It sets
+//! `no_new_privs`, runs the application, reaps zombies,
 //! forwards TERM/INT/HUP, and exits with the application's shell status. Stage
 //! 1 forwards that status upward, so the launcher classifies the exit exactly.
 //!
@@ -59,6 +60,7 @@ fn main() -> ExitCode {
             SandboxMode::Launch => linux::launch(&args),
             SandboxMode::Init => linux::init(&args),
             SandboxMode::Probe => linux::probe(&args),
+            SandboxMode::MountProc => linux::mount_proc(),
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -614,14 +616,12 @@ mod linux {
         ) {
             mount_failed("/", e.to_string());
         }
-        if let Err(e) = mount(
-            "proc",
-            "/proc",
-            "proc",
-            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
-            None::<&CStr>,
-        ) {
-            mount_failed("/proc", e.to_string());
+        // The init process is PID 1 in the child PID namespace. On the
+        // hosted and local privileged container kernels, its own procfs
+        // mount is refused (EPERM), while a child in the same mount/PID
+        // namespaces can mount it. The helper exits before any app starts.
+        if let Err(e) = mount_proc_in_child() {
+            mount_failed("/proc", e);
         }
         if !policy.private_tmp {
             return false;
@@ -637,6 +637,39 @@ mod linux {
             Err(e) => {
                 mount_failed("/tmp", e.to_string());
                 false
+            }
+        }
+    }
+
+    fn mount_proc_in_child() -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|e| format!("resolve sandbox binary: {e}"))?;
+        let output = Command::new(exe)
+            .arg("--mount-proc")
+            .output()
+            .map_err(|e| format!("start procfs mount helper: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "procfs mount helper exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
+    }
+
+    pub fn mount_proc() -> ExitCode {
+        match mount(
+            "proc",
+            "/proc",
+            "proc",
+            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+            None::<&CStr>,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("mount /proc: {e}");
+                exit_code(ISOLATION_UNAVAILABLE_STATUS)
             }
         }
     }
