@@ -2,7 +2,8 @@
 
 Status: **offline decision record, 2026-10-12, with read-only physical
 inventory findings (2026-10-11, [AoC offline](#physical-finding-2026-10-11-aoc-offline);
-after #58, [TAS25xx tuning missing](#physical-finding-after-58-tas25xx-tuning-missing)).**
+after #58, [TAS25xx tuning missing](#physical-finding-after-58-tas25xx-tuning-missing);
+after #61, [ALSA card bound](#physical-finding-after-61-alsa-card-bound)).**
 Nothing here is physical audio playback or capture evidence.
 `capabilities.toml` keeps `[audio] status = "unsupported"`
 (`capabilities.toml:27-29`). It is written for issue #2; the AoC firmware
@@ -29,8 +30,8 @@ audio sources and generated module lists still need review where noted.
 | Ferrix adapter | `ferrix-backends.env:15` selects `wireplumber`. The target adapter composes `WirePlumberAudio::connect()` and falls back to `UnavailableHardware` on error (`adapter/src/lib.rs:837-841`, `292-302`). `connect` fails when no classified default sink exists (`crates/ferrix-audio-wireplumber/src/lib.rs:71`, `157-174`). | That a route works. Without an ALSA sink, the product sees `unsupported`. |
 | Product API | `ferrix-hardware-api::Audio` models output routes only: speaker, earpiece, headphones, Bluetooth (`crates/ferrix-hardware-api/src/lib.rs:833-898`). Call route and uplink mute belong to telephony (`crates/ferrix-telephony-api/src/lib.rs:825-833`). | General microphone capture, volume, or playback mute as typed hardware controls. None exists, and this record does not add them. |
 
-Conclusion: this target has **built and supervised audio services, no proven
-ALSA card, no proven speaker output, no proven mic capture, and no call audio.**
+Conclusion: this target has **a bound AoC ALSA card and supervised audio
+services, but no proven speaker output, mic capture, or call audio.**
 The board plan orders audio after Bluetooth and before cellular. Call audio
 comes only after voice calls (`linux-plan.md:827-829`, `837-840`).
 
@@ -148,10 +149,11 @@ Pinned `google-modules/amplifiers` revision
 - **Failure path.** A missing file ends as `-ENOENT` (`-2`), which matches
   the observed `-2` per request. However, the component probe maps
   `-ENOENT` to `0` (`if (ret == -ENOENT) ret = 0;`), so a missing tuning
-  file alone does not fail that probe. The firmware stays unloaded and
-  `hw_params` retries later. The AoC card's own `-2` is therefore **not**
-  shown to be caused by the missing file. The file is still needed before
-  the amplifier can be initialised for playback.
+  file alone does not fail that probe. A narrower read-only kernel log on
+  the #58 image later showed `tas25xx_set_dai_fmt` retrying the missing file,
+  then `snd_soc_dai_set_fmt on tas25xx ASI1: -2` immediately before the AoC
+  card registration failed `-2`. The physical #61 image confirms that adding
+  the pinned file allows both firmware load and card registration.
 - **Content and selection.** `tas25xx_fw_ready` parses an optional `MDATA`
   table that picks one sub-image by the chip's silicon revision ID. The ID is
   read from `TAS25XX_REVID_REG` in `src/tas25xx-regmap.c`. A `HEADR` block
@@ -200,9 +202,10 @@ slice mirrors #55:
 
 Offline tests cover the single stage row, staging it through the synthetic
 factory archive, the rejection of TAS-controller calibration rows, and the
-rootfs and manifest handoff. **No image carrying this change has booted.**
-TAS initialisation, the ALSA card and PipeWire nodes all remain unproved.
-`[audio]` stays `unsupported`.
+rootfs and manifest handoff. The physical #61 image has now booted and its
+TAS driver reports `FW loading success`; ALSA card and PCMs enumerate.
+PipeWire nodes and audio function remain unproved. `[audio]` stays
+`unsupported`.
 
 ### Open questions for the next physical inventory
 
@@ -229,6 +232,26 @@ TAS initialisation, the ALSA card and PipeWire nodes all remain unproved.
   until a physical inventory shows that it blocks the card.
 - The parser does no bounds checking on the file. Only the hash-pinned
   factory bytes that Android ships may reach it.
+
+## Physical finding after #61: ALSA card bound
+
+`physical: google-pixel-9a-tegu-gxq96-mp1-0`, fresh native Linux build of
+merged source `9c3c13d`, exact-device gated dev flash and read-only audio
+inventory. Redacted raw transcript remains in ignored `out/pixel-9a/audio/`.
+
+- The guest file `lib/firmware/tismartpa_driver_tuning.bin` matches the pinned
+  factory SHA-256 `da10e6bc27db8b339a28636534404b1d4068ac91de2c2118d7f02ca28059e6fe`.
+  AoC reports online. TAS25xx logs `FW loading success`; its optional
+  `ALGOP` block is absent and the parser explicitly ignores that condition.
+- `sound-aoc` is bound. `/proc/asound/cards` lists one `aoc-snd-card`;
+  `/proc/asound/pcm` lists 34 entries, including 19 playback and 16 capture
+  directions (some entries are bidirectional). ALSA devices exist under
+  `/dev/snd/`. This clears the kernel card-binding dependency seen in #58.
+- `alsaucm listcards` finds no matching card profile. The reachable
+  PipeWire/WirePlumber graph has no audio device, sink, source, or default.
+  `ferrix-core` still reports audio `unsupported`. No stream, mixer setting,
+  speaker, microphone, headset, or call route has been tested. Issue #2 owns
+  UCM, route selection, and physical playback/capture proof.
 
 ## Exact-device read-only inventory plan
 

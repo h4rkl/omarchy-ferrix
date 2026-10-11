@@ -1,5 +1,31 @@
 # Status
 
+## 2026-10-12 (Pixel 9a TAS25xx tuning binds ALSA; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- PR #61 merged the hash-pinned, target-scoped factory TAS25xx tuning stage at
+  source commit `9c3c13d`. A fresh native Linux kernel, product, postmarketOS
+  rootfs, and seven-image bundle were built for this trial. The bundle manifest
+  SHA-256 is `23ddcc394068af85fa7dde6bf64df644c486de4a8858328f42798e148677a6f8`;
+  transferred image sizes and hashes matched. The rootfs contains
+  `tismartpa_driver_tuning.bin` with the pinned factory file's SHA-256
+  `da10e6bc27db8b339a28636534404b1d4068ac91de2c2118d7f02ca28059e6fe`.
+- The checked-in dev-flash workflow rechecked exactly one unlocked
+  `tegu`/`GXQ96`/`MP1.0` device in ordinary Fastboot on slot B, the tested
+  hash-pinned stock restore, and stock bootloader/baseband. All seven planned
+  images flashed successfully; the workflow rebooted without switching slots.
+  The Ferrix CDC-ACM shell reached full userspace.
+- The read-only inventory verified the exact guest device tree. AoC is online;
+  TAS25xx logs `FW loading success`, the `sound-aoc` device binds, and ALSA
+  now lists one `aoc-snd-card` with 34 PCM entries (19 playback, 16 capture
+  reported by `/proc/asound/pcm`; some entries are bidirectional). The card
+  has no matching UCM profile. WirePlumber's reachable graph lists no audio
+  device, sink, or source, and `ferrix-core` still reports audio `unsupported`.
+  No playback, microphone capture, mixer, or route was exercised. The TAS
+  parser logs that its optional `ALGOP` block is absent and ignores it;
+  the logs also show Bluetooth codec-capability errors. Issue #59's firmware
+  and card-binding slice is complete; #2 owns UCM, routes, and physical audio
+  proof. Raw logs and images remain ignored under `out/pixel-9a/`.
+
 ## 2026-10-12 (Pixel 9a AoC online; TAS25xx blocks ALSA; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - PR #58 merged the bounded AoC firmware loader. On native Linux, the
