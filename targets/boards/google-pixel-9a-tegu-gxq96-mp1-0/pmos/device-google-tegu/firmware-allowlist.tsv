@@ -23,3 +23,7 @@ gpu-mali	lib/firmware/mali_csffw.bin	0
 # Mali: ferrix-aoc-firmware hands it to AoC, and audio stays unsupported when
 # it is absent. No per-unit audio calibration is ever listed here.
 audio-aoc	lib/firmware/aoc.bin	0
+# The factory TAS25xx amplifier tuning (audio-tas25xx in the stage allowlist).
+# Optional: snd-soc-tas25xx requests it itself, and audio stays unsupported
+# when it is absent. Never speaker.cal or ti_sp_tuning.bin.
+audio-tas25xx	lib/firmware/tismartpa_driver_tuning.bin	0

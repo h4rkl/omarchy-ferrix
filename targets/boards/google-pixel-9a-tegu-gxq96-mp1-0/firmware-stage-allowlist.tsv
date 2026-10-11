@@ -22,3 +22,4 @@ modem-s5300	vendor.img	/firmware/uecapconfig	lib/firmware/uecapconfig	bundle
 gpu-mali	vendor.img	/firmware/mali_csffw-r51p0.bin	lib/firmware/mali_csffw-r52p0.bin
 gpu-mali	vendor.img	/firmware/mali_csffw-r51p0.bin	lib/firmware/mali_csffw.bin
 audio-aoc	vendor.img	/firmware/aoc.bin	lib/firmware/aoc.bin
+audio-tas25xx	vendor.img	/firmware/tismartpa_driver_tuning.bin	lib/firmware/tismartpa_driver_tuning.bin
