@@ -304,7 +304,16 @@ partitions are mounted read-only from the exact current-slot modem label
 (`modem_a` or `modem_b`, selected from the bootloader's
 `androidboot.slot_suffix`), plus `efs`, `persist`, and `modem_userdata`, at `/mnt/vendor/modem_img`, `/mnt/vendor/efs`,
 `/mnt/vendor/persist`, and `/mnt/vendor/modem_userdata`; the service refuses a
-missing or ambiguous slot, foreign or writable mount. UECAP, carrier-config, modem image, and NV inputs
+missing or ambiguous slot, foreign or writable mount. Because the factory image
+does not restore `efs` or `persist`, each source's type is first read from its
+superblock with util-linux `blkid -p` (no mount, no cache write), and only ext4
+(`ro,noload`) or f2fs (`ro,norecovery`) is mounted; plain `ro` would still
+replay an ext4 journal or roll f2fs forward. A duplicated partition label, an
+unknown or ambivalent type, or a mount whose mountinfo superblock options do
+not show `ro` plus the recovery-suppression flag is refused. This is
+source-level and offline stub-tested only: the four partitions' actual types,
+and whether the pinned kernel displays `noload`/`norecovery` in mountinfo,
+still need a physical read-only inventory. UECAP, carrier-config, modem image, and NV inputs
 remain external firmware/partition data and are not checked in.
 
 Service ordering alone is not modem readiness. The loader/plugin must expose a

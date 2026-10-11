@@ -1,14 +1,25 @@
 #!/sbin/openrc-run
 
 name="Ferrix S5300 read-only source mounts"
-description="Mounts the exact Pixel 9a modem image and calibration partitions read-only"
+description="Mounts the exact Pixel 9a modem image and calibration partitions read-only without journal or roll-forward recovery"
 command="/bin/true"
 command_background="no"
 
 mount_root=/mnt/vendor
-efs_source=/dev/disk/by-partlabel/efs
-persist_source=/dev/disk/by-partlabel/persist
-modem_userdata_source=/dev/disk/by-partlabel/modem_userdata
+partlabel_root=/dev/disk/by-partlabel
+sys_block_path=/sys/class/block
+mountinfo_path=/proc/self/mountinfo
+bootconfig_path=/proc/bootconfig
+cmdline_path=/proc/cmdline
+
+# efs and persist hold device-unique calibration that the pinned factory image
+# does not rewrite, so a mount must never be able to write them.  Plain `ro`
+# is not enough: ext4 replays a dirty journal and f2fs rolls forward fsync
+# data even on a read-only mount.  Every source therefore has its filesystem
+# identified first, from the superblock and without mounting, and is mounted
+# only as ext4 with `ro,noload` or f2fs with `ro,norecovery`.  Any other type
+# is refused until a physical read-only inventory of this exact device has been
+# reviewed.
 
 depend() {
 	need udev ferrix-radio-firmware
@@ -16,31 +27,128 @@ depend() {
 	before exynos-modem sit-proxy modemmanager
 }
 
-mounted_read_only() {
-	path=$1
-	awk -v wanted="$path" '
-		$2 == wanted {
-			for (i = 4; i <= NF; i++) {
-				if ($i == "ro" || $i ~ /^ro,|,ro$/ || $i ~ /,ro,/) {
-					found = 1
-				}
-			}
+has_option() {
+	case ",$1," in
+		*",$2,"*) return 0 ;;
+	esac
+	return 1
+}
+
+# Print "root fstype source mount-options super-options" for the topmost
+# mount at $1 from mountinfo.  mountinfo is used rather than /proc/mounts
+# because it separates the per-mount and superblock read-only flags: a
+# read-only bind of a writable superblock reads as `ro` in /proc/mounts.
+mount_entry() {
+	awk -v wanted="$1" '
+		$5 == wanted {
+			for (i = 7; i <= NF && $i != "-"; i++) ;
+			if (i + 3 > NF) next
+			entry = $4 " " $(i + 1) " " $(i + 2) " " $6 " " $(i + 3)
 		}
-		END { exit(found ? 0 : 1) }
-	' /proc/mounts 2>/dev/null
+		END { if (entry == "") exit 1; print entry }
+	' "$mountinfo_path" 2>/dev/null
 }
 
-mounted_source_matches() {
-	source=$1
-	path=$2
-	expected=$(readlink -f "$source" 2>/dev/null) || return 1
-	actual=$(awk -v wanted="$path" '$2 == wanted { print $1; exit }' /proc/mounts 2>/dev/null) || return 1
-	[ -n "$actual" ] || return 1
-	actual=$(readlink -f "$actual" 2>/dev/null) || return 1
-	[ "$actual" = "$expected" ]
+require_block_device() {
+	[ -b "$1" ]
 }
 
-resolve_modem_source() {
+# Resolve an exact GPT partition name to its device node.  udev's by-partlabel
+# link names whichever partition claimed the label last, so a label carried by
+# more than one partition (for example on another UFS LUN) is refused.
+resolve_partition() {
+	label=$1
+	device=$(readlink -f "$partlabel_root/$label" 2>/dev/null) || device=
+	[ -n "$device" ] && require_block_device "$device" || {
+		eerror "required exact partition label is unavailable: $label"
+		return 1
+	}
+	owners=$(grep -Flx "PARTNAME=$label" "$sys_block_path"/*/uevent 2>/dev/null)
+	owner_count=$(printf '%s\n' "$owners" | awk 'NF { count++ } END { print count + 0 }')
+	[ "$owner_count" -eq 1 ] || {
+		eerror "partition label $label must name exactly one partition (found $owner_count)"
+		return 1
+	}
+	owner=$(awk -F= '$1 == "DEVNAME" { print $2; exit }' "$owners")
+	[ "$owner" = "${device##*/}" ] || {
+		eerror "partition label $label resolves to ${device##*/}, but the kernel names $owner"
+		return 1
+	}
+	printf '%s\n' "$device"
+}
+
+# Identify the filesystem from its superblock without mounting it.  Only
+# util-linux blkid is accepted (the device package depends on `blkid`); the
+# BusyBox applet has no low-level probe mode.  `-p` opens the device read-only
+# and bypasses the blkid cache; it exits 2 when no signature is found and 8
+# when signatures are ambivalent, and both are refusals.
+probe_fstype() {
+	device=$1
+	blkid -V 2>/dev/null | grep -q 'util-linux' || {
+		eerror "util-linux blkid is required to identify $device without mounting it"
+		return 1
+	}
+	fstype=$(blkid -c /dev/null -p -o value -s TYPE -- "$device" 2>/dev/null) || fstype=
+	case "$fstype" in
+		ext4|f2fs) printf '%s\n' "$fstype" ;;
+		*)
+			eerror "refusing unrecognised filesystem '${fstype:-none}' on $device"
+			return 1
+			;;
+	esac
+}
+
+recovery_option() {
+	case "$1" in
+		ext4) printf 'noload\n' ;;
+		f2fs) printf 'norecovery\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+# The kernel must report recovery suppression on the superblock.  ext4 shows
+# its single noload flag as `noload` or `norecovery` depending on kernel
+# version; f2fs shows `norecovery`.  If the running kernel does not display
+# the option the mount is refused: an unconfirmed option is not evidence.
+recovery_suppressed() {
+	case "$1" in
+		ext4) has_option "$2" noload || has_option "$2" norecovery ;;
+		f2fs) has_option "$2" norecovery ;;
+		*) return 1 ;;
+	esac
+}
+
+verify_mount() {
+	device=$1
+	destination=$2
+	fstype=$3
+	entry=$(mount_entry "$destination") || {
+		eerror "no mount is visible at $destination"
+		return 1
+	}
+	read -r mounted_root mounted_type mounted_source mount_options super_options <<EOF
+$entry
+EOF
+	mounted_device=$(readlink -f "$mounted_source" 2>/dev/null) || mounted_device=$mounted_source
+	[ "$mounted_device" = "$device" ] && [ "$mounted_root" = / ] || {
+		eerror "refusing a foreign mount at $destination (expected all of $device)"
+		return 1
+	}
+	[ "$mounted_type" = "$fstype" ] || {
+		eerror "refusing a $mounted_type mount at $destination (the superblock is $fstype)"
+		return 1
+	}
+	has_option "$mount_options" ro && has_option "$super_options" ro || {
+		eerror "refusing a non-read-only mount or superblock at $destination"
+		return 1
+	}
+	recovery_suppressed "$fstype" "$super_options" || {
+		eerror "cannot confirm $(recovery_option "$fstype") on the $fstype superblock at $destination; refusing it"
+		return 1
+	}
+}
+
+resolve_modem_label() {
 	# The modem partition is A/B while EFS, persist, and modem_userdata are
 	# single-label partitions.  The bootloader supplies the selected slot in
 	# androidboot.slot_suffix; never guess `_a` when Ferrix is booted from the
@@ -48,7 +156,7 @@ resolve_modem_source() {
 	# malformed or conflicting command line from attaching the wrong modem
 	# calibration image.
 	# GKI bootloaders pass it in bootconfig; older ones on the command line.
-	slot_values=$(sed -n 's/^[[:space:]]*androidboot\.slot_suffix[[:space:]]*=[[:space:]]*"*\([^"]*\)"*[[:space:]]*$/\1/p' /proc/bootconfig 2>/dev/null)
+	slot_values=$(sed -n 's/^[[:space:]]*androidboot\.slot_suffix[[:space:]]*=[[:space:]]*"*\([^"]*\)"*[[:space:]]*$/\1/p' "$bootconfig_path" 2>/dev/null)
 	[ -n "$slot_values" ] || slot_values=$(awk '{
 		for (i = 1; i <= NF; i++) {
 			if ($i ~ /^androidboot\.slot_suffix=/) {
@@ -57,7 +165,7 @@ resolve_modem_source() {
 				print value
 			}
 		}
-	}' /proc/cmdline 2>/dev/null)
+	}' "$cmdline_path" 2>/dev/null)
 	slot_count=$(printf '%s\n' "$slot_values" | awk 'NF { count++ } END { print count + 0 }')
 	[ "$slot_count" -eq 1 ] || {
 		eerror "exactly one androidboot.slot_suffix is required (found $slot_count)"
@@ -65,42 +173,44 @@ resolve_modem_source() {
 	}
 	slot=$(printf '%s\n' "$slot_values")
 	case "$slot" in
-		_a|_b) printf '/dev/disk/by-partlabel/modem%s\n' "$slot" ;;
+		_a|_b) printf 'modem%s\n' "$slot" ;;
 		*) eerror "unsupported androidboot.slot_suffix: $slot"; return 1 ;;
 	esac
 }
 
 mount_one() {
-	source=$1
+	label=$1
 	destination=$2
-	options=$3
 
-	[ -e "$source" ] || {
-		eerror "required exact partition label is unavailable: $source"
+	device=$(resolve_partition "$label") || return 1
+	fstype=$(probe_fstype "$device") || return 1
+	checkpath -d -m 0755 "$destination"
+	if mount_entry "$destination" >/dev/null; then
+		# An existing mount is accepted only if it already has every
+		# property this service would have requested.
+		verify_mount "$device" "$destination" "$fstype"
+		return
+	fi
+	# The explicit type stops mount(8) from probing for another driver, and
+	# ext4 and f2fs fail the mount on an option they do not recognise.
+	mount -t "$fstype" -o "ro,$(recovery_option "$fstype"),nosuid,nodev,noexec" -- "$device" "$destination" || {
+		eerror "could not mount $label read-only at $destination"
 		return 1
 	}
-	checkpath -d -m 0755 "$destination"
-	if mountpoint -q "$destination"; then
-		mounted_source_matches "$source" "$destination" || {
-			eerror "refusing a foreign mount at $destination (expected $source)"
-			return 1
-		}
-		mounted_read_only "$destination" || {
-			eerror "refusing a non-read-only mount at $destination"
-			return 1
-		}
-		return 0
-	fi
-	mount -o "$options" "$source" "$destination"
+	verify_mount "$device" "$destination" "$fstype" && return 0
+	# The kernel did not report every requested property; never hand an
+	# unconfirmed mount to the modem stack.
+	umount -- "$destination" || eerror "could not unmount unconfirmed $destination"
+	return 1
 }
 
 start() {
-	ebegin "Mounting exact Pixel 9a modem inputs read-only"
-	modem_source=$(resolve_modem_source) || { eend 1; return 1; }
-	mount_one "$modem_source" "$mount_root/modem_img" ro,nosuid,nodev,noexec || { eend 1; return 1; }
-	mount_one "$efs_source" "$mount_root/efs" ro,nosuid,nodev,noexec || { eend 1; return 1; }
-	mount_one "$persist_source" "$mount_root/persist" ro,nosuid,nodev,noexec || { eend 1; return 1; }
-	mount_one "$modem_userdata_source" "$mount_root/modem_userdata" ro,nosuid,nodev,noexec || { eend 1; return 1; }
+	ebegin "Mounting exact Pixel 9a modem inputs read-only without journal recovery"
+	modem_label=$(resolve_modem_label) || { eend 1; return 1; }
+	mount_one "$modem_label" "$mount_root/modem_img" || { eend 1; return 1; }
+	mount_one efs "$mount_root/efs" || { eend 1; return 1; }
+	mount_one persist "$mount_root/persist" || { eend 1; return 1; }
+	mount_one modem_userdata "$mount_root/modem_userdata" || { eend 1; return 1; }
 	eend 0
 }
 
@@ -110,8 +220,8 @@ stop() {
 	# service is stopped.  Never force an unmount: a busy mount is safer left in
 	# place than torn down while the modem owns an fd.
 	for destination in "$mount_root/modem_userdata" "$mount_root/persist" "$mount_root/efs" "$mount_root/modem_img"; do
-		if mountpoint -q "$destination"; then
-			umount "$destination" || { eerror "could not unmount $destination"; eend 1; return 1; }
+		if mount_entry "$destination" >/dev/null; then
+			umount -- "$destination" || { eerror "could not unmount $destination"; eend 1; return 1; }
 		fi
 	done
 	eend 0

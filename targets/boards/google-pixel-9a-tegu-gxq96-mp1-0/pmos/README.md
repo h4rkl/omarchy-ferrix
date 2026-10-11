@@ -182,6 +182,11 @@ The device package carries a target-local, source-pinned radio stack:
 `modem_userdata` partitions, and mounts them read-only at the paths the
 reviewed daemon consumes. It refuses a missing, ambiguous, foreign, or
 writable mount; it never guesses `_a` when Ferrix is booted from slot B.
+Each type is read with util-linux `blkid -p` (package dependency `blkid`)
+before mounting, and only ext4 `ro,noload` or f2fs `ro,norecovery` is
+accepted to suppress journal replay and f2fs roll-forward on
+`efs`/`persist`. An existing or new mount must show those flags in mountinfo
+superblock options or it is refused.
 OpenRC orders the mounts, `exynos-modem`, `sit-proxy`, and the Samsung SIT
 ModemManager provider before Ferrix's telephony adapter. The reviewed factory
 layout supplies directory-valued inputs at `vendor.img:/firmware/carrierconfig`

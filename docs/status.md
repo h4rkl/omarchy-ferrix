@@ -30,6 +30,39 @@
   now captures Fastboot's exit status in the shell through a log pipe; its
   offline restore tests pass. The failed hardware run is not recovery proof.
 
+## 2026-10-12 (Pixel 9a: S5300 calibration mounts suppress journal recovery, issue #34; offline only)
+
+- **Change:** `ferrix-s5300-mounts` no longer mounts `modem_<slot>`, `efs`,
+  `persist`, and `modem_userdata` with plain `ro`, which still lets ext4
+  replay a dirty journal and f2fs roll forward fsync data. The factory image
+  does not restore `efs` or `persist`. Each source now resolves to exactly one
+  kernel partition named by that label. Its type is read with util-linux
+  `blkid -p` (new device-package dependency `blkid`; the BusyBox applet is
+  refused). Only ext4 is mounted, as `ro,noload`, and only f2fs, as
+  `ro,norecovery`, each with an explicit `-t`. Unknown, missing, or ambivalent
+  types are refused.
+  New and existing mounts are checked in `/proc/self/mountinfo`. Each needs
+  the exact device, root `/`, the probed type, `ro` on both the mount and the
+  superblock, and the recovery flag in the superblock options. A mount that
+  fails this check after the service mounted it is unmounted (never forced).
+  `modem_img` uses the same path. No new write path, and no modem character
+  device, is opened.
+- **Evidence:** offline only. The stub harness in
+  `tools/pixel-9a/tests/rootfs-workflow.sh` (`just pixel-9a-rootfs-test`)
+  sources the service against a fixture with stubbed blkid/mount/umount. No
+  device was probed or mounted. The focused mount harness and full rootfs
+  recipe passed after the separate `gpu-mali` fixture repair in #42. The modem chain stays out of the
+  dev image's runlevel. No capability changes.
+- **Limitations (need a physical read-only inventory of
+  `google-pixel-9a-tegu-gxq96-mp1-0`):** the real filesystem types of the four
+  partitions are not recorded, so a vfat/erofs `modem_<slot>` would be refused
+  as fail-closed. The type list is a source-level assumption. It has not been
+  confirmed that the pinned kernel prints `noload`/`norecovery` in mountinfo;
+  if it does not, every mount is refused rather than trusted. The service does
+  not mark the block device read-only (`BLKROSET`); a pinned-kernel source
+  review and exact-target physical evidence are still needed before treating
+  these mounts as a proven non-writing operation.
+
 ## 2026-10-10 (Icon set: filled Remix Icon v4.7.0 glyphs, issue #20; QEMU/host preview only)
 
 - **Licence:** Remix Icon is under the non-OSI Remix Icon License v1.0 from
