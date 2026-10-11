@@ -116,9 +116,13 @@ the project must not silently call that a fully functioning Pixel 9a.
   [PR #45](https://github.com/h4rkl/omarchy-ferrix/pull/45), with mock tests
   and CI passing; #54 supplied the CDC-ACM transport. The physical run found
   no ALSA card or PCM and an `Offline` AoC with deferred sound-card probe.
-  [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55) owns a bounded
-  pinned-factory AoC firmware experiment. Speaker, microphone, route, and
-  mute evidence remain absent; #2 was reopened after an incorrect closure.
+  [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55) is now closed
+  after [PR #58](https://github.com/h4rkl/omarchy-ferrix/pull/58) and a
+  physical image brought AoC online. ALSA still has no card: TAS25xx cannot
+  load `tismartpa_driver_tuning.bin`, and the sound-card probe fails `-2`.
+  [#59](https://github.com/h4rkl/omarchy-ferrix/issues/59) owns that next
+  target firmware/probe slice. Speaker, microphone, route, and mute evidence
+  remain absent; #2 stays open.
 - [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed by
   [merged PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48), which
   makes an ADB or Fastboot identity-query failure explicit. The successful
