@@ -459,6 +459,16 @@ pixel-9a-radios-test:
 	@sh "{{root}}/tools/pixel-9a/tests/radios-workflow.sh"
 	@sh "{{root}}/tools/pixel-9a/tests/radio-firmware-runtime.sh"
 
+# Read-only audio inventory of a Pixel 9a already running Ferrix/pmOS over the
+# USB network (same SSH transport and exact device-tree gate as the radios).
+# Never plays, records, changes mixers/routes, loads modules, or starts
+# services. Physical execution is gated by issue #25; stub-tested only.
+pixel-9a-audio-inventory:
+    @"{{root}}/tools/pixel-9a/audio-inventory.sh" inventory
+
+pixel-9a-audio-inventory-test:
+    @sh "{{root}}/tools/pixel-9a/tests/audio-inventory-workflow.sh"
+
 # Generic, vendor-agnostic read-only device front door. Discovery only uses
 # adb devices/getprop and fastboot devices/getvar; matching, proposing, and
 # pinned downloads never contact a device. Mutation lives only in target-scoped

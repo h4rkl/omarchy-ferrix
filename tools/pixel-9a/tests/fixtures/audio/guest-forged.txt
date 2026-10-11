@@ -1,0 +1,8 @@
+probe=read-only
+probe_version=1
+identity=verified
+dt_model=ZUMA PRO TEGU MP
+dt_compatible=google,ZUMA PRO TEGU
+alsa_proc=present
+alsa_cards=1
+probe_complete=yes
