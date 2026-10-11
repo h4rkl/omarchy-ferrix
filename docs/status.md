@@ -1,5 +1,35 @@
 # Status
 
+## 2026-10-12 (Pixel 9a pinned stock recovery verified; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The owner freed host space; `df -h .` showed 61 GiB available. The checked-in
+  factory inspection and read-only restore preflight passed for one unlocked
+  `tegu` / ADB-correlated `GXQ96` / `MP1.0` device in ordinary bootloader
+  Fastboot on slot B. The pinned `CP3A.260905.009` factory archive and OTA
+  matched their recorded SHA-256 hashes; the archive's vendor update sequence
+  matched the reviewed bootloader, radio, and `fastboot -w update` steps.
+- `just pixel-9a-factory-restore --confirm-restore` completed those exact
+  steps. Bootloader `tegu-17.0-15819938` and baseband
+  `g5300t-260604-260807-B-16036236` were rechecked after their flashes.
+  Fastboot sent all 29 `super` chunks, exited 0, and the wrapper emitted
+  `result=factory-restore-complete` with `update_exit_status=0`. The ignored,
+  serial-redacted transcript is
+  `out/pixel-9a/restore/20261011T201345Z.txt`. Staged images were removed;
+  host free space returned to 61 GiB.
+- Immediate read-only discovery saw no transport, then same-serial ADB with
+  `error: closed` from property queries as the phone started. After the owner
+  made ADB available, fresh `just pixel-9a-discover` and
+  `just device-discover` at `20261011T202532Z` observed Google Pixel 9a,
+  `tegu` / `GXQ96` / `MP1.0`, Android 17, build fingerprint
+  `google/tegu/tegu:17/CP3A.260905.009/16091614:user/release-keys`, slot B,
+  and unlocked/orange boot state on that same serial. This is a completed
+  pinned stock restore with same-device Android boot proof. The early failed
+  property queries exposed a separate discovery false-success bug, tracked in
+  #46; those earlier `result=ok` lines are not stock evidence.
+- Stock recovery proof does not establish a Ferrix boot or any modem, audio,
+  or other phone capability. #34 still needs exact-device filesystem and
+  mount observations before any modem CP boot trial.
+
 ## 2026-10-12 (Pixel 9a recovery follow-up; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The owner reports running only `fastboot -w`, which wipes user data; no
