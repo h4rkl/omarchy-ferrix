@@ -103,15 +103,27 @@ fn reason_of(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Interprets a `ferrix-sandbox --probe` run: status 0 with a `sandbox-probe`
-/// record is success; anything else is the reason the policy cannot be met.
+/// Interprets a `ferrix-sandbox --probe` run: status 0 with a non-degraded
+/// `sandbox-probe` record is success; anything else is the reason the policy
+/// cannot be met. The probe exits 0 once `unshare` succeeds even when a later
+/// control (uid/gid mapping, the init-stage mounts, `no_new_privs`) failed,
+/// so a degraded report is a failure here, not a partial success.
 pub fn parse_probe_output(stdout: &str, status: Option<i32>) -> Result<AppliedIsolation, String> {
     let probe = find_record(stdout, "sandbox-probe");
     match status {
-        Some(0) => probe
-            .and_then(|value| serde_json::from_value::<ProbeReport>(value).ok())
-            .map(|report| report.applied)
-            .ok_or_else(|| "probe exited 0 without a readable sandbox-probe record".to_owned()),
+        Some(0) => {
+            let report = probe
+                .and_then(|value| serde_json::from_value::<ProbeReport>(value).ok())
+                .ok_or_else(|| {
+                    "probe exited 0 without a readable sandbox-probe record".to_owned()
+                })?;
+            if report.degraded {
+                return Err(report
+                    .reason
+                    .unwrap_or_else(|| "probe reported degraded isolation".to_owned()));
+            }
+            Ok(report.applied)
+        }
         Some(code) => Err(probe
             .as_ref()
             .and_then(reason_of)
@@ -273,6 +285,16 @@ mod tests {
             parse_probe_output(failed, Some(126)).unwrap_err(),
             "unshare: EPERM"
         );
+        // Unshare worked but a later control did not: still unavailable.
+        let degraded = r#"{"evidence":"mock","event":"sandbox-probe","applied":{"pid_namespace":true,"mount_namespace":true,"user_namespace":true},"degraded":true,"reason":"uid_map: /proc/self/uid_map: Operation not permitted (os error 1)"}"#;
+        assert!(
+            parse_probe_output(degraded, Some(0))
+                .unwrap_err()
+                .starts_with("uid_map:")
+        );
+        let unexplained =
+            r#"{"evidence":"mock","event":"sandbox-probe","applied":{},"degraded":true}"#;
+        assert!(parse_probe_output(unexplained, Some(0)).is_err());
         let legacy = r#"{"evidence":"QEMU","event":"sandbox-failed","reason":"not linux"}"#;
         assert_eq!(
             parse_probe_output(legacy, Some(126)).unwrap_err(),

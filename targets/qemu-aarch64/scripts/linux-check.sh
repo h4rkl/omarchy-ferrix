@@ -7,9 +7,12 @@
 #
 #   just linux-check                       # cargo test --workspace
 #   just linux-check clippy --workspace --all-targets -- -D warnings
+#   FERRIX_SANDBOX_TESTS=required just linux-check test -p ferrix-runtime-native
 #
 # The container runs privileged so the sandbox tests can create Linux
 # namespaces; nothing outside the mounted repository and cache is touched.
+# FERRIX_SANDBOX_TESTS is passed through when set: `required` makes every
+# sandbox test that would skip fail instead (CI's sandbox-check gate).
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -30,7 +33,7 @@ docker run --rm --privileged --platform linux/arm64 \
   -v "$cache/cargo-registry":/usr/local/cargo/registry \
   -v "$cache/linux-check-target":/build \
   -w /src -e CARGO_TARGET_DIR=/build -e RUSTFLAGS='-C target-feature=-crt-static' -e "RUSTUP_TOOLCHAIN=$rust_toolchain" \
-  -e FERRIX_LINUX_CHECK=1 \
+  -e FERRIX_LINUX_CHECK=1 -e FERRIX_SANDBOX_TESTS \
   "$rust_image" sh -ec 'apk add --no-cache gcc musl-dev pkgconf pixman-dev libinput-dev eudev-dev libseat-dev libdrm-dev libxkbcommon-dev mesa-dev >/dev/null
 # The pinned image ships without clippy; add it only when asked for.
 case "$1" in clippy) rustup component add clippy >/dev/null 2>&1 ;; esac

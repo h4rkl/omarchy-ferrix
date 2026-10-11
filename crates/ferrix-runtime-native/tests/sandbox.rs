@@ -1,12 +1,16 @@
 //! Linux-only end-to-end tests: the built `ferrix-sandbox` through
 //! `NativeRuntime`. Run from the repository root with
-//! `just linux-check test -p ferrix-runtime-native` (privileged container). When the
-//! default policy cannot be met (EPERM in a locked-down container) each test
-//! prints a `sandbox-test-skipped` record and passes vacuously.
+//! `FERRIX_SANDBOX_TESTS=required just linux-check test -p ferrix-runtime-native`
+//! (privileged container; CI's `sandbox-check` job). When the policy cannot be
+//! met (EPERM, or a degraded probe on a hosted runner that denies `uid_map` or
+//! mounts) each test prints a `sandbox-test-skipped` record and passes
+//! vacuously, unless `FERRIX_SANDBOX_TESTS=required`, which turns every skip
+//! into a failure so the gate cannot pass without exercising the sandbox.
 #![cfg(target_os = "linux")]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ferrix_app_api::{
@@ -60,12 +64,35 @@ fn runtime() -> NativeRuntime {
     })
 }
 
+/// Set to `required` by the privileged gate: an environment that cannot
+/// meet a policy is then a test failure instead of a skip.
+const REQUIRED_ENV: &str = "FERRIX_SANDBOX_TESTS";
+
+fn sandbox_required() -> bool {
+    match std::env::var(REQUIRED_ENV) {
+        Ok(value) if value == "required" => true,
+        Ok(value) if value.is_empty() => false,
+        // A typo must not quietly turn the gate back into skips.
+        Ok(value) => panic!("{REQUIRED_ENV}={value:?}: expected \"required\" or unset"),
+        Err(_) => false,
+    }
+}
+
+/// Prints the skip record, or fails the test under `FERRIX_SANDBOX_TESTS=required`.
+fn skip(reason: &str) {
+    assert!(
+        !sandbox_required(),
+        "{REQUIRED_ENV}=required but the sandbox test cannot run here: {reason}"
+    );
+    emit(&skipped_record(EVIDENCE, reason));
+}
+
 /// `false` (after printing the skip record) when `policy` cannot be met here.
 fn available(policy: &IsolationPolicy) -> bool {
     match probe_sandbox_with(Some(Path::new(SANDBOX)), policy) {
         Ok(_) => true,
         Err(reason) => {
-            emit(&skipped_record(EVIDENCE, &reason));
+            skip(&reason);
             false
         }
     }
@@ -313,6 +340,38 @@ fn scratch(prefix: &str) -> PathBuf {
     Path::new(env!("CARGO_TARGET_TMPDIR")).join(unique(prefix))
 }
 
+/// Longest usable socket path: `sun_path` is 108 bytes including the NUL.
+const SUN_PATH_MAX: usize = 107;
+/// Room reserved for a socket file name inside a socket directory.
+const SOCKET_NAME_ROOM: usize = 32;
+
+/// Like [`scratch`], but short enough to bind sockets in. The target
+/// directory sits under the checkout, which on a hosted runner
+/// (`/home/runner/work/<repo>/<repo>/target/tmp`) leaves too little of
+/// `sun_path` for a unique name plus a socket file. The first root outside
+/// `/tmp` that leaves room is used; the name is unique per process.
+fn socket_scratch() -> PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let name = format!(
+        "fxs-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    let needed = 1 + name.len() + 1 + SOCKET_NAME_ROOM;
+    let roots = [
+        Path::new(env!("CARGO_TARGET_TMPDIR")),
+        Path::new("/dev/shm"),
+        Path::new("/var/tmp"),
+    ];
+    let root = roots
+        .iter()
+        .find(|root| root.is_dir() && root.as_os_str().len() + needed <= SUN_PATH_MAX)
+        .unwrap_or_else(|| {
+            panic!("no scratch root outside /tmp short enough for sockets: {roots:?}")
+        });
+    root.join(name)
+}
+
 /// A throwaway socket directory (stands in for `/run/ferrix` through
 /// `FERRIX_RUN_DIR`) holding listening sockets with the given names.
 struct SocketDir {
@@ -322,19 +381,31 @@ struct SocketDir {
 
 impl SocketDir {
     fn new(names: &[&str]) -> Self {
-        Self::at(scratch("ferrix-run"), names)
+        let dir = socket_scratch();
+        // A crashed earlier run with the same pid may have left it behind.
+        let _ = std::fs::remove_dir_all(&dir);
+        Self::at(dir, names)
     }
 
     fn at(dir: PathBuf, names: &[&str]) -> Self {
         std::fs::create_dir_all(&dir).unwrap();
-        let listeners = names
-            .iter()
-            .map(|name| std::os::unix::net::UnixListener::bind(dir.join(name)).unwrap())
-            .collect();
-        Self {
+        // Owned before binding so a failed bind still removes the directory.
+        let mut sockets = Self {
             dir,
-            _listeners: listeners,
+            _listeners: Vec::new(),
+        };
+        for name in names {
+            let path = sockets.dir.join(name);
+            assert!(
+                path.as_os_str().len() <= SUN_PATH_MAX,
+                "socket path too long for sun_path: {}",
+                path.display()
+            );
+            let listener = std::os::unix::net::UnixListener::bind(&path)
+                .unwrap_or_else(|e| panic!("bind {}: {e}", path.display()));
+            sockets._listeners.push(listener);
         }
+        sockets
     }
 
     fn path(&self) -> String {
@@ -494,23 +565,24 @@ fn missing_run_dir_is_fatal_under_required_and_degraded_under_best_effort() {
 /// `private-run`: all of `/run` is replaced; the socket directory (filtered)
 /// and `/run/user` come back, nothing else does. Needs a socket directory
 /// under `/run`, so it creates one (root in the privileged container) and
-/// skips when it cannot.
+/// skips when it cannot (fails under `FERRIX_SANDBOX_TESTS=required`).
 #[test]
 fn private_run_hides_everything_else_under_run() {
     if !available(&IsolationPolicy::default()) {
         return;
     }
     let dir = Path::new("/run").join(unique("ferrix-test"));
-    if std::fs::create_dir_all(&dir).is_err() {
-        emit(&skipped_record(
-            EVIDENCE,
-            "cannot create a socket directory under /run",
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        skip(&format!(
+            "cannot create a socket directory under /run: {error}"
         ));
         return;
     }
     let marker = Path::new("/run").join(unique("ferrix-marker"));
-    std::fs::write(&marker, "x").unwrap();
+    // Constructed first so the directory is removed even if the marker fails.
     let sockets = SocketDir::at(dir, &[APPD_SOCKET_FILE, TELEPHONYD_SOCKET_FILE]);
+    std::fs::write(&marker, "x").unwrap();
+    let _marker = RemoveOnDrop(marker.clone());
     let dir = sockets.path();
     let probe = format!(
         "test -S {dir}/{APPD_SOCKET_FILE} && ! test -e {dir}/{TELEPHONYD_SOCKET_FILE} && ! test -e {} && ! test -e /run/dbus/system_bus_socket && [ \"$(ls /run | wc -l)\" -le 2 ]",
@@ -532,5 +604,13 @@ fn private_run_hides_everything_else_under_run() {
     assert!(!report.degraded, "{report:?}");
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
     assert!(marker.exists(), "the host's /run is untouched");
-    let _ = std::fs::remove_file(&marker);
+}
+
+/// Removes a file when dropped, pass or fail.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }

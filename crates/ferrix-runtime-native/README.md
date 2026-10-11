@@ -129,8 +129,11 @@ the sandbox is unavailable: `Required` fails, `BestEffort` spawns directly with
 `IsolationReport::unisolated(.., "not linux")`.
 
 `probe_sandbox()` runs `ferrix-sandbox --probe` (default policy) and returns
-what could be established, or the reason it could not; tests skip with a
-`sandbox-test-skipped` record when the environment forbids namespaces.
+what could be established, or the reason it could not; a probe that exits 0
+with a degraded report (for example `uid_map` or the init-stage mounts denied
+after `unshare` succeeded) counts as "could not". Tests skip with a
+`sandbox-test-skipped` record when the environment cannot meet the policy,
+unless `FERRIX_SANDBOX_TESTS=required`, which turns every skip into a failure.
 
 ## Not provided yet
 
@@ -148,9 +151,14 @@ record on the log is the evidence of record.
 ## Validation
 
 macOS host: `cargo test -p ferrix-runtime-native` (library and pure planning tests).
-Linux: `just linux-check test -p ferrix-runtime-native` runs `tests/sandbox.rs` inside
-the privileged pinned arm64 Alpine Rust container (mock evidence, not QEMU),
-including the socket-visibility tests: a policy listing only `a.sock` shows
+A plain `cargo test` on an unprivileged Linux host (CI's `rust` job on
+`ubuntu-latest`) runs the same and skips the namespace tests with records.
+Linux: `FERRIX_SANDBOX_TESTS=required just linux-check test -p ferrix-runtime-native`
+runs `tests/sandbox.rs` inside the privileged pinned arm64 Alpine Rust
+container (mock evidence, not QEMU; CI's `sandbox-check` job, where a skip is
+a failure). Socket directories are created outside `/tmp` under a root short
+enough for `sun_path` and removed afterwards. The socket-visibility tests
+cover: a policy listing only `a.sock` shows
 `a.sock` and not `b.sock` (via `FERRIX_RUN_DIR` on a temp directory); through
 `NativeRuntime`, a launch without a telephony grant cannot see
 `telephonyd.sock` while one with `telephony-state` can; a missing socket
