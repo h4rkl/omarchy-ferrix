@@ -81,6 +81,10 @@ the project must not silently call that a fully functioning Pixel 9a.
   the host still has only 13 GiB free, so the factory restore has not been
   rerun and stock boot remains unverified. The S5300 source route decision is
   in [draft PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
+- The Rust CI job fails existing native sandbox integration tests on its
+  unprivileged hosted runner. [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
+  tracks a real privileged test gate and bounded Unix socket paths; unrelated
+  PRs must not be called green while that gate fails.
 
 ## Working structure
 
@@ -165,6 +169,10 @@ Issue #20 remains a UI/icon follow-up; its open state must be reconciled with
 the newer icon evidence in `docs/status.md` before scheduling more icon work.
 Closed issues #6, #13, #15, and #17 are historical inputs, not proof of Pixel
 daily-phone acceptance. Do not open duplicates for work already owned above.
+
+Cross-cutting delivery gate [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
+restores meaningful native sandbox CI before merging implementation PRs. It
+does not itself promote a phone capability.
 
 ## Physical-device invariant and evidence rules
 
