@@ -26,10 +26,10 @@ check() {
 offending=$(grep -nE '^[[:space:]]*[^#]*(adb|fastboot)([[:space:]]|$)' "$discover" \
   | grep -vE 'need (adb|fastboot)$' \
   | grep -vE 'emit transport (adb|fastboot)$' \
-  | grep -vE 'adb_rows=\$\(adb devices -l ' \
-  | grep -vE 'fastboot_rows=\$\(fastboot devices -l ' \
-  | grep -vE 'value=\$\(adb -s "\$serial" shell getprop "\$prop" ' \
-  | grep -vE 'value=\$\(fastboot -s "\$serial" getvar "\$var" ' \
+  | grep -vE 'adb_listing=\$\(adb devices -l\)' \
+  | grep -vE 'fastboot_listing=\$\(fastboot devices -l\)' \
+  | grep -vE 'raw=\$\(adb -s "\$serial" shell getprop "\$prop" ' \
+  | grep -vE 'raw=\$\(fastboot -s "\$serial" getvar "\$var" ' \
   || true)
 check "static: discovery contains only allow-listed device verbs" [ -z "$offending" ]
 [ -z "$offending" ] || printf '%s\n' "$offending"
@@ -53,6 +53,14 @@ case "$1" in
     ;;
   -s)
     [ "$#" -eq 5 ] && [ "$3" = shell ] && [ "$4" = getprop ] || exit 99
+    if [ "${STUB_ADB_GETPROP_FAIL:-}" = "$5" ]; then
+      echo 'error: closed'
+      exit 1
+    fi
+    if [ "${STUB_ADB_GETPROP_TEXT_ERROR:-}" = "$5" ]; then
+      echo 'error: closed'
+      exit 0
+    fi
     case "$5" in
       ro.product.manufacturer) echo Google ;;
       ro.product.name|ro.product.device|ro.product.vendor.device|ro.product.board) echo tegu ;;
@@ -91,6 +99,14 @@ case "$1" in
     ;;
   -s)
     [ "$#" -eq 4 ] && [ "$3" = getvar ] || exit 99
+    if [ "${STUB_FASTBOOT_GETVAR_FAIL:-}" = "$4" ]; then
+      echo 'FAILED (remote: query failed)' >&2
+      exit 1
+    fi
+    if [ "${STUB_FASTBOOT_GETVAR_ABSENT:-}" = "$4" ]; then
+      echo 'Finished. Total time: 0.001s' >&2
+      exit 0
+    fi
     case "$4" in
       product) value=tegu ;;
       variant) value=GXQ96 ;;
@@ -149,6 +165,19 @@ check "privacy: regex-special serial is absent from transcript" env \
 check "privacy: transcript contains hashed marker" grep -q '^serial=serial-sha256:[0-9a-f][0-9a-f]*$' "$adb_transcript"
 check "dynamic: ADB properties were queried" grep -q 'shell.*getprop.*ro.build.fingerprint' "$calls"
 
+export STUB_ADB_GETPROP_FAIL=ro.product.model
+run_discovery adb_shell_closed
+check "dynamic: failed ADB shell is refused" [ "$status" -eq 5 ]
+check "dynamic: failed ADB shell has no ok marker" sh -c '! grep -q "^result=ok$" "$1"' sh "$work/adb_shell_closed/stdout"
+check "dynamic: failed ADB query is recorded" grep -q '^result=identity-query-failed$' "$work/adb_shell_closed/stdout"
+unset STUB_ADB_GETPROP_FAIL
+
+export STUB_ADB_GETPROP_TEXT_ERROR=ro.product.model
+run_discovery adb_text_error
+check "dynamic: error text from ADB is refused even on exit zero" [ "$status" -eq 5 ]
+check "dynamic: error text has no ok marker" sh -c '! grep -q "^result=ok$" "$1"' sh "$work/adb_text_error/stdout"
+unset STUB_ADB_GETPROP_TEXT_ERROR
+
 export STUB_ADB_DEVICES="" STUB_FASTBOOT_DEVICES="$special_serial fastboot
 "
 run_discovery fastboot_special_serial
@@ -158,6 +187,17 @@ check "privacy: Fastboot transcript redacts regex-special serial" env \
   SPECIAL_SERIAL="$special_serial" TRANSCRIPT="$fastboot_transcript" \
   sh -c '! grep -Fq "$SPECIAL_SERIAL" "$TRANSCRIPT"'
 check "dynamic: Fastboot identity variables were queried" grep -q 'getvar.*hw-revision' "$calls"
+
+export STUB_FASTBOOT_GETVAR_FAIL=hw-revision
+run_discovery fastboot_query_failed
+check "dynamic: failed Fastboot getvar is refused" [ "$status" -eq 5 ]
+check "dynamic: failed Fastboot getvar has no ok marker" sh -c '! grep -q "^result=ok$" "$1"' sh "$work/fastboot_query_failed/stdout"
+unset STUB_FASTBOOT_GETVAR_FAIL
+
+export STUB_FASTBOOT_GETVAR_ABSENT=hw-revision
+run_discovery fastboot_query_absent
+check "dynamic: absent Fastboot value is refused" [ "$status" -eq 5 ]
+unset STUB_FASTBOOT_GETVAR_ABSENT
 
 bad_calls=$(grep -vE '^adb\tdevices\t-l\t$|^adb\t-s\t[^[:space:]]+\tshell\tgetprop\tro\.[^[:space:]]+\t$|^fastboot\tdevices\t-l\t$|^fastboot\t-s\t[^[:space:]]+\tgetvar\t(product|variant|hw-revision|current-slot|slot-count|unlocked|secure|is-userspace)\t$' "$calls" || true)
 check "dynamic: every stubbed device call was read-only" [ -z "$bad_calls" ]

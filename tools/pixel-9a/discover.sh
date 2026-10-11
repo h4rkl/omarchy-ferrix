@@ -74,8 +74,18 @@ emit() {
   printf '%s=%s\n' "$key" "$value" >> "$transcript"
 }
 
-adb_rows=$(adb devices -l | awk 'NR > 1 && NF { print }')
-fastboot_rows=$(fastboot devices -l 2>/dev/null | awk 'NF { print }')
+adb_listing=$(adb devices -l) || {
+  emit result transport-query-failed
+  echo "ADB device enumeration failed; transcript: $transcript" >&2
+  exit 5
+}
+fastboot_listing=$(fastboot devices -l) || {
+  emit result transport-query-failed
+  echo "Fastboot device enumeration failed; transcript: $transcript" >&2
+  exit 5
+}
+adb_rows=$(printf '%s\n' "$adb_listing" | awk 'NR > 1 && NF { print }')
+fastboot_rows=$(printf '%s\n' "$fastboot_listing" | awk 'NF { print }')
 adb_count=$(printf '%s\n' "$adb_rows" | awk 'NF { count++ } END { print count + 0 }')
 fastboot_count=$(printf '%s\n' "$fastboot_rows" | awk 'NF { count++ } END { print count + 0 }')
 total=$((adb_count + fastboot_count))
@@ -135,7 +145,21 @@ if [ "$adb_count" -eq 1 ]; then
     ro.build.version.release \
     ro.build.version.security_patch \
     ro.vendor.build.version.security_patch; do
-    value=$(adb -s "$serial" shell getprop "$prop" </dev/null | tr -d '\r')
+    if ! raw=$(adb -s "$serial" shell getprop "$prop" </dev/null 2>&1); then
+      emit query_failed "$prop"
+      emit result identity-query-failed
+      echo "ADB property query failed for $prop; transcript: $transcript" >&2
+      exit 5
+    fi
+    value=$(printf '%s' "$raw" | tr -d '\r')
+    case "$value" in
+      error:*|ERROR:*)
+        emit query_failed "$prop"
+        emit result identity-query-failed
+        echo "ADB property query returned an error for $prop; transcript: $transcript" >&2
+        exit 5
+        ;;
+    esac
     emit "$prop" "$value"
   done
   emit result ok
@@ -149,9 +173,21 @@ emit serial "$serial"
 emit serial_sha256_prefix "$(sha256_prefix "$serial")"
 for var in product variant hw-revision current-slot slot-count unlocked secure is-userspace; do
   # Fastboot writes getvar responses to stderr on many versions.
-  value=$(fastboot -s "$serial" getvar "$var" 2>&1 | awk -v key="$var" '
+  if ! raw=$(fastboot -s "$serial" getvar "$var" 2>&1); then
+    emit query_failed "$var"
+    emit result identity-query-failed
+    echo "Fastboot variable query failed for $var; transcript: $transcript" >&2
+    exit 5
+  fi
+  value=$(printf '%s\n' "$raw" | awk -v key="$var" '
     index($0, key ":") { sub(".*" key ":[[:space:]]*", ""); print; exit }
   ')
+  if [ -z "$value" ]; then
+    emit query_failed "$var"
+    emit result identity-query-failed
+    echo "Fastboot variable $var was absent; transcript: $transcript" >&2
+    exit 5
+  fi
   emit "$var" "$value"
 done
 emit result ok
