@@ -1,13 +1,16 @@
 #!/bin/sh
-# Offline proof for the read-only S5300 source partition inventory. `ssh` is
-# a stub that checks the transport options and the exact probe on stdin, then
-# answers with a synthetic probe transcript; no device is contacted.
+# Offline proof for the read-only S5300 source partition inventory. The real
+# CDC-ACM transport talks to a fake guest (acm-fake-guest.sh): a real
+# interactive shell on a pty whose final `sh` is a stub that checks it got the
+# exact probe bytes, then answers with a synthetic probe transcript; no device
+# is contacted.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 inventory="$root/tools/pixel-9a/s5300-source-inventory.sh"
 probe="$root/tools/pixel-9a/s5300-source-inventory-remote.sh"
 fails=0
+command -v python3 >/dev/null 2>&1 || { echo 'python3 is required for the CDC-ACM transport test' >&2; exit 1; }
 
 check() {
 	name=$1
@@ -33,8 +36,10 @@ check "static: probe reads only TYPE with uncached low-level blkid" \
 	sh -c '[ "$(grep -c "blkid -c /dev/null -p -o value -s TYPE -- \"\$link\"" "$1")" -eq 1 ] && [ "$(grep -cE "[^-]blkid .*-s (UUID|LABEL|PARTUUID)" "$1")" -eq 0 ]' sh "$probe"
 check "static: probe gates on the exact tegu device tree" \
 	sh -c 'grep -Fq "ZUMA PRO TEGU MP on ZUMA PRO" "$1" && grep -Fq "google,ZUMA PRO TEGU" "$1"' sh "$probe"
-check "static: exactly one ssh invocation, in BatchMode" \
-	sh -c '[ "$(grep -cE "^[[:space:]]*ssh -o BatchMode=yes" "$1")" -eq 1 ] && [ "$(grep -v "^[[:space:]]*#" "$1" | grep -cE "(^|[[:space:]])ssh -")" -eq 1 ]' sh "$inventory"
+check "static: exactly one guest session, through the CDC-ACM transport" \
+	sh -c '[ "$(grep -v "^[[:space:]]*#" "$1" | grep -cE "python3 \"\\\$transport\" --probe \"\\\$probe\" ")" -eq 1 ]' sh "$inventory"
+check "static: no SSH or other network transport" \
+	sh -c '! grep -v "^[[:space:]]*#" "$1" | grep -nwE "ssh|scp|nc|telnet|curl"' sh "$inventory"
 check "static: the host never writes a passed gate" sh -c '! grep -nE "gate=passed|safety_gate passed" "$1"' sh "$inventory"
 # Off the target the probe must refuse before reading any partition state.
 probe_status=0
@@ -42,21 +47,11 @@ sh "$probe" >/dev/null 2>&1 </dev/null || probe_status=$?
 check "probe: refuses a host that is not the tegu board" [ "$probe_status" -eq 4 ]
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/pixel-9a-s5300-inventory-test.XXXXXX")
-trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/bin" "$work/fx"
-cat >"$work/bin/ssh" <<'STUB'
-#!/bin/sh
-[ "$1" = -o ] && [ "$2" = BatchMode=yes ] || { echo 'stub: ssh without BatchMode' >&2; exit 98; }
-for arg; do last=$arg; done
-[ "$last" = 'sh -s' ] || { echo "stub: unexpected remote command $last" >&2; exit 99; }
-cat >"$STUB_STDIN"
-cmp -s "$STUB_STDIN" "$STUB_PROBE" || { echo 'stub: probe on stdin differs' >&2; exit 97; }
-[ "${STUB_EXIT:-0}" -eq 0 ] || exit "$STUB_EXIT"
-cat "$STUB_FIXTURE"
-STUB
-chmod 0755 "$work/bin/ssh"
-export PATH="$work/bin:$PATH" STUB_PROBE="$probe" STUB_STDIN="$work/stdin"
-unset FERRIX_PIXEL9A_SSH_HOST FERRIX_PIXEL9A_SSH_USER FERRIX_PIXEL9A_SSH_PORT FERRIX_PIXEL9A_SSH_OPTS 2>/dev/null || true
+. "$root/tools/pixel-9a/tests/acm-fake-guest.sh"
+trap 'acm_guest_stop; rm -rf "$work"' EXIT
+mkdir -p "$work/fx"
+acm_guest_init "$root" "$work" "$probe"
+unset FERRIX_PIXEL9A_ACM_TIMEOUT 2>/dev/null || true
 
 part() {
 	printf 'part.%s.label=%s\npart.%s.link_state=block\npart.%s.link_device=%s\n' "$1" "$2" "$1" "$1" "$3"
@@ -112,18 +107,28 @@ derive wrong-label -e 's/^part\.modem_img\.label=modem_b$/part.modem_img.label=m
 
 status=0
 out=''
+# run CASE FIXTURE [EXIT [EVIDENCE]]: one fresh fake guest per case.
 run() {
 	case_dir="$work/run-$1"
 	mkdir -p "$case_dir"
+	acm_guest_start
+	acm_guest_ctl fixture "$work/fx/$2"
+	acm_guest_ctl exit "${3:-0}"
 	status=0
-	out=$(FERRIX_OUT_DIR="$case_dir" STUB_FIXTURE="$work/fx/$2" STUB_EXIT="${3:-0}" \
-		FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE="${4:-mock}" sh "$inventory" 2>&1) || status=$?
+	out=$(FERRIX_OUT_DIR="$case_dir" FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE="${4:-mock}" \
+		sh "$inventory" 2>&1) || status=$?
+	runs=$(acm_guest_runs)
+	acm_guest_stop
 	transcript="$case_dir/pixel-9a/s5300-source-inventory/inventory-latest.txt"
 }
 has() { printf '%s\n' "$out" | grep -Fxq "$1"; }
 
 run ext4 ext4
 check "ext4: completes" [ "$status" -eq 0 ]
+check "ext4: the probe ran exactly once over CDC-ACM" [ "$runs" -eq 1 ]
+check "ext4: the guest received the exact checked-in probe bytes" cmp -s "$ACM_GUEST_CTL/stdin" "$probe"
+check "ext4: transcript records the transport and probe hash" \
+	sh -c 'grep -Fxq source=cdc-acm-read-only "$1" && grep -Eq "^probe_sha256=[0-9a-f]{64}$" "$1"' sh "$transcript"
 check "ext4: every source is unique ext4" sh -c '[ "$(printf "%s\n" "$1" | grep -cE "^[a-z_]+\.type_status=ext4$")" -eq 4 ]' sh "$out"
 check "ext4: service would accept each source" sh -c '[ "$(printf "%s\n" "$1" | grep -cE "^[a-z_]+\.service_would_accept=yes$")" -eq 4 ]' sh "$out"
 check "ext4: active slot modem label" has 'modem_img.label=modem_b'
@@ -182,9 +187,47 @@ check "slot: unresolved slot reported" has 'slot_status=unresolved'
 check "slot: modem image not guessed" has 'modem_img.resolution=slot-unresolved'
 check "slot: other sources still inventoried" has 'efs.type_status=ext4'
 
-run unreachable ext4 255
+# Transport failures: an unresponsive port, a wedged probe, and an overrun.
+mkdir -p "$work/run-unreachable"
+acm_guest_start --silent
+status=0
+out=$(FERRIX_OUT_DIR="$work/run-unreachable" FERRIX_PIXEL9A_ACM_TIMEOUT=3 FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE=mock \
+	sh "$inventory" 2>&1) || status=$?
+silent_port=$FERRIX_SHELL
+acm_guest_stop
 check "unreachable: exit 3" [ "$status" -eq 3 ]
+check "unreachable: sanitised transport reason" has 'REFUSING pixel-9a S5300 source inventory: guest CDC-ACM shell transport failed (no-shell-response)'
 check "unreachable: refusal recorded" sh -c 'grep -Fxq result=refused "$1"/pixel-9a/s5300-source-inventory/inventory-*.txt' sh "$work/run-unreachable"
+check "privacy: port path is neither printed nor retained" \
+	sh -c '! printf "%s\n" "$1" | grep -Fq "$2" && ! grep -rFq "$2" "$3"' sh "$out" "$silent_port" "$work/run-unreachable"
+
+mkdir -p "$work/run-timeout"
+acm_guest_start
+acm_guest_ctl fixture "$work/fx/ext4"
+acm_guest_ctl sleep 30
+status=0
+out=$(FERRIX_OUT_DIR="$work/run-timeout" FERRIX_PIXEL9A_ACM_TIMEOUT=3 FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE=mock \
+	sh "$inventory" 2>&1) || status=$?
+acm_guest_stop
+check "timeout: wedged probe exits 3" [ "$status" -eq 3 ]
+check "timeout: reason is timeout" has 'REFUSING pixel-9a S5300 source inventory: guest CDC-ACM shell transport failed (timeout)'
+check "timeout: no inventory is reported" sh -c '! printf "%s\n" "$1" | grep -q "^efs\."' sh "$out"
+
+mkdir -p "$work/run-overrun"
+acm_guest_start
+acm_guest_ctl fixture "$work/fx/ext4"
+acm_guest_ctl flood 70000
+status=0
+out=$(FERRIX_OUT_DIR="$work/run-overrun" FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE=mock sh "$inventory" 2>&1) || status=$?
+acm_guest_stop
+check "truncation: output over 64 KiB exits 3" [ "$status" -eq 3 ]
+check "truncation: reason is output-limit" has 'REFUSING pixel-9a S5300 source inventory: guest CDC-ACM shell transport failed (output-limit)'
+
+mkdir -p "$work/run-bad-timeout-env"
+status=0
+FERRIX_OUT_DIR="$work/run-bad-timeout-env" FERRIX_PIXEL9A_ACM_TIMEOUT='5;id' sh "$inventory" >/dev/null 2>&1 || status=$?
+check "usage: malformed transport timeout is refused before any session" \
+	sh -c '[ "$1" -eq 2 ] && [ ! -d "$2/pixel-9a" ]' sh "$status" "$work/run-bad-timeout-env"
 
 run identity ext4 4
 check "identity mismatch: exit 4" [ "$status" -eq 4 ]

@@ -459,10 +459,16 @@ pixel-9a-radios-test:
 	@sh "{{root}}/tools/pixel-9a/tests/radios-workflow.sh"
 	@sh "{{root}}/tools/pixel-9a/tests/radio-firmware-runtime.sh"
 
-# Read-only audio inventory of a Pixel 9a already running Ferrix/pmOS over the
-# USB network (same SSH transport and exact device-tree gate as the radios).
-# Never plays, records, changes mixers/routes, loads modules, or starts
-# services. Physical execution requires the recovery proof from issue #25.
+# Offline proof of the CDC-ACM guest probe transport (tools/pixel-9a/acm-probe.py)
+# against a fake pty guest; never contacts a device.
+pixel-9a-acm-probe-test:
+    @sh "{{root}}/tools/pixel-9a/tests/acm-probe.sh"
+
+# Read-only audio inventory of a Pixel 9a already running a Ferrix dev image,
+# over its USB CDC-ACM bring-up shell (the rootfs has no sshd) with the exact
+# device-tree gate. Never plays, records, changes mixers/routes, loads
+# modules, or starts services. Physical execution requires the recovery proof
+# from issue #25.
 pixel-9a-audio-inventory:
     @"{{root}}/tools/pixel-9a/audio-inventory.sh" inventory
 
@@ -470,8 +476,8 @@ pixel-9a-audio-inventory-test:
     @sh "{{root}}/tools/pixel-9a/tests/audio-inventory-workflow.sh"
 
 # Read-only issue #34 filesystem inventory of the four S5300 modem source
-# partitions on a booted exact Ferrix guest over SSH. Never mounts or writes,
-# and never reports the safety gate as passed.
+# partitions on a booted exact Ferrix dev guest over its CDC-ACM bring-up
+# shell. Never mounts or writes, and never reports the safety gate as passed.
 pixel-9a-s5300-source-inventory:
     @sh "{{root}}/tools/pixel-9a/s5300-source-inventory.sh"
 

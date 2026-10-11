@@ -913,8 +913,9 @@ physical device, and it never edits `capabilities.toml`.
 
 `just pixel-9a-s5300-source-inventory` is a read-only check of the four
 partitions that `ferrix-s5300-mounts` reads: the active-slot `modem_a` or
-`modem_b`, plus `efs`, `persist`, and `modem_userdata`. It uses the same SSH
-settings as the radios workflow. The guest probe
+`modem_b`, plus `efs`, `persist`, and `modem_userdata`. It reaches the guest
+over the CDC-ACM guest probe transport described below (guest stderr
+discarded, 60 s and 64 KiB bounds). The guest probe
 (`tools/pixel-9a/s5300-source-inventory-remote.sh`) first checks the exact tegu
 device tree. It then selects the slot with the same rule as the service and
 resolves each `/dev/disk/by-partlabel` link and kernel `PARTNAME` uevent. Next
@@ -956,15 +957,15 @@ and recovery proof.
 ## Read-only audio inventory
 
 `just pixel-9a-audio-inventory` (`tools/pixel-9a/audio-inventory.sh
-inventory`) uses the radios SSH transport and environment
-(`FERRIX_PIXEL9A_SSH_HOST`/`_USER`/`_PORT`/`_SSH_OPTS`). One SSH session pipes
-the checked-in `tools/pixel-9a/audio-inventory-remote.sh` probe to `sh -s`.
+inventory`) runs the checked-in `tools/pixel-9a/audio-inventory-remote.sh`
+probe once over the CDC-ACM guest probe transport described below (guest
+stderr merged, 180 s and 1 MiB bounds).
 The probe's first action is the exact device-tree gate: model
 `ZUMA PRO TEGU MP on ZUMA PRO` and compatible line `google,ZUMA PRO TEGU`.
 QEMU exits 5 and any other board exits 4. The host then checks the
-identity that comes back before it parses anything. Exit 3 means SSH is
-unreachable, and probe output without the completion marker fails. The probe
-records:
+identity that comes back before it parses anything. Exit 3 means the
+transport failed, and probe output without the completion marker fails. The
+probe records:
 
 - ALSA cards, PCMs and `/dev/snd` nodes;
 - audio-named modules, device-tree bindings (bound/unbound), deferred devices,
@@ -994,6 +995,46 @@ the workflow never edits `capabilities.toml`.
 until the stock restore and recovery proof are re-established. So far it is
 stub-tested only (`just pixel-9a-audio-inventory-test`, labelled mock), and no
 audio state has been read from the physical device.
+
+## CDC-ACM guest probe transport (issue #52)
+
+The Ferrix dev rootfs is built with `--no-sshd`, so the read-only inventory
+workflows above reach the guest through the USB CDC-ACM bring-up shell
+(`ttyGS1`; the host node defaults to `/dev/cu.usbmodemferrix_tegu3`, override
+with `FERRIX_SHELL`). `tools/pixel-9a/acm-probe.py` is the only transport; it
+uses the Python standard library and runs exactly one checked-in probe per
+session:
+
+- It sends one short POSIX bootstrap line. The bootstrap turns tty echo and
+  NL-to-CRNL translation off, prints a READY marker, and reads exactly the
+  announced number of base64 lines of the probe. It decodes them and pipes
+  them to the guest `sh`, as `ssh ... 'sh -s'` did, but only if the guest-side
+  SHA-256 equals the host hash of the exact file bytes. Otherwise nothing runs.
+- Every frame marker carries a per-run 128-bit random nonce. The bootstrap
+  assembles the marker at run time, so the echoed command line never contains
+  it, and probe output cannot forge it. Only the bytes between BEGIN and
+  `END:<status>` are returned; echo, prompts and console noise are dropped.
+  The transport exits with the probe's status, so each probe keeps its own
+  device-tree gate (exit 4/5).
+- `--timeout` and `--max-bytes` bound each run. A timeout, an overrun, a
+  silent port, a hash mismatch or a framing error exits 255 with one
+  `ferrix-acm: ... reason=<token>` line, and no partial output is returned.
+  The wrappers map that to exit 3. After a timeout or overrun the host sends
+  Ctrl-C to stop its own probe and restores the saved tty settings.
+- The port path and USB serial never appear in errors, transcripts or TSVs.
+  Retained records name the transport `cdc-acm` and the probe SHA-256.
+- Probes containing NUL bytes, linked probes and non-character-device ports
+  are refused. The port is opened `O_NOCTTY`, held exclusive (`TIOCEXCL`)
+  where the host supports it, and restored on exit.
+
+Limits: the session needs an idle shell prompt on `ttyGS1`; do not run it
+while `tools/pixel-9a/devtest/` helpers hold the port. The guest needs
+`stty`, `head`, `base64`, `sha256sum` and `cut` (busybox provides them). The
+interactive shell may record the bootstrap line, which holds only the nonce,
+hash and line count, in its history. If `stty` is missing, CRLF output is
+normalised to LF. The transport is offline-tested against a pty-bridged real
+`/bin/sh` (`just pixel-9a-acm-probe-test`, labelled mock). It has not been
+run on the physical device.
 
 ## Agent playbook
 

@@ -1,7 +1,8 @@
 #!/bin/sh
-# Sent over SSH (`sh -s`) by tools/pixel-9a/audio-inventory.sh. Read-only audio
-# inventory of the exact tegu guest. The device-tree gate runs before any audio
-# probe, inside the same SSH session that collects the inventory.
+# Sent over the CDC-ACM shell (tools/pixel-9a/acm-probe.py, piped to the guest
+# `sh`) by tools/pixel-9a/audio-inventory.sh. Read-only audio inventory of the
+# exact tegu guest. The device-tree gate runs before any audio probe, inside
+# the same shell session that collects the inventory.
 #
 # This probe only reads /proc, /sys, /dev listings, logs, and query-only
 # command output. It never opens a PCM, changes a mixer control or the default
@@ -40,7 +41,7 @@ printf 'os_id=%s\n' "${os_id:-unknown}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-# Bound every query so a wedged daemon cannot hang the SSH session.
+# Bound every query so a wedged daemon cannot hang the shell session.
 run_t() {
   if have timeout; then timeout 10 "$@"; else "$@"; fi
 }
@@ -265,7 +266,7 @@ for process in pipewire wireplumber pipewire-pulse; do
 done
 
 if have wpctl && [ -S "$runtime_dir/pipewire-0" ]; then
-  raw wpctl-status run_t env XDG_RUNTIME_DIR="$runtime_dir"wpctl status
+  raw wpctl-status run_t env XDG_RUNTIME_DIR="$runtime_dir" wpctl status
   if [ "$raw_rc" -eq 0 ]; then
     echo pipewire_graph=reachable
     printf '%s\n' "$raw_out" | awk '
@@ -284,10 +285,10 @@ if have wpctl && [ -S "$runtime_dir/pipewire-0" ]; then
         printf "graph_devices=%d\ngraph_sinks=%d\ngraph_sources=%d\n", count["devices"], count["sinks"], count["sources"]
         printf "graph_default_sink=%s\ngraph_default_source=%s\n", default_sink ? "marked" : "none", default_source ? "marked" : "none"
       }'
-    raw wpctl-list-audio-sinks run_t env XDG_RUNTIME_DIR="$runtime_dir"wpctl list audio sinks
+    raw wpctl-list-audio-sinks run_t env XDG_RUNTIME_DIR="$runtime_dir" wpctl list audio sinks
     printf 'adapter_list_sinks_exit=%s\n' "$raw_rc"
-    raw wpctl-inspect-default-sink run_t env XDG_RUNTIME_DIR="$runtime_dir"wpctl inspect @DEFAULT_AUDIO_SINK@
-    raw wpctl-inspect-default-source run_t env XDG_RUNTIME_DIR="$runtime_dir"wpctl inspect @DEFAULT_AUDIO_SOURCE@
+    raw wpctl-inspect-default-sink run_t env XDG_RUNTIME_DIR="$runtime_dir" wpctl inspect @DEFAULT_AUDIO_SINK@
+    raw wpctl-inspect-default-source run_t env XDG_RUNTIME_DIR="$runtime_dir" wpctl inspect @DEFAULT_AUDIO_SOURCE@
   else
     echo pipewire_graph=unreachable
   fi
@@ -297,9 +298,9 @@ else
   echo pipewire_graph=wpctl-unavailable
 fi
 if have pactl && [ -S "$runtime_dir/pulse/native" ]; then
-  raw pactl-info run_t env XDG_RUNTIME_DIR="$runtime_dir"pactl info
-  raw pactl-short-sinks run_t env XDG_RUNTIME_DIR="$runtime_dir"pactl list short sinks
-  raw pactl-short-sources run_t env XDG_RUNTIME_DIR="$runtime_dir"pactl list short sources
+  raw pactl-info run_t env XDG_RUNTIME_DIR="$runtime_dir" pactl info
+  raw pactl-short-sinks run_t env XDG_RUNTIME_DIR="$runtime_dir" pactl list short sinks
+  raw pactl-short-sources run_t env XDG_RUNTIME_DIR="$runtime_dir" pactl list short sources
 fi
 
 # --- Ferrix audio adapter ----------------------------------------------------
