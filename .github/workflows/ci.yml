@@ -115,6 +115,9 @@ jobs:
       - name: Pixel AoC firmware loader (mock)
         run: sh tools/pixel-9a/tests/aoc-firmware-runtime.sh
 
+      - name: Pixel AoC UCM profile (offline)
+        run: sh tools/pixel-9a/tests/audio-ucm-profile.sh
+
   sandbox-check:
     name: Native sandbox (privileged container, arm64)
     runs-on: ${{ inputs.qemu_runner || 'ubuntu-24.04-arm' }}

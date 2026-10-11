@@ -123,9 +123,15 @@ the project must not silently call that a fully functioning Pixel 9a.
   [#59](https://github.com/h4rkl/omarchy-ferrix/issues/59) delivered that
   target firmware/probe slice through PR #61 and a fresh physical image
   loaded the pinned TAS tuning file; the AoC ALSA card now exposes 34 PCM
-  entries. PipeWire still has no audio endpoints because the card lacks a
-  matching UCM profile. Speaker, microphone, route, and mute evidence remain
-  absent; #2 stays open.
+  entries. A temporary, hash-matched UCM copy parsed on the phone. The
+  installed `pulseaudio-wireplumber` package was found to disable hardware
+  audio monitoring; temporarily removing its fragment exposed the ALSA
+  device. With both observed backend mixer switches enabled and the TAS
+  amplifier switch off, WirePlumber exposed speaker and mic nodes. All
+  temporary files and switches were restored. The target rootfs now pins the
+  PipeWire provider, but a fresh image with that fix has not booted. Speaker
+  playback, non-silent mic capture, route, and mute evidence remain absent;
+  #2 stays open.
 - [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed by
   [merged PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48), which
   makes an ADB or Fastboot identity-query failure explicit. The successful

@@ -184,6 +184,20 @@ verify_android_rootfs() {
 	fi
 }
 
+# The console UI's default audio provider is PulseAudio. It installs
+# pulseaudio-wireplumber, whose 51-pulseaudio.conf disables WirePlumber's ALSA
+# and Bluetooth hardware monitors. Reject that dependency before producing a
+# Ferrix image; the target selects the PipeWire provider in pmbootstrap.cfg.
+verify_audio_backend_rootfs() {
+	installed=$(cat "$1" 2>/dev/null || sudo -n cat "$1" 2>/dev/null) ||
+		die "built rootfs has no readable apk database: $1"
+	if printf '%s\n' "$installed" | grep -Eq '^P:(postmarketos-base-ui-audio-backend-pulseaudio|pulseaudio-wireplumber)$'; then
+		die 'built rootfs contains PulseAudio WirePlumber hardware-monitor override'
+	fi
+	printf '%s\n' "$installed" | grep -qx 'P:postmarketos-base-ui-audio-backend-pipewire' ||
+		die 'built rootfs did not select the PipeWire UI audio backend'
+}
+
 check_static_inputs() {
 	case "$android" in
 		0|1) ;;
@@ -198,7 +212,7 @@ check_static_inputs() {
 	done
 	required_file "$pmaports_pins"
 	[ -d "$package_dir" ] || die "target-local pmOS package is missing: $package_dir"
-	for file in APKBUILD deviceinfo kernel-cmdline.conf modules-initfs modules-initfs-radio initramfs-init vendor-bootconfig modules-vendor-dlkm modules-system-dlkm boot-layout.toml firmware-policy.toml firmware-allowlist.tsv s5300-channels.toml s5300-userspace-sources.toml ferrix-backends.env ferrix-openrc.sh networkmanager-ferrix.conf modprobe-zram-gs.conf ferrix-core.initd ferrix-networkd.initd ferrix-telephonyd.initd ferrix-audio.initd ferrix-pipewire.initd ferrix-product.initd ferrix-s5300-mounts.initd ferrix-radio-firmware.initd ferrix-aoc-firmware.initd ferrix-bluetooth-uart.initd ferrix-contactsd.initd exynos-modem.initd sit-proxy.initd 99-google-tegu-sit.rules; do
+	for file in APKBUILD deviceinfo kernel-cmdline.conf modules-initfs modules-initfs-radio initramfs-init vendor-bootconfig modules-vendor-dlkm modules-system-dlkm boot-layout.toml firmware-policy.toml firmware-allowlist.tsv s5300-channels.toml s5300-userspace-sources.toml ferrix-backends.env ferrix-openrc.sh networkmanager-ferrix.conf modprobe-zram-gs.conf ferrix-core.initd ferrix-networkd.initd ferrix-telephonyd.initd ferrix-audio.initd ferrix-pipewire.initd ferrix-product.initd ferrix-s5300-mounts.initd ferrix-radio-firmware.initd ferrix-aoc-firmware.initd ferrix-bluetooth-uart.initd ferrix-contactsd.initd exynos-modem.initd sit-proxy.initd 99-google-tegu-sit.rules ucm-aoc-snd-card.conf ucm-tegu-HiFi.conf; do
 		required_file "$package_dir/$file"
 	done
 	[ -d "$package_dir/vendor-ramdisk/ferrix" ] || die "source-owned vendor ramdisk is missing: $package_dir/vendor-ramdisk/ferrix"
@@ -1041,11 +1055,6 @@ build_rootfs() {
 		awk -v extra="$android_list" '/^extra_packages = / { $0 = $0 "," extra; found=1 } { print } END { exit(found ? 0 : 1) }' \
 			"$config" >"$config_tmp" || die 'target pmbootstrap.cfg has no extra_packages line for the Android package set'
 		mv "$config_tmp" "$config"
-		# pmaports selects the UI audio backend through pmbootstrap's
-		# providers (default PulseAudio, which conflicts with pipewire-pulse).
-		awk '{ print } /^\[providers\]$/ { print "postmarketos-base-ui-audio-backend = postmarketos-base-ui-audio-backend-pipewire"; found=1 } END { exit(found ? 0 : 1) }' \
-			"$config" >"$config_tmp" || die 'target pmbootstrap.cfg has no [providers] section for the Android audio backend'
-		mv "$config_tmp" "$config"
 		printf '%s\n' "opt-in Android runtime packages: $android_list (audio backend: pipewire)"
 	fi
 	printf '%s\n' "running pmbootstrap rootfs build with config $config"
@@ -1087,6 +1096,7 @@ build_rootfs() {
 		find "$pmb_work" -maxdepth 2 -print >&2 2>/dev/null || true
 		die "pmbootstrap did not produce a rootfs chroot under $pmb_work"
 	fi
+	verify_audio_backend_rootfs "$rootfs_dir/lib/apk/db/installed"
 	[ "$android" != 1 ] || verify_android_rootfs "$rootfs_dir/lib/apk/db/installed"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \

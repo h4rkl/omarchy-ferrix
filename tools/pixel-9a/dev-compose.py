@@ -371,6 +371,13 @@ def gki_rootfs_patches():
 RADIO_ROUTE_SERVICES = ("ferrix-s5300-mounts", "exynos-modem", "sit-proxy")
 
 
+# Discovery-only ALSA UCM, at the paths the device APKBUILD installs it to.
+UCM_FILES = (
+    ("ucm-aoc-snd-card.conf", "/usr/share/alsa/ucm2/conf.d/aoc-snd-card/aoc-snd-card.conf"),
+    ("ucm-tegu-HiFi.conf", "/usr/share/alsa/ucm2/Google/tegu/HiFi.conf"),
+)
+
+
 # Same destinations rootfs.sh stages the product to.
 PRODUCT_BINARIES = (
     "ferrix-core", "ferrix-shell", "ferrix-basic-screen", "ferrix-appd", "ferrix-sandbox",
@@ -415,6 +422,9 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
                "/etc/NetworkManager/conf.d/90-ferrix.conf", 0o644)
     editor.put((package / "modprobe-zram-gs.conf").read_bytes(),
                "/etc/modprobe.d/ferrix-zram-gs.conf", 0o644)
+    for name, dest in UCM_FILES:
+        editor.put((package / name).read_bytes(), dest, 0o644)
+        written.append(dest)
     for script in sorted(package.glob("ferrix-*.initd")):
         dest = f"/etc/init.d/{script.stem}"
         editor.put(script.read_bytes(), dest, 0o755)
