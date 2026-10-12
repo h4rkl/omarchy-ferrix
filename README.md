@@ -31,6 +31,8 @@ the generic `qemu-aarch64` target.
 Read `AGENTS.md` before contributing. `plans/baseline.md` is the implementation
 authority, `plans/plan.md` the long-term direction, `docs/design.md` the visual
 system and theming contract, and `docs/status.md` the evidence log.
+`plans/README.md` indexes every planning document and marks it as authority,
+proposal or delivery tracker.
 
 If you want to assess the repository before allowing an agent to follow its
 instructions or run its automation, give the agent `AGENT_SECURITY.md` first. It
