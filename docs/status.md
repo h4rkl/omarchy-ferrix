@@ -1,5 +1,31 @@
 # Status
 
+## 2026-10-12 (1-r5 image, S5300 S2 pre-mount GO with opener positive control and unit/boot identity, issues #107 and #108; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- **Image.** Dev image `tegu-kleaf-dev-20261012T112143Z`, flashed to slot B by `reflash.sh` (`just pixel-9a-dev-flash`); Ferrix came up after 77 s. It holds:
+  - the rootfs from `ccb55bb` (#121), with `device-google-tegu` 1-r5, `exynos-modem` 0.1.0_git20260731-r3 and `modemmanager-samsung-sit` 1.25.95_git20260731-r3;
+  - the reused kernel `6.1.124-android14-11-ga4662a84a15f`.
+- **Builder checks.**
+  - The rootfs passes e2fsck.
+  - `/mnt/vendor` is a 0755 root:root directory, so the 1-r5 post-install ran in the pmbootstrap chroot.
+  - `/usr/lib/ferrix/s5300-cpif.sh` matches its pin.
+  - The image manifest hash-verifies on the builder and on the Mac.
+- **Preflight.** `just pixel-9a-s5300-s2-preflight` (read-only, pre-mount) ran from `main` at `f37e3fb` four times: twice on one boot, once more on that boot, and once after an ordinary reboot. Every run gave `preflight_result=go`, `device_blockers=none` and `host_blockers=none`. (A run from the older `eb107ab`, before #121 merged, correctly reported `image_skew=pkg-device-google-tegu`.)
+- **#107 opener scan.**
+  - Controls: `opener_positive_control=detected`, `opener_format_control=matched`.
+  - Counts: `opener_major_foreign=0`, `opener_vanished=0`.
+  - Result: `opener_scan=clean` with 0 holders.
+
+  This is the first exact-device run where a clean scan is shown to be able to see a holder.
+- **#108 identity.**
+  - `unit_identity_state=ok`, with source `bootconfig-serialno`, and `boot_identity_state=ok`.
+  - Both identities were identical across runs on one boot. Across the reboot, the unit identity was unchanged and the boot identity changed.
+  - Each run wrote `decision_binding=written`. None was consumed, because no mount or CP boot ran.
+- **Device state.** `modem_state=OFFLINE`, `vendor_mounts=0`, no role loops.
+- **Limits.**
+  - No mounts start and no CP boot. `[telephony]` remains `unsupported`, and the capability matrix is unchanged.
+  - Identity values and transcripts stay under the ignored `out/pixel-9a/s5300-s2-preflight/`.
+
 ## 2026-10-12 (device-google-tegu 1-r5: /mnt/vendor via install script; builder evidence, no physical claim)
 
 - The 1-r4 image could not be built. On the builder (attempt
