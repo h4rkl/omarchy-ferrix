@@ -198,7 +198,7 @@ jobs:
           platforms: linux/arm64
 
       - name: Install just
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: just@1.58.0
 
@@ -276,7 +276,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends qemu-system-arm cpio ipxe-qemu
 
       - name: Install just
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: just@1.58.0
 
@@ -378,7 +378,7 @@ jobs:
           test -f /usr/lib/ipxe/qemu/efi-virtio.rom
 
       - name: Install just
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
           tool: just@1.58.0
 
