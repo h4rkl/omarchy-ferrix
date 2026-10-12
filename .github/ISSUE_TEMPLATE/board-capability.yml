@@ -1,0 +1,98 @@
+name: Board capability
+description: Propose or track one capability on one exactly identified physical board target.
+title: "[board] <target-id>: <capability>"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One capability on one exact target per issue. Evidence from QEMU, mock or
+        another hardware revision is never reused for a physical target (AGENTS.md).
+
+        **Redact unique identifiers.** Do not paste device serials, IMEI/MEID,
+        MAC addresses, Wi-Fi/Bluetooth addresses, account names, partition dumps,
+        firmware, keys or backups. Use `<redacted>` in their place.
+
+        A new physical target needs a checked-in board-support proposal and
+        explicit owner approval before target work starts.
+  - type: input
+    id: target
+    attributes:
+      label: Exact target id
+      description: The board directory name under `targets/boards/`, e.g. `google-pixel-9a-tegu-gxq96-mp1-0`. Include model number/codename and hardware revision for a new target.
+      placeholder: google-pixel-9a-tegu-gxq96-mp1-0
+    validations:
+      required: true
+  - type: dropdown
+    id: capability
+    attributes:
+      label: Capability
+      description: The capability-matrix key in the target's `capabilities.toml`.
+      options:
+        - power
+        - display
+        - input
+        - network
+        - bluetooth
+        - audio
+        - telephony
+        - lifecycle
+        - mock-control
+        - other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: current-state
+    attributes:
+      label: Current matrix state and goal
+      description: The current `status` and `evidence` in `capabilities.toml`, and the change this issue aims for. Promotion requires exact physical evidence.
+      placeholder: "Currently `unsupported` (No Ferrix adapter or physical Linux evidence). Goal: ..."
+    validations:
+      required: true
+  - type: textarea
+    id: adapter
+    attributes:
+      label: Adapter and Linux service
+      description: The `ferrix-hardware-api` surface and the typed project-owned adapter / Linux service (NetworkManager, UPower, PipeWire, ModemManager, BlueZ, ...) it sits behind. Product code stays target-neutral.
+  - type: textarea
+    id: evidence-plan
+    attributes:
+      label: Evidence plan
+      description: |
+        What will be observed, how, and with which checked-in workflow (`just` recipe or `tools/<target>/` script).
+        Label each result `physical:<target-id>`; anything else is `QEMU` or `mock` and does not count for the matrix.
+        Graphical claims need a capture of the actual framebuffer or window.
+      placeholder: |
+        - Workflow: `just ...`
+        - Observation: ...
+        - Label: physical:google-pixel-9a-tegu-gxq96-mp1-0
+        - Recorded in: docs/status.md and the board README
+    validations:
+      required: true
+  - type: textarea
+    id: recovery-impact
+    attributes:
+      label: Recovery impact
+      description: |
+        Which partitions, slots, firmware or boot routes this touches, and how the device returns to the pinned stock factory image.
+        State "none" if it needs no flash, boot or slot change. No relock, erase, format or `oem` commands; no bootloader/radio writes except pinned stock images.
+      placeholder: "Boots via `just pixel-9a-dev-flash` on slot b; restore with `just pixel-9a-factory-restore`. No bootloader or radio writes."
+    validations:
+      required: true
+  - type: textarea
+    id: data-policy
+    attributes:
+      label: Data-collection policy
+      description: What device output is captured, where it is kept (ignored `out/` or `local/`, never Git), how identifiers are redacted, and what, if anything, is committed.
+      placeholder: "Raw logs stay under out/; committed evidence is redacted and summarised in docs/status.md."
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I have not pasted serials, IMEI/MEID, MAC/BT addresses, keys, firmware or partition dumps in this issue.
+          required: true
+        - label: This capability is claimed only for the exact target and hardware revision named above.
+          required: true

@@ -1,0 +1,28 @@
+# Dependency update configuration (issue #119).
+#
+# cargo: one root workspace covers every crate, including the Pixel 9a board
+#   adapter and factory-tool. Minor and patch bumps are grouped into a single
+#   weekly PR; major bumps arrive individually so they can be reviewed against
+#   the MIT/Apache-2.0 licence policy (tools/dev/license-check.sh).
+# github-actions: workflows pin actions by commit SHA with a version comment;
+#   Dependabot updates both.
+#
+# Not covered: docker. The builder Dockerfiles under containers/ take their
+# base image by digest through a build ARG whose default must match a pins.env
+# file (e.g. targets/qemu-aarch64/pmos/pins.env). Dependabot would bump the
+# Dockerfile default without the pins file, so those pins stay manual.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

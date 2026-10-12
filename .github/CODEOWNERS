@@ -1,0 +1,34 @@
+# Code owners for omarchy-ferrix. Later rules take precedence over earlier ones.
+# The explicit entries below mark the paths AGENTS.md treats as high risk:
+# board targets, recovery and flash tooling, the device-provisioning playbook
+# and the authority documents. They name the same owner as the default today
+# so that review stays required if the default ever changes.
+
+# Default owner.
+*                                                @h4rkl
+
+# Repository rules and authority documents.
+/AGENTS.md                                       @h4rkl
+/plans/baseline.md                               @h4rkl
+/plans/plan.md                                   @h4rkl
+/.github/                                        @h4rkl
+
+# Physical board targets (capability matrices, recovery pins, firmware policy).
+/targets/boards/**                               @h4rkl
+
+# Pixel 9a recovery and flash tooling, with their workflow tests.
+/tools/pixel-9a/dev-flash*                       @h4rkl
+/tools/pixel-9a/factory-restore*                 @h4rkl
+/tools/pixel-9a/enter-fastboot*                  @h4rkl
+/tools/pixel-9a/flash*                           @h4rkl
+/tools/pixel-9a/unlock-bootloader*               @h4rkl
+/tools/pixel-9a/recovery-download*               @h4rkl
+/tools/pixel-9a/factory-tool/                    @h4rkl
+/tools/pixel-9a/tests/dev-flash*                 @h4rkl
+/tools/pixel-9a/tests/factory-restore*           @h4rkl
+/tools/pixel-9a/tests/enter-fastboot*            @h4rkl
+/tools/pixel-9a/tests/flash*                     @h4rkl
+/tools/pixel-9a/tests/unlock*                    @h4rkl
+
+# Device provisioning playbook.
+/skills/mobile-device-provisioning/**            @h4rkl

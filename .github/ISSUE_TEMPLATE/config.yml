@@ -1,0 +1,4 @@
+# Issue chooser configuration. Blank issues stay allowed for anything the
+# forms below do not fit; the forms carry the AGENTS.md evidence and
+# redaction rules so they are the preferred route.
+blank_issues_enabled: true
