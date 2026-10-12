@@ -1542,15 +1542,43 @@ device name, node name, or serial. The result is `candidate-observed`
 accepts are WirePlumber's BlueZ source-loopback pair bound to the matched
 A2DP sink, and it requires the reviewed PipeWire 1.6.8-r4 and WirePlumber
 0.5.15-r0 builds and configuration. Every run prints `active_gate=closed`.
-No playback mode exists yet. The revised classifier observed the sink and
-filter shapes on the exact phone while the headset was connected; active
-playback still needs a separate workflow and owner decision. Checks, the
+The preflight itself has no playback mode. The revised classifier observed
+the sink and filter shapes on the exact phone while the headset was
+connected. Playback is the separate workflow below, and each run needs its
+own owner decision. Checks, the
 pinned-source review, limits, and the remaining gate are in
 [`audio-route-decision.md`](audio-route-decision.md#bluetooth-a2dp-output-preflight-issue-91).
 Transcripts go to ignored `out/pixel-9a/a2dp-output-preflight/`. Offline
 tests: `just pixel-9a-a2dp-output-preflight-test`. Probe v2 ran on the
 phone and blocked on two filters; probe v3 reported `candidate-observed`
 with the bound pair.
+
+### Bluetooth A2DP active proof (issue #91)
+
+`tools/pixel-9a/a2dp-active-proof.sh` is the separate, exact-target
+playback proof. It has two modes:
+
+- `dry` (`just pixel-9a-a2dp-active-proof-dry`) plays nothing. It reruns
+  the unchanged v3 preflight in one CDC-ACM session and re-derives the sink
+  identity. It prints the decision context and one per-run phrase, bound to a
+  salted hash of that identity, the versions and the kernel.
+- `play` (`just pixel-9a-a2dp-active-proof-play`, with
+  `FERRIX_PIXEL9A_A2DP_PLAY_CONFIRM`) consumes the phrase once and
+  revalidates in its own session. It then sends one generated 1.5 s, 750 Hz,
+  about −20 dBFS tone to the bound A2DP sink only, through `pw-cat` with the
+  reviewed target, no-fallback, no-reconnect and no-move properties. No
+  volume or mixer is written.
+
+While the tone plays, an event-driven graph guard (`pw-mon`) and two polled
+kernel-side guards (playback PCM openers and the speaker-path controls) kill
+the tone on any misroute. The result reports route safety, tone delivery,
+cleanup, and owner audible confirmation separately. Audible confirmation
+always stays `owner-pending`. The design, guards, limits, and residual risks
+are in
+[`audio-route-decision.md`](audio-route-decision.md#a2dp-active-proof-workflow-issue-91).
+Offline tests: `just pixel-9a-a2dp-active-proof-test`. **It has not run on
+the phone.** A `play` run needs an explicit owner decision for that run. The
+internal speaker and earpiece stay NO-GO, and `[audio]` stays `unsupported`.
 
 ## CDC-ACM guest probe transport (issue #52)
 

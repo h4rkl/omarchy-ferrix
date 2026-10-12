@@ -90,6 +90,74 @@
 - Offline tests pass. The physical run was read-only: no source was mounted,
   no CPIF node was opened, and no service or CP was started. It is pre-boot
   evidence only; `[telephony]` remains `unsupported`.
+
+## 2026-10-12 (A2DP active proof dry runs; physical:google-pixel-9a-tegu-gxq96-mp1-0, dry only)
+
+- The session that operates the phone ran `dry` twice on the exact phone,
+  with the checked-in guest bodies. No tone was played either time.
+- 07:01 UTC: refused safely (`preflight-blocked`). The headset was paired
+  but disconnected: zero connected Audio Sinks, zero BlueZ A2DP sinks, and
+  a `null` default sink. No decision was issued.
+- 07:02 UTC, after the owner reconnected it: passed. The in-session v3
+  preflight was `candidate-observed` on kernel
+  `6.1.124-android14-11-ga4662a84a15f` with BlueZ 5.86-r2, PipeWire
+  1.6.8-r4 and WirePlumber 0.5.15-r0. It saw one connected paired Audio
+  Sink, one LDAC BlueZ A2DP default sink, the two bound BlueZ
+  source-loopback filters, no ALSA sink, zero playback PCM openers, and
+  both watched speaker controls `off`. The host issued one per-run
+  decision, kept with the transcripts in ignored
+  `out/pixel-9a/a2dp-active-proof/`.
+- `dry` starts no graph guard or poller, so `play`, the guards, and audio
+  output remain unverified on hardware. That decision has expired and is
+  unusable: it predates the volume gate, binding v2 and the recorded
+  decision origin, so `play` refuses it. A `play` run needs a fresh `dry`
+  with the current scripts and a fresh explicit owner decision. `[audio]`
+  stays `unsupported`.
+- The offline test now also runs under Ubuntu's dash and mawk. mawk only
+  feeds the graph guard line by line with `-W interactive`; without it the
+  guard never arms and `play` refuses (`graph-guard-not-armed`), which is
+  a checked refusal case. Check counts are in the workflow entry below.
+
+## 2026-10-12 (A2DP active proof workflow; offline/mock only, google-pixel-9a-tegu-gxq96-mp1-0)
+
+- `tools/pixel-9a/a2dp-active-proof.sh` implements the #91 active-proof
+  gate as a separate exact-target workflow:
+  - `dry` reruns the unchanged v3 preflight in one CDC-ACM session and
+    re-derives the sink identity. It prints the decision context and a
+    per-run phrase, bound to a salted hash of the sink identity, versions and
+    kernel.
+  - `play` consumes that phrase once and revalidates in its own session. It
+    sends one generated 1.5 s tone to the bound A2DP sink only, through
+    `pw-cat` with the reviewed target and no-fallback, no-reconnect and
+    no-move properties.
+  - An event-driven `pw-mon` graph guard and polled PCM-opener and
+    speaker-control guards kill the tone on any misroute, disconnect,
+    transient object, or incomplete observation.
+  - The result separates route safety, delivery, cleanup, and owner audible
+    confirmation; audible confirmation is always `owner-pending`.
+- Review fixes (offline only): `route_safety=held` now needs the graph
+  guard to have seen our own node added and, after the tone, removed; a
+  bounded wait replaced the fixed 0.5 s sleep, and a never-linked stream or
+  a stalled pw-mon reads `unverified`. Both modes read the bound sink
+  volume once (`wpctl get-volume`, never written) and refuse muted, above
+  0.50 on wpctl's cubic scale (about −18 dB), or unparseable; the value is
+  in the summary. A bound-sink property change during the tone trips; a
+  volume change during the tone is not detectable (residual limit). Every
+  post-session `play` failure now reports `unverified`, runs the read-only
+  observation, and exits 7. The decision records its mock or physical
+  origin, the salt stays inside the repository's `out/`, and the binding
+  also covers the device-tree serial.
+- Evidence is `mock` only: 236 fake-tool, fake-guest, and transport
+  checks (`just pixel-9a-a2dp-active-proof-test`; 239 where the host awk
+  is mawk, which this macOS run did not exercise). It has **not** run on the
+  phone.
+  pw-mon output shape, kill latency, and false-trip behaviour on hardware
+  are unverified. The kernel-side guards are polled, not event-driven
+  (limits in `audio-route-decision.md`, "A2DP active proof workflow").
+- A `play` run needs a fresh `dry` run on the phone and an explicit owner
+  decision for that run. Internal TAS playback remains NO-GO, and `[audio]`
+  stays `unsupported`.
+
 ## 2026-10-12 (A2DP route source review and preflight v3; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - Probe v2 ran on the exact phone with one paired, connected Audio Sink

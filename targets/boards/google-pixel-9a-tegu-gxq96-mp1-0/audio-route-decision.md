@@ -802,8 +802,10 @@ on the exact phone twice on 2026-10-12, both times blocked (see
 [exact-device results](#a2dp-exact-device-results)). Probe version 3 adds
 the [filter and WirePlumber contract](#a2dp-route-source-review-issue-91)
 below. A read-only v3 run on the exact phone reported
-`candidate-observed` with the connected headset. **No playback mode exists.** The
-[active-proof gate](#a2dp-active-proof-gate) below lists what is missing.
+`candidate-observed` with the connected headset. **The preflight has no
+playback mode.** Playback is the separate
+[active proof workflow](#a2dp-active-proof-workflow-issue-91), which has not
+run on the phone.
 
 - **Transport and identity.** One CDC-ACM session sends the exact probe body.
   The guest's first action is the exact tegu device-tree gate (exit 4). The
@@ -1093,33 +1095,29 @@ named like a section header.
 
 ### A2DP active-proof gate
 
-A bounded A2DP stimulus/restore mode is **not** implemented, and this
-slice deliberately does not add one. The source review above settles the
-earlier open point: which stream properties keep a stream off every sink
-but its target. The revised classifier observed the exact sink and filter
-shapes on the phone in a read-only v3 preflight. An active
-playback workflow remains to be implemented and reviewed. Every run prints
-`active_gate_reason=active-playback-workflow-not-implemented`.
-
-Design for a later, separately reviewed mode, from S4 and S5:
+The design below, from S4 and S5, is now implemented as the
+[active proof workflow](#a2dp-active-proof-workflow-issue-91). The v3
+preflight itself is unchanged. It still prints `active_proof=not-implemented`
+and `active_gate=closed`, because it never opens the gate; only a `play` run
+with a fresh per-run decision can.
 
 - **Preconditions.** The full v3 preflight returns `candidate-observed`
   in the same session.
 - **Owner decision.** A typed per-run phrase bound to a hash of the
-  observed sink identity, versions, and kernel. The hash never leaves the
+  observed sink identity, versions, and kernel. The identity never leaves the
   guest in clear.
-- **Stimulus.** One generated tone of at most 2 s, through
-  `pw-cat --playback --raw` from stdin with a sample count bound, under
-  `timeout`, `--volume` well below 1, and no sink-volume write. The
-  sink's numeric `object.serial` (never `0`) is the target, given as both
-  `--target` and `target.object` in `--properties`, together with
-  `node.dont-fallback = true`, `node.dont-reconnect = true`,
-  `node.dont-move = true`, `node.linger = false`,
-  `state.restore-props = false`, and `state.restore-target = false`.
+- **Stimulus.** One generated tone of at most 2 s, through `pw-cat
+  --playback --raw` from stdin, with a byte bound and a wall-time bound and no
+  sink-volume write. The target is the sink's numeric `object.serial`
+  (never `0`), given as both `--target` and `target.object` in
+  `--properties`. The properties also set `node.dont-fallback = true`,
+  `node.dont-reconnect = true`, `node.dont-move = true`,
+  `node.linger = false`, `state.restore-props = false`, and
+  `state.restore-target = false`.
 - **Independent invariant.** The design must not rely only on those
   properties. With no ALSA sink in the graph, the worst misroute is the
-  null sink or the same headset, never TAS. The mode polls during the
-  tone and kills the stream if any of these happens:
+  null sink or the same headset, never TAS. The mode watches during the tone
+  and kills the stream if any of these happens:
   - an ALSA (or any non-bound) sink appears;
   - a playback PCM fd opens;
   - a watched control leaves `off`;
@@ -1132,13 +1130,300 @@ Design for a later, separately reviewed mode, from S4 and S5:
   profile, or volume, so there is nothing else to restore.
 - **Audibility.** The owner confirms it by ear on each run.
 
+Two departures from this design: the tone uses no `--volume`; its level is
+in the generated samples instead, so no stream volume is set and none can be
+stored. The "polls" became one event-driven graph guard and two polled
+kernel-side guards (see below).
+
+### A2DP active proof workflow (issue #91)
+
+`tools/pixel-9a/a2dp-active-proof.sh` (guest body
+`a2dp-active-proof-remote.sh`) implements the gate above. It is fixture-,
+fake-tool- and fake-guest-tested (`just pixel-9a-a2dp-active-proof-test`,
+236 checks, 239 where the host awk is mawk). Only `dry` has run on the phone
+([physical dry runs](#physical-dry-runs-2026-10-12)); **`play` has not run.**
+No code, mock, or `dry` result is evidence of audible output, and `[audio]`
+stays `unsupported`.
+
+- **One composed session per mode.** The host sends a three-line header
+  (`proof_mode`, a secret salt, the expected binding). Then come the v3
+  host's pinned constants, key list, `validate`, `get`, `is_n` and
+  `preflight_problems`, copied unchanged and checked byte-identical by the
+  tests, and the unchanged v3 guest body as `preflight_body()`. The active
+  body comes last. The guest judges the in-session preflight with the same
+  code the v3 host uses, and the host judges it again afterwards. The guest
+  creates and removes only a private 0700 tmpfs directory,
+  `/run/ferrix-a2dp-proof`, and refuses if one is left over (it is never
+  removed then).
+- **`dry`.** The guest runs the v3 preflight and requires
+  `candidate-observed`. It then re-derives the identity with query verbs
+  only (`bluetoothctl devices Paired/info`, `wpctl status/inspect`): exactly
+  one paired, connected Audio Sink, and exactly one bluez A2DP sink whose
+  node name and `api.bluez5.address` both name it and whose `object.serial`
+  is non-zero. Next it computes SHA-256 (binding v2) over the salt, target,
+  the device-tree `serial-number` (empty if absent), kernel, the five
+  package versions, the WirePlumber tree result, the codec, and the sink's
+  address, serial, device id, node name, profile and codec. Only that hash,
+  and the profile class and codec, leave the guest. It then reads the bound
+  sink's volume once with `wpctl get-volume <id>` (read only; nothing here
+  writes a volume or mute) and refuses `sink-muted`, `sink-volume-over-cap`,
+  or `sink-volume-unreadable` for anything but the one line `wpctl.c`
+  prints (`Volume: %.2f`, optionally ` [MUTED]`). The cap is the named
+  constant `volume_cap=50`: 0.50 on wpctl's scale. wpctl switches the mixer
+  API to its cubic scale (`wpctl.c:2268`), so 0.50 is 0.125 linear, about
+  −18 dB, on top of the tone's −20 dBFS peak. That keeps a first tone near
+  conversational level on typical headphones while staying clearly audible.
+  The host stores the decision id, time, origin (`mock` or
+  `physical:<target>`), salt and binding in ignored
+  `out/pixel-9a/a2dp-active-proof/decision-pending` (mode 0600), and
+  refuses to run if `FERRIX_OUT_DIR` resolves, links followed, outside the
+  repository's `out/`. The salt appears in no transcript or output, so the
+  binding cannot be traced back to an address. The host prints the observed
+  volume with the context and
+  `FERRIX_PIXEL9A_A2DP_PLAY_CONFIRM='play one 1.5 s 750 Hz tone on the bound
+  A2DP sink binding <12 hex> decision <8 hex> on
+  google-pixel-9a-tegu-gxq96-mp1-0'`. Each `dry` run replaces the pending
+  decision.
+- **Consumed once.** `play` checks the phrase against the pending decision.
+  It renames the decision to `decision-consumed-<id>` and erases the salt
+  before any session, so a phrase works at most once, even if the session
+  then fails or refuses. A decision older than 10 minutes is consumed and
+  refused. A missing, malformed, or symlinked decision is refused, and so is
+  one whose recorded origin differs from the run's: a physical `play` never
+  accepts a mock-origin decision, or one that records no origin.
+- **Same-session gates (`play`).** In order:
+  1. Arm the graph guard. This happens before the preflight, so the window
+     from preflight to tone is covered.
+  2. Run the v3 preflight; it must be `candidate-observed`.
+  3. Re-derive the binding; it must equal the decision's.
+  4. Arm the PCM-opener and control pollers. Each arms only after one clean
+     pass.
+  5. Review the graph. Since the preflight started, nothing may have
+     changed but clients and state changes of the bound sink, its ports and
+     its device.
+  6. Read the sink volume again (same refusals and cap as `dry`),
+     immediately before the tone.
+  7. Start `pw-cat`, blocked on opening its stdin FIFO, so every guard knows
+     its pid before it can connect. The graph guard must acknowledge
+     enforcement for that pid.
+
+  Any failure refuses with exit 6 and nothing played.
+- **Stimulus.** 72000 bytes: 1125 repeats of one 64-sample, 750 Hz cycle,
+  unsigned 8-bit mono at 48 kHz, peak 13/128 (about −20 dBFS). That is 1.5 s,
+  bounded by `head -c`, with a 4 s watchdog that SIGKILLs `pw-cat`. The
+  command is `pw-cat --playback --raw --rate 48000 --channels 1 --format u8
+  --target <serial> --properties { node.name = <random> target.object =
+  <serial> ... } -`, with the six properties above. The node name carries a
+  random 64-bit token, so the guard can tell its own stream apart. No file
+  is played and no waveform is kept.
+- **Graph guard (event-driven).** `pw-mon -N -a -p` (pinned
+  `pipewire-tools` 1.6.8) feeds an awk guard through a FIFO. Source review
+  of `src/tools/pw-mon.c` at 1.6.8 shows:
+  - `setlinebuf(stdout)` (line 810), so events are not held in a buffer;
+  - `-p` prints a blank line after every event;
+  - each bound object prints `added:` once, then `changed:`;
+  - every removal prints `removed:` with its id;
+  - property values print unescaped as `key = "value"`.
+
+  `pw_global_new` (`global.c:91-92`) puts `object.serial` in every
+  registry global's properties, and every impl object copies it into its
+  info properties. Serials are never reused. The guard arms when pw-mon
+  reports its own client (`pipewire.sec.pid` = pw-mon's pid); that client's
+  serial S0 separates existing objects from new ones. While enforcing, it
+  kills `pw-cat` on any of these:
+  - any added node other than the one `Stream/Output/Audio` node with our
+    name (`new-sink-node` for any sink, ALSA or not; `foreign-node`
+    otherwise);
+  - a port not on our node;
+  - a link whose input is not the bound sink (`link-outside-bound-sink`), or
+    whose output is a known node other than ours;
+  - an added device or other object;
+  - a change to anything but clients, our objects, the bound sink, its
+    ports, and its device, or a property change of the bound sink
+    (`bound-sink-props-changed`: pw-mon marks the properties `*` when
+    `PW_NODE_CHANGE_MASK_PROPS` is set, `pw-mon.c:304`, and
+    `pw_node_info_update` resets the mask per event);
+  - removal of the bound sink or its device (disconnect), or of any other
+    existing object;
+  - a removal or change of an object it never saw (a transient: pw-mon
+    prints `removed:` even for an object whose info never arrived);
+  - a duplicated property or any line pw-mon would not print.
+
+  Links and ports that name a node not yet printed are held and must
+  resolve to our node; any unresolved at the end trip. pw-mon exiting is
+  caught by the live guard.
+- **Kernel-side guards (polled, about every 50 ms plus scan time).** One
+  poller reruns the v3 `/proc/*/fd` opener scan: any `pcmC*D*p` opener or an
+  incomplete scan trips. The other reruns `amixer cget` on `TDM_0_RX Mixer
+  EP1` and `TAS25XX ASI Switch`: anything but `off`, or a failed read, trips.
+  A live guard kills the tone if the awk guard, pw-mon, or either poller
+  exits. Each guard records its reason before reading `pw-cat`'s pid, and
+  the shell writes the pid before it checks the records, so no trip can miss
+  both.
+- **Afterwards.** There is no fixed sleep. The graph guard keeps enforcing
+  until it has seen our node and every port and link of it removed, or a
+  guard trips, for at most 5 s (`removal_wait`). Then the guest stops the
+  guards and collects the graph summary: own node seen, own links, link
+  reached `active`, own objects seen removed (`graph_own_removed`). It runs
+  the v3 preflight again as the final observation and removes the scratch
+  directory.
+- **Result** (host; transcripts in ignored
+  `out/pixel-9a/a2dp-active-proof/`):
+  - `route_safety`: `held` only with positive observation: no guard
+    tripped, a complete graph summary, and the guard saw our own node added
+    and, after the tone, removed before it was stopped. Otherwise it is
+    `tripped` (with `route_trips`) or `unverified`, which covers a stream
+    that never appeared (`graph_own_node=no`) and a lagging or stalled
+    pw-mon that never delivered the removal;
+  - `sink_volume` and `sink_mute`: the values read just before the tone
+    (the host refuses a reported value over the cap or muted);
+  - `tone_delivery`: `linked-active` (`pw-cat` exit 0, no watchdog, our
+    node seen, at least one link to the bound sink, link `active`) or
+    `not-delivered`;
+  - `cleanup`: `clean` needs a valid final block with zero streams, both
+    controls `off`, a complete scan with zero openers, no ALSA sink, and the
+    scratch directory gone;
+  - `audible_confirmation=owner-pending` always;
+  - `audio_capability=unsupported` always.
+
+  Exit 0 is `route-held-tone-delivered`. Exit 8 is route held and cleanup
+  clean, but nothing delivered. Exit 7 is `route-not-verified`: a guard
+  tripped, the route or cleanup was not verified, or any failure once the
+  `play` session began: the transport was lost, the guest failed mid-run,
+  or its output was malformed, incomplete, identifier-bearing, from another
+  board, or claimed a tone without every gate. Each of these reports
+  `route_safety=unverified` and runs one read-only v3 preflight to observe
+  streams, openers and controls. `dry` keeps exits 3, 4 and 5 for these.
+  Exit 6 is a refusal before any tone (the guest's device-tree gate keeps
+  4), and exit 2 a usage, out-directory or decision problem. A tripped
+  route is never retried automatically.
+- **Offline coverage.** The tests cover a safe candidate (delivered, clean,
+  owner-pending), and refusals for:
+  - binding mismatch, a reconnected sink with a new serial, codec, kernel
+    and version skew;
+  - an ALSA sink, the speaker route, or a second headset at start;
+  - a left-over scratch directory;
+  - a sink volume over the cap, muted, unparseable, two-line, empty or out
+    of range (a volume exactly at the cap is accepted);
+  - a guard that cannot arm, including an awk that buffers its input
+    (simulated everywhere, and plain mawk where the host has it);
+  - a sink added, a transient object, or a PCM opener between preflight
+    and tone.
+
+  They cover trips for:
+  - an ALSA sink appearing, a never-seen transient, a link to another node;
+  - headset and BlueZ device removal, an added device, a foreign stream;
+  - an ALSA device change;
+  - a malformed line and a forged duplicate property;
+  - pw-mon exiting;
+  - a playback PCM opener, the speaker route on, an unreadable amp switch.
+
+  They also cover an unlinked target (now `unverified`, exit 7), removal
+  events 1.5 s late (still `held`), a pw-mon that stalls before the removal
+  (`unverified`, never `held`), a bound-sink property change (trip), a hung
+  player (watchdog), a stream left behind, and host classification of each
+  case, including every post-session play failure as `unverified` with the
+  observation step. They also cover a physical `play` refusing a
+  mock-origin or origin-less decision and an out directory outside, or
+  linked outside, the repository's `out/`. They check
+  malformed, identifier-bearing, duplicate, truncated and skipped-gate
+  output, the decision lifecycle (single use, stale, tampered, linked,
+  replaced), privacy of output and transcripts, and an end-to-end run
+  through the transport.
+
+#### Physical dry runs (2026-10-12)
+
+Evidence: `physical:google-pixel-9a-tegu-gxq96-mp1-0`, `dry` mode only,
+run by the session that operates the phone, with the checked-in active and
+v3 guest bodies (transcript body hashes match the committed files).
+Transcripts, the binding, and the per-run decision phrase stay in ignored
+`out/pixel-9a/a2dp-active-proof/`. No tone was played in either run.
+
+- **07:01 UTC, refused (safe).** The headset was paired but disconnected:
+  one paired and zero connected Audio Sinks, zero BlueZ A2DP sinks, and a
+  `null` default sink. The in-session v3 preflight reported
+  `connected-audio-sink-count-not-one` and `bluez-a2dp-sink-count-not-one`,
+  and the guest refused with `preflight-blocked` before re-deriving any
+  identity. No decision was issued.
+- **07:02 UTC, passed.** After the owner reconnected the headset, the
+  in-session v3 preflight was `candidate-observed` on the exact image:
+  kernel `6.1.124-android14-11-ga4662a84a15f`, BlueZ 5.86-r2, PipeWire
+  1.6.8-r4, WirePlumber 0.5.15-r0. It saw one paired, connected Audio Sink;
+  one BlueZ A2DP sink, LDAC, matching that device and set as the default;
+  exactly the two bound BlueZ source-loopback filters; no ALSA sink; a
+  complete `/proc/*/fd` scan with zero playback PCM openers; and both
+  watched speaker controls `off`. Identity re-derivation was `ok`
+  (`a2dp-sink`, `ldac`). The host issued one per-run decision.
+
+This shows the `dry` path, the identity derivation, and the refusal on a
+disconnected headset on hardware. It does not show `play`, any guard, the
+volume gate, or audio output. Those runs predate the volume gate, binding
+v2 and the recorded decision origin. The 07:02 decision has expired and
+could not be used anyway: it records no origin, so `play` refuses it. A
+`play` run needs a fresh `dry` with the current scripts and a fresh explicit
+owner decision for that run.
+
+#### Residual limits
+
+- **Detection, not prevention.** The graph guard sees every new object,
+  even a transient one. It kills `pw-cat` after the event arrives, not
+  before the object exists. The order PipeWire and WirePlumber must follow
+  for a misroute narrows this: a new sink node, then its ports, then a link,
+  then format negotiation and PCM open, then data. The guard trips on the
+  first step. A link to it is also refused by the stream's own
+  `node.dont-*` properties (S4). With no ALSA sink at start, a route to TAS
+  needs all of that. The kill latency on the phone has not been measured.
+- **Kernel-side guards are polled.** `amixer events` cannot be used: alsa-utils
+  `amixer.c` (`events()`) never flushes stdout, so events wait in a pipe
+  buffer. A control flip or PCM open shorter than one poll interval can go
+  unseen by the pollers. Such a flip cannot carry this tone unless the graph
+  guard also sees a route for it. The final observation rereads both. A
+  device node created with `mknod` in another namespace is seen only through
+  `/proc/*/fd`.
+- **Unverified on hardware.** Three points are inferred from source and
+  fake tests, not observed:
+  - pw-mon's exact output, and that its own client carries
+    `pipewire.sec.pid` when run as root against the uid-1000 socket;
+  - the awk in the image (busybox `awk.c` `awk_getline` uses `safe_read`,
+    so it handles lines as they arrive; the acknowledgements refuse
+    otherwise). mawk without `-W interactive` fills its input buffer
+    first, and the offline tests show it refuses with
+    `graph-guard-not-armed`; the tests run mawk interactive for that reason;
+  - whether the bound sink or its device emits changes the guard does not
+    allow;
+  - that PipeWire removes our node, ports and links, and pw-mon prints it,
+    within the 5 s removal bound after `pw-cat` exits or is killed (if not,
+    the run reads `unverified`).
+
+  A false trip reads `route-not-verified`, never a pass. The physical `dry`
+  runs do not touch any of these: `dry` starts no pw-mon, guard, or poller.
+- **Sink volume is checked, not held.** The volume is read once, just before
+  the tone, and never written. A change between that read and the end of
+  the tone (headset buttons, AVRCP absolute volume, another client) is not
+  detected: pw-mon `-a` hides params, and a Props param change prints as an
+  unmarked `changed:` of the bound sink, the same as a state change
+  (`pw-mon.c:283-304`), so the guard cannot tell them apart. Dropping `-a`
+  would expose Props, but it was not reviewed. With A2DP hardware volume
+  the headset applies its own gain, so 0.50 bounds the requested level, not
+  the sound pressure.
+- **Property-change trip is untested on hardware.** Whether the bound sink
+  changes its properties when a stream starts is unknown. If it does, `play`
+  trips with `bound-sink-props-changed` (fail closed, never a pass).
+- **No acoustic claim.** `linked-active` shows that PipeWire linked and ran
+  the stream to the bound sink. Whether the headset played it audibly is for
+  the owner to confirm by ear. It is recorded with the transcript, not by
+  code.
+
 The ordered next steps:
 
-1. A reviewed active-mode slice implements the design above, with offline
-   tests.
-2. A fresh read-only preflight in the active session reports
-   `candidate-observed` with the connected headset.
-3. A separate owner decision per active run.
+1. On the phone, with the headset connected, run `dry` and review its
+   context. Done once on 2026-10-12 (above); that decision is not reusable,
+   so repeat it immediately before any `play`.
+2. Get an explicit owner decision for one `play` run, using the phrase from
+   that fresh `dry` run.
+3. Record the transcript's `route_safety`, `tone_delivery`, and `cleanup`,
+   and the owner's audible confirmation. Then decide whether `[audio]`
+   evidence is sufficient. Mock or code evidence never is.
 
 The internal speaker and earpiece stay NO-GO under #83/#90. This workflow
 does not change that, and it never falls back to them.
@@ -1188,7 +1473,10 @@ offline-tested and returned the expected blocked result on the exact phone.
 Probe v2 then blocked on the owner-paired headset only because of two
 filters. The [source review](#a2dp-route-source-review-issue-91) identifies
 them as WirePlumber's BlueZ source loopback, and probe v3 observed exactly
-that bound pair on the phone. The next step is a reviewed active workflow.
-No playback mode exists until the [active-proof gate](#a2dp-active-proof-gate)
-is closed. Keep `[audio]` unsupported until an audible output route and its
+that bound pair on the phone. The
+[active proof workflow](#a2dp-active-proof-workflow-issue-91) is now checked
+in and offline-tested. Its `dry` mode refused safely with the headset
+disconnected and passed with it connected on the exact phone; `play` has not
+run. Its next step is a fresh `dry`, then an explicit owner decision for one
+`play` run. Keep `[audio]` unsupported until an audible output route and its
 routing are proved.
