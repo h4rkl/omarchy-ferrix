@@ -1,5 +1,23 @@
 # Status
 
+## 2026-10-12 (S5300 E1 pre-boot inventory; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The checked-in read-only E1 host probe from PR #78 ran over CDC-ACM against
+  the still-booted `674157b` Ferrix image and pinned 6.1.124 kernel. It
+  reported `e1_result=go`, `no_go=none`, and `unknown_facts=none`: `cpif`,
+  `shm_ipc`, and `cpif_page` are Live; exactly one `samsung,exynos-cp`
+  platform device is bound to `cp_interface`; `modem_state=OFFLINE`.
+  The four boot/FMT/RFS nodes and eight OEM nodes are character devices in
+  the `cpif` class with matching sysfs device numbers. There are no WWAN
+  class devices, while 30 `rmnet*` netdevs already exist before CP boot.
+  The probe opened no modem node and made no CP or capability change. Its
+  redacted transcript remains ignored under `out/pixel-9a/s5300-cpif-inventory/`.
+- E1 establishes the pre-boot kernel surface only. The owner accepted the
+  separate #34 mount gate. The target-local `exynos-modem` adapter, read-only
+  NV file checks, and runtime firmware compatibility remain before a manual
+  CP boot trial. No modem, SIM, registration, data, SMS, or call capability
+  is claimed.
+
 ## 2026-10-12 (Pixel 9a S5300 source-mount proof; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The image composed from `674157b` (seven-image manifest SHA-256

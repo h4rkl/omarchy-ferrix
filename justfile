@@ -504,6 +504,16 @@ pixel-9a-s5300-source-inventory:
 pixel-9a-s5300-source-inventory-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-source-inventory.sh"
 
+# Issue #1 E1: read-only CPIF inventory (modules, samsung,exynos-cp binding,
+# modem_state, CPIF char-node metadata and sysfs class, rmnet count) on a
+# booted exact Ferrix dev guest over its CDC-ACM bring-up shell, before any
+# CP boot. Never opens a CPIF node, starts a service, or edits capabilities.
+pixel-9a-s5300-cpif-inventory:
+    @sh "{{root}}/tools/pixel-9a/s5300-cpif-inventory.sh"
+
+pixel-9a-s5300-cpif-inventory-test:
+    @sh "{{root}}/tools/pixel-9a/tests/s5300-cpif-inventory.sh"
+
 # Issue #34 recovery-suppression proof on a booted exact Ferrix dev guest over
 # CDC-ACM. With no argument it is a read-only preflight that never mounts or
 # changes block-device state. `mount ROLE` is a separate run gated by a typed

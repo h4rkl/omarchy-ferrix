@@ -968,6 +968,78 @@ source roles uniquely resolved and unmounted, with no holders; `modem_b` is
 ext4 and `efs`, `persist`, and `modem_userdata` are f2fs. It reported
 `preflight_problems=none` and left the issue gate at `owner-review-required`.
 
+## S5300 CPIF E1 inventory (issue #1)
+
+`just pixel-9a-s5300-cpif-inventory` runs gate E1 of
+[`s5300-route-decision.md`](s5300-route-decision.md) on a booted Ferrix dev
+guest. It is read-only and runs over the CDC-ACM guest probe transport (guest
+stderr discarded, 60 s and 64 KiB bounds). The guest probe
+(`tools/pixel-9a/s5300-cpif-inventory-remote.sh`) first checks the exact tegu
+device tree; QEMU and other boards exit 4. It then reads:
+
+- the `/proc/modules` lines for `cpif`, `shm_ipc`, and `cpif_page`, and
+  whether `/sys/module` has a built-in copy;
+- every platform device whose `of_node/compatible` contains
+  `samsung,exynos-cp`, its `driver` link name, and its `modem_state`
+  attribute;
+- the inode type, symlink flag, `stat(2)` device number, mode, and numeric
+  owner of `/dev/umts_boot0`, `umts_ipc0`, `umts_ipc1`, `umts_rfs0`, and
+  `oem_ipc0` to `oem_ipc7`, plus each node's `/sys/class/*/<node>` entry,
+  its `dev` attribute, and its `subsystem` link;
+- the number of `oem_ipc*` names, `/sys/class/wwan` entries, and
+  `/sys/class/net/rmnet*` netdevs.
+
+The probe never opens a CPIF character device. Opening `umts_boot0` or
+`umts_ipc*` runs the link's `init_comm` hook. The probe touches `/dev` paths
+only through shell file tests, `stat`, and a directory glob. It reads no
+dmesg, node contents, serials, or SIM/IMEI data. It starts no service and
+never boots, powers, or resets the CP. The offline test enforces this
+statically. It also runs the real probe against a fixture tree whose nodes
+are FIFOs, which would block if anything opened them.
+
+The host refuses malformed, unknown, duplicate, or missing fields, more than
+one `/proc/modules` line per module, and a `modem_state` reported without a
+single platform device (exit 5). It then reports `e1_result`:
+
+- **`go`** means all of the following were observed: all three modules are
+  `Live` loadable modules; exactly one `samsung,exynos-cp` platform device
+  has a bound driver; `modem_state` is exactly `OFFLINE`; each of the twelve
+  nodes is a character device (not a symlink) with exactly one sysfs class
+  entry whose `dev` equals the node's device number and whose subsystem is
+  that class; all twelve share one class; and no `wwan` device exists. The
+  `rmnet*` count is recorded but never decides the result. The observed
+  class is recorded with `node_class_matches_source_claim`, which compares it
+  against the source-claimed `cpif` class for information only.
+- **`no-go`** means an observed fact contradicts one of these. Examples are a
+  missing, built-in, or transitional module; a missing, unbound, or
+  ambiguous platform device; `ONLINE`, a booting, crash, or unrecognised
+  `modem_state`, or no `modem_state` attribute; a missing node, symlink,
+  non-char node, or class/device mismatch; mixed classes; or a WWAN surface.
+- **`incomplete`** means a fact could not be read (`/proc/modules`, the
+  platform directory, `modem_state`, or `stat`). Nothing in it counts as
+  pass.
+
+`e1_gate` repeats the result only for physical runs. Mock runs report
+`not-evidence-mock`. Transcripts are labelled
+`physical:google-pixel-9a-tegu-gxq96-mp1-0` (or `mock` under
+`FERRIX_PIXEL9A_S5300_CPIF_EVIDENCE=mock`). They state `cp_nodes_opened=no`
+and are written to ignored `out/pixel-9a/s5300-cpif-inventory/`. Every run
+reports `capability_change=none`.
+
+E1 `go` does not show that the CP boots or that opening a node is safe. E0
+defined the source-level boot-control ABI; runtime firmware compatibility,
+NV file sizes, FMT payload equivalence, RFS service, `rmnet*` after
+`ONLINE`, CP crash handling and driver/firmware skew remain unknown. The run
+lists these as `e1_unknowns`. E1 is separate from the owner-accepted issue
+#34 mount gate; adapter review and read-only NV checks also precede a CP
+boot trial. The workflow passes its offline fixtures
+(`just pixel-9a-s5300-cpif-inventory-test`). On the exact physical device,
+the first read-only run returned `e1_result=go`: three Live modules, one
+bound `cp_interface` platform device, `OFFLINE`, all twelve `cpif` class
+character nodes with matching device numbers, no WWAN class device, and 30
+`rmnet*` netdevs before CP boot. The probe opened no CPIF node; runtime
+modem behavior remains untested.
+
 ## S5300 source mount proof (issue #34)
 
 This section records source review, not physical evidence. Line numbers refer
