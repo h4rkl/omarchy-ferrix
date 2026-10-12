@@ -76,8 +76,9 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   boots Ferrix on the pinned 6.1.124 kernel. After the S2 run and a reboot,
   the S5300 services are stopped and the CP is `OFFLINE`
   ([1-r3 entry](../docs/status.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
-  The checked-in recipes are now `device-google-tegu` 1-r4, so the
-  preflight reports image skew until a 1-r4 image is flashed.
+  The checked-in recipes are now `device-google-tegu` 1-r5, so the
+  preflight reports image skew until a 1-r5 image is flashed. No 1-r4
+  image exists: abuild refused its packaged `/mnt/vendor`.
   The earlier `f49a460` boot showed the `ferrix-basic-screen` reference
   surface, not the product shell; #12 and related shell issues remain open.
 - **Modem (physical, S2 CP boot observed; S3 not started).** [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34)
@@ -99,7 +100,9 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   The owner then approved one manual S2 run on that image. The lead
   performed it by hand; no checked-in active workflow exists.
   - The first mounts start failed before any mount, because `/mnt/vendor`
-    was missing. The fix (`02eebc7`) merged with PR #113 for 1-r4.
+    was missing. The first fix (`02eebc7`, PR #113, 1-r4) packaged the
+    directory, which abuild refuses under `/mnt`. 1-r5 creates it from
+    the package install scripts instead.
   - After a reboot and a one-off directory creation, all four sources
     mounted read-only, and the post-mount preflight returned `go`.
   - The CP stayed `ONLINE` for about 13.9 minutes of samples on one AP
@@ -119,7 +122,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   found that a checked-in active S2 workflow cannot yet be made fail-closed. Its follow-ups
   are [#107](https://github.com/h4rkl/omarchy-ferrix/issues/107) (opener-scan
   positive control; offline fix merged in PR #113, device check pending a
-  1-r4 image), [#108](https://github.com/h4rkl/omarchy-ferrix/issues/108)
+  1-r5 image), [#108](https://github.com/h4rkl/omarchy-ferrix/issues/108)
   (per-unit and per-boot decision binding),
   [#109](https://github.com/h4rkl/omarchy-ferrix/issues/109) (OpenRC teardown
   and disconnect-safe observation design) and
@@ -231,7 +234,7 @@ physical claim.
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
 | 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25) closed: pinned stock restore and same-device Android 17 boot verified. Recheck the recovery invariant before every image write. |
-| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | Completed prerequisites: #34 source mounts, #79 NV sizes, #81 scratch, #88 staging; #55/#59 AoC/TAS binding, #80 mic pickup, #83/#90 speaker NO-GO. Open: [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92) bounded manual CP boot and teardown (S2 met by one manual run on 1-r3: ONLINE about 13.9 min, no panic; RFS service not observed; new follow-ups for CP left `ONLINE` after a daemon stop and role loops left attached after a mounts stop; a checked-in active workflow is still blocked on #107 on-device control (1-r4), #108 decision binding, #109 teardown/observation design (PR #114); optional #110 rollback; fresh owner decision per mounts start and CP boot; S3 not started); [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) FMT codec for tegu SIT; [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) A2DP output without TAS; [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) speaker protection and gain contract; [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27) ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #27 end-to-end proof depends on #1 and #2. |
+| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | Completed prerequisites: #34 source mounts, #79 NV sizes, #81 scratch, #88 staging; #55/#59 AoC/TAS binding, #80 mic pickup, #83/#90 speaker NO-GO. Open: [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92) bounded manual CP boot and teardown (S2 met by one manual run on 1-r3: ONLINE about 13.9 min, no panic; RFS service not observed; new follow-ups for CP left `ONLINE` after a daemon stop and role loops left attached after a mounts stop; a checked-in active workflow is still blocked on #107 on-device control (1-r5), #108 decision binding, #109 teardown/observation design (PR #114); optional #110 rollback; fresh owner decision per mounts start and CP boot; S3 not started); [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) FMT codec for tegu SIT; [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) A2DP output without TAS; [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) speaker protection and gain contract; [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27) ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #27 end-to-end proof depends on #1 and #2. |
 | 2. Power and radios | [#9](https://github.com/h4rkl/omarchy-ferrix/issues/9) power key, blanking, suspend/wake, sensors; [#24](https://github.com/h4rkl/omarchy-ferrix/issues/24) Wi-Fi hardening; [#5](https://github.com/h4rkl/omarchy-ferrix/issues/5) Bluetooth pairing; [#7](https://github.com/h4rkl/omarchy-ferrix/issues/7) hidden Wi-Fi; [#8](https://github.com/h4rkl/omarchy-ferrix/issues/8) time/RTC | [#26](https://github.com/h4rkl/omarchy-ferrix/issues/26): charge/thermal/endurance, with screen-off drain dependent on #9. |
 | 3. Camera, location and other hardware | [#3](https://github.com/h4rkl/omarchy-ferrix/issues/3) camera; #9 owns orientation/proximity/ambient sensors | [#28](https://github.com/h4rkl/omarchy-ferrix/issues/28) GNSS/location; [#29](https://github.com/h4rkl/omarchy-ferrix/issues/29) NFC/fingerprint feasibility and proof. |
 | 4. App and shell usability | [#19](https://github.com/h4rkl/omarchy-ferrix/issues/19) browser performance/video/screen fit; [#4](https://github.com/h4rkl/omarchy-ferrix/issues/4) optional GPU; [#12](https://github.com/h4rkl/omarchy-ferrix/issues/12), [#21](https://github.com/h4rkl/omarchy-ferrix/issues/21), [#22](https://github.com/h4rkl/omarchy-ferrix/issues/22), [#23](https://github.com/h4rkl/omarchy-ferrix/issues/23) shell/navigation/notifications; [#14](https://github.com/h4rkl/omarchy-ferrix/issues/14) text; [#16](https://github.com/h4rkl/omarchy-ferrix/issues/16) pmOS QEMU graphics | No duplicate browser or shell issue. Keep browser usability evidence distinct from hardware GPU support. |
@@ -284,8 +287,9 @@ Claude an issue-scoped task packet; review its PR and evidence; then
 reconcile issue state, plan, status and matrix.
 
 Next actionable step from this snapshot: #92's S2 CP boot was observed
-once, by hand. First, build and flash a 1-r4 image. It carries `/mnt/vendor`
-(`02eebc7`) and the #107 opener-scan control. Then repeat the pre-mount
+once, by hand. First, build and flash a 1-r5 image. Its install scripts
+create `/mnt/vendor` (the 1-r4 packaged directory failed abuild's `/mnt`
+rule), and it carries the #107 opener-scan control. Then repeat the pre-mount
 preflight until it reports `opener_positive_control=detected`. File the two
 teardown follow-ups (the CP stays `ONLINE` after a daemon stop; role loops
 stay attached after a mounts stop), and feed them into the #109 design

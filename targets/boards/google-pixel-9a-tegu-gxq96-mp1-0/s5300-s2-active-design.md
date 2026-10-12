@@ -536,7 +536,7 @@ Proposal, for a later package slice:
 - Pin changes: the new `exynos-modem.initd` hash in
   `s5300-cpif-services.sha256` (`:3`); its sha512 and the pin file's sha512
   in `device-google-tegu/APKBUILD` (`:178`, `:196`); and a `pkgrel` bump to
-  the release after #107's 1-r4. The library's path list is unchanged
+  the release after 1-r5 (which carries #107). The library's path list is unchanged
   (`cpif.sh:56`). `cpif_modem_config` is unchanged, because the CLI is the
   same (`exynos-modem.initd:42-48`). The host preflight reads the expected
   release from the recipe (`s5300-s2-preflight.md:63-66`), so a stale image
@@ -748,7 +748,7 @@ state, and the run is governed by the supervisor's STOP rules and
 | C0 | This design, owner review | no |
 | C1 | Tier A OpenRC characterisation in a pinned container with the image's exact `openrc`/`busybox` versions; throwaway services and all C-arm/C-tok/C-fail/C-kill/C-crash/C-stop/C-use cases; results labelled `mock` | no |
 | C2 | Tier B checked-in workflow (throwaway services, C-hup, C-ver), its offline tests, then one lead-run exact-device pass after its own decision; reboot, then E1 and the preflight | yes (lead only; no S5300 service) |
-| C3 | Package release after #107's 1-r4: `output_log`/`error_log` (and `retry` if C1/C2 require it) in `exynos-modem.initd`; pins, sha512, `pkgrel`; the preflight's log-absent check; the F1 doc corrections; optionally the F4 `backends.env` check; image rebuild, then a pre-mount `go` on the device | read-only preflight only |
+| C3 | Package release after 1-r5 (which carries #107): `output_log`/`error_log` (and `retry` if C1/C2 require it) in `exynos-modem.initd`; pins, sha512, `pkgrel`; the preflight's log-absent check; the F1 doc corrections; optionally the F4 `backends.env` check; image rebuild, then a pre-mount `go` on the device | read-only preflight only |
 | C4 | Crash-signature review against pinned CPIF `a8976934` source (fetched to ignored `out/`), with file:line for each string, checked in as data; offline classifier tests | no |
 | C5 | Supervisor, launch and fetch bodies, host workflow and redaction, offline only against the fake guest and fixtures: every STOP, every teardown refusal, a lost heartbeat, a boot change, a stale lock, and the budget expiring between `arm` and `start` | no |
 | C6 | Owner decisions (mounts, CP boot), then the first physical S2 run by the lead | yes |

@@ -86,7 +86,8 @@ binding salt, was refused before the port was opened.
   `b90d3b41…f74b`, and the library must pin that same hash.
 - The pin list must name each of the seven pinned files exactly once. The
   expected releases are read from the recipes: `device-google-tegu`
-  `1-r4` (issue #107 opener-scan hardening), `modemmanager-samsung-sit`
+  `1-r5` (issue #107 opener-scan hardening and the #92 `/mnt/vendor`
+  install script), `modemmanager-samsung-sit`
   `1.25.95_git20260731-r3`, and
   `exynos-modem` `0.1.0_git20260731-r3`.
 
@@ -129,7 +130,7 @@ SHA-256 of the whole file before running it. The body:
 ## Check matrix
 
 "Now" means the check can pass on the current installed image. "New image"
-means it cannot pass until an image rebuilt with `device-google-tegu` 1-r4
+means it cannot pass until an image rebuilt with `device-google-tegu` 1-r5
 is flashed. "After mounts" means it is evaluated only after an
 owner-approved manual `rc-service ferrix-s5300-mounts start`. "Active" means
 only the later S2 workflow can observe it.
@@ -148,7 +149,7 @@ only the later S2 workflow can observe it.
 | Library `cpif_check_target` | — | pass | now |
 | Installed files vs checked-in | SHA-256 of the 7 pinned paths | all equal to the checked-in pins | **new image**: `s5300-cpif.sh` differs on 1-r3 and older |
 | On-device pins | `s5300-cpif-services.sha256` | `cpif_check_package` pass | now (older images are self-consistent) |
-| Releases | apk db | device 1-r4, modem r3, MM r3 | **new image**: any 1-r3 or older device package is skew |
+| Releases | apk db | device 1-r5, modem r3, MM r3 | **new image**: any older device package is skew (1-r3 and before; no 1-r4 image was built) |
 | Mounts service | installed SHA-256 | #34-accepted `b90d3b41…` | now |
 | CLI | `exynos-modem --print-config` | exact reviewed text | now (binary is r3) |
 | Surface | modules, platform, driver, `modem_state`, WWAN | three modules `Live`, one `cp_interface`, `OFFLINE`, no WWAN | now |
@@ -301,8 +302,9 @@ does not use that grep.
   the #107 positive control. Each scan reported `clean`, but it was not
   shown to be able to detect a holder.
 
-**Next.** First, a rebuilt 1-r4 image. It carries `/mnt/vendor` (`02eebc7`)
-and the #107 opener-scan control. Then a pre-mount preflight `go` with
+**Next.** First, a rebuilt 1-r5 image. Its install scripts create
+`/mnt/vendor` (the 1-r4 recipe's packaged directory, `02eebc7`, failed
+abuild's `/mnt` rule), and it carries the #107 opener-scan control. Then a pre-mount preflight `go` with
 `opener_positive_control=detected`. S3 (`sit-proxy`, ModemManager, SIM)
 has not started. S3 planning waits on the owner review of the #109 design.
 Each mounts start and CP boot still needs a fresh owner decision.
@@ -369,9 +371,9 @@ deferred. The aggregate transcript is ignored under
 scan hardening, so it reported none of the `opener_positive_control`,
 `opener_format_control`, `opener_major_foreign`, or `opener_vanished`
 facts, and its `clean` was never shown to be able to detect a holder. The
-checked-in expectation is now `device-google-tegu` 1-r4: a 1-r3 image also
+checked-in expectation is now `device-google-tegu` 1-r5: a 1-r3 image also
 reports `file-s5300-cpif.sh,pkg-device-google-tegu` skew. A rebuilt and
-reflashed 1-r4 image is
+reflashed 1-r5 image is
 required before the preflight can return `go`.
 
 ### Phases
@@ -394,7 +396,7 @@ OpenRC state directory, is NO-GO or `incomplete`.
 The guest body now runs the library's `cpif_opener_scan` and re-validates
 its facts before they leave the guest. The library is pinned, so these
 checks reach `arm`/`start_pre` only from a rebuilt `device-google-tegu`
-1-r4 image. **None of them has run on the exact phone yet.** Until a
+1-r5 image. **None of them has run on the exact phone yet.** Until a
 rebuilt image runs this preflight on `google-pixel-9a-tegu-gxq96-mp1-0`,
 they are offline (fixture) evidence only.
 
@@ -424,7 +426,7 @@ they are offline (fixture) evidence only.
   `task` directory is missing, empty, or unlistable makes the scan
   `incomplete`; before #107 such a pid dropped out silently.
 
-The physical run must show, on a rebuilt 1-r4 image:
+The physical run must show, on a rebuilt 1-r5 image:
 `opener_positive_control=detected`, `opener_format_control=matched`,
 `opener_major_foreign=0`, and `opener_scan=clean`. If the CPIF devices
 share a major with another driver, `opener_major_foreign` will block, and
@@ -720,8 +722,9 @@ for a fail-closed active command; see
   `just pixel-9a-dev-flash` by the lead, then a pre-mount `go` from this
   preflight on the exact device (see the result above). Re-run the
   preflight after any reflash or reboot.
-- After #107 (`device-google-tegu` 1-r4, opener-scan positive control): a
-  rebuilt 1-r4 image flashed the same way, and a pre-mount `go` that reports
+- After #107 (opener-scan positive control; first in the 1-r4 recipe, which
+  never built, and carried by `device-google-tegu` 1-r5): a rebuilt 1-r5
+  image flashed the same way, and a pre-mount `go` that reports
   `opener_positive_control=detected`, `opener_format_control=matched` and
   `opener_major_foreign=0` on the exact device.
 - A fresh, recorded owner decision for one S2 run, a per-run typed phrase

@@ -48,7 +48,7 @@ checked-in S2 workflow.
    `arm` worked on a stopped service, the token was used once, and `stop`
    on a live pidfile daemon returned 0. A failed or killed `start_pre`, and
    stop on a crashed daemon, are still unobserved.*
-3. **The opener scan lacks a positive control on the device.** *(Offline fix in #107, `device-google-tegu` 1-r4; open until a rebuilt image passes on the exact phone.)* The scan
+3. **The opener scan lacks a positive control on the device.** *(Offline fix in #107, first in the `device-google-tegu` 1-r4 recipe, which never built; the first buildable image is 1-r5. Open until a rebuilt image passes on the exact phone.)* The scan
    matches holders by `stat -L` device number on every thread's fd table, and
    it fails closed on unreadable entries. On the one exact-device run it
    returned `clean`, but it has never been shown to *detect* a holder with
