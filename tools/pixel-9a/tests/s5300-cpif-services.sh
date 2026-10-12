@@ -22,7 +22,7 @@ lib="$pkg/ferrix-s5300-cpif.sh"
 pins="$pkg/s5300-cpif-services.sha256"
 accepted_mounts_sha256=b90d3b41ac175c93e5da5db0858327157da414bc9ca06d403c598108db22f74b
 work=$(mktemp -d "${TMPDIR:-/tmp}/ferrix-s5300-cpif.XXXXXX")
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+trap 'chmod -R u+rwx "$work" 2>/dev/null; rm -rf "$work"' EXIT HUP INT TERM
 fails=0
 
 fail() {
@@ -161,36 +161,59 @@ bin="$work/bin"
 mkdir -p "$bin"
 cat >"$bin/stat" <<'EOF'
 #!/usr/bin/env python3
+# stat [-L] -c FMT [--] FILE...: FIFOs stand in for CPIF character devices,
+# with the device number looked up by the name the path resolves to. Like
+# stat(1), it prints every file it can and exits 1 if any failed.
 import os, stat, sys
 args = sys.argv[1:]
 follow = args[:1] == ["-L"]
 args = args[1:] if follow else args
-if len(args) != 3 or args[0] != "-c":
+if len(args) < 3 or args[0] != "-c":
     sys.exit(64)
-fmt, path = args[1], args[2]
-try:
-    st = os.stat(path) if follow else os.lstat(path)
-except OSError:
-    sys.exit(1)
-rdev = ""
-if stat.S_ISFIFO(st.st_mode):
+fmt, paths = args[1], args[2:]
+if paths[:1] == ["--"]:
+    paths = paths[1:]
+vanish = os.environ.get("FAKE_VANISH", "")
+status = 0
+for path in paths:
+    if vanish and path == vanish:
+        # The fd is closed between the directory glob and the stat.
+        os.unlink(path)
     try:
-        with open(os.path.join(os.environ["FAKE_RDEV"], os.path.basename(path))) as f:
-            rdev = f.read().strip()
+        st = os.stat(path) if follow else os.lstat(path)
     except OSError:
-        pass
-major, minor = (rdev.split() + ["", ""])[:2]
-values = {"t": major, "T": minor, "u": str(st.st_uid), "g": str(st.st_gid),
-          "a": "%o" % stat.S_IMODE(st.st_mode), "h": str(st.st_nlink), "s": str(st.st_size)}
-out, i = "", 0
-while i < len(fmt):
-    if fmt[i] == "%" and i + 1 < len(fmt):
-        out += values[fmt[i + 1]]
-        i += 2
-    else:
-        out += fmt[i]
-        i += 1
-print(out)
+        status = 1
+        continue
+    rdev, kind = "", "regular file"
+    if stat.S_ISDIR(st.st_mode):
+        kind = "directory"
+    elif stat.S_ISLNK(st.st_mode):
+        kind = "symbolic link"
+    elif stat.S_ISCHR(st.st_mode):
+        kind = "character special file"
+        rdev = "%x %x" % (os.major(st.st_rdev), os.minor(st.st_rdev))
+    elif stat.S_ISFIFO(st.st_mode):
+        name = os.path.basename(os.path.realpath(path) if follow else path)
+        try:
+            with open(os.path.join(os.environ["FAKE_RDEV"], name)) as f:
+                rdev = f.read().strip()
+            kind = "character special file"
+        except OSError:
+            kind = "fifo"
+    major, minor = (rdev.split() + ["", ""])[:2]
+    values = {"t": major, "T": minor, "u": str(st.st_uid), "g": str(st.st_gid),
+              "a": "%o" % stat.S_IMODE(st.st_mode), "h": str(st.st_nlink), "s": str(st.st_size),
+              "n": path, "F": kind}
+    out, i = "", 0
+    while i < len(fmt):
+        if fmt[i] == "%" and i + 1 < len(fmt):
+            out += values[fmt[i + 1]]
+            i += 2
+        else:
+            out += fmt[i]
+            i += 1
+    print(out)
+sys.exit(status)
 EOF
 cat >"$bin/uname" <<'EOF'
 #!/bin/sh
@@ -214,6 +237,7 @@ repin() {
 
 # A fresh, passing google-kleaf-cpif fixture at $fx.
 build_fixture() {
+	[ ! -d "$work/fx" ] || chmod -R u+rwx "$work/fx"
 	rm -rf "$work/fx"
 	fx="$work/fx"
 	mkdir -p "$fx"
@@ -223,7 +247,7 @@ build_fixture() {
 	: >"$FAKE_LOG"
 	mkdir -p "$fx/etc/ferrix" "$fx/etc/init.d" "$fx/usr/lib/ferrix" "$fx/usr/share/ferrix/pixel-9a" \
 		"$fx/usr/lib/udev/rules.d" "$fx/usr/sbin" "$fx/lib/apk/db" "$fx/proc/device-tree" "$fx/proc/self" \
-		"$fx/proc/100/fd" "$fx/sys/bus/platform/devices" "$fx/sys/bus/platform/drivers/cp_interface" \
+		"$fx/proc/100/task/100/fd" "$fx/proc/100/task/101/fd" "$fx/proc/self/ns" "$fx/sys/bus/platform/devices" "$fx/sys/bus/platform/drivers/cp_interface" \
 		"$fx/sys/class" "$fx/dev" "$fx/run" "$fx/rdev" "$fx/mnt/vendor/modem_img/images/default" \
 		"$fx/mnt/vendor/efs" "$fx/mnt/vendor/persist/modem" "$fx/vendor/firmware/uecapconfig" \
 		"$fx/vendor/firmware/carrierconfig"
@@ -277,7 +301,9 @@ EOF
 	printf 'cpif 1 0 - Live 0x0\nshm_ipc 1 0 - Live 0x0\ncpif_page 1 0 - Live 0x0\nbcmdhd 1 0 - Live 0x0\n' \
 		>"$fx/proc/modules"
 	printf '22 1 0:20 / /run rw,nosuid,nodev - tmpfs tmpfs rw,mode=755\n' >"$fx/proc/self/mountinfo"
-	ln -s /dev/null "$fx/proc/100/fd/0"
+	ln -s /dev/null "$fx/proc/100/task/100/fd/0"
+	ln -s /dev/null "$fx/proc/100/task/101/fd/0"
+	ln -s 'pid:[4026531836]' "$fx/proc/self/ns/pid"
 	cp_dev="$fx/sys/bus/platform/devices/cp"
 	mkdir -p "$cp_dev/of_node"
 	printf 'samsung,exynos-cp\000' >"$cp_dev/of_node/compatible"
@@ -475,7 +501,26 @@ pf 'a subsystem mismatch' "subsystem 'misc'" \
 	'rm "$fx/sys/class/cpif/umts_rfs0/subsystem"; ln -s ../../../class/misc "$fx/sys/class/cpif/umts_rfs0/subsystem"'
 pf 'a device-number mismatch' 'is not the device that sysfs names umts_boot0' 'echo 227:99 >"$fx/sys/class/cpif/umts_boot0/dev"'
 pf 'an unreadable device number' 'cannot read the device number' 'rm "$fx/rdev/umts_ipc0"'
-pf 'a node already held by a process' '/dev/oem_ipc1 is already open (pid 100)' 'ln -s /dev/oem_ipc1 "$fx/proc/100/fd/7"'
+pf 'a node already held by a process' '/dev/oem_ipc1 is already open (pid 100)' 'ln -s "$fx/dev/oem_ipc1" "$fx/proc/100/task/100/fd/7"'
+# Issue #92 opener-scan hardening: match by device number, read every
+# thread's fd table, and fail closed on anything the scan cannot read.
+pf 'a node held through another path to the same device' '/dev/umts_boot0 is already open (pid 100)' \
+	'mkdir -p "$fx/elsewhere"; mkfifo "$fx/elsewhere/alias"; cp "$fx/rdev/umts_boot0" "$fx/rdev/alias"; ln -s "$fx/elsewhere/alias" "$fx/proc/100/task/100/fd/9"'
+pf 'a node held only by a non-leader thread' '/dev/umts_rfs0 is already open (pid 100)' \
+	'ln -s "$fx/dev/umts_rfs0" "$fx/proc/100/task/101/fd/4"'
+pf 'a held CPIF device outside the twelve E1 names' '/dev/umts_router is already open (pid 100)' \
+	'mkfifo "$fx/umts_router"; echo "e3 40" >"$fx/rdev/umts_router"; mkdir -p "$fx/sys/class/cpif/umts_router"; echo 227:64 >"$fx/sys/class/cpif/umts_router/dev"; ln -s "$fx/umts_router" "$fx/proc/100/task/100/fd/5"'
+pf 'an fd directory that cannot be listed' 'could not read every open file' 'chmod 000 "$fx/proc/100/task/101/fd"'
+pf 'a live fd that cannot be stated' 'could not read every open file' 'ln -s "$fx/gone" "$fx/proc/100/task/100/fd/8"'
+pf 'a scan outside the initial PID namespace' 'initial PID namespace' \
+	'rm "$fx/proc/self/ns/pid"; ln -s "pid:[4026532001]" "$fx/proc/self/ns/pid"'
+pf 'an unreadable PID namespace' 'initial PID namespace' 'rm "$fx/proc/self/ns/pid"'
+run_case 'cpif: an fd closed during the scan is churn, not a refusal' ok '' exynos-modem preflight \
+	'ln -s "$fx/gone" "$fx/proc/100/task/100/fd/8"; export FAKE_VANISH="$fx/proc/100/task/100/fd/8"'
+run_case 'cpif: a task that exits during the scan is churn, not a refusal' ok '' exynos-modem preflight \
+	'mkdir -p "$fx/proc/200/task"; ln -s "$fx/gone" "$fx/proc/200/task/200"'
+run_case 'cpif: a held non-CPIF character device is not a holder' ok '' exynos-modem preflight \
+	'ln -s /dev/null "$fx/proc/100/task/100/fd/3"; mkfifo "$fx/other"; echo "e3 63" >"$fx/rdev/other"; ln -s "$fx/other" "$fx/proc/100/task/100/fd/6"'
 
 # --- source mounts and inputs -----------------------------------------------
 pf 'unstarted source mounts' 'start ferrix-s5300-mounts manually' 'export FAKE_STARTED=ferrix-radio-firmware'
@@ -512,7 +557,7 @@ run_case 'cpif: provision refuses another target' fail 'refuses FERRIX_TARGET' e
 	'rmdir "$fx/run/exynos-modem"; sed -i.bak "s/^FERRIX_TARGET=.*/FERRIX_TARGET=x/" "$fx/etc/ferrix/backends.env"'
 
 # --- sit-proxy ----------------------------------------------------------------
-online='echo ONLINE >"$fx/sys/bus/platform/devices/cp/modem_state"; export FAKE_STARTED="ferrix-s5300-mounts ferrix-radio-firmware exynos-modem"; ln -s /dev/umts_boot0 "$fx/proc/100/fd/3"; ln -s /dev/umts_rfs0 "$fx/proc/100/fd/4"; ln -s /dev/oem_ipc1 "$fx/proc/100/fd/5"'
+online='echo ONLINE >"$fx/sys/bus/platform/devices/cp/modem_state"; export FAKE_STARTED="ferrix-s5300-mounts ferrix-radio-firmware exynos-modem"; ln -s "$fx/dev/umts_boot0" "$fx/proc/100/task/100/fd/3"; ln -s "$fx/dev/umts_rfs0" "$fx/proc/100/task/100/fd/4"; ln -s "$fx/dev/oem_ipc1" "$fx/proc/100/task/100/fd/5"'
 run_case 'cpif: sit-proxy starts after exynos-modem has the CP ONLINE' ok '' sit-proxy \
 	'preflight && start_pre && grep -qx "checkpath -d -m 0755 /run/sit-proxy" "$FAKE_LOG"' "$online"
 run_case 'cpif: sit-proxy refuses an OFFLINE CP' fail "'OFFLINE', not ONLINE" sit-proxy start_pre \
@@ -520,7 +565,7 @@ run_case 'cpif: sit-proxy refuses an OFFLINE CP' fail "'OFFLINE', not ONLINE" si
 run_case 'cpif: sit-proxy refuses without a running exynos-modem' fail 'needs a running exynos-modem' sit-proxy start_pre \
 	'echo ONLINE >"$fx/sys/bus/platform/devices/cp/modem_state"'
 run_case 'cpif: sit-proxy refuses an FMT node someone else holds' fail '/dev/umts_ipc1 is already open' sit-proxy start_pre \
-	"$online; ln -s /dev/umts_ipc1 \"\$fx/proc/100/fd/6\""
+	"$online; ln -s \"\$fx/dev/umts_ipc1\" \"\$fx/proc/100/task/101/fd/6\""
 run_case 'cpif: sit-proxy refuses a missing FMT node' fail 'umts_ipc0 is missing' sit-proxy start_pre \
 	"$online; rm \"\$fx/dev/umts_ipc0\""
 run_case 'cpif: sit-proxy refuses another kernel' fail 'not the pinned Kleaf' sit-proxy preflight \

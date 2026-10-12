@@ -89,13 +89,12 @@ looked at the kernel log and run the preflight again, rather than reopening
 
 The checks live in `pmos/device-google-tegu/ferrix-s5300-cpif.sh`, which is
 installed as `/usr/lib/ferrix/s5300-cpif.sh` and sourced by both init scripts.
-They never open a CPIF node. `/dev` is touched only by `-L`/`-c` file tests,
-`stat(2)`, and `readlink(2)` of `/proc/<pid>/fd` links. Per-unit files are
+They never open a CPIF node. `/dev` is touched only by `-L`/`-c` file tests
+and `stat(2)`, and open files only by `stat(2)` through
+`/proc/<pid>/task/<tid>/fd` links. Per-unit files are
 checked by `stat(2)` only. No firmware or NV byte is read or copied. Package,
-identity, node and mount mismatches are refusals. The `/proc/<pid>/fd` opener
-scan is a snapshot and can miss an inaccessible link or an alternate name
-for the same character device; issue #92 must harden and review that scan
-before an active CP boot.
+identity, node and mount mismatches are refusals. The opener scan was hardened for issue #92
+(see "Opener scan" below).
 
 `rc-service exynos-modem preflight` checks, in order:
 
@@ -127,7 +126,8 @@ before an active CP boot.
    symlink. It must have exactly one `/sys/class/*/<node>` entry, in class
    `cpif`, with subsystem `cpif`, whose `dev` equals the node's device number.
    A missing, ambiguous, mismatched, or foreign node is refused.
-6. **Openers**: no `/proc/<pid>/fd` link names any of the twelve nodes.
+6. **Openers**: no task holds any device in the `cpif` sysfs class (the
+   twelve nodes and any other class entry), by the opener scan below.
 7. **Sources**: `ferrix-s5300-mounts` must already be started. The installed
    service must hash to the #34-accepted
    `b90d3b41…f74b`. Its own `verify_own_mount` is then run, unchanged, in a
@@ -177,6 +177,34 @@ start`. That run needs its own checked-in, bounded workflow; this change does
 not perform or authorise it. Issue #92 owns that workflow and its fresh
 owner decision, including opener-scan hardening and enforced stop order.
 
+## Opener scan (issue #92 hardening)
+
+`cpif_holders` / `cpif_check_unheld` in the library replace the earlier
+`readlink` string comparison:
+
+- **Aliases.** A holder is matched by device number, not by path. Each
+  `/proc/<pid>/task/<tid>/fd/<n>` magic link is `stat -L`'d (stat(2), never
+  open(2)), and its `%F` and `%t:%T` are compared with the `dev` attribute
+  of each named class entry. Another node with the same numbers, a deleted
+  node, or a path in another mount namespace (for example the Waydroid
+  container) therefore counts as a holder.
+- **Threads.** Every thread's fd directory is read, not only the leader's.
+  This covers a thread with an unshared fd table and a zombie leader.
+- **Fail closed.** The scan refuses (status 2) when the shell is not in the
+  initial PID namespace (`/proc/self/ns/pid` must be `pid:[4026531836]`), when
+  a live task's fd directory cannot be listed, when a live fd cannot be
+  `stat`'ed, or when the scan subshell does not reach its completion line.
+- **Churn.** A task or fd that has gone when it is re-checked is treated as
+  exited or closed and skipped. That is a bounded race and is not a
+  refusal.
+
+Remaining limits: the scan is a snapshot, so an open after a task was read
+is not seen. A later scan (for example `start_pre` after `arm`) narrows this
+window but does not close it. SCM_RIGHTS fds in flight, io_uring fixed files,
+mappings whose fd was closed, and kernel-internal references are not visible.
+The cost is one `stat` per open descriptor plus a slow path for failures, so
+it grows with task and descriptor counts. It has not been timed on the device.
+
 ## Files
 
 | File | Change |
@@ -185,7 +213,7 @@ owner decision, including opener-scan hardening and enforced stop order.
 | `pmos/device-google-tegu/sit-proxy.initd` | per-backend CLI/supervision; per-backend `depend()` (CPIF: `use` the mounts and `exynos-modem`); CPIF `preflight` and `start_pre` |
 | `pmos/device-google-tegu/ferrix-s5300-cpif.sh` | new check library (`/usr/lib/ferrix/s5300-cpif.sh`) |
 | `pmos/device-google-tegu/s5300-cpif-services.sha256` | new installed pin list |
-| `pmos/device-google-tegu/APKBUILD` | pkgrel 2; installs the two new files; S5300 services out of the runlevel list; sha512 re-pins |
+| `pmos/device-google-tegu/APKBUILD` | pkgrel 3 (issue #92 opener scan; was 2); installs the two new files; S5300 services out of the runlevel list; sha512 re-pins |
 | `pmos/device-google-tegu/s5300-userspace-sources.toml` | records `start_policy = "manual-only"` and both backends |
 | `pmos/device-google-tegu/ferrix-backends.env` | comment only; the package value stays `linux-google-tegu-wwan` |
 | `pmos/modemmanager-samsung-sit/{modemmanager.initd,APKBUILD}` | `need` → `use`; pkgrel 3 |
@@ -291,7 +319,7 @@ On the exact booted phone, from an image built through the checked-in
 builder and flashed through the recovery-gated workflow, with no modem
 service started and no CPIF node opened:
 
-1. The installed `device-google-tegu` is pkgrel 2, `modemmanager-samsung-sit`
+1. The installed `device-google-tegu` is pkgrel 3 (issue #92 library), `modemmanager-samsung-sit`
    pkgrel 3, and `exynos-modem` `0.1.0_git20260731-r3`. Each path in
    `/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256` matches
    (`sha256sum -c`), and `/etc/init.d/ferrix-s5300-mounts` still hashes to
