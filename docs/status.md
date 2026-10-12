@@ -1,5 +1,21 @@
 # Status
 
+## 2026-10-12 (S5300 CPIF userspace adapter; offline only)
+
+- PR #82 adds hash-pinned, target-local patches to the pinned GPL
+  `exynos-modem` and `sit-proxy` source for Google's Kleaf CPIF ABI on
+  `google-pixel-9a-tegu-gxq96-mp1-0`. An explicit backend handles reset and
+  SRINFO ioctl layouts, keeps the OEM node open across empty reads, and fixes
+  the CPIF device paths. The default WWAN backend remains selected; the Pixel
+  init scripts still refuse CPIF and no modem service starts by default.
+- The pinned archive and both patches applied cleanly in the offline suite;
+  31 `exynos-modem`, 25 `sit-proxy`, and 9 FFI tests passed, as did 14 CLI
+  contract checks. This is code evidence only. No new image was built or run
+  on the phone, and no CP boot, SIM, data, SMS, or call claim follows. Before
+  an S2 trial, #79 must verify NV input sizes, #81 must harden the daemon's
+  fixed `/tmp` NV scratch paths, and the separate integration and runtime
+  compatibility gates must pass.
+
 ## 2026-10-12 (S5300 E1 pre-boot inventory; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The checked-in read-only E1 host probe from PR #78 ran over CDC-ACM against
