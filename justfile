@@ -622,6 +622,13 @@ pixel-9a-s5300-s2-preflight:
 pixel-9a-s5300-s2-preflight-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-s2-preflight.sh"
 
+# Issue #108 offline decision-binding checker for S2 preflight records:
+# `check` validates a binding-*.rec against a fresh preflight transcript;
+# `consume` renames it (single use) and then validates. Local files only;
+# never contacts a device and never authorises a CP boot by itself.
+pixel-9a-s5300-s2-binding mode record facts:
+    @sh "{{root}}/tools/pixel-9a/s5300-s2-binding.sh" "{{mode}}" "{{record}}" "{{facts}}"
+
 # Generic, vendor-agnostic read-only device front door. Discovery only uses
 # adb devices/getprop and fastboot devices/getvar; matching, proposing, and
 # pinned downloads never contact a device. Mutation lives only in target-scoped

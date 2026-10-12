@@ -1,5 +1,33 @@
 # Status
 
+## 2026-10-12 (S5300 S2 decision binding, issue #108; offline only, no physical claim)
+
+- The read-only `just pixel-9a-s5300-s2-preflight` now reports a redacted
+  per-unit identity and per-boot identity (`unit_identity`,
+  `boot_identity`). Each is a 16-hex salted SHA-256 prefix, computed in the
+  guest with a host-only salt from the ignored
+  `out/pixel-9a/s5300-s2-binding/salt` (0700/0600). Raw serials, boot IDs
+  and the salt never reach a transcript, summary or stdout.
+- The unit source is the first of four candidates present: bootconfig
+  `androidboot.serialno`, cmdline `androidboot.serialno`, DT
+  `serial-number`, or `gs-chipid` `unique_id`. Which one tegu exposes is
+  **unconfirmed** and needs a physical read-only run. An unavailable
+  identity leaves `preflight_result` unchanged and refuses only the
+  binding.
+- A `go` with both identities writes a single-use, HMAC-sealed,
+  10-minute decision-binding record. The new offline
+  `tools/pixel-9a/s5300-s2-binding.sh` (`check`/`consume`, also
+  `just pixel-9a-s5300-s2-binding`) refuses records from `no-go`,
+  `incomplete` or mock runs, from another unit or boot, with changed pins
+  or factory pin, expired, edited, or already consumed. The binding contract
+  is in `s5300-s2-preflight.md`.
+- Offline tests only (macOS host awk; mawk/gawk and shellcheck were not
+  available). Nothing ran on the phone. `[telephony]` remains
+  `unsupported`, and no CP boot is authorised.
+- Host-side scripts only. No packaged file changed, so `device-google-tegu`
+  stays at 1-r4 and the identity facts sit beside the #107 opener-control
+  facts in the same preflight summary.
+
 ## 2026-10-12 (S5300 CPIF opener-scan positive control, issue #107; offline only)
 
 - The pinned CPIF library (`ferrix-s5300-cpif.sh`, `device-google-tegu`

@@ -20,6 +20,7 @@ and opener scan).
 ```sh
 just pixel-9a-s5300-s2-preflight        # tools/pixel-9a/s5300-s2-preflight.sh
 just pixel-9a-s5300-s2-preflight-test   # offline tests only
+just pixel-9a-s5300-s2-binding check|consume RECORD FACTS   # offline (#108)
 ```
 
 The workflow has one mode, and that mode is read-only. It takes no
@@ -40,17 +41,37 @@ Outputs go, mode 0600, to the ignored `out/pixel-9a/s5300-s2-preflight/`:
   `opener_scan`, `opener_positive_control`,
   `deferred_to_active_workflow`, `cp_nodes_opened: false`,
   `state_changes: "none"`, `cp_boot_authorized: false`, and
-  `active_s2_workflow: "not-implemented"`.
+  `active_s2_workflow: "not-implemented"`. Since issue #108 it also has
+  `unit_identity`, `unit_identity_source`, `boot_identity`,
+  `binding_salt_id`, `decision_binding`, `decision_binding_id`, and
+  `decision_binding_record`.
+- `binding-<stamp>.rec`, only for a `go` with both identities available: the
+  single-use decision-binding record (see
+  [Decision binding](#redacted-identity-and-decision-binding-issue-108)).
+  It is also appended to the end of its transcript.
+
+New `key=value` lines (issue #108; every earlier key and exit code is
+unchanged): `session_header=binding-salt` and `binding_salt_id` in the
+transcript header; `unit_identity`, `unit_identity_source`,
+`unit_identity_state`, `boot_identity`, `boot_identity_state`,
+`decision_binding` (`written`, `refused-no-go`, `refused-incomplete`,
+`unit-identity-unavailable`, or `boot-identity-unavailable`) and
+`decision_binding_id` (32 hex or `none`) on stdout and in the transcript;
+and `decision_binding_record=<path>` on stdout when a record is written.
+The raw probe section gains `unit_id_source`, `unit_id_state`,
+`unit_id_hash`, `boot_id_state`, and `boot_id_hash`.
 
 These files contain no serial, port name, partition label, block device
 name, file name under `/mnt/vendor`, PID, kernel log, IMEI/SIM data, or
-per-unit bytes. CPIF holder task names are reduced to the known service
+per-unit bytes. The unit and the boot appear only as salted 16-hex
+SHA-256 prefixes, and the salt never appears. CPIF holder task names are reduced to the known service
 names or `other`; any unexpected CPIF class entry is also `other`.
 Package-file hashes and versions are included.
 
 Exit status: 0 `go`, 8 `no-go`, 9 `incomplete`; 2 usage; 3 transport or guest
 failure; 4 not the exact tegu device tree; 5 malformed or incomplete probe
-output; 6 a host input was refused before the port was opened.
+output (including inconsistent identity fields); 6 a host input, or the
+binding salt, was refused before the port was opened.
 
 ## What runs where
 
@@ -76,9 +97,12 @@ and SHA-256 (`host_recovery_factory_archive=verified`). Anything else is a
 `host_blockers` entry. The workflow does not run or test a restore, and it
 cannot show that the restore would work on the device today.
 
-**Guest, one CDC-ACM session.** `acm-probe.py` sends one file made of the
-checked-in library followed by `tools/pixel-9a/s5300-s2-preflight-remote.sh`.
-The guest checks its SHA-256 before running it. The body:
+**Guest, one CDC-ACM session.** `acm-probe.py` sends one file made of one
+`s2_salt=<64 hex>` line, then the checked-in library, then
+`tools/pixel-9a/s5300-s2-preflight-remote.sh`. The transcript's
+`composed_probe_sha256` is still the hash of the library plus body only, so
+it stays reproducible and never depends on the salt. The guest checks the
+SHA-256 of the whole file before running it. The body:
 
 - refuses to run without the library (exit 5) or on another device tree
   (exit 4);
@@ -91,7 +115,8 @@ The guest checks its SHA-256 before running it. The body:
   `/proc/<pid>/task/<tid>/fd` links;
 - parses `backends.env` without sourcing it, and reads only the
   `androidboot.slot_suffix` and `androidboot.revision` keys from
-  bootconfig/cmdline;
+  bootconfig/cmdline, plus the identity candidates and boot ID below, which
+  it only hashes;
 - runs the installed `exynos-modem --print-config` only if the apk database
   names the pinned release;
 - runs the accepted service's `verify_own_mount`, through the library's
@@ -114,6 +139,8 @@ only the later S2 workflow can observe it.
 | Root | `id -u` | 0 | now |
 | Slot | bootconfig, then cmdline | exactly one of `_a`/`_b` | now |
 | Hardware revision | bootconfig `androidboot.revision` | `MP1.0`; absent → `incomplete` | **unknown**: the guest has never been read for this key (see limits) |
+| Unit identity (#108) | first of the four candidates below | reported only; never a blocker or unknown. `go` + `ok` is needed for a binding record | **unconfirmed** on tegu |
+| Boot identity (#108) | `/proc/sys/kernel/random/boot_id` | reported only; `go` + `ok` is needed for a binding record | **unconfirmed** on tegu |
 | PID namespace | `/proc/self/ns/pid` | initial namespace | now |
 | Backend | `backends.env` (parsed) | target exact, `google-kleaf-cpif` | now (composer sets it) |
 | Library `cpif_check_target` | — | pass | now |
@@ -289,6 +316,192 @@ that needs its own review rather than a relaxed check.
   run exercised the guest BusyBox tools, real OpenRC state directories and
   CDC-ACM link for this read-only path. It did not exercise active S2.
 
+## Redacted identity and decision binding (issue #108)
+
+Blocker 4 of the #92 active-S2 analysis: an S2 owner decision must be bound
+to the exact observed unit and boot, and a decision recorded against a
+non-`go` preflight (for example the 1-r2 run) must never satisfy a later
+image. This section is offline work. No physical run has exercised it yet.
+
+### Identity sources
+
+The guest tries these in a fixed order. The first one present wins. A
+candidate that is present but repeated (`ambiguous`) or outside
+`[A-Za-z0-9._:-]{4,64}` (`malformed`) stops the search. There is no
+fallback past it, so a later candidate can never replace a damaged earlier
+one.
+
+| Order | `unit_id_source` | Read from | Evidence on tegu |
+| --- | --- | --- | --- |
+| 1 | `bootconfig-serialno` | `androidboot.serialno` in `/proc/bootconfig` (exact key, like the slot and revision) | Expected, not observed. `audio-route-decision.md` records that bootconfig and cmdline carry `androidboot.serialno`. The #92 exact-device run read ABL's `androidboot.revision=MP1.0` from bootconfig, but never this key. |
+| 2 | `cmdline-serialno` | `androidboot.serialno=` token in `/proc/cmdline` | Same note as order 1. Older boot-image routes put it here. |
+| 3 | `dt-serial-number` | `/proc/device-tree/serial-number` | Unverified. No checked-in inventory reads it. |
+| 4 | `chipid-unique-id` | `/sys/devices/system/chip-id/unique_id` (Google downstream `gs-chipid`) | Unverified. The path is assumed and has not been observed on this kernel. |
+
+The unit hash covers the source name and the value
+(`<source>:<value>`), so two sources never compare equal. If a later boot
+reports another source, the unit no longer matches and the binding is
+refused.
+
+Boot identity is the kernel's per-boot random UUID,
+`/proc/sys/kernel/random/boot_id`. It must be 36 characters of `[0-9a-f-]`.
+It is standard Linux procfs, but it has not been observed on tegu.
+
+States: `unit_id_state` and `boot_id_state` are `ok`, `absent`,
+`malformed`, `no-salt`, or `no-hasher`, and the unit can also be
+`ambiguous`. A hash (16 hex) is printed exactly when the state is `ok`.
+Otherwise the hash is `unavailable`. The host refuses inconsistent
+combinations with exit 5.
+
+### Salt and redaction design
+
+- **Salt.** 32 random bytes as hex, in the ignored
+  `out/pixel-9a/s5300-s2-binding/salt` (directory 0700, file 0600, owned by
+  the user). It is created once with `O_EXCL` on first use. A salt or
+  directory with another owner or mode, or another size, is refused (exit
+  6), never repaired. It is never printed, logged, committed, or passed as
+  an argument. `binding_salt_id` is a public 16-hex fingerprint
+  (`SHA-256("ferrix-s5300-s2-salt-id-v1\n" salt "\n")`).
+- **Hash in the guest.** The host prepends the salt to the session as the
+  only header line. The guest reads each raw value into a shell variable and
+  feeds `ferrix-s5300-s2-unit-v1\n<salt>\n<source>:<value>\n` (or the
+  `boot` form) to `sha256sum` on stdin with the `printf` builtin, so the
+  value never appears on an argument vector. It prints only the first 16 hex
+  digits, then unsets the salt and both raw values before running any other
+  program. The salt is never exported, so `exynos-modem --print-config` and
+  `blkid` never inherit it.
+- **Why not hash on the host?** That would put the raw serial and boot ID
+  across the transport and into the host's work files. Hashing in the guest
+  means that neither raw value ever leaves the guest.
+- **Why salt?** A serial is short, structured, and visible on the box, in
+  Fastboot, and in ADB. An unsalted hash in a transcript that gets shared
+  would let anyone confirm a guessed serial. A 256-bit host secret makes the
+  prefix unlinkable without the salt. One persistent salt per host, not one
+  per run, keeps the unit hash stable across boots, which is what binding
+  needs. 64 bits is ample to tell one unit from another.
+- **Transport.** The salt travels inside the base64 probe that
+  `acm-probe.py` sends after `stty -echo`. It runs piped to `sh`, so it is
+  not in shell history (the bootstrap line holds only the nonce, hash, and
+  line count). Only framed probe output is kept. The session file sits in
+  the private `mktemp` work directory, which is removed on exit.
+- **Threat model.** This protects against accidental disclosure in
+  transcripts and against stale or reused decisions. It does not protect
+  against someone who already runs as the owner and can read the salt.
+
+### Unavailable identity: reported, binding fails closed
+
+An unavailable unit or boot identity is **not** a blocker or an unknown.
+It never changes `preflight_result` or the exit status. It only sets
+`decision_binding=unit-identity-unavailable` (or `boot-...`) and writes no
+record. This is deliberate. `preflight_result` answers one question: does a
+read-only device fact block the next step? Identity says nothing about CP,
+node, mount, or service state. Making it `incomplete` would also stop the
+first physical run from reaching a pre-mount `go` before anyone has
+confirmed which identity source tegu actually exposes. Safety holds anyway,
+because every later action needs a valid, consumed record, and no record
+can exist without both identities.
+
+### Decision-binding record
+
+A record is written only when `preflight_result=go` and both identities are
+`ok`. It goes, mode 0600, to `binding-<stamp>-<pid>.rec` beside the
+transcript, and is appended to the end of the transcript under
+`## decision binding (single use; s5300-s2-preflight.md)`. It has exactly
+these `key=value` lines, in this order (`s2b_record_keys` in
+`tools/pixel-9a/s5300-s2-binding-lib.sh`):
+
+| Key | Meaning |
+| --- | --- |
+| `record`, `record_version` | `ferrix-s5300-s2-decision-binding`, `1` |
+| `record_id` | 32 random hex; the owner's typed decision must name it |
+| `target_id`, `evidence` | exact target; `physical:<target>` or `mock` |
+| `preflight_result`, `preflight_gate`, `preflight_phase` | `go`; `go` or `not-evidence-mock`; `pre-mount` or `post-mount` |
+| `unit_identity`, `unit_identity_source`, `boot_identity` | salted prefixes and source |
+| `binding_salt_id` | fingerprint of the salt that made the hashes and the seal |
+| `kernel_release`, `slot_suffix` | observed |
+| `library_sha256`, `probe_body_sha256`, `composed_probe_sha256` | checked-in library, body, and library+body |
+| `package_pins_sha256`, `mounts_service_sha256` | `s5300-cpif-services.sha256` and the #34 mounts service |
+| `pkg.device-google-tegu`, `pkg.exynos-modem`, `pkg.modemmanager-samsung-sit` | checked-in releases (equal to installed, since `go`) |
+| `factory_archive_sha256`, `host_recovery_factory_archive` | pinned factory archive hash; `verified` |
+| `preflight_transcript`, `preflight_transcript_sha256` | transcript name and the SHA-256 of every line before the binding section |
+| `created_epoch`, `expires_epoch` | host clock; expiry is exactly 600 s later |
+| `single_use`, `cp_boot_authorized` | `consume-by-rename`; `no` |
+| `record_mac` | HMAC-SHA-256 of all lines above, keyed by the salt |
+
+### Checker contract (`tools/pixel-9a/s5300-s2-binding.sh`)
+
+```sh
+s5300-s2-binding.sh check   RECORD FACTS   # validate only
+s5300-s2-binding.sh consume RECORD FACTS   # rename first, then validate
+```
+
+`FACTS` is the transcript of a fresh preflight that the caller ran itself.
+It may not be the record's own transcript or a copy of it. Output is
+`binding_check=pass|refused`, with `binding_refusal=<token>` on refusal and
+`binding_consumed=<path>` after a rename. Exit status is 0 pass, 2 usage, 7
+refused. The checker never creates a salt and never contacts a device.
+
+It refuses, with these tokens:
+
+- **record:** a name other than `binding-*.rec` (`record-name`); not 0600
+  (`record-not-private`); schema (`record-malformed`, which also covers
+  unknown or reordered keys and any lifetime other than 600 s); a bad seal
+  (`record-mac`); `record-target`; `mock` evidence or a non-`go` gate
+  (`record-mock-origin`); `no-go` or `incomplete` (`record-not-go`);
+  another salt (`record-salt-changed`); `record-expired` or
+  `record-not-yet-valid`; a missing or edited transcript
+  (`transcript-missing`, `transcript-mismatch`);
+- **single use:** a renamed `.consumed-*` file, or a `record_id` already in
+  the 0600 ledger `out/pixel-9a/s5300-s2-binding/consumed-ids`, which
+  catches copies (`record-consumed`); a record that was already renamed away
+  (`record-already-consumed`);
+- **current facts:** not a private preflight transcript
+  (`facts-unreadable`, `facts-not-private`); `facts-not-fresh`;
+  `facts-not-physical`; not `go` (`facts-not-go`); `phase-mismatch`;
+  `unit-identity-unavailable`, `unit-mismatch` (another unit or source);
+  `boot-identity-unavailable`, `boot-changed`; `kernel-changed`,
+  `slot-changed`;
+- **checked-in inputs now:** library, body, composition, pin list, mounts
+  service, or any release changed (`pins-changed`); the pinned factory hash
+  changed (`factory-changed`); `host-recovery-not-verified`;
+- **salt:** `salt-missing`, `salt-not-private`, `salt-dir-not-private`,
+  `salt-malformed`.
+
+**Single use.** `consume` renames the record to
+`<record>.consumed-<epoch>-<pid>` with `rename(2)` before any validation, so
+of any number of concurrent consumers exactly one wins. It then appends the
+`record_id` to the ledger and validates. A record that fails after the
+rename stays consumed, and a retry is refused. **Expiry** is whichever comes
+first: 10 minutes after `created_epoch`, or a boot change (the current
+`boot_identity` must equal the record's). A clock that runs backwards is
+refused.
+
+**The later active workflow must:** run a fresh preflight in the same
+invocation; call `consume` with the record and that transcript; require the
+owner's per-run typed phrase to name the exact target and the `record_id`;
+and act only on exit 0, then repeat its own checks before `arm`. A passing
+record is an input to the owner decision. It never authorises a CP boot by
+itself. Deleting the salt directory resets the ledger, but it also
+invalidates every earlier record, because the salt id and the seal no longer
+match.
+
+### What the physical read-only run must confirm
+
+1. Which `unit_identity_source` tegu reports (expected:
+   `bootconfig-serialno`), with `unit_identity_state=ok`.
+2. That `boot_identity_state=ok`.
+3. That `unit_identity` is the same across two runs and across a reboot
+   with the same host salt.
+4. That `boot_identity` is the same across two runs in one boot, and
+   changes after a reboot.
+5. That BusyBox `sha256sum` hashes stdin as expected.
+6. That no transcript, summary, or record contains the raw serial or boot
+   ID. The operator checks this locally and never writes the raw value
+   anywhere.
+
+Until these are confirmed, the identity sources stay
+**unconfirmed physical facts**.
+
 ## Review: partial-mount failure path of `ferrix-s5300-mounts`
 
 The accepted service (`b90d3b41…`) is unchanged in this slice. Changing it
@@ -439,6 +652,26 @@ for a fail-closed active command; see
   edited library, an edited mounts service, or a missing body, all before
   any file or session.
 
+- **identity** (#108, real composed probe): the salted hash of each of the
+  four candidates in order; absent, ambiguous (no fallback), and malformed
+  serials; an absent or malformed boot ID; and no session salt. Every case
+  checks that no raw serial, boot ID, or salt is printed.
+- **decision binding** (#108, host workflow plus checker): a physical `go`
+  writes one 0600 record with the documented keys, appended to its
+  transcript and named in the summary. A fresh `go` on the same unit and
+  boot passes. Each refusal token above is exercised: mock, `no-go`, and
+  `incomplete` runs and records; another unit, source, or boot; an
+  unavailable identity (the preflight stays `go`, but no record is
+  written); the record's own transcript as facts; other phase, salt, pins,
+  library, guest body, pin list, release, or factory pin; expired,
+  future-dated, or longer-lived records; unknown keys; an unsealed edit; a
+  missing or edited transcript; wrong modes for the record, salt, or salt
+  directory (the preflight refuses with exit 6 before any session); no salt
+  on the checking host; consume, second consume, a consumed file, a copy
+  made before consumption, and a failed consume that still burns the
+  record. Greps show that no raw serial, boot ID, or salt appears in any
+  transcript, summary, record, ledger, or stdout.
+
 `tools/pixel-9a/tests/s5300-mounts-service.sh` adds the partial-start
 characterisation above.
 
@@ -468,3 +701,14 @@ caught:
 
 **Not run:** anything on the phone, busybox, real OpenRC, or the real
 CDC-ACM link.
+
+Issue #108 run (2026-10-12, macOS arm64 host, offline): `s5300-s2-preflight.sh`
+passed all 376 checks, `s5300-cpif-services.sh` passed, and `cargo fmt
+--check` and `git diff --check` were clean. Three deliberate regressions,
+each in a throwaway copy, were caught: a guest unit hash that skipped the
+salt (the static check and the identity checks failed); a checker without
+the boot comparison (all three boot-change cases failed); and a checker
+without the ledger (the case of a copy made before consumption failed).
+mawk, gawk, BusyBox, and shellcheck were not available on the host, so the
+awk was written to the POSIX subset (no interval expressions and no gawk
+extensions) and was not run under those tools.

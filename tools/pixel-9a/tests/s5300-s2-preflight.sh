@@ -1,6 +1,6 @@
 #!/bin/sh
 # Offline proof for the issue #92 S2 read-only preflight
-# (s5300-s2-preflight.md). No device is contacted. Three layers:
+# (s5300-s2-preflight.md). No device is contacted. Four layers:
 #   1. static checks that the guest body only reads, never calls a
 #      state-changing helper, and carries the exact init-script CLI;
 #   2. the real composed probe (checked-in library + body) with only its
@@ -10,7 +10,9 @@
 #      prove the probe wrote nothing;
 #   3. the host workflow through the real CDC-ACM transport and a fake guest
 #      (acm-fake-guest.sh) answering with probe transcripts derived from
-#      layer 2.
+#      layer 2;
+#   4. the issue #108 decision binding: records written by the host workflow
+#      and every refusal of s5300-s2-binding.sh, plus redaction greps.
 # Passing this is not physical evidence and does not authorise a CP boot.
 set -eu
 
@@ -90,7 +92,16 @@ check 'static: the binary runs only behind the pinned release check' \
 check 'static: source checks run only if the mounts service is already started' \
 	sh -c 'grep -B1 -F "cpif_check_sources)" "$1" | grep -Fq "if service_started ferrix-s5300-mounts; then"' sh "$probe"
 check 'static: exactly one guest session, through the CDC-ACM transport' \
-	sh -c '[ "$(grep -v "^[[:space:]]*#" "$1" | grep -cE "python3 \"\\\$transport\" --probe \"\\\$composed\" ")" -eq 1 ]' sh "$host"
+	sh -c '[ "$(grep -v "^[[:space:]]*#" "$1" | grep -cE "python3 \"\\\$transport\" --probe \"\\\$session\" ")" -eq 1 ]' sh "$host"
+check 'static: the session is exactly one salt line followed by the composed probe' \
+	grep -Fqx '{ printf '"'"'s2_salt=%s\n'"'"' "$s2b_salt"; cat "$composed"; } >"$session"' "$host"
+check 'static: the host uses the salt only in the session line, the checker never' \
+	sh -c '[ "$(grep -v "^[[:space:]]*#" "$1" | grep -c "[$]s2b_salt")" -eq 1 ] && ! grep -q "[$]s2b_salt" "$2"' sh "$host" "$root/tools/pixel-9a/s5300-s2-binding.sh"
+check 'static: the guest prints identity only as salted hash prefixes' \
+	sh -c '! grep -nE "printf .*(s2_unit_value|s2_boot_value|s2_salt)" "$1" | grep -v "s2_digest\|sha256sum"' sh "$probe"
+check 'static: the guest drops the salt and raw identity values after hashing' \
+	grep -Fqx 'unset s2_salt s2_unit_value s2_boot_value' "$probe"
+check 'static: binding checker and library POSIX syntax' sh -c 'sh -n "$1" && sh -n "$2"' sh "$root/tools/pixel-9a/s5300-s2-binding.sh" "$root/tools/pixel-9a/s5300-s2-binding-lib.sh"
 check 'static: the composed probe is exactly the library followed by the body' \
 	grep -Fqx 'cat "$library" "$probe" >"$composed"' "$host"
 check 'static: the host never edits capabilities or status' \
@@ -193,6 +204,12 @@ fi
 chmod 755 "$bin"/*
 uid=$(id -u)
 log="$work/log"
+# Raw identity stand-ins that must never leave the guest, and the layer-2
+# session salt (the host workflow makes its own under each FERRIX_OUT_DIR).
+secret_serial=SECRETSERIAL1
+secret_boot=5ec2e7b0-07d1-4bad-8c0f-5ec2e7b0b007
+test_salt=$(printf 'ferrix-test-salt' | (sha256sum 2>/dev/null || shasum -a 256) | cut -c1-64)
+salted() { printf 'ferrix-s5300-s2-%s-v1\n%s\n%s\n' "$1" "$test_salt" "$2" | (sha256sum 2>/dev/null || shasum -a 256) | cut -c1-16; }
 
 repin() {
 	grep -v '^#' "$pins" | while read -r _ path; do
@@ -254,6 +271,8 @@ EOF
 	printf 'google,ZUMA PRO TEGU\000google,zumapro\000' >"$fx/proc/device-tree/compatible"
 	printf 'androidboot.serialno = "SECRETSERIAL1"\nandroidboot.slot_suffix = "_b"\nandroidboot.revision = "MP1.0"\n' >"$fx/proc/bootconfig"
 	printf 'console=ttyGS1 androidboot.serialno=SECRETSERIAL1\n' >"$fx/proc/cmdline"
+	mkdir -p "$fx/proc/sys/kernel/random"
+	printf '%s\n' "$secret_boot" >"$fx/proc/sys/kernel/random/boot_id"
 	printf 'cpif 1 0 - Live 0x0\nshm_ipc 1 0 - Live 0x0\ncpif_page 1 0 - Live 0x0\n' >"$fx/proc/modules"
 	printf '22 1 0:20 / /run rw,nosuid,nodev - tmpfs tmpfs rw,mode=755\n' >"$fx/proc/self/mountinfo"
 	ln -s 'pid:[4026531836]' "$fx/proc/self/ns/pid"
@@ -346,7 +365,10 @@ pout="$work/probe.out"
 probe_case() {
 	build_fixture
 	[ -z "${2:-}" ] || eval "$2"
-	cat "$work/lib-fixture.sh" "$probe" >"$work/composed-fixture.sh"
+	{
+		[ -n "${S2_NO_SALT:-}" ] || printf 's2_salt=%s\n' "$test_salt"
+		cat "$work/lib-fixture.sh" "$probe"
+	} >"$work/composed-fixture.sh"
 	snapshot | sort >"$work/before"
 	(PATH="$bin:$PATH" sh "$work/composed-fixture.sh") >"$pout" 2>"$work/probe.err" </dev/null &
 	pid=$!
@@ -374,7 +396,9 @@ for p in sys.argv[1:]:
 	check "$1: exit 0 and complete" sh -c '[ "$1" -eq 0 ] && grep -Fxq probe_complete=yes "$2"' sh "$pstatus" "$pout"
 	check "$1: no file in the fixture was created, changed, or removed" cmp -s "$work/before" "$work/after"
 	check "$1: the binary ran only with --print-config" sh -c '! grep "^exynos-modem " "$1" | grep -qv -- "--print-config$"' sh "$log"
-	check "$1: no serial or command-line value is printed" sh -c '! grep -q SECRETSERIAL1 "$1"' sh "$pout"
+	check "$1: no serial, boot ID, salt, or command-line value is printed" \
+		sh -c '! grep -Fq "$2" "$1" && ! grep -Fq "$3" "$1" && ! grep -Fq "$4" "$1" && ! grep -Fq "$4" "$5"' \
+		sh "$pout" "$secret_serial" "$secret_boot" "$test_salt" "$work/probe.err"
 }
 po() { grep -Fxq "$1" "$pout"; }
 
@@ -393,7 +417,33 @@ check 'clean: on-device pins match and the CP is OFFLINE' sh -c '[ "$(grep -c "^
 check 'clean: services stopped, ModemManager started, no links or overrides' sh -c 'grep -Fxq service.exynos-modem=stopped "$1" && grep -Fxq service.ferrix-s5300-mounts=stopped "$1" && grep -Fxq service.modemmanager=started "$1" && grep -Fxq runlevel.exynos-modem=0 "$1" && grep -Fxq confd.modemmanager=expected "$1" && grep -Fxq rc_conf_mentions=0 "$1" && grep -Fxq udev_overrides=0 "$1"' sh "$pout"
 check 'clean: no token, scratch not provisioned, nothing mounted, sources deferred' sh -c 'grep -Fxq arm_token=absent "$1" && grep -Fxq scratch=absent "$1" && grep -Fxq vendor_mounts=0 "$1" && grep -Fxq part.efs.loops=0 "$1" && grep -Fxq part.modem.count=1 "$1" && grep -Fxq check.sources=deferred "$1"' sh "$pout"
 check 'clean: the source verify path did not run' sh -c '! grep -q verify_own_mount "$1"' sh "$log"
+check 'clean: unit identity is the salted bootconfig serial prefix' sh -c 'grep -Fxq unit_id_source=bootconfig-serialno "$1" && grep -Fxq unit_id_state=ok "$1" && grep -Fxq "unit_id_hash=$2" "$1"' \
+	sh "$pout" "$(salted unit "bootconfig-serialno:$secret_serial")"
+check 'clean: boot identity is the salted boot_id prefix' sh -c 'grep -Fxq boot_id_state=ok "$1" && grep -Fxq "boot_id_hash=$2" "$1"' sh "$pout" "$(salted boot "$secret_boot")"
 cp "$pout" "$work/clean.out"
+
+# Identity candidates, in order, and every fail-closed state.
+probe_case 'identity from the command line' 'printf "androidboot.slot_suffix = \"_b\"\nandroidboot.revision = \"MP1.0\"\n" >"$fx/proc/bootconfig"'
+check 'identity cmdline: second candidate' sh -c 'grep -Fxq unit_id_source=cmdline-serialno "$1" && grep -Fxq "unit_id_hash=$2" "$1"' sh "$pout" "$(salted unit "cmdline-serialno:$secret_serial")"
+no_serial='printf "androidboot.slot_suffix = \"_b\"\nandroidboot.revision = \"MP1.0\"\n" >"$fx/proc/bootconfig"; printf "console=ttyGS1\n" >"$fx/proc/cmdline"'
+probe_case 'identity from the device tree' "$no_serial"'; printf "SECRETSERIAL1\000" >"$fx/proc/device-tree/serial-number"'
+check 'identity dt: third candidate' sh -c 'grep -Fxq unit_id_source=dt-serial-number "$1" && grep -Fxq "unit_id_hash=$2" "$1"' sh "$pout" "$(salted unit "dt-serial-number:$secret_serial")"
+probe_case 'identity from the chip id' "$no_serial"'; mkdir -p "$fx/sys/devices/system/chip-id"; printf "SECRETSERIAL1\n" >"$fx/sys/devices/system/chip-id/unique_id"'
+check 'identity chip id: fourth candidate' sh -c 'grep -Fxq unit_id_source=chipid-unique-id "$1" && grep -Fxq "unit_id_hash=$2" "$1"' sh "$pout" "$(salted unit "chipid-unique-id:$secret_serial")"
+probe_case 'identity absent' "$no_serial"
+check 'identity absent: unavailable, no source' sh -c 'grep -Fxq unit_id_source=none "$1" && grep -Fxq unit_id_state=absent "$1" && grep -Fxq unit_id_hash=unavailable "$1" && grep -Fxq boot_id_state=ok "$1"' sh "$pout"
+probe_case 'identity ambiguous' 'printf "androidboot.serialno = \"SECRETSERIAL1\"\nandroidboot.serialno = \"SECRETSERIAL2\"\nandroidboot.slot_suffix = \"_b\"\nandroidboot.revision = \"MP1.0\"\n" >"$fx/proc/bootconfig"'
+check 'identity ambiguous: stops, never falls back to the command line' sh -c 'grep -Fxq unit_id_source=bootconfig-serialno "$1" && grep -Fxq unit_id_state=ambiguous "$1" && grep -Fxq unit_id_hash=unavailable "$1" && ! grep -q SECRETSERIAL2 "$1"' sh "$pout"
+probe_case 'identity malformed' 'printf "androidboot.serialno = \"SECRET SERIAL1\"\nandroidboot.slot_suffix = \"_b\"\nandroidboot.revision = \"MP1.0\"\n" >"$fx/proc/bootconfig"'
+check 'identity malformed: stops, unavailable, value not printed' sh -c 'grep -Fxq unit_id_state=malformed "$1" && grep -Fxq unit_id_hash=unavailable "$1" && ! grep -q "SECRET SERIAL1" "$1"' sh "$pout"
+probe_case 'boot ID absent' 'rm "$fx/proc/sys/kernel/random/boot_id"'
+check 'boot absent: unavailable, unit still hashed' sh -c 'grep -Fxq boot_id_state=absent "$1" && grep -Fxq boot_id_hash=unavailable "$1" && grep -Fxq unit_id_state=ok "$1"' sh "$pout"
+probe_case 'boot ID malformed' 'printf "not-a-boot-id\n" >"$fx/proc/sys/kernel/random/boot_id"'
+check 'boot malformed: unavailable' sh -c 'grep -Fxq boot_id_state=malformed "$1" && grep -Fxq boot_id_hash=unavailable "$1"' sh "$pout"
+S2_NO_SALT=yes
+probe_case 'no session salt'
+unset S2_NO_SALT
+check 'no salt: neither identity is hashed' sh -c 'grep -Fxq unit_id_state=no-salt "$1" && grep -Fxq unit_id_hash=unavailable "$1" && grep -Fxq boot_id_state=no-salt "$1" && grep -Fxq boot_id_hash=unavailable "$1"' sh "$pout"
 
 probe_case 'held through an alias' 'mkdir -p "$fx/elsewhere"; mkfifo "$fx/elsewhere/alias"; cp "$fx/rdev/umts_boot0" "$fx/rdev/alias"; ln -s "$fx/elsewhere/alias" "$fx/proc/100/task/100/fd/9"'
 check 'alias: held, node and holder name reported, no pid' sh -c 'grep -Fxq opener_scan=held "$1" && grep -Fxq opener_held_nodes=umts_boot0 "$1" && grep -Fxq opener_holder_comms=ModemManager "$1" && grep -Fxq opener_holder_count=1 "$1" && ! grep -q "=100$" "$1"' sh "$pout"
@@ -502,6 +552,14 @@ derive bad-holder-comm -e 's/^opener_holder_comms=.*/opener_holder_comms=SECRETI
 derive bad-held-node -e 's/^opener_held_nodes=.*/opener_held_nodes=SECRETIMEI1/'
 derive not-complete -e 's/^probe_complete=yes$/probe_complete=no/'
 derive qemu -e 's/^dt_model=.*/dt_model=QEMU Virtual Machine/'
+derive other-unit -e 's/^unit_id_hash=.*/unit_id_hash=0123456789abcdef/'
+derive other-boot -e 's/^boot_id_hash=.*/boot_id_hash=fedcba9876543210/'
+derive unit-unavailable -e 's/^unit_id_source=.*/unit_id_source=none/' -e 's/^unit_id_state=.*/unit_id_state=absent/' -e 's/^unit_id_hash=.*/unit_id_hash=unavailable/'
+derive boot-unavailable -e 's/^boot_id_state=.*/boot_id_state=absent/' -e 's/^boot_id_hash=.*/boot_id_hash=unavailable/'
+derive identity-inconsistent -e 's/^unit_id_hash=.*/unit_id_hash=unavailable/'
+derive identity-no-source -e 's/^unit_id_source=.*/unit_id_source=none/'
+derive identity-short-hash -e 's/^boot_id_hash=.*/boot_id_hash=0123/'
+derive identity-raw -e 's/^unit_id_hash=.*/unit_id_hash=SECRETSERIAL1/'
 
 recovery="$work/recovery"
 mkdir -p "$recovery"
@@ -523,20 +581,29 @@ run() {
 	acm_guest_start
 	acm_guest_ctl fixture "$work/fx3/$2"
 	acm_guest_ctl exit "${3:-0}"
+	acm_guest_ctl header_lines 1
 	status=0
-	out=$(FERRIX_OUT_DIR="$case_dir" FERRIX_PIXEL9A_S5300_S2_EVIDENCE="${4:-mock}" sh "$host" 2>&1) || status=$?
+	out=$(FERRIX_OUT_DIR="${RUN_OUT:-$case_dir}" FERRIX_PIXEL9A_S5300_S2_EVIDENCE="${4:-mock}" sh "$host" 2>&1) || status=$?
 	runs=$(acm_guest_runs)
 	port=$FERRIX_SHELL
+	printf '%s\n' "$out" >>"$work/all-stdout"
 	acm_guest_stop
-	transcript="$case_dir/pixel-9a/s5300-s2-preflight/preflight-latest.txt"
-	summary="$case_dir/pixel-9a/s5300-s2-preflight/summary-latest.json"
+	transcript="${RUN_OUT:-$case_dir}/pixel-9a/s5300-s2-preflight/preflight-latest.txt"
+	summary="${RUN_OUT:-$case_dir}/pixel-9a/s5300-s2-preflight/summary-latest.json"
 }
 has() { printf '%s\n' "$out" | grep -Fxq "$1"; }
 reports() { printf '%s\n' "$out" | grep -E "^($1)=" | grep -Fq "$2"; }
 
 run go go
 check 'go: exit 0, pre-mount go' sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq preflight_result=go && printf "%s\n" "$2" | grep -Fxq preflight_phase=pre-mount' sh "$status" "$out"
-check 'go: exactly one session with the exact composed bytes' sh -c '[ "$1" -eq 1 ] && cmp -s "$2" "$3"' sh "$runs" "$ACM_GUEST_CTL/stdin" "$work/composed-expected.sh"
+check 'go: exactly one session: one salt line, then the exact composed bytes' \
+	sh -c '[ "$1" -eq 1 ] && cmp -s "$2" "$3" && [ "$(cat "$4")" = "s2_salt=$(cat "$5")" ]' \
+	sh "$runs" "$ACM_GUEST_CTL/body.1" "$work/composed-expected.sh" "$ACM_GUEST_CTL/header.1" "$work/run-go/pixel-9a/s5300-s2-binding/salt"
+check 'go: the salt directory is 0700 and the salt file 0600, 64 hex' \
+	sh -c 'm() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }; [ "$(m "$1")" = 700 ] && [ "$(m "$1/salt")" = 600 ] && grep -Eqx "[0-9a-f]{64}" "$1/salt"' \
+	sh "$work/run-go/pixel-9a/s5300-s2-binding"
+check 'go: redacted identity keys are reported' sh -c 'for k in unit_identity boot_identity; do printf "%s\n" "$1" | grep -Eqx "$k=[0-9a-f]{16}" || exit 1; done; printf "%s\n" "$1" | grep -Fxq unit_identity_source=bootconfig-serialno && grep -Eqx "binding_salt_id=[0-9a-f]{16}" "$2"' sh "$out" "$transcript"
+check 'go (mock): a record is written but labelled mock' sh -c 'printf "%s\n" "$1" | grep -Fxq decision_binding=written && grep -Fxq evidence=mock "$2"/pixel-9a/s5300-s2-preflight/binding-*.rec' sh "$out" "$work/run-go"
 check 'go: mock never reports a physical gate' has 'preflight_gate=not-evidence-mock'
 check 'go: never authorises a CP boot or claims an active workflow' sh -c 'printf "%s\n" "$1" | grep -Fxq cp_boot_authorized=no && printf "%s\n" "$1" | grep -Fxq active_s2_workflow=not-implemented' sh "$out"
 check 'go: source checks are deferred until the manual mount start' has 'deferred_until_mounts=sources-verify-own-mount,modem-image-metadata,nv-size-metadata,cpsha-metadata,post-mount-partial-detection'
@@ -618,6 +685,11 @@ refuse bad-held-node bad-held-node 5
 refuse not-complete not-complete 5
 refuse bad-control bad-control 5
 refuse missing-control missing-control 5
+refuse identity-inconsistent identity-inconsistent 5
+refuse identity-no-source identity-no-source 5
+refuse identity-short-hash identity-short-hash 5
+refuse identity-raw identity-raw 5
+check 'identity-raw: a raw value in a hash field is neither echoed nor retained' sh -c '! printf "%s\n" "$1" | grep -Fq SECRETSERIAL1 && ! grep -rFq SECRETSERIAL1 "$2"' sh "$out" "$work/run-identity-raw"
 refuse qemu qemu 4
 refuse identity go 4 4
 refuse no-library go 5 5
@@ -644,7 +716,8 @@ copy_root() {
 	r="$work/root"
 	mkdir -p "$r/tools/pixel-9a" "$r/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu" \
 		"$r/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/modemmanager-samsung-sit"
-	cp "$host" "$probe" "$root/tools/pixel-9a/acm-probe.py" "$r/tools/pixel-9a/"
+	cp "$host" "$probe" "$root/tools/pixel-9a/acm-probe.py" "$root/tools/pixel-9a/s5300-s2-binding.sh" \
+		"$root/tools/pixel-9a/s5300-s2-binding-lib.sh" "$r/tools/pixel-9a/"
 	cp "$board/manifest.toml" "$r/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/"
 	cp "$pkg/APKBUILD" "$lib" "$pins" "$pkg/ferrix-s5300-mounts.initd" "$r/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/"
 	cp "$mm/APKBUILD" "$r/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/modemmanager-samsung-sit/"
@@ -665,6 +738,215 @@ host_refuses 'an edited mounts service' 'not the service accepted for the #34 ga
 copy_root
 rm "$work/root/tools/pixel-9a/s5300-s2-preflight-remote.sh"
 host_refuses 'a missing guest body' 'is missing or linked'
+
+# --- 4. decision binding (issue #108) -----------------------------------------------
+
+bind="$work/bind"
+checker="$root/tools/pixel-9a/s5300-s2-binding.sh"
+record_keys=$(sed -n "s/^s2b_record_keys='\(.*\)'\$/\1/p" "$root/tools/pixel-9a/s5300-s2-binding-lib.sh")
+mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+# brun NAME FIXTURE [EVIDENCE]: one preflight into the shared binding out
+# dir (one salt); brec is the record path (or empty), btx the transcript.
+brun() {
+	RUN_OUT=$bind
+	run "$1" "$2" 0 "${3:-physical}"
+	unset RUN_OUT
+	brec=$(printf '%s\n' "$out" | sed -n 's/^decision_binding_record=//p')
+	btx=$(printf '%s\n' "$out" | sed -n 's/^transcript=//p')
+}
+bstatus=0
+bout=''
+bcheck() {
+	bstatus=0
+	bout=$(FERRIX_OUT_DIR="${BIND_OUT:-$bind}" sh "${BCHECKER:-$checker}" "$@" 2>&1) || bstatus=$?
+	printf '%s\n' "$bout" >>"$work/all-stdout"
+}
+# brefused NAME TOKEN MODE RECORD FACTS
+brefused() {
+	bname=$1 btoken=$2
+	shift 2
+	bcheck "$@"
+	check "binding: $bname is refused ($btoken)" sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$2" | grep -Fxq binding_check=refused && printf "%s\n" "$2" | grep -Fxq "binding_refusal=$3"' \
+		sh "$bstatus" "$bout" "$btoken"
+}
+# Re-seal an edited record with the binding salt, as only this host could.
+reseal() {
+	sed '$d' "$1" >"$1.body"
+	python3 -c 'import hashlib, hmac, sys
+key = b"ferrix-s5300-s2-record-mac-v1:" + open(sys.argv[1], "rb").read().strip()
+print("record_mac=" + hmac.new(key, open(sys.argv[2], "rb").read(), hashlib.sha256).hexdigest())' \
+		"$bind/pixel-9a/s5300-s2-binding/salt" "$1.body" >"$1.mac"
+	cat "$1.body" "$1.mac" >"$1"
+	rm -f "$1.body" "$1.mac"
+}
+# variant NAME SED [unsealed]: an edited copy of the good record beside it.
+variant() {
+	v="${rec%/*}/binding-$1.rec"
+	sed "$2" "$rec" >"$v"
+	[ "${3:-}" = unsealed ] || reseal "$v"
+	chmod 600 "$v"
+}
+
+brun bind-rec go
+rec=$brec
+rec_tx=$btx
+check 'binding: a physical go writes one private record' sh -c '[ "$1" -eq 0 ] && [ -f "$2" ] && [ "$(m() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }; m "$2")" = 600 ] && printf "%s\n" "$3" | grep -Fxq decision_binding=written && printf "%s\n" "$3" | grep -Eqx "decision_binding_id=[0-9a-f]{32}"' \
+	sh "$status" "$rec" "$out"
+check 'binding: the record has exactly the documented keys, in order' [ "$(cut -d= -f1 "$rec" | tr '\n' ' ')" = "$record_keys " ]
+check 'binding: the record is go, physical, bound to both identities, and expires in 600 s' \
+	sh -c 'grep -Fxq preflight_result=go "$1" && grep -Fxq evidence=physical:google-pixel-9a-tegu-gxq96-mp1-0 "$1" && grep -Eqx "unit_identity=[0-9a-f]{16}" "$1" && grep -Eqx "boot_identity=[0-9a-f]{16}" "$1" && [ "$(($(sed -n "s/^expires_epoch=//p" "$1") - $(sed -n "s/^created_epoch=//p" "$1")))" -eq 600 ] && grep -Fxq cp_boot_authorized=no "$1"' sh "$rec"
+check 'binding: the record ends its transcript and is named in the summary' python3 -c 'import json, sys
+t = open(sys.argv[1]).read(); r = open(sys.argv[2]).read(); d = json.load(open(sys.argv[3]))
+assert t.endswith("## decision binding (single use; s5300-s2-preflight.md)\n" + r)
+assert d["decision_binding"] == "written" and d["decision_binding_record"] == sys.argv[2].rsplit("/", 1)[1] and len(d["unit_identity"]) == 16' "$rec_tx" "$rec" "$summary"
+check 'binding: the record id matches the transcript and summary' sh -c 'id=$(sed -n "s/^record_id=//p" "$1"); grep -Fxq "decision_binding_id=$id" "$2"' sh "$rec" "$rec_tx"
+
+brun bind-facts go
+facts=$btx
+bcheck check "$rec" "$facts"
+check 'binding: a fresh physical go on the same unit and boot passes' sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq binding_check=pass && printf "%s\n" "$2" | grep -Fxq "binding_record_id=$(sed -n "s/^record_id=//p" "$3")"' sh "$bstatus" "$bout" "$rec"
+check 'binding: check does not consume' [ -f "$rec" ]
+
+# Refusals from the current facts.
+brun bind-mock go mock
+mock_rec=$brec
+mock_facts=$btx
+brefused 'a mock-origin record' record-mock-origin check "$mock_rec" "$facts"
+brefused 'mock facts' facts-not-physical check "$rec" "$mock_facts"
+brun bind-nogo skew
+check 'binding: a no-go run writes no record' sh -c '[ "$1" -eq 8 ] && [ -z "$2" ] && printf "%s\n" "$3" | grep -Fxq decision_binding=refused-no-go && printf "%s\n" "$3" | grep -Fxq decision_binding_id=none' sh "$status" "$brec" "$out"
+brefused 'facts from a no-go run' facts-not-go check "$rec" "$btx"
+brun bind-incomplete revision-absent
+check 'binding: an incomplete run writes no record' sh -c '[ "$1" -eq 9 ] && [ -z "$2" ] && printf "%s\n" "$3" | grep -Fxq decision_binding=refused-incomplete' sh "$status" "$brec" "$out"
+brefused 'facts from an incomplete run' facts-not-go check "$rec" "$btx"
+brun bind-post post
+brefused 'facts from the other phase' phase-mismatch check "$rec" "$btx"
+brun bind-other-unit other-unit
+brefused 'facts from another unit' unit-mismatch check "$rec" "$btx"
+brun bind-other-boot other-boot
+brefused 'facts from another boot' boot-changed check "$rec" "$btx"
+brun bind-unit-unavailable unit-unavailable
+check 'binding: unit identity unavailable keeps the go but writes no record' sh -c '[ "$1" -eq 0 ] && [ -z "$2" ] && printf "%s\n" "$3" | grep -Fxq preflight_result=go && printf "%s\n" "$3" | grep -Fxq unknown_facts=none && printf "%s\n" "$3" | grep -Fxq decision_binding=unit-identity-unavailable && printf "%s\n" "$3" | grep -Fxq unit_identity=unavailable' sh "$status" "$brec" "$out"
+brefused 'facts with no unit identity' unit-identity-unavailable check "$rec" "$btx"
+brun bind-boot-unavailable boot-unavailable
+check 'binding: boot identity unavailable keeps the go but writes no record' sh -c '[ "$1" -eq 0 ] && [ -z "$2" ] && printf "%s\n" "$3" | grep -Fxq decision_binding=boot-identity-unavailable && printf "%s\n" "$3" | grep -Fxq boot_identity=unavailable' sh "$status" "$brec" "$out"
+brefused 'facts with no boot identity' boot-identity-unavailable check "$rec" "$btx"
+brefused "the record's own transcript as facts" facts-not-fresh check "$rec" "$rec_tx"
+cp -p "$rec_tx" "${rec_tx%/*}/preflight-copy.txt"
+brefused "a copy of the record's own transcript" facts-not-fresh check "$rec" "${rec_tx%/*}/preflight-copy.txt"
+brefused 'facts that are not a preflight transcript' facts-unreadable check "$rec" "$summary"
+
+# Refusals from the record itself.
+variant nogo 's/^preflight_result=go$/preflight_result=no-go/'
+brefused 'a record from a no-go run' record-not-go check "$v" "$facts"
+variant incomplete 's/^preflight_result=go$/preflight_result=incomplete/'
+brefused 'a record from an incomplete run' record-not-go check "$v" "$facts"
+variant mock-label 's/^evidence=.*/evidence=mock/'
+brefused 'a record relabelled mock' record-mock-origin check "$v" "$facts"
+variant tampered 's/^expires_epoch=.*/expires_epoch=9999999999/' unsealed
+brefused 'an edited, unsealed record' record-mac check "$v" "$facts"
+variant other-unit 's/^unit_identity=.*/unit_identity=0123456789abcdef/'
+brefused 'a record for another unit' unit-mismatch check "$v" "$facts"
+variant other-source 's/^unit_identity_source=.*/unit_identity_source=dt-serial-number/'
+brefused 'a record from another identity source' unit-mismatch check "$v" "$facts"
+variant other-boot 's/^boot_identity=.*/boot_identity=fedcba9876543210/'
+brefused 'a record from another boot' boot-changed check "$v" "$facts"
+variant other-salt 's/^binding_salt_id=.*/binding_salt_id=0000000000000000/'
+brefused 'a record made with another salt' record-salt-changed check "$v" "$facts"
+variant pins 's/^pkg\.device-google-tegu=.*/pkg.device-google-tegu=1-r2/'
+brefused 'a record with other package pins' pins-changed check "$v" "$facts"
+variant library 's/^library_sha256=.*/library_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+brefused 'a record with another library' pins-changed check "$v" "$facts"
+variant factory 's/^factory_archive_sha256=.*/factory_archive_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+brefused 'a record with another factory archive' factory-changed check "$v" "$facts"
+variant expired 's/^created_epoch=.*/created_epoch=1000/;s/^expires_epoch=.*/expires_epoch=1600/'
+brefused 'an expired record' record-expired check "$v" "$facts"
+variant future 's/^created_epoch=.*/created_epoch=4000000000/;s/^expires_epoch=.*/expires_epoch=4000000600/'
+brefused 'a record from the future' record-not-yet-valid check "$v" "$facts"
+variant long-lived 's/^expires_epoch=.*/expires_epoch=9999999999/'
+brefused 'a record with a longer lifetime' record-malformed check "$v" "$facts"
+variant extra-key 's/^single_use=.*/single_use=consume-by-rename\
+operator=someone/'
+brefused 'a record with an unknown key' record-malformed check "$v" "$facts"
+variant no-transcript 's/^preflight_transcript=.*/preflight_transcript=preflight-missing.txt/'
+brefused 'a record whose transcript is missing' transcript-missing check "$v" "$facts"
+sed 's/^opener_scan=clean$/opener_scan=held/' "$rec_tx" >"${rec_tx%/*}/preflight-edited.txt"
+variant edited-transcript "s/^preflight_transcript=.*/preflight_transcript=preflight-edited.txt/"
+brefused 'a record whose transcript was edited' transcript-mismatch check "$v" "$facts"
+cp "$rec" "${rec%/*}/binding-mode.rec"
+chmod 644 "${rec%/*}/binding-mode.rec"
+brefused 'a record readable by others' record-not-private check "${rec%/*}/binding-mode.rec" "$facts"
+cp -p "$rec" "${rec%/*}/decision.txt"
+brefused 'a file that is not a binding record' record-name check "${rec%/*}/decision.txt" "$facts"
+
+# Checked-in inputs changed after the record was written.
+copy_root
+BCHECKER="$work/root/tools/pixel-9a/s5300-s2-binding.sh"
+bcheck check "$rec" "$facts"
+check 'binding: an identical copied tree still passes' [ "$bstatus" -eq 0 ]
+sed -i.bak 's/^pkgrel=.*/pkgrel=99/' "$work/root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/APKBUILD"
+brefused 'a changed device-package release' pins-changed check "$rec" "$facts"
+copy_root
+printf '# edit\n' >>"$work/root/tools/pixel-9a/s5300-s2-preflight-remote.sh"
+brefused 'a changed guest body' pins-changed check "$rec" "$facts"
+copy_root
+printf '# edit\n' >>"$work/root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/s5300-cpif-services.sha256"
+brefused 'a changed package pin list' pins-changed check "$rec" "$facts"
+unset BCHECKER
+awk -F '\t' 'BEGIN { OFS = FS } $1 == "factory" { $6 = sprintf("%064d", 0) } { print }' "$FERRIX_PIXEL9A_PINS" >"$work/recovery-other.pins"
+saved_pins=$FERRIX_PIXEL9A_PINS
+FERRIX_PIXEL9A_PINS="$work/recovery-other.pins"
+brefused 'a re-pinned factory archive' factory-changed check "$rec" "$facts"
+FERRIX_PIXEL9A_PINS=$saved_pins
+
+# Salt handling.
+salt_dir="$bind/pixel-9a/s5300-s2-binding"
+chmod 644 "$salt_dir/salt"
+brefused 'any record while the salt is readable by others' salt-not-private check "$rec" "$facts"
+brun bind-salt-mode go
+check 'binding: the preflight refuses a salt readable by others, before any session' sh -c '[ "$1" -eq 6 ] && [ "$2" -eq 0 ] && printf "%s\n" "$3" | grep -Fq "binding salt refused (salt-not-private)"' sh "$status" "$runs" "$out"
+chmod 600 "$salt_dir/salt"
+chmod 755 "$salt_dir"
+brefused 'any record while the salt directory is open' salt-dir-not-private check "$rec" "$facts"
+chmod 700 "$salt_dir"
+BIND_OUT="$work/bind-elsewhere"
+brefused 'a record checked on a host without the salt' salt-missing check "$rec" "$facts"
+unset BIND_OUT
+check 'binding: the checker never creates a salt' [ ! -e "$work/bind-elsewhere/pixel-9a/s5300-s2-binding/salt" ]
+
+# Single use: consumed by rename before validation, and remembered.
+cp -p "$rec" "${rec%/*}/binding-copy.rec"
+bcheck consume "$rec" "$facts"
+consumed=$(printf '%s\n' "$bout" | sed -n 's/^binding_consumed=//p')
+check 'binding: consume renames the record and then passes' sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq binding_check=pass && [ ! -e "$3" ] && [ -f "$4" ] && case "$4" in "$3".consumed-*) ;; *) exit 1 ;; esac' sh "$bstatus" "$bout" "$rec" "$consumed"
+check 'binding: the ledger is private and holds the record id' sh -c 'm() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }; [ "$(m "$1")" = 600 ] && grep -Fxq "$(sed -n "s/^record_id=//p" "$2")" "$1"' sh "$salt_dir/consumed-ids" "$consumed"
+brefused 'a second consume' record-already-consumed consume "$rec" "$facts"
+brefused 'a check after consume' record-already-consumed check "$rec" "$facts"
+brefused 'the consumed file' record-consumed check "$consumed" "$facts"
+brefused 'consuming the consumed file' record-consumed consume "$consumed" "$facts"
+brefused 'a copy made before consumption' record-consumed consume "${rec%/*}/binding-copy.rec" "$facts"
+brun bind-rec2 go
+rec2=$brec
+brun bind-facts2 other-boot
+brefused 'a consume that fails validation' boot-changed consume "$rec2" "$btx"
+check 'binding: a failed consume still burns the record' sh -c '[ ! -e "$1" ] && ls "$1".consumed-* >/dev/null 2>&1' sh "$rec2"
+brefused 'a retry after a failed consume' record-already-consumed consume "$rec2" "$facts"
+status=0
+FERRIX_OUT_DIR="$bind" sh "$checker" check "$rec" >/dev/null 2>&1 || status=$?
+check 'binding: checker usage needs a mode, a record, and facts' [ "$status" -eq 2 ]
+
+# Redaction: no raw identity value or salt anywhere outside the salt files.
+check 'privacy: no raw serial or boot ID in any transcript, summary, record, or stdout' \
+	sh -c '! grep -rFq -e "$1" -e "$2" "$3" "$4" "$5"' sh "$secret_serial" "$secret_boot" "$work/bind" "$work/all-stdout" "$work/run-go"
+leaks=''
+for salt_file in "$work"/run-*/pixel-9a/s5300-s2-binding/salt "$salt_dir/salt"; do
+	[ -f "$salt_file" ] || continue
+	salt_out=${salt_file%/pixel-9a/s5300-s2-binding/salt}
+	if grep -rFl "$(cat "$salt_file")" "$salt_out" "$work/all-stdout" | grep -v '/s5300-s2-binding/salt$' | grep -q .; then
+		leaks=yes
+	fi
+done
+check 'privacy: no salt in any transcript, summary, record, ledger, or stdout' [ -z "$leaks" ]
 
 mock_gates=''
 for file in "$work"/run-*/pixel-9a/s5300-s2-preflight/preflight-*.txt; do
