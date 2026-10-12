@@ -438,6 +438,9 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
     editor.put((package / "ferrix-openrc.sh").read_bytes(), "/usr/lib/ferrix/openrc.sh", 0o644)
     editor.put((package / "networkmanager-ferrix.conf").read_bytes(),
                "/etc/NetworkManager/conf.d/90-ferrix.conf", 0o644)
+    editor.put((package / "chrony-onoffline.nm-dispatcher").read_bytes(),
+               "/etc/NetworkManager/dispatcher.d/60-ferrix-chrony-onoffline", 0o755)
+    written.append("/etc/NetworkManager/dispatcher.d/60-ferrix-chrony-onoffline")
     editor.put((package / "modprobe-zram-gs.conf").read_bytes(),
                "/etc/modprobe.d/ferrix-zram-gs.conf", 0o644)
     for name, dest in UCM_FILES:
