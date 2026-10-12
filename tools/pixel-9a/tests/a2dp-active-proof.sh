@@ -265,7 +265,27 @@ EOF
 printf '#!/bin/sh\necho 6.1.124-android14-11-ga4662a84a15f\n' >"$fbin/uname"
 printf '#!/bin/sh\nif command -v shasum >/dev/null 2>&1; then exec shasum -a 256 "$@"; fi\nexec /usr/bin/sha256sum "$@"\n' >"$fbin/sha256sum"
 printf '#!/bin/sh\necho 0\n' >"$fbin/id"
-chmod 0755 "$fbin"/*
+# The graph guard needs an awk that acts on each FIFO line as it arrives
+# (BSD awk and gawk do). mawk, Ubuntu's default awk, fills its input
+# buffer first unless run -W interactive, so the guard would never arm and
+# every play would refuse; that refusal is itself checked below. The fake
+# guest therefore runs mawk interactive. A buffering awk is simulated by
+# awk-buffered, which hands the guard its input only at end of file.
+real_awk=$(command -v awk)
+mawk_bin=''
+if awk -W version </dev/null 2>&1 | grep -q '^mawk'; then
+	mawk_bin=$real_awk
+	printf '#!/bin/sh\nexec %s -W interactive "$@"\n' "$real_awk" >"$fbin/awk"
+	real_awk=$fbin/awk
+fi
+cat >"$fake/awk-buffered" <<EOF
+#!/bin/sh
+case " \$* " in
+*" dir="*) d=\$(cat); printf '%s\n' "\$d" | exec $real_awk "\$@" ;;
+esac
+exec $real_awk "\$@"
+EOF
+chmod 0755 "$fbin"/* "$fake/awk-buffered"
 export FAKE_A2DP_STATE="$state" FAKE_PROC="$fake/proc"
 mkdir -p "$fake/share/wireplumber/wireplumber.conf.d"
 printf 'context.modules = []\n' >"$fake/share/wireplumber/wireplumber.conf"
@@ -474,6 +494,16 @@ check "guest refuses (scratch-left-over): an existing scratch directory is not r
 rm -rf "$proofdir"
 monfail() { : >"$state/mon-fail"; }
 refusal_case graph-guard-cannot-arm graph-guard-not-armed monfail
+cp "$fbin/awk" "$work/awk.saved" 2>/dev/null || rm -f "$work/awk.saved"
+restore_awk() { if [ -f "$work/awk.saved" ]; then cp "$work/awk.saved" "$fbin/awk"; else rm -f "$fbin/awk"; fi; }
+buffered_awk() { cp "$fake/awk-buffered" "$fbin/awk"; }
+refusal_case buffering-awk graph-guard-not-armed buffered_awk
+restore_awk
+if [ -n "$mawk_bin" ]; then
+	plain_mawk() { printf '#!/bin/sh\nexec %s "$@"\n' "$mawk_bin" >"$fbin/awk"; }
+	refusal_case non-interactive-mawk graph-guard-not-armed plain_mawk
+	restore_awk
+fi
 inject_alsa() {
 	printf 'printf '"'"'added:\\n\\tid: 80\\n\\tpermissions: rwxm-\\n\\ttype: PipeWire:Interface:Node (version 3)\\n \\tproperties:\\n \\t\\tobject.serial = "700"\\n \\t\\tnode.name = "alsa_output.x"\\n \\t\\tmedia.class = "Audio/Sink"\\n\\n'"'"' >>"$FAKE_A2DP_STATE/mon-events"\n' >"$state/inject-before"
 }

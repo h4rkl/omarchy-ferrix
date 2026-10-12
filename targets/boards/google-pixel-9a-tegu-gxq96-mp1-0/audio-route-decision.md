@@ -1140,8 +1140,10 @@ kernel-side guards (see below).
 `tools/pixel-9a/a2dp-active-proof.sh` (guest body
 `a2dp-active-proof-remote.sh`) implements the gate above. It is fixture-,
 fake-tool- and fake-guest-tested (`just pixel-9a-a2dp-active-proof-test`,
-186 checks). **It has not run on the phone.** No code or mock result is
-evidence of audible output, and `[audio]` stays `unsupported`.
+189 checks, 192 where the host awk is mawk). Only `dry` has run on the phone
+([physical dry runs](#physical-dry-runs-2026-10-12)); **`play` has not run.**
+No code, mock, or `dry` result is evidence of audible output, and `[audio]`
+stays `unsupported`.
 
 - **One composed session per mode.** The host sends a three-line header
   (`proof_mode`, a secret salt, the expected binding). Then come the v3
@@ -1269,7 +1271,8 @@ evidence of audible output, and `[audio]` stays `unsupported`.
     and version skew;
   - an ALSA sink, the speaker route, or a second headset at start;
   - a left-over scratch directory;
-  - a guard that cannot arm;
+  - a guard that cannot arm, including an awk that buffers its input
+    (simulated everywhere, and plain mawk where the host has it);
   - a sink added, a transient object, or a PCM opener between preflight
     and tone.
 
@@ -1287,6 +1290,36 @@ evidence of audible output, and `[audio]` stays `unsupported`.
   output, the decision lifecycle (single use, stale, tampered, linked,
   replaced), privacy of output and transcripts, and an end-to-end run
   through the transport.
+
+#### Physical dry runs (2026-10-12)
+
+Evidence: `physical:google-pixel-9a-tegu-gxq96-mp1-0`, `dry` mode only,
+run by the session that operates the phone, with the checked-in active and
+v3 guest bodies (transcript body hashes match the committed files).
+Transcripts, the binding, and the per-run decision phrase stay in ignored
+`out/pixel-9a/a2dp-active-proof/`. No tone was played in either run.
+
+- **07:01 UTC, refused (safe).** The headset was paired but disconnected:
+  one paired and zero connected Audio Sinks, zero BlueZ A2DP sinks, and a
+  `null` default sink. The in-session v3 preflight reported
+  `connected-audio-sink-count-not-one` and `bluez-a2dp-sink-count-not-one`,
+  and the guest refused with `preflight-blocked` before re-deriving any
+  identity. No decision was issued.
+- **07:02 UTC, passed.** After the owner reconnected the headset, the
+  in-session v3 preflight was `candidate-observed` on the exact image:
+  kernel `6.1.124-android14-11-ga4662a84a15f`, BlueZ 5.86-r2, PipeWire
+  1.6.8-r4, WirePlumber 0.5.15-r0. It saw one paired, connected Audio Sink;
+  one BlueZ A2DP sink, LDAC, matching that device and set as the default;
+  exactly the two bound BlueZ source-loopback filters; no ALSA sink; a
+  complete `/proc/*/fd` scan with zero playback PCM openers; and both
+  watched speaker controls `off`. Identity re-derivation was `ok`
+  (`a2dp-sink`, `ldac`). The host issued one per-run decision.
+
+This shows the `dry` path, the identity derivation, and the refusal on a
+disconnected headset on hardware. It does not show `play`, any guard, or
+audio output. The 07:02 decision expires 10 minutes after issue, so a
+`play` run needs a fresh `dry` and a fresh explicit owner decision for that
+run.
 
 #### Residual limits
 
@@ -1311,11 +1344,14 @@ evidence of audible output, and `[audio]` stays `unsupported`.
     `pipewire.sec.pid` when run as root against the uid-1000 socket;
   - the awk in the image (busybox `awk.c` `awk_getline` uses `safe_read`,
     so it handles lines as they arrive; the acknowledgements refuse
-    otherwise);
+    otherwise). mawk without `-W interactive` fills its input buffer
+    first, and the offline tests show it refuses with
+    `graph-guard-not-armed`; the tests run mawk interactive for that reason;
   - whether the bound sink or its device emits changes the guard does not
     allow.
 
-  A false trip reads `route-not-verified`, never a pass.
+  A false trip reads `route-not-verified`, never a pass. The physical `dry`
+  runs do not touch any of these: `dry` starts no pw-mon, guard, or poller.
 - **No acoustic claim.** `linked-active` shows that PipeWire linked and ran
   the stream to the bound sink. Whether the headset played it audibly is for
   the owner to confirm by ear. It is recorded with the transcript, not by
@@ -1324,9 +1360,10 @@ evidence of audible output, and `[audio]` stays `unsupported`.
 The ordered next steps:
 
 1. On the phone, with the headset connected, run `dry` and review its
-   context.
+   context. Done once on 2026-10-12 (above); that decision is not reusable,
+   so repeat it immediately before any `play`.
 2. Get an explicit owner decision for one `play` run, using the phrase from
-   that `dry` run.
+   that fresh `dry` run.
 3. Record the transcript's `route_safety`, `tone_delivery`, and `cleanup`,
    and the owner's audible confirmation. Then decide whether `[audio]`
    evidence is sufficient. Mock or code evidence never is.
@@ -1381,6 +1418,8 @@ filters. The [source review](#a2dp-route-source-review-issue-91) identifies
 them as WirePlumber's BlueZ source loopback, and probe v3 observed exactly
 that bound pair on the phone. The
 [active proof workflow](#a2dp-active-proof-workflow-issue-91) is now checked
-in and offline-tested; it has not run. Its next step is a dry run on the
-phone, then an explicit owner decision for one `play` run. Keep `[audio]` unsupported until an audible output route and its
+in and offline-tested. Its `dry` mode refused safely with the headset
+disconnected and passed with it connected on the exact phone; `play` has not
+run. Its next step is a fresh `dry`, then an explicit owner decision for one
+`play` run. Keep `[audio]` unsupported until an audible output route and its
 routing are proved.

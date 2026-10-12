@@ -38,6 +38,31 @@
   no CPIF node was opened, and no service or CP was started. It is pre-boot
   evidence only; `[telephony]` remains `unsupported`.
 
+## 2026-10-12 (A2DP active proof dry runs; physical:google-pixel-9a-tegu-gxq96-mp1-0, dry only)
+
+- The session that operates the phone ran `dry` twice on the exact phone,
+  with the checked-in guest bodies. No tone was played either time.
+- 07:01 UTC: refused safely (`preflight-blocked`). The headset was paired
+  but disconnected: zero connected Audio Sinks, zero BlueZ A2DP sinks, and
+  a `null` default sink. No decision was issued.
+- 07:02 UTC, after the owner reconnected it: passed. The in-session v3
+  preflight was `candidate-observed` on kernel
+  `6.1.124-android14-11-ga4662a84a15f` with BlueZ 5.86-r2, PipeWire
+  1.6.8-r4 and WirePlumber 0.5.15-r0. It saw one connected paired Audio
+  Sink, one LDAC BlueZ A2DP default sink, the two bound BlueZ
+  source-loopback filters, no ALSA sink, zero playback PCM openers, and
+  both watched speaker controls `off`. The host issued one per-run
+  decision, kept with the transcripts in ignored
+  `out/pixel-9a/a2dp-active-proof/`.
+- `dry` starts no graph guard or poller, so `play`, the guards, and audio
+  output remain unverified on hardware. That decision expires after 10
+  minutes; a `play` run needs a fresh `dry` and a fresh explicit owner
+  decision. `[audio]` stays `unsupported`.
+- The offline test now also runs under Ubuntu's dash and mawk. mawk only
+  feeds the graph guard line by line with `-W interactive`; without it the
+  guard never arms and `play` refuses (`graph-guard-not-armed`), which is
+  now a checked refusal case (189 checks, 192 where the host awk is mawk).
+
 ## 2026-10-12 (A2DP active proof workflow; offline/mock only, google-pixel-9a-tegu-gxq96-mp1-0)
 
 - `tools/pixel-9a/a2dp-active-proof.sh` implements the #91 active-proof
