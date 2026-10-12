@@ -95,14 +95,14 @@ checked-in S2 workflow.
 
 ## Proposed next slices (each separately reviewed)
 
-1. Read-only scan hardening (blocker 3) in the library, with offline
+1. [#107](https://github.com/h4rkl/omarchy-ferrix/issues/107): read-only scan hardening (blocker 3) in the library, with offline
    positive and negative cases. Then rebuild the image and repeat the
    read-only preflight on the exact device.
-2. Read-only identity and boot-ID facts (blocker 4), redacted to hash
+2. [#108](https://github.com/h4rkl/omarchy-ferrix/issues/108): read-only identity and boot-ID facts (blocker 4), redacted to hash
    prefixes, added to the preflight.
-3. A written design for blockers 2 and 5, for owner review before any
+3. [#109](https://github.com/h4rkl/omarchy-ferrix/issues/109): a written design for blockers 2, 5 and 6, for owner review before any
    active code exists.
-4. #34 follow-up for blocker 1 (contract C1–C5), if the owner wants
+4. [#110](https://github.com/h4rkl/omarchy-ferrix/issues/110): #34 follow-up for blocker 1 (contract C1–C5), if the owner wants
    recovery without a reboot.
 
 Until then, physical S2 remains blocked. A fresh owner decision is still
