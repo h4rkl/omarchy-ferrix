@@ -117,7 +117,8 @@ This calls `tools/pixel-9a/test-offline.sh`, which works as follows:
   `acm-fake-guest` helpers.
 - It runs every test even after one fails.
 - It prints the tail of each failing log and a summary at the end.
-- It exits non-zero if any test failed.
+- It exits non-zero if any test failed, apart from Linux-quarantined tests
+  (see below).
 
 Tests mark a stage they cannot run on this host with a line that starts with
 `skip ` and still exit 0. Two examples:
@@ -137,6 +138,25 @@ The runner reports these tests as passed with skips and repeats the skip
 lines. Logs go to a fresh temporary directory, or to
 `FERRIX_PIXEL9A_TEST_LOG_DIR` if it is set. Some tests take several minutes.
 `a2dp-active-proof.sh` is the slowest, at about six minutes.
+
+### Linux quarantine (#127)
+
+`tests/quarantine-linux.txt` lists tests that fail on Linux CI hosts
+(ubuntu-latest) but pass on macOS. The list holds one file name per line, and
+`#` starts a comment. Root causes are tracked in #127.
+
+The runner reads the list only when `uname -s` is `Linux`:
+
+- Listed tests still run.
+- A listed test that fails is reported as `QUARANTINED (#127)`, with its log
+  tail, and does not fail the run.
+- A listed test that passes is reported as `quarantined but passed; remove
+  from list`.
+- A test that is not listed still fails the run when it fails.
+
+On macOS and other hosts the list is ignored, and every test counts. Remove an
+entry in the PR that fixes the test. Never quarantine a test by editing its
+assertions.
 
 To add a test, drop `tests/<feature>.sh` (or `.py`) in place. The runner and
 CI pick it up automatically. Also add a `pixel-9a-<feature>-test` recipe so

@@ -1,19 +1,21 @@
 # Linux CI for the emulator-first project (see AGENTS.md and plans/baseline.md).
 #
-# Five jobs, each its own required check (none depends on another except
+# Six jobs, each its own required check (none depends on another except
 # qemu-scenario-check on qemu-check):
 #   docs                - Markdown relative-link and #anchor check over every
 #                         tracked *.md, plus the docs/status.md current-state
 #                         and docs/status-log/ structure tests (stdlib Python).
 #   rust                - host toolchain checks (fmt, clippy, test) on ubuntu-latest.
-#   pixel-9a-offline    - every offline Pixel 9a test (`just pixel-9a-test-offline`
-#                         via tools/pixel-9a/test-offline.sh) with stubbed
-#                         adb/fastboot/guest. Evidence label: mock.
 #                         The hosted runner denies uid_map/setgroups and mounts in
 #                         an unprivileged user namespace, so the real-namespace
 #                         tests in crates/ferrix-runtime-native/tests/sandbox.rs
 #                         probe as degraded and print `sandbox-test-skipped`
 #                         here; every other test runs normally.
+#   pixel-9a-offline    - every offline Pixel 9a test (`just pixel-9a-test-offline`
+#                         via tools/pixel-9a/test-offline.sh) with stubbed
+#                         adb/fastboot/guest. Evidence label: mock. Tests in
+#                         tools/pixel-9a/tests/quarantine-linux.txt (#127) run
+#                         but cannot fail the job.
 #   sandbox-check       - those sandbox tests for real: `just linux-check test -p
 #                         ferrix-runtime-native` in the pinned privileged arm64
 #                         builder container with FERRIX_SANDBOX_TESTS=required,

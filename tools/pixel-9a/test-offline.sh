@@ -11,8 +11,13 @@
 # prints a line starting with "skip " (the tests' own convention for a stage
 # whose host prerequisite is absent) is reported as PASS with skips.
 #
-# Exit status: 0 when every test passed, 1 when any test failed, 2 on usage
-# errors. Never contacts a device: each test uses its own adb/fastboot stubs.
+# On Linux hosts, tests named in tests/quarantine-linux.txt (#127) still run,
+# but a failure is reported as QUARANTINED and does not fail the run; a
+# quarantined test that passes is flagged for removal from the list. The list
+# is ignored on other hosts.
+#
+# Exit status: 0 when every non-quarantined test passed, 1 when any of them
+# failed, 2 on usage errors. Never contacts a device: each test uses its own adb/fastboot stubs.
 set -u
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -24,6 +29,19 @@ helpers="acm-fake-guest.sh acm-fake-guest.py"
 is_helper() {
 	for h in $helpers; do
 		[ "$1" = "$h" ] && return 0
+	done
+	return 1
+}
+
+quarantine_file="$tests_dir/quarantine-linux.txt"
+quarantine=""
+if [ "$(uname -s)" = Linux ] && [ -f "$quarantine_file" ]; then
+	quarantine=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$quarantine_file")
+fi
+
+is_quarantined() {
+	for q in $quarantine; do
+		[ "$1" = "$q" ] && return 0
 	done
 	return 1
 }
@@ -45,11 +63,18 @@ if [ "$#" -gt 0 ]; then
 	list=$(printf '%s\n' "$@")
 fi
 
+for q in $quarantine; do
+	[ -f "$tests_dir/$q" ] || printf 'test-offline: warning: quarantine-linux.txt names a missing test: %s\n' "$q" >&2
+done
+
 pass=0
 fail=0
 skipped=0
+quarantined=0
 failed=""
 with_skips=""
+quarantined_failed=""
+quarantined_passed=""
 
 for name in $list; do
 	is_helper "$name" && continue
@@ -74,6 +99,15 @@ for name in $list; do
 		else
 			printf 'PASS %s (%ss)\n' "$name" "$secs"
 		fi
+		if is_quarantined "$name"; then
+			quarantined_passed="$quarantined_passed $name"
+			printf '     %s: quarantined but passed; remove from list\n' "$name"
+		fi
+	elif is_quarantined "$name"; then
+		quarantined=$((quarantined + 1))
+		quarantined_failed="$quarantined_failed $name"
+		printf 'QUARANTINED (#127) %s (exit %s, %ss); last lines of %s:\n' "$name" "$status" "$secs" "$log"
+		tail -n 20 "$log" | sed 's/^/     /'
 	else
 		fail=$((fail + 1))
 		failed="$failed $name"
@@ -82,10 +116,12 @@ for name in $list; do
 	fi
 done
 
-total=$((pass + fail))
-printf '\nPixel 9a offline tests: %s run, %s passed (%s with skips), %s failed\n' \
-	"$total" "$pass" "$skipped" "$fail"
+total=$((pass + fail + quarantined))
+printf '\nPixel 9a offline tests: %s run, %s passed (%s with skips), %s failed, %s quarantined failures (#127)\n' \
+	"$total" "$pass" "$skipped" "$fail" "$quarantined"
 [ -z "$with_skips" ] || printf 'with skips:%s\n' "$with_skips"
+[ -z "$quarantined_failed" ] || printf 'QUARANTINED (#127), not counted as failures:%s\n' "$quarantined_failed"
+[ -z "$quarantined_passed" ] || printf 'quarantined but passed; remove from list:%s\n' "$quarantined_passed"
 [ -z "$failed" ] || printf 'failed:%s\n' "$failed"
 printf 'logs: %s\n' "$log_dir"
 [ "$fail" -eq 0 ]

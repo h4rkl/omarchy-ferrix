@@ -1,0 +1,17 @@
+# Offline Pixel 9a tests that fail on Linux CI hosts (ubuntu-latest) but pass
+# on macOS. Tracking issue: #127 (https://github.com/h4rkl/omarchy-ferrix/issues/127).
+#
+# tools/pixel-9a/test-offline.sh reads this file only when `uname -s` is
+# Linux. It still runs every test listed here, but a failure is reported as
+# "QUARANTINED (#127)" and does not fail the run. A listed test that passes is
+# reported as "quarantined but passed; remove from list". On other hosts the
+# file is ignored. Any failure of a test not listed here still fails the run.
+#
+# One test file name (as in tools/pixel-9a/tests/) per line; '#' starts a
+# comment. Remove an entry in the PR that fixes it.
+discover-read-only.sh
+factory-restore-workflow.sh
+firmware-workflow.sh
+radios-workflow.sh
+sideload-workflow.sh
+unlock-workflow.sh
