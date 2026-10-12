@@ -1,6 +1,6 @@
 # Status
 
-## 2026-10-12 (S5300 S2 read-only preflight, issue #92; offline only)
+## 2026-10-12 (S5300 S2 read-only preflight, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - New checked-in `just pixel-9a-s5300-s2-preflight`
   (`tools/pixel-9a/s5300-s2-preflight.sh` and `-remote.sh`) for the exact
@@ -18,18 +18,25 @@
 - It opens no CPIF node, writes nothing, starts, mounts, provisions or arms
   nothing, and always reports `cp_boot_authorized=no` and
   `active_s2_workflow=not-implemented`.
-- On the installed 1-r2 image it is expected to return `no-go` for
-  `file-s5300-cpif.sh` and `pkg-device-google-tegu` skew until a rebuilt
-  image is flashed. Whether bootconfig carries the hardware revision is
-  unobserved.
+- On the exact phone with the installed 1-r2 image, one read-only run
+  returned `no-go` solely for `file-s5300-cpif.sh` and
+  `pkg-device-google-tegu` image skew. Bootconfig reported `MP1.0` and
+  slot B; the pinned kernel and backend matched, CP remained `OFFLINE`,
+  and all 23 CPIF class nodes (including 11 extra beyond the twelve named
+  E1 nodes) had a complete, clean opener scan. Services and runlevels were
+  in the reviewed state, scratch was root-owned and empty on tmpfs, the arm
+  token and source mounts were absent, and host factory archive hash/size
+  verification passed. Source checks were deferred. A rebuilt 1-r3 image
+  is required before a pre-mount GO can be considered. The aggregate
+  transcript remains ignored under `out/pixel-9a/s5300-s2-preflight/`.
 - The partial-mount path of the unchanged, #34-accepted
   `ferrix-s5300-mounts` was reviewed. A failed start leaves earlier read-only
   loop mounts in place with no checked-in teardown. A characterisation test
   now pins that behaviour, and a rollback contract is proposed in
   `s5300-s2-preflight.md`; until then the rule is to reboot.
-- Offline tests pass. No phone, USB, ADB/Fastboot, builder, service, or CP was
-  touched, and no physical or CP boot evidence exists. `[telephony]` remains
-  `unsupported`.
+- Offline tests pass. The physical run was read-only: no source was mounted,
+  no CPIF node was opened, and no service or CP was started. It is pre-boot
+  evidence only; `[telephony]` remains `unsupported`.
 ## 2026-10-12 (A2DP route source review and preflight v3; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - Probe v2 ran on the exact phone with one paired, connected Audio Sink

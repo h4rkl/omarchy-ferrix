@@ -7,9 +7,9 @@ boot. It adds a checked-in, bounded preflight that collects the facts a
 reviewer needs for a later one-shot S2 manual CP boot, and returns a
 machine-readable GO/NO-GO for those facts. **It does not boot the CP, start
 or arm a service, mount anything, or implement any active S2 step.** The owner
-has not authorised a CP boot. Writing and running this slice did not touch a
-phone, USB, CDC-ACM, ADB, Fastboot, or the builder. No physical result exists
-for it yet.
+has not authorised a CP boot. The implementation pass was offline; the PM
+subsequently ran the read-only preflight once on the exact phone. No mount,
+service start, CPIF node open, or CP boot was performed.
 
 Route context: [`s5300-route-decision.md`](s5300-route-decision.md) (stage 2),
 [`s5300-cpif-integration.md`](s5300-cpif-integration.md) (services, library,
@@ -27,7 +27,8 @@ arguments, so a mount or arm argument cannot be passed. `FERRIX_SHELL`
 selects the host CDC-ACM node, which is never printed or retained.
 `FERRIX_PIXEL9A_S5300_S2_EVIDENCE=mock` labels stubbed runs, and a mock run
 can never report a physical gate. `FERRIX_PIXEL9A_ACM_TIMEOUT` defaults to
-180 s, because the opener scan has not been timed on the device.
+180 s. The first read-only device run completed within this bound; later
+image and service states may differ.
 
 Outputs go, mode 0600, to the ignored `out/pixel-9a/s5300-s2-preflight/`:
 
@@ -140,16 +141,22 @@ only the later S2 workflow can observe it.
 until reboot after any earlier mount in this boot. It only tightens the
 barrier, but it shows that this boot is not fresh.
 
-### Expected result on the currently installed image
+### Exact-device result on the currently installed image
 
 The installed bundle was built from `1b70e3a` (`device-google-tegu` 1-r2).
 Between that commit and this branch, the only pinned file that changed is
-`ferrix-s5300-cpif.sh`. A run on that image should therefore report
-`preflight_result=no-go` with exactly
-`image_skew=file-s5300-cpif.sh,pkg-device-google-tegu`, unless a live fact
-also blocks. The live opener scan itself is still meaningful, because it
-uses the checked-in library. A rebuilt and reflashed 1-r3 image is required
-before the preflight can return `go`.
+`ferrix-s5300-cpif.sh`. The read-only run returned `preflight_result=no-go`
+with exactly `image_skew=file-s5300-cpif.sh,pkg-device-google-tegu` and no
+other blocker or unknown. Bootconfig reported `MP1.0` and slot B. CP was
+`OFFLINE`, the host factory archive was hash/size verified, all twelve E1
+nodes passed, and the opener scan was complete and clean across 23 CPIF
+class nodes (eleven additional nodes were counted, never named in output).
+The S5300 services were stopped with no runlevel link or arm token; scratch
+was root-owned, mode 0700 and empty on tmpfs; all four source roles were
+unique, unmounted, unheld and not loop-backed. Source verification remains
+deferred. The aggregate transcript is ignored under
+`out/pixel-9a/s5300-s2-preflight/`. A rebuilt and reflashed 1-r3 image is
+required before the preflight can return `go`.
 
 ### Phases
 
@@ -174,21 +181,19 @@ OpenRC state directory, is NO-GO or `incomplete`.
   scan does not see SCM_RIGHTS fds in flight, io_uring fixed files, or kernel
   references (integration doc).
 - The OpenRC state comes from `/run/openrc/<state>/` directories rather than
-  from `rc-status`. That avoids running OpenRC tools, but it has not been
-  checked against this device's OpenRC version. A missing state directory
-  reports `unknown`.
+  from `rc-status`. The read-only exact-device run found the expected service
+  states, but a missing state directory still reports `unknown` and blocks.
 - The override checks are heuristics. They cover conf.d content, multiplexed
   instances, and `rc.conf`/`local.d`/`/etc/udev/rules.d` lines that name the
   S5300 services or CPIF nodes. They do not prove that no other mechanism
   starts or reconfigures a service.
-- Whether bootconfig carries `androidboot.revision` on this device has not
-  been observed. If it does not, the result is `incomplete`, and identity
-  then rests on the Fastboot evidence from the recovery-gated flash, which
-  this workflow does not collect.
+- Bootconfig carried `androidboot.revision=MP1.0` in one exact-device run.
+  The preflight still returns `incomplete` if that key is absent on a later
+  run; it does not substitute prior Fastboot identity evidence.
 - The offline tests run the real composed probe with the host `/bin/sh`,
-  Python stand-ins for `stat`/`uname`, and a FIFO fixture. Busybox `sh`,
-  `stat`, `ls`, `awk`, and `sha256sum` on the guest, real OpenRC, and the
-  CDC-ACM link to a real phone have not been exercised.
+  Python stand-ins for `stat`/`uname`, and a FIFO fixture. The exact-device
+  run exercised the guest BusyBox tools, real OpenRC state directories and
+  CDC-ACM link for this read-only path. It did not exercise active S2.
 
 ## Review: partial-mount failure path of `ferrix-s5300-mounts`
 
