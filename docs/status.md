@@ -1,5 +1,24 @@
 # Status
 
+## 2026-10-12 (speaker protection NO-GO; exact Pixel source and effective image review)
+
+- Issue #83's read-only source and built-module review found that neither the
+  `674157b` Ferrix TAS module nor the pinned stock TAS module contains the
+  kernel `TAS25XX_ALGO` protection/calibration path. Stock audio HAL strings
+  suggest that Android configures AoC speaker protection and per-unit tuning,
+  but the protocol and AoC behaviour without that setup remain unknown. The
+  Linux AoC controls and TAS cached mixer values do not prove protection or
+  bound the amplifier gain. The board audio decision is **NO-GO** for an
+  internal speaker or earpiece trial. No speaker stream, TAS write, or new
+  device probe ran; `[audio]` remains `unsupported`. Bluetooth A2DP is a
+  separate output route worth proving without driving the TAS amplifiers.
+- PR #85's controlled-tone mic workflow passed CI. Its read-only preflight on
+  the still-booted exact Pixel reported one AoC card, a matching free PCM 8
+  capture subdevice, no opener, mic/speaker/TAS routes off, no leftover proof
+  directory, and `preflight_problems=none`. It changed nothing. A separate
+  one-run decision and documented host-speaker setup remain before any active
+  acoustic capture.
+
 ## 2026-10-12 (Pixel 9a controlled-tone microphone acoustic proof workflow, issue #80; offline only)
 
 - **Change:** `just pixel-9a-mic-acoustic-proof`
@@ -26,7 +45,7 @@
   baseline, broadband, inconsistent, saturated, interrupted-stimulus,
   capture-failure, cleanup, refusal, transport-failure, and privacy cases. The
   issue #2 suite still passes unchanged.
-- **Limits:** not run on the phone. The physical setup (built-in host
+- **Limits:** no active acoustic capture has run on the phone. The physical setup (built-in host
   speaker, modest volume, distance, quiet room) cannot be verified from code
   and is documented in `audio-route-decision.md`. A single positive would not
   exclude gate-locked electrical coupling over the shared USB host, and it
