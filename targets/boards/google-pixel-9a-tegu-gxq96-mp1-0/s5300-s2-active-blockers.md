@@ -102,6 +102,7 @@ checked-in S2 workflow.
    prefixes, added to the preflight.
 3. [#109](https://github.com/h4rkl/omarchy-ferrix/issues/109): a written design for blockers 2, 5 and 6, for owner review before any
    active code exists.
+   Design: [`s5300-s2-active-design.md`](s5300-s2-active-design.md) (for owner review; not implemented; authorises nothing).
 4. [#110](https://github.com/h4rkl/omarchy-ferrix/issues/110): #34 follow-up for blocker 1 (contract C1–C5), if the owner wants
    recovery without a reboot.
 
