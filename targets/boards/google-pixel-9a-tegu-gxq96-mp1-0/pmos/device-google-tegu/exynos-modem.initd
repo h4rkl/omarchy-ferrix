@@ -48,8 +48,22 @@ scratch_dir=/run/exynos-modem
 crash_dump_boot=disabled'
 
 depend() {
-	need ferrix-s5300-mounts ferrix-radio-firmware
-	after udev
+	# The deptree must follow a backend change in backends.env.
+	config /etc/ferrix/backends.env
+	need ferrix-radio-firmware
+	case "${FERRIX_S5300_KERNEL_BACKEND:-}" in
+		linux-google-tegu-wwan)
+			need ferrix-s5300-mounts
+			;;
+		*)
+			# OpenRC starts a `need` before start_pre runs, so a manual CPIF
+			# start (or a refused backend) would mount the per-unit sources
+			# before any check or the one-use arm. `use` only orders; the
+			# preflight requires the mounts to be started already.
+			use ferrix-s5300-mounts
+			;;
+	esac
+	after udev ferrix-s5300-mounts
 	before sit-proxy modemmanager
 }
 

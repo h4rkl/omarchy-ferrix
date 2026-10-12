@@ -118,9 +118,10 @@ grep -q 'modem%s' "$package_dir/ferrix-s5300-mounts.initd" ||
 	fail 'S5300 mounts must construct the exact slot-specific modem label'
 grep -q 'mounts -> exynos-modem -> sit-proxy -> modemmanager' "$package_dir/s5300-userspace-sources.toml" ||
 	fail 'S5300 service order is not recorded'
-grep -q 'need ferrix-s5300-mounts' "$package_dir/exynos-modem.initd" ||
-	fail 'exynos-modem service does not require read-only source mounts'
-grep -q 'after udev exynos-modem' "$package_dir/sit-proxy.initd" ||
+# WWAN keeps `need`; CPIF only `use`s them (s5300-cpif-services.sh runs depend()).
+grep -q '^			need ferrix-s5300-mounts$' "$package_dir/exynos-modem.initd" ||
+	fail 'exynos-modem service does not require read-only source mounts on WWAN'
+grep -q '^	after udev ferrix-s5300-mounts exynos-modem$' "$package_dir/sit-proxy.initd" ||
 	fail 'sit-proxy service does not follow exynos-modem'
 grep -q '^	use ferrix-s5300-mounts exynos-modem sit-proxy$' "$pmos_dir/modemmanager-samsung-sit/modemmanager.initd" ||
 	fail 'ModemManager service does not order after the S5300 stack'

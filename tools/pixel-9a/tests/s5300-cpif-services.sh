@@ -252,7 +252,7 @@ EOF
 		sed -e "s#/etc/ferrix/backends.env#$fx/etc/ferrix/backends.env#g" \
 			-e "s#/usr/lib/ferrix/s5300-cpif.sh#$fx/usr/lib/ferrix/s5300-cpif.sh#g" \
 			"$pkg/$svc.initd" >"$work/$svc.initd"
-		[ "$(grep -c "$fx" "$work/$svc.initd")" -eq 3 ] || { echo "harness could not redirect $svc" >&2; exit 1; }
+		[ "$(grep -c "$fx" "$work/$svc.initd")" -eq 4 ] || { echo "harness could not redirect $svc" >&2; exit 1; }
 		cp "$pkg/$svc.initd" "$fx/etc/init.d/$svc"
 	done
 	cp "$mm/modemmanager.initd" "$fx/etc/init.d/modemmanager"
@@ -381,6 +381,36 @@ for backend in cpif '' linux-google-tegu-wwan-x; do
 	run_case "refuses backend '$backend' in sit-proxy start" fail "refuses kernel backend '$backend'" sit-proxy start_pre \
 		"set_backend '$backend'"
 done
+
+# --- OpenRC dependencies -------------------------------------------------------
+# depend() is executed with OpenRC's gendepends keywords stubbed to record
+# each keyword's services. A `need` starts its target before start_pre, so on
+# anything but the legacy WWAN route neither service may `need` the source
+# mounts or the CP daemon; they may only `use`/`after` them.
+deps='deps() {
+	for kw in need use after before config; do eval "$kw() { printf \"%s %s\\n\" $kw \"\$*\" >>\"\$fx/deps\"; }"; done
+	: >"$fx/deps"; depend
+}
+kw() { awk -v k="$1" '"'"'$1 == k { for (i = 2; i <= NF; i++) print $i }'"'"' "$fx/deps" | sort -u | tr "\n" " "; }
+has() { case " $(kw "$1") " in *" $2 "*) return 0 ;; esac; return 1; }'
+run_case 'deps wwan: exynos-modem keeps need on the source mounts and firmware gate' ok '' exynos-modem \
+	"$deps"'; deps && has need ferrix-s5300-mounts && has need ferrix-radio-firmware && has after udev && has before sit-proxy && has config "$fx/etc/ferrix/backends.env"' \
+	'set_backend linux-google-tegu-wwan'
+run_case 'deps wwan: sit-proxy keeps need on the mounts, exynos-modem, and firmware gate' ok '' sit-proxy \
+	"$deps"'; deps && has need ferrix-s5300-mounts && has need exynos-modem && has need ferrix-radio-firmware && has after exynos-modem' \
+	'set_backend linux-google-tegu-wwan'
+for backend in google-kleaf-cpif '' cpif; do
+	run_case "deps '$backend': exynos-modem only uses and orders after the source mounts" ok '' exynos-modem \
+		"$deps"'; deps && [ "$(kw need)" = "ferrix-radio-firmware " ] && has use ferrix-s5300-mounts && has after ferrix-s5300-mounts && has before sit-proxy && has config "$fx/etc/ferrix/backends.env"' \
+		"set_backend '$backend'"
+	run_case "deps '$backend': sit-proxy only uses and orders after the mounts and exynos-modem" ok '' sit-proxy \
+		"$deps"'; deps && [ "$(kw need)" = "ferrix-radio-firmware " ] && has use ferrix-s5300-mounts && has use exynos-modem && has after ferrix-s5300-mounts && has after exynos-modem' \
+		"set_backend '$backend'"
+done
+# The stub can tell a reintroduced `need` apart: the same harness flags a CPIF
+# depend() that needs the mounts again.
+run_case 'deps: a reintroduced CPIF need on the source mounts is detected' fail 'reintroduced' exynos-modem \
+	"$deps"'; sed -i.bak "s/^			use ferrix-s5300-mounts\$/			need ferrix-s5300-mounts/" "$work/exynos-modem.initd"; . "$work/exynos-modem.initd"; deps; [ "$(kw need)" = "ferrix-radio-firmware " ] || { echo reintroduced; exit 1; }'
 
 # --- manual-only start ------------------------------------------------------
 run_case 'cpif: preflight passes on the exact surface without opening a node' ok '' exynos-modem \

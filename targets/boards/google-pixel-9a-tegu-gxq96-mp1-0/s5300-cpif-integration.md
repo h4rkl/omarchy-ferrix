@@ -54,9 +54,30 @@ looked at the kernel log and run the preflight again, rather than reopening
   `ferrix-telephonyd` needs it. The composer's older catch-up edit, which
   deleted that `need` line on the Kleaf image, is now a no-op for the new
   package.
-- Dependencies are otherwise unchanged: `exynos-modem` needs
-  `ferrix-s5300-mounts` and `ferrix-radio-firmware`; `sit-proxy` needs
-  `exynos-modem`; `ferrix-telephonyd` only orders after the chain.
+- `exynos-modem` and `sit-proxy` choose their dependencies from
+  `FERRIX_S5300_KERNEL_BACKEND`, and declare
+  `config /etc/ferrix/backends.env` so OpenRC rebuilds its deptree when that
+  file changes. On `linux-google-tegu-wwan` the old dependencies are kept:
+  `exynos-modem` needs `ferrix-s5300-mounts`, and `sit-proxy` needs
+  `ferrix-s5300-mounts` and `exynos-modem`. On `google-kleaf-cpif`, and on any
+  backend that `start_pre` refuses, both only `use` and order `after` them.
+  OpenRC starts a `need` before the dependent's `start_pre` runs. With `need`,
+  a manual `rc-service exynos-modem start` would therefore have run the
+  per-unit source mounts before any check or the arm token was looked at, and
+  `rc-service sit-proxy start` would have tried to start the CP daemon too.
+  The preflights still refuse unless those services are already started:
+  `exynos-modem` requires `ferrix-s5300-mounts`, and `sit-proxy` requires
+  `exynos-modem`. Both still `need` `ferrix-radio-firmware`. That service is a
+  read-only firmware check, so letting OpenRC start it adds a check and changes
+  nothing. `ferrix-telephonyd` only orders after the chain.
+- With `use`, OpenRC no longer stops dependents first on CPIF. Stopping
+  `exynos-modem` leaves `sit-proxy` running, and stopping `ferrix-s5300-mounts`
+  leaves the daemon running. The manual stop order is `sit-proxy`, then
+  `exynos-modem`, then `ferrix-s5300-mounts`. A wrong order fails closed.
+  `ferrix-s5300-mounts`' `stop` never forces an unmount, so a mount that is
+  still held stays mounted, read-only, over its loop. A later `arm` or `start`
+  refuses while any CPIF node is held or the mounts are not started and
+  verified.
 - `99-google-tegu-sit.rules` is unchanged and tags only `wwan` SIT ports.
   No CPIF node is handed to ModemManager. Binding the SIT plugin to CPIF
   (or through the `sit-proxy` sockets) is S3 work and is **not** done here.
@@ -141,8 +162,10 @@ the CP cannot be restarted at boot even if a link were added to a runlevel.
 target, the package pins, and the `sit-proxy --print-config` output. They
 then require `exynos-modem` to be started, `modem_state` to be exactly
 `ONLINE` (route decision: stage 3 only follows a stage 2 GO), `umts_ipc0/1` to
-pass the node rules, and nobody else to hold them. They need no token, because
-`sit-proxy` needs `exynos-modem`, and starting that needs one.
+pass the node rules, and nobody else to hold them. They need no token: on
+CPIF, `sit-proxy` only `use`s `exynos-modem`, so it never starts the daemon
+itself, and it refuses unless the daemon, which needed a token to start, is
+already running.
 
 The intended manual order for a future S2/S3 run is therefore:
 `rc-service ferrix-s5300-mounts start` → `rc-service exynos-modem provision`
@@ -154,8 +177,8 @@ not perform or authorise it.
 
 | File | Change |
 | --- | --- |
-| `pmos/device-google-tegu/exynos-modem.initd` | per-backend CLI/supervision; `preflight`, `provision`, `arm`; CPIF `start_pre`; WWAN `start_pre` body unchanged |
-| `pmos/device-google-tegu/sit-proxy.initd` | per-backend CLI/supervision; CPIF `preflight` and `start_pre` |
+| `pmos/device-google-tegu/exynos-modem.initd` | per-backend CLI/supervision; per-backend `depend()` (CPIF: `use` the mounts); `preflight`, `provision`, `arm`; CPIF `start_pre`; WWAN `start_pre` body unchanged |
+| `pmos/device-google-tegu/sit-proxy.initd` | per-backend CLI/supervision; per-backend `depend()` (CPIF: `use` the mounts and `exynos-modem`); CPIF `preflight` and `start_pre` |
 | `pmos/device-google-tegu/ferrix-s5300-cpif.sh` | new check library (`/usr/lib/ferrix/s5300-cpif.sh`) |
 | `pmos/device-google-tegu/s5300-cpif-services.sha256` | new installed pin list |
 | `pmos/device-google-tegu/APKBUILD` | pkgrel 2; installs the two new files; S5300 services out of the runlevel list; sha512 re-pins |
@@ -197,6 +220,13 @@ needs a new #34 review and new pins in the library and the NV workflow.
   case. A fake `stat` reports device numbers. The binaries are stubs that
   log their arguments, and every case fails if a binary ran without
   `--print-config`. Covered: both backends' CLI and supervisor selection;
+  each service's `depend()`, run with OpenRC's `need`/`use`/`after`/`before`/
+  `config` keywords stubbed to record their arguments. On WWAN it must keep
+  `need` on the mounts (and on `exynos-modem` for `sit-proxy`). On
+  `google-kleaf-cpif`, an empty backend, and an unknown backend, the only
+  `need` allowed is `ferrix-radio-firmware`, and the mounts and daemon must
+  appear under `use` and `after`. A self-check confirms that a reintroduced
+  `need` is caught;
   refusal of unknown and empty backends; preflight/arm/start, one-shot token
   consumption, and refusal of a re-arm or a forged or symlinked token; each
   target, package, binary, module, platform, `modem_state`, WWAN, node, class,
@@ -224,7 +254,10 @@ the preflight expects. `s5300-mounts-service.sh`, `rootfs-workflow.sh`, and the
 existing S5300 workflow suites also passed. Two deliberate regressions were
 caught: adding a read of a node to the library failed the static scan and made
 the node cases time out, and dropping the token consumption failed the arm
-cases. **Not run:** OpenRC itself (`checkpath`, `service_started`,
+cases. A later run added the nine `depend()` cases (98 checks, passed). A
+deliberate regression, putting `need` back in both CPIF branches, failed all
+six CPIF and refused-backend `depend()` cases, plus the two stale-pin checks.
+**Not run:** OpenRC itself (`checkpath`, `service_started`,
 `start-stop-daemon`, `use` semantics), busybox `stat`/`sha256sum` on the guest,
 abuild/pmbootstrap packaging, and anything on the device.
 

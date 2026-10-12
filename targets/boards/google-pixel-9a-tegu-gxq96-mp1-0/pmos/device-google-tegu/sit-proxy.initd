@@ -33,9 +33,20 @@ dev.1=/dev/umts_ipc1
 socket_dir=/run/sit-proxy'
 
 depend() {
-	need ferrix-s5300-mounts exynos-modem
+	# The deptree must follow a backend change in backends.env.
+	config /etc/ferrix/backends.env
 	need ferrix-radio-firmware
-	after udev exynos-modem
+	case "${FERRIX_S5300_KERNEL_BACKEND:-}" in
+		linux-google-tegu-wwan)
+			need ferrix-s5300-mounts exynos-modem
+			;;
+		*)
+			# Never pull in the mounts or the CP daemon on CPIF (or a refused
+			# backend): start_pre requires exynos-modem to be started already.
+			use ferrix-s5300-mounts exynos-modem
+			;;
+	esac
+	after udev ferrix-s5300-mounts exynos-modem
 	before modemmanager
 }
 

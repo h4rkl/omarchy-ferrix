@@ -1,7 +1,7 @@
 # SHA-256 of the installed files that decide google-kleaf-cpif behaviour.
 # Checked by /usr/lib/ferrix/s5300-cpif.sh; regenerate per s5300-cpif-integration.md.
-51bec90a6992d6829a28fd40e0d5383c4772ed54699f96a3f42ab1e8d9c8a9f8  /etc/init.d/exynos-modem
-09567b5d1ac42c1759c0336d7ad645666a6f7aa9b00a539c2c5119f92672d5e9  /etc/init.d/sit-proxy
+7fb615656324faeb7212b52ec9838020ea4d5d2b976a6e21e15114fca1a94866  /etc/init.d/exynos-modem
+df0a817bd0b52f9f9d8b9093e2f2b8e79e754f595146949fc9f6cbc9acaf73b5  /etc/init.d/sit-proxy
 b90d3b41ac175c93e5da5db0858327157da414bc9ca06d403c598108db22f74b  /etc/init.d/ferrix-s5300-mounts
 4d73041607f761ed11ed69926da73d0f78d1fdc5b0cc80482edb0b8de62f364a  /etc/init.d/modemmanager
 55eed2f968d9a916838925bbc3374b4f1c597bd9284847e3d7b6078b28152b22  /usr/lib/ferrix/s5300-cpif.sh
