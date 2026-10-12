@@ -3,30 +3,37 @@ set shell := ["/bin/sh", "-eu", "-c"]
 root := justfile_directory()
 out := env_var_or_default("FERRIX_OUT_DIR", root + "/out") + "/qemu-aarch64"
 
+[group('host-dev')]
 host-check:
     @"{{root}}/tools/dev/check.sh"
 
 # Prepare ignored per-developer notes and settings without touching builds.
+[group('host-dev')]
 local-init:
     @sh "{{root}}/tools/dev/local-init.sh"
 
+[group('host-dev')]
 license-check:
     @sh "{{root}}/tools/dev/license-check.sh"
 
 # Explicit, opt-in host package installation. See AGENT_INSTALL.md.
+[group('host-dev')]
 dev-setup:
     @"{{root}}/tools/dev/install.sh"
 
+[group('devices')]
 oneplus-tools-check:
     @command -v adb >/dev/null && adb version | head -2 || { echo "FAIL adb — brew install --cask android-platform-tools" >&2; exit 1; }
     @command -v fastboot >/dev/null && fastboot --version | head -1 || { echo "FAIL fastboot — brew install --cask android-platform-tools" >&2; exit 1; }
 
 # Pixel 9a read-only tooling checks and identity discovery. The workflow
 # refuses zero or multiple devices and never mutates a physical device.
+[group('pixel-9a-probes')]
 pixel-9a-tools-check:
     @command -v adb >/dev/null && adb version | head -2 || { echo "FAIL adb — brew install --cask android-platform-tools" >&2; exit 1; }
     @command -v fastboot >/dev/null && fastboot --version | head -1 || { echo "FAIL fastboot — brew install --cask android-platform-tools" >&2; exit 1; }
 
+[group('pixel-9a-probes')]
 pixel-9a-discover:
     @"{{root}}/tools/pixel-9a/discover.sh"
 
@@ -34,11 +41,13 @@ pixel-9a-discover:
 # development. This removes the hard-button requirement when ADB is available;
 # it never enters Fastbootd or changes device storage.
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-enter-fastboot *args:
     @"{{root}}/tools/pixel-9a/enter-fastboot.sh" "$@"
 
 # Offline safety/privacy tests with strict adb/fastboot stubs; never contacts a
 # physical device.
+[group('tests')]
 pixel-9a-tools-test:
     @sh "{{root}}/tools/pixel-9a/tests/discover-read-only.sh"
     @sh "{{root}}/tools/pixel-9a/tests/inspect-factory.sh"
@@ -48,90 +57,122 @@ pixel-9a-tools-test:
     @sh "{{root}}/tools/pixel-9a/tests/enter-fastboot-workflow.sh"
     @sh "{{root}}/tools/pixel-9a/tests/dev-flash-workflow.sh"
 
+# Every offline Pixel 9a test under tools/pixel-9a/tests/ in sorted order; runs
+# all of them, prints a pass/fail/skip summary and fails if any test failed.
+# Optional NAME arguments (e.g. acm-probe.sh) select a subset. Device-free.
+[group('tests')]
+[positional-arguments]
+pixel-9a-test-offline *names:
+    @sh "{{root}}/tools/pixel-9a/test-offline.sh" "$@"
+
+[group('tests')]
 pixel-9a-enter-fastboot-test:
     @sh "{{root}}/tools/pixel-9a/tests/enter-fastboot-workflow.sh"
 
 # Separate native-Linux Pixel host environment. Loading it is opt-in and
 # read-only; it never creates output directories or contacts a device.
+[group('pixel-9a-build')]
 pixel-9a-env-validate:
     @"{{root}}/tools/pixel-9a/env.sh" validate
 
+[group('pixel-9a-build')]
 pixel-9a-env-print:
     @"{{root}}/tools/pixel-9a/env.sh" print
 
+[group('pixel-9a-build')]
 pixel-9a-env-check group="all":
     @"{{root}}/tools/pixel-9a/env.sh" check "{{group}}"
 
+[group('tests')]
 pixel-9a-env-test:
     @sh "{{root}}/tools/pixel-9a/tests/env.sh"
     @sh "{{root}}/tools/pixel-9a/tests/attempt-env.sh"
 
 # Device-free fresh-output handoff for the selected static route. Source the
 # generated env.sh after tools/pixel-9a/env.sh on the native builder.
+[group('pixel-9a-build')]
 pixel-9a-attempt-env attempt capacity:
     @sh "{{root}}/tools/pixel-9a/attempt-env.sh" "{{attempt}}" "{{capacity}}"
 
+[group('pixel-9a-flash-recovery')]
 pixel-9a-recovery-download:
     @"{{root}}/tools/pixel-9a/recovery-download.sh"
 
 # Offline only: verify the pinned local factory archive and record its package,
 # android-info, fastboot-info, and nested image inventory under out/pixel-9a/.
+[group('pixel-9a-flash-recovery')]
 pixel-9a-factory-inspect:
     @"{{root}}/tools/pixel-9a/inspect-factory.sh"
 
 # Device-free inspection of extracted, ignored Pixel 9a DTBs and overlays.
+[group('pixel-9a-build')]
 pixel-9a-dt-inspect file:
     @"{{root}}/tools/pixel-9a/dt-inspect.sh" "{{file}}"
 
+[group('pixel-9a-build')]
 pixel-9a-dt-fixups file:
     @"{{root}}/tools/pixel-9a/dt-inspect.sh" --fixups "{{file}}"
 
+[group('pixel-9a-build')]
 pixel-9a-dt-symbols file:
     @"{{root}}/tools/pixel-9a/dt-inspect.sh" --symbols "{{file}}"
 
+[group('pixel-9a-build')]
 pixel-9a-dt-symbol-probe base overlay:
     @"{{root}}/tools/pixel-9a/dt-symbol-probe.sh" "{{base}}" "{{overlay}}"
 
+[group('pixel-9a-build')]
 pixel-9a-dt-apply-probe base overlay:
     @"{{root}}/tools/pixel-9a/dt-symbol-probe.sh" --base-dtb "{{base}}" "{{overlay}}"
 
 # Native-Linux-only, device-free Google downstream kernel workflow. Sync is a
 # large opt-in download; build uses Google's Kleaf/Bazel target and writes only
 # to ignored cache/output paths.
+[group('pixel-9a-build')]
 pixel-9a-kernel-check:
     @"{{root}}/tools/pixel-9a/kernel.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-kernel-sync:
     @"{{root}}/tools/pixel-9a/kernel.sh" sync
 
+[group('pixel-9a-build')]
 pixel-9a-kernel-verify:
     @"{{root}}/tools/pixel-9a/kernel.sh" verify
 
+[group('pixel-9a-build')]
 pixel-9a-kernel-build:
     @"{{root}}/tools/pixel-9a/kernel.sh" build
 
+[group('tests')]
 pixel-9a-kernel-test:
     @sh "{{root}}/tools/pixel-9a/tests/kernel-workflow.sh"
 
 # Separate native-Linux Kbuild route for the radio-first s5300_modem WWAN
 # backend. It is deliberately not a mode of the Google Kleaf/cpif workflow.
+[group('pixel-9a-build')]
 pixel-9a-kernel-radio-check:
     @"{{root}}/tools/pixel-9a/kernel-radio.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-kernel-radio-sync:
     @"{{root}}/tools/pixel-9a/kernel-radio.sh" sync
 
+[group('pixel-9a-build')]
 pixel-9a-kernel-radio-verify:
     @"{{root}}/tools/pixel-9a/kernel-radio.sh" verify
 
+[group('pixel-9a-build')]
 pixel-9a-kernel-radio-build:
     @"{{root}}/tools/pixel-9a/kernel-radio.sh" build
 
+[group('tests')]
 pixel-9a-kernel-radio-test:
     @sh "{{root}}/tools/pixel-9a/tests/kernel-radio-workflow.sh"
 
 # Read-only live partition inventory. The workflow refuses ambiguous devices
 # and writes only a redacted ignored transcript.
+[group('pixel-9a-probes')]
 pixel-9a-partition-inventory:
     @"{{root}}/tools/pixel-9a/partition-inventory.sh"
 
@@ -139,52 +180,65 @@ pixel-9a-partition-inventory:
 # composer. It reads both A/B static and logical mappings over ADB, or the
 # independent A/B partition-size getvars from an owner-entered Fastbootd
 # session, and preserves the broader inventory's complete/partial result.
+[group('pixel-9a-probes')]
 pixel-9a-partition-capacity:
     @"{{root}}/tools/pixel-9a/partition-capacity.sh"
 
 # Read-only exact-target Fastbootd diagnostics. Saves raw getvar responses,
 # including failures; never publishes a capacity handoff or changes the phone.
+[group('pixel-9a-probes')]
 pixel-9a-partition-capacity-diagnose:
     @"{{root}}/tools/pixel-9a/partition-capacity.sh" --diagnose-fastboot
 
 # Separate schema-2, eight-partition handoff for the native static-boot route.
 # Read-only; requires owner-entered ordinary bootloader Fastboot.
+[group('pixel-9a-probes')]
 pixel-9a-partition-capacity-static:
     @"{{root}}/tools/pixel-9a/partition-capacity.sh" --static-boot
 
 # Same-device ADB by-name plus live ordinary-Fastboot userdata mapping.
 # Supply FERRIX_PIXEL9A_PARTITION_INVENTORY from the post-restore ADB capture.
+[group('pixel-9a-probes')]
 pixel-9a-userdata-map:
     @"{{root}}/tools/pixel-9a/partition-capacity.sh" --userdata-map
 
+[group('tests')]
 pixel-9a-partition-test:
     @sh "{{root}}/tools/pixel-9a/tests/partition-inventory.sh"
 
 # This may succeed while the broader Android inventory remains partial; it
 # never authorizes a boot or storage operation.
+[group('tests')]
 pixel-9a-partition-capacity-test:
     @sh "{{root}}/tools/pixel-9a/tests/partition-capacity.sh"
 
 # Device-free native-Linux artifact and firmware policy checks. Manifest and
 # staging commands remain gated on verified build inputs and explicit opt-in.
+[group('pixel-9a-build')]
 pixel-9a-artifacts-check:
     @"{{root}}/tools/pixel-9a/artifacts.sh" check
 
+[group('pixel-9a-build')]
 pixel-9a-artifacts-manifest:
     @"{{root}}/tools/pixel-9a/artifacts.sh" manifest
 
+[group('tests')]
 pixel-9a-artifacts-test:
     @sh "{{root}}/tools/pixel-9a/tests/artifacts-workflow.sh"
 
+[group('pixel-9a-build')]
 pixel-9a-firmware-check:
     @"{{root}}/tools/pixel-9a/firmware.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-firmware-inventory:
     @"{{root}}/tools/pixel-9a/firmware.sh" inventory
 
+[group('pixel-9a-build')]
 pixel-9a-firmware-stage:
     @"{{root}}/tools/pixel-9a/firmware.sh" stage
 
+[group('tests')]
 pixel-9a-firmware-test:
     @sh "{{root}}/tools/pixel-9a/tests/firmware-workflow.sh"
     @sh "{{root}}/tools/pixel-9a/tests/aoc-firmware-runtime.sh"
@@ -194,23 +248,29 @@ pixel-9a-firmware-test:
 # provisioned native Linux x86_64 environment. Kernel/Kleaf, pmOS, recovery,
 # and firmware concerns remain separate workflows. The build itself remains
 # explicitly opt-in.
+[group('pixel-9a-build')]
 pixel-9a-product-check:
     @"{{root}}/tools/pixel-9a/product.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-product-build:
     @"{{root}}/tools/pixel-9a/product.sh" build
 
+[group('tests')]
 pixel-9a-product-test:
     @sh "{{root}}/tools/pixel-9a/tests/product-workflow.sh"
 
 # Device-free split-boot composition. The build route requires pinned kernel
 # and rootfs manifests, native boot tooling, and an explicit per-run token.
+[group('pixel-9a-build')]
 pixel-9a-boot-check:
     @"{{root}}/tools/pixel-9a/boot.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-boot-build:
     @"{{root}}/tools/pixel-9a/boot.sh" build
 
+[group('tests')]
 pixel-9a-boot-test:
     @sh "{{root}}/tools/pixel-9a/tests/boot-workflow.sh"
 
@@ -221,35 +281,43 @@ pixel-9a-boot-test:
 # reboot helper): tools/pixel-9a/native-builder.sh run dev-compose build with
 # FERRIX_PIXEL9A_KERNEL_OUT, FERRIX_PIXEL9A_DEV_BASE_ROOTFS, FERRIX_PIXEL9A_DEV_OUT,
 # and optionally FERRIX_PIXEL9A_DEV_CHECKPOINT.
+[group('pixel-9a-build')]
 pixel-9a-dev-compose *args:
     @python3 "{{root}}/tools/pixel-9a/dev-compose.py" "$@"
 
 # Offline contract for dev-compose's opt-in Android (Waydroid + Fulguris)
 # staging; on a host with e2fsprogs it also stages into a scratch ext4 image.
+[group('tests')]
 pixel-9a-dev-compose-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/dev-compose-android-contract.py"
 
 # Device-free boot composition for the independent radio-first kernel route.
 # Its output directory is separate from the canonical Google Kleaf route and
 # is rejected by the canonical boot contract.
+[group('pixel-9a-build')]
 pixel-9a-boot-radio-check:
     @"{{root}}/tools/pixel-9a/boot-radio.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-boot-radio-build:
     @"{{root}}/tools/pixel-9a/boot-radio.sh" build
 
+[group('tests')]
 pixel-9a-boot-radio-test:
     @sh "{{root}}/tools/pixel-9a/tests/boot-radio-workflow.sh"
 
 # Device-free native-Linux construction of the source-owned initramfs, vendor
 # ramdisk/bootconfig, early-module CPIO, and reviewed module-root inputs used
 # by the radio-first split composer.
+[group('pixel-9a-build')]
 pixel-9a-boot-inputs-check:
     @"{{root}}/tools/pixel-9a/boot-inputs.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-boot-inputs-build:
     @"{{root}}/tools/pixel-9a/boot-inputs.sh" build
 
+[group('tests')]
 pixel-9a-boot-inputs-test:
     @sh "{{root}}/tools/pixel-9a/tests/boot-inputs-workflow.sh"
 
@@ -257,54 +325,68 @@ pixel-9a-boot-inputs-test:
 # radio-first route. It requires a redacted exact-target partition-capacity
 # handoff plus source-built kernel/rootfs/boot-input inputs; it never invokes a
 # device operation and keeps the output bootable=false.
+[group('pixel-9a-build')]
 pixel-9a-radio-split-check:
     @"{{root}}/tools/pixel-9a/radio-split.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-radio-split-build:
     @"{{root}}/tools/pixel-9a/radio-split.sh" build
 
+[group('tests')]
 pixel-9a-radio-split-test:
     @sh "{{root}}/tools/pixel-9a/tests/radio-split-workflow.sh"
 
 # Independent, device-free eight-static-partition route. A fresh post-restore
 # exact-target capacity handoff and current native source manifests are required.
+[group('pixel-9a-build')]
 pixel-9a-static-boot-check:
     @"{{root}}/tools/pixel-9a/static-boot.py" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-static-boot-build:
     @"{{root}}/tools/pixel-9a/static-boot.py" build
 
+[group('pixel-9a-build')]
 pixel-9a-static-boot-verify:
     @"{{root}}/tools/pixel-9a/static-boot.py" verify
 
 # Transfer check runs on the device host without the native AVB utility. Set
 # FERRIX_PIXEL9A_STATIC_BOOT_OUT for a named build output. It verifies pinned
 # hashes and stored AVB metadata; the native verifier remains independent.
+[group('pixel-9a-build')]
 pixel-9a-static-boot-verify-transfer:
     @"{{root}}/tools/pixel-9a/static-boot.py" verify-transfer
 
+[group('tests')]
 pixel-9a-static-boot-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/static-boot-contract.py"
 
 # Native Linux/postmarketOS Pixel 9a rootfs substrate. These recipes are
 # device-free; build refuses missing kernel/product/firmware inputs and never
 # invokes a boot or flash route.
+[group('pixel-9a-build')]
 pixel-9a-rootfs-check:
     @"{{root}}/tools/pixel-9a/rootfs.sh" preflight
 
+[group('pixel-9a-build')]
 pixel-9a-rootfs-validate:
     @"{{root}}/tools/pixel-9a/rootfs.sh" validate
 
+[group('pixel-9a-build')]
 pixel-9a-rootfs-build:
     @"{{root}}/tools/pixel-9a/rootfs.sh" build
 
+[group('pixel-9a-build')]
 pixel-9a-rootfs-finalize:
     @"{{root}}/tools/pixel-9a/rootfs.sh" finalize
 
+[group('tests')]
 pixel-9a-rootfs-test:
     @sh "{{root}}/tools/pixel-9a/tests/rootfs-workflow.sh"
 
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-unlock-bootloader *args:
     @"{{root}}/tools/pixel-9a/unlock-bootloader.sh" "$@"
 
@@ -312,10 +394,12 @@ pixel-9a-unlock-bootloader *args:
 # per-run confirmations and refuse ambiguous or mismatched devices.
 # Stub-tested only; not yet run on hardware.
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-sideload-ota *args:
     @"{{root}}/tools/pixel-9a/sideload-ota.sh" "$@"
 
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-factory-restore *args:
     @"{{root}}/tools/pixel-9a/factory-restore.sh" "$@"
 
@@ -325,9 +409,11 @@ pixel-9a-factory-restore *args:
 # a hash-verified pinned factory archive with tested restore. Without
 # --confirm it is a read-only plan printing the bound confirm_token.
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-dev-flash *args:
     @"{{root}}/tools/pixel-9a/dev-flash.sh" "$@"
 
+[group('tests')]
 pixel-9a-dev-flash-test:
     @sh "{{root}}/tools/pixel-9a/tests/dev-flash-workflow.sh"
 
@@ -336,17 +422,21 @@ pixel-9a-dev-flash-test:
 # require exact identity, re-hashed inputs, a verified factory archive, and a
 # typed per-run phrase. Stub-tested only; not yet run on hardware.
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-check *args:
     @"{{root}}/tools/pixel-9a/flash.sh" preflight "$@"
 
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-boot-temp *args:
     @"{{root}}/tools/pixel-9a/flash.sh" boot-temp "$@"
 
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash *args:
     @"{{root}}/tools/pixel-9a/flash.sh" flash "$@"
 
+[group('tests')]
 pixel-9a-flash-test:
     @sh "{{root}}/tools/pixel-9a/tests/flash-workflow.sh"
 
@@ -355,81 +445,101 @@ pixel-9a-flash-test:
 # canonical route, preflight is read-only and boot/flash require exact identity,
 # recovery, backup, inactive-slot, image-hash, and typed confirmation gates.
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-radio-check *args:
     @"{{root}}/tools/pixel-9a/flash-radio.sh" preflight "$@"
 
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-radio-boot-temp *args:
     @"{{root}}/tools/pixel-9a/flash-radio.sh" boot-temp "$@"
 
 # Record an operator-reviewed, redacted kernel capture after temporary boot.
 # This performs only identity reads and local evidence writes.
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-observe-temp-boot *args:
     @"{{root}}/tools/pixel-9a/flash-radio.sh" observe-temp "$@"
 
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-radio *args:
     @"{{root}}/tools/pixel-9a/flash-radio.sh" flash "$@"
 
+[group('tests')]
 pixel-9a-flash-radio-test:
     @sh "{{root}}/tools/pixel-9a/tests/flash-radio-workflow.sh"
 
 # Separate eight-static-partition candidate. The temporary command probes
 # kernel progress only; these recipes do not flash or select a slot.
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-static-check:
     @"{{root}}/tools/pixel-9a/flash-static.py" preflight
 
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-static-boot-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" boot-temp
 
 # If the temporary kernel reaches stock Android ADB, bind live procfs to the
 # pinned image and exact prior boot transcript. This performs no device write.
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-static-capture-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" capture-temp
 
 # Read-only stock Android boot reasons and bounded pstore summary after a probe.
+[group('pixel-9a-probes')]
 pixel-9a-postprobe-diagnose:
     @python3 "{{root}}/tools/pixel-9a/postprobe-diagnose.py"
 
 # Bind a reviewed kernel capture to this exact static boot transcript.
+[group('pixel-9a-flash-recovery')]
 pixel-9a-flash-static-observe-temp:
     @"{{root}}/tools/pixel-9a/flash-static.py" observe-temp
 
+[group('tests')]
 pixel-9a-flash-static-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/flash-static-contract.py"
 
 # Persistent static stages are separate. The current partial compatibility
 # gate refuses them; each eventual mutation needs its own owner go-ahead.
+[group('pixel-9a-flash-recovery')]
 pixel-9a-install-static-check:
     @"{{root}}/tools/pixel-9a/install-static.py" preflight
 
+[group('pixel-9a-flash-recovery')]
 pixel-9a-install-static-kernel:
     @"{{root}}/tools/pixel-9a/install-static.py" flash-kernel
 
+[group('pixel-9a-flash-recovery')]
 pixel-9a-install-static-rootfs:
     @"{{root}}/tools/pixel-9a/install-static.py" flash-rootfs
 
+[group('pixel-9a-flash-recovery')]
 pixel-9a-install-static-activate:
     @"{{root}}/tools/pixel-9a/install-static.py" activate
 
+[group('tests')]
 pixel-9a-install-static-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/install-static-contract.py"
 
 # Exact-target, read-only inventory after the separately confirmed static
 # install and slot-B activation. Presence is not functional evidence.
+[group('pixel-9a-probes')]
 pixel-9a-guest-evidence-inventory:
     @"{{root}}/tools/pixel-9a/guest-evidence.py" inventory
 
+[group('tests')]
 pixel-9a-guest-evidence-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/guest-evidence-contract.py"
 
 # Select and boot the already-flashed inactive radio-first slot through the
 # checked-in workflow; it never accepts a raw set_active command.
 [positional-arguments]
+[group('pixel-9a-flash-recovery')]
 pixel-9a-boot-inactive *args:
     @"{{root}}/tools/pixel-9a/boot-inactive.sh" "$@"
 
+[group('tests')]
 pixel-9a-boot-inactive-test:
     @sh "{{root}}/tools/pixel-9a/tests/boot-inactive-workflow.sh"
 
@@ -437,31 +547,39 @@ pixel-9a-boot-inactive-test:
 # (172.16.42.1, SSH). preflight/inventory/evidence are read-only; enable and
 # connect-wifi change radio state only, after a typed confirmation. Stub-tested
 # only: no radio has been observed working on the physical device.
+[group('pixel-9a-probes')]
 pixel-9a-radios-check:
     @"{{root}}/tools/pixel-9a/radios.sh" preflight
 
+[group('pixel-9a-probes')]
 pixel-9a-radios-inventory:
     @"{{root}}/tools/pixel-9a/radios.sh" inventory
 
+[group('pixel-9a-probes')]
 pixel-9a-radios-associated:
     @"{{root}}/tools/pixel-9a/radios.sh" associated
 
 [positional-arguments]
+[group('pixel-9a-probes')]
 pixel-9a-radios-enable *args:
     @"{{root}}/tools/pixel-9a/radios.sh" enable "$@"
 
+[group('pixel-9a-probes')]
 pixel-9a-radios-connect-wifi ssid:
     @"{{root}}/tools/pixel-9a/radios.sh" connect-wifi "{{ssid}}"
 
+[group('pixel-9a-probes')]
 pixel-9a-radios-evidence:
     @"{{root}}/tools/pixel-9a/radios.sh" evidence
 
+[group('tests')]
 pixel-9a-radios-test:
 	@sh "{{root}}/tools/pixel-9a/tests/radios-workflow.sh"
 	@sh "{{root}}/tools/pixel-9a/tests/radio-firmware-runtime.sh"
 
 # Offline proof of the CDC-ACM guest probe transport (tools/pixel-9a/acm-probe.py)
 # against a fake pty guest; never contacts a device.
+[group('tests')]
 pixel-9a-acm-probe-test:
     @sh "{{root}}/tools/pixel-9a/tests/acm-probe.sh"
 
@@ -470,13 +588,16 @@ pixel-9a-acm-probe-test:
 # device-tree gate. Never plays, records, changes mixers/routes, loads
 # modules, or starts services. Physical execution requires the recovery proof
 # from issue #25.
+[group('pixel-9a-audio')]
 pixel-9a-audio-inventory:
     @"{{root}}/tools/pixel-9a/audio-inventory.sh" inventory
 
+[group('tests')]
 pixel-9a-audio-inventory-test:
     @sh "{{root}}/tools/pixel-9a/tests/audio-inventory-workflow.sh"
 
 # Offline package and policy checks for the discovery-only AoC UCM profile.
+[group('tests')]
 pixel-9a-audio-ucm-test:
     @sh "{{root}}/tools/pixel-9a/tests/audio-ucm-profile.sh"
 
@@ -489,9 +610,11 @@ pixel-9a-audio-ucm-test:
 # /run, restores the route, measures the PCM bytes, and deletes the file.
 # `restore` (FERRIX_PIXEL9A_MIC_RESTORE_CONFIRM) puts that one route back to
 # off. Never plays audio or writes a speaker, amplifier, or volume control.
+[group('pixel-9a-audio')]
 pixel-9a-mic-capture-proof *args:
     @sh "{{root}}/tools/pixel-9a/mic-capture-proof.sh" {{args}}
 
+[group('tests')]
 pixel-9a-mic-capture-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/mic-capture-proof.sh"
 
@@ -501,9 +624,11 @@ pixel-9a-mic-capture-proof-test:
 # own speaker at the existing volume during one 2 s capture; the guest folds
 # stimulus and control-bin Goertzel amplitudes and deletes the recording.
 # Never plays on the phone or changes a host volume or device.
+[group('pixel-9a-audio')]
 pixel-9a-mic-acoustic-proof:
     @sh "{{root}}/tools/pixel-9a/mic-capture-proof.sh" acoustic
 
+[group('tests')]
 pixel-9a-mic-acoustic-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/mic-acoustic-proof.sh"
 
@@ -512,9 +637,11 @@ pixel-9a-mic-acoustic-proof-test:
 # graph, package, service, and internal speaker-path state as counts and
 # classes only. Never plays, pairs, connects, selects a sink or profile,
 # writes a mixer or volume, or starts services; no playback mode exists.
+[group('pixel-9a-audio')]
 pixel-9a-a2dp-output-preflight:
     @sh "{{root}}/tools/pixel-9a/a2dp-output-preflight.sh" preflight
 
+[group('tests')]
 pixel-9a-a2dp-output-preflight-test:
     @sh "{{root}}/tools/pixel-9a/tests/a2dp-output-preflight.sh"
 
@@ -524,21 +651,26 @@ pixel-9a-a2dp-output-preflight-test:
 # (FERRIX_PIXEL9A_A2DP_PLAY_CONFIRM), consumes it once, revalidates in its
 # own session, and sends one guarded 1.5 s generated tone to the bound A2DP
 # sink only. Run play only after an explicit owner decision for that run.
+[group('pixel-9a-audio')]
 pixel-9a-a2dp-active-proof-dry:
     @sh "{{root}}/tools/pixel-9a/a2dp-active-proof.sh" dry
 
+[group('pixel-9a-audio')]
 pixel-9a-a2dp-active-proof-play:
     @sh "{{root}}/tools/pixel-9a/a2dp-active-proof.sh" play
 
+[group('tests')]
 pixel-9a-a2dp-active-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/a2dp-active-proof.sh"
 
 # Read-only issue #34 filesystem inventory of the four S5300 modem source
 # partitions on a booted exact Ferrix dev guest over its CDC-ACM bring-up
 # shell. Never mounts or writes, and never reports the safety gate as passed.
+[group('pixel-9a-s5300')]
 pixel-9a-s5300-source-inventory:
     @sh "{{root}}/tools/pixel-9a/s5300-source-inventory.sh"
 
+[group('tests')]
 pixel-9a-s5300-source-inventory-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-source-inventory.sh"
 
@@ -546,9 +678,11 @@ pixel-9a-s5300-source-inventory-test:
 # modem_state, CPIF char-node metadata and sysfs class, rmnet count) on a
 # booted exact Ferrix dev guest over its CDC-ACM bring-up shell, before any
 # CP boot. Never opens a CPIF node, starts a service, or edits capabilities.
+[group('pixel-9a-s5300')]
 pixel-9a-s5300-cpif-inventory:
     @sh "{{root}}/tools/pixel-9a/s5300-cpif-inventory.sh"
 
+[group('tests')]
 pixel-9a-s5300-cpif-inventory-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-cpif-inventory.sh"
 
@@ -562,9 +696,11 @@ pixel-9a-s5300-cpif-inventory-test:
 # #34 safety gate as passed; it stays blocked unless the checked-in
 # ferrix-s5300-mounts meets the same read-only-loop contract and the guest's
 # installed copy is that exact file.
+[group('pixel-9a-s5300')]
 pixel-9a-s5300-mount-proof *args:
     @sh "{{root}}/tools/pixel-9a/s5300-mount-proof.sh" {{args}}
 
+[group('tests')]
 pixel-9a-s5300-mount-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-mount-proof.sh"
 
@@ -578,9 +714,11 @@ pixel-9a-s5300-mount-proof-test:
 # 0x80000 TOC minimum, then unmounts, detaches, and post-checks. It never
 # reads contents, starts cpif services, or authorises a CP boot.
 # Metadata-only S5300 NV preflight of efs (issue #79); `mount` is gated.
+[group('pixel-9a-s5300')]
 pixel-9a-s5300-nv-metadata *args:
     @sh "{{root}}/tools/pixel-9a/s5300-nv-metadata.sh" {{args}}
 
+[group('tests')]
 pixel-9a-s5300-nv-metadata-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-nv-metadata.sh"
 
@@ -588,6 +726,7 @@ pixel-9a-s5300-nv-metadata-test:
 # is mounted only through a verified read-only loop over a BLKROSET partition,
 # with every refusal and cleanup path exercised against stubs. Not physical
 # evidence.
+[group('tests')]
 pixel-9a-s5300-mounts-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-mounts-service.sh"
 
@@ -598,6 +737,7 @@ pixel-9a-s5300-mounts-test:
 # the patches the way abuild does, runs the patched tests, and checks the CLI
 # through --print-config and refusals only (Linux, or Docker on other hosts).
 # Never opens a modem node and enables no service. Not physical evidence.
+[group('tests')]
 pixel-9a-s5300-cpif-adapter-test:
     @sh "{{root}}/tools/pixel-9a/tests/exynos-modem-cpif-adapter.sh"
 
@@ -606,6 +746,7 @@ pixel-9a-s5300-cpif-adapter-test:
 # preflight/provision/arm/start path, package hash pins, no runlevel links,
 # ModemManager ordering, and the Kleaf composer's backend pairing. CPIF nodes
 # are FIFO stand-ins that block if opened. Not physical evidence.
+[group('tests')]
 pixel-9a-s5300-cpif-services-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-cpif-services.sh"
 
@@ -616,9 +757,11 @@ pixel-9a-s5300-cpif-services-test:
 # partial or stale source mounts, plus host recovery artifacts. It opens no
 # CPIF node and starts, mounts, provisions, or arms nothing. It never
 # authorises or performs a CP boot.
+[group('pixel-9a-s5300')]
 pixel-9a-s5300-s2-preflight:
     @sh "{{root}}/tools/pixel-9a/s5300-s2-preflight.sh"
 
+[group('tests')]
 pixel-9a-s5300-s2-preflight-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-s2-preflight.sh"
 
@@ -626,6 +769,7 @@ pixel-9a-s5300-s2-preflight-test:
 # `check` validates a binding-*.rec against a fresh preflight transcript;
 # `consume` renames it (single use) and then validates. Local files only;
 # never contacts a device and never authorises a CP boot by itself.
+[group('pixel-9a-s5300')]
 pixel-9a-s5300-s2-binding mode record facts:
     @sh "{{root}}/tools/pixel-9a/s5300-s2-binding.sh" "{{mode}}" "{{record}}" "{{facts}}"
 
@@ -635,18 +779,22 @@ pixel-9a-s5300-s2-binding mode record facts:
 # tools such as tools/pixel-9a/. See skills/mobile-device-provisioning/.
 #
 # Read-only any-vendor ADB/Fastboot identity discovery (redacted transcript).
+[group('devices')]
 device-discover:
     @"{{root}}/tools/device/discover.sh"
 
 # Offline: match out/device/identity-latest.env to a checked-in board target.
+[group('devices')]
 device-match:
     @"{{root}}/tools/device/match-target.sh"
 
 # Offline: scaffold a board-support proposal for an unmatched device.
+[group('devices')]
 device-propose:
     @"{{root}}/tools/device/propose-board.sh"
 
 # Pinned vendor recovery download; requires FERRIX_RECOVERY_DOWNLOAD opt-in.
+[group('devices')]
 device-recovery-download target kind="all":
     @"{{root}}/tools/device/recovery-download.sh" --target "{{target}}" --kind "{{kind}}"
 
@@ -654,6 +802,7 @@ device-recovery-download target kind="all":
 # download fixture; never contacts a device or the network.
 #
 # Offline stub tests for the generic device tools.
+[group('tests')]
 device-tools-test:
     @sh "{{root}}/tools/device/tests/discover-read-only.sh"
     @sh "{{root}}/tools/device/tests/match-target.sh"
@@ -662,6 +811,7 @@ device-tools-test:
 
 # Read-only OnePlus discovery (adb/fastboot identity props). Writes a
 # serial-redacted transcript under out/oneplus/; never mutates the device.
+[group('devices')]
 oneplus-discover:
     @"{{root}}/tools/oneplus/discover.sh"
 
@@ -670,51 +820,65 @@ oneplus-discover:
 # (exit 3, no-approved-proposal). Contains no flash/erase/unlock/boot command.
 #   just oneplus-provision-gate --image IMG --recovery BACKUP --partition boot
 [positional-arguments]
+[group('devices')]
 oneplus-provision-gate *args:
     @"{{root}}/tools/oneplus/provision-gate.sh" "$@"
 
 # Shell tests for the OnePlus tooling (stubbed adb/fastboot; no device needed).
+[group('tests')]
 oneplus-tools-test:
     @sh "{{root}}/tools/oneplus/tests/provision-gate-is-inert.sh"
 
+[group('qemu')]
 qemu-build:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-build.sh"
 
+[group('qemu')]
 qemu-run:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-run.sh"
 
+[group('qemu')]
 qemu-agent-start:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-start.sh"
 
+[group('qemu')]
 qemu-agent-status:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-status.sh"
 
+[group('qemu')]
 qemu-frame:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-frame.sh"
 
+[group('qemu')]
 qemu-tap x y:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" tap "{{x}}" "{{y}}"
 
+[group('qemu')]
 qemu-swipe x1 y1 x2 y2:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" swipe "{{x1}}" "{{y1}}" "{{x2}}" "{{y2}}"
 
+[group('qemu')]
 qemu-key key:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}"
 
+[group('qemu')]
 qemu-type text:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" type "{{text}}"
 
+[group('qemu')]
 qemu-agent-stop:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-agent-stop.sh"
 
 # Boot a fresh graphical TCG guest and verify minimize, side-edge yield, and
 # long-swipe close through compositor/appd records plus a final framebuffer.
+[group('qemu')]
 qemu-gesture-check:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-gesture-check.sh"
 
 # Headless TCG CI contract: boot-health, telephonyd-ready, networkd-ready,
 # unplugged-to-charging over ferrix.control, clean poweroff.
 # FERRIX_QEMU_REQUIRE_SERVICES=0 skips the two daemon assertions.
+[group('qemu')]
 qemu-check:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-check.sh"
 
@@ -722,30 +886,37 @@ qemu-check:
 # the running QEMU session over the per-daemon mock-control channels.
 #   just qemu-scenario incoming-call-answer-route-remote-hangup --frame
 [positional-arguments]
+[group('qemu')]
 qemu-scenario name *args:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-scenario.sh" "$@"
 
 # List the checked-in scenarios.
+[group('qemu')]
 qemu-scenario-list:
     @ls "{{root}}/targets/qemu-aarch64/scenarios" | sed 's/\.toml$//'
 
 # Validate every scenario file's schema without touching QEMU.
+[group('qemu')]
 qemu-scenario-validate:
     @cargo run -q --manifest-path "{{root}}/Cargo.toml" -p ferrix-scenario -- --validate "{{root}}"/targets/qemu-aarch64/scenarios/*.toml
 
 # Headless TCG run of every checked-in scenario in a fresh agent session
 # (needs `just qemu-build` artifacts). FERRIX_QEMU_SCENARIO_TIMEOUT bounds it.
+[group('qemu')]
 qemu-scenario-check:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-scenario-check.sh"
 
+[group('qemu')]
 qemu-clean:
     @echo "Removing resolved generated path: {{out}}"
     @test "{{out}}" != "/" && rm -rf "{{out}}"
 
+[group('product-shell')]
 shell-nested:
     @"{{root}}/targets/qemu-aarch64/scripts/shell-nested.sh"
 
 # Product compositor (ferrix-shell) nested in a host window; Linux host session only.
+[group('product-shell')]
 shell-compositor-nested:
     @"{{root}}/targets/qemu-aarch64/scripts/shell-nested.sh"
 
@@ -755,27 +926,34 @@ shell-compositor-nested:
 #   just qemu-mock --service network set-radio enabled=false
 #   just qemu-mock kill-daemon name=ferrix-networkd                # SIGKILL; init restarts it
 [positional-arguments]
+[group('qemu')]
 qemu-mock +args:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-mock.sh" "$@"
 
+[group('tests')]
 arch-check:
     @cargo test -p ferrix-session --test architecture
 
 # Cargo for the Linux guest architecture inside the pinned arm64 Rust builder
 # (host convenience for Linux-only crates; defaults to `test --workspace`).
 [positional-arguments]
+[group('host-dev')]
 linux-check *args:
     @"{{root}}/targets/qemu-aarch64/scripts/linux-check.sh" "$@"
 
+[group('tests')]
 test:
     @cargo test --workspace
 
+[group('qemu')]
 pmos-build:
     @"{{root}}/targets/qemu-aarch64/scripts/pmos-build.sh"
 
+[group('qemu')]
 pmos-run:
     @"{{root}}/targets/qemu-aarch64/scripts/pmos-run.sh"
 
+[group('qemu')]
 pmos-check:
     @"{{root}}/targets/qemu-aarch64/scripts/pmos-check.sh"
 
@@ -783,19 +961,24 @@ pmos-check:
 # image under out/qemu-aarch64/pmos-android/; the default pmOS build, check,
 # and CI are unchanged. The Android display density is QEMU-target-local;
 # graphical limitations remain recorded in docs/status.md.
+[group('android')]
 waydroid-images-fetch:
     @sh "{{root}}/tools/android/waydroid-images-fetch.sh"
 
 # Host-only deterministic test of the guest's staged-APK bootstrap. It uses a
 # fake Waydroid CLI and never starts a container, QEMU, or a physical device.
+[group('tests')]
 android-bootstrap-test:
     @sh "{{root}}/targets/qemu-aarch64/scripts/android-bootstrap-test.sh"
 
+[group('android')]
 pmos-android-build:
     @FERRIX_PMOS_ANDROID=1 "{{root}}/targets/qemu-aarch64/scripts/pmos-build.sh"
 
+[group('android')]
 pmos-android-run:
     @FERRIX_PMOS_ANDROID=1 "{{root}}/targets/qemu-aarch64/scripts/pmos-run.sh"
 
+[group('android')]
 pmos-android-check:
     @FERRIX_PMOS_ANDROID=1 "{{root}}/targets/qemu-aarch64/scripts/pmos-check.sh"
