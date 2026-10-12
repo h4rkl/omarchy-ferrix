@@ -1020,8 +1020,10 @@ mismatch. Transcripts: `out/pixel-9a/radios/<command>-<stamp>.txt`.
 
 After any hardware session, update only what the evidence supports:
 
-- `docs/status.md`: dated entry; every claim labelled with the exact target
-  id; say what was not done.
+- `docs/status-log/YYYY-MM.md` (current month, at the top): dated entry;
+  every claim labelled with the exact target id; say what was not done.
+  Update the `docs/status.md` "Current state" table only when a matrix
+  changes.
 - `targets/boards/<id>/README.md`: observed state, dates, and a limitation
   sentence per unproven capability.
 - `targets/boards/<id>/manifest.toml`: `[gates]`, `[linux]` status fields,

@@ -185,7 +185,7 @@ gates.
 
 ## Research starting points
 
-- [Ferrix mobile architecture](ferrum-mobile-architecture/SKILL.md)
+- [Ferrix mobile architecture](ferrix-mobile-architecture/SKILL.md)
 - [Ferrix application platform](../docs/app-platform.md)
 - [Solana payment integration overview](https://solana.com/docs/payments/accept-payments)
 - [pay.sh documentation](https://pay.sh/docs)

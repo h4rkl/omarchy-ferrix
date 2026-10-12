@@ -19,7 +19,9 @@ probe="$root/tools/pixel-9a/mic-capture-proof-remote.sh"
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
 fails=0
 command -v python3 >/dev/null 2>&1 || { echo 'python3 is required for the CDC-ACM transport test' >&2; exit 1; }
-status_before=$(cksum <"$root/docs/status.md")
+# The evidence record is docs/status.md plus every docs/status-log/ month.
+status_sum() { cat "$root/docs/status.md" "$root"/docs/status-log/*.md | cksum; }
+status_before=$(status_sum)
 capabilities_before=$(cksum <"$root/targets/boards/$target_id/capabilities.toml")
 
 check() {
@@ -807,7 +809,7 @@ e2e e2e-silence capture
 check "e2e: digital silence is exit 8, route restored" \
 	sh -c '[ "$1" -eq 8 ] && printf "%s\n" "$2" | grep -Fxq mic_capture_result=digital-silence && [ "$3" = off ]' sh "$status" "$out" "$(mic_state)"
 
-check "no test edits docs/status.md" [ "$(cksum <"$root/docs/status.md")" = "$status_before" ]
+check "no test edits docs/status.md or docs/status-log/" [ "$(status_sum)" = "$status_before" ]
 check "no test edits capabilities.toml" [ "$(cksum <"$root/targets/boards/$target_id/capabilities.toml")" = "$capabilities_before" ]
 
 if [ "$fails" -ne 0 ]; then

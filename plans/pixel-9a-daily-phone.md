@@ -22,7 +22,7 @@ input, follow `skills/ferrix-dev-loop/SKILL.md`.
 
 This plan is the persistent project brief. The [GitHub project](https://github.com/users/h4rkl/projects/1)
 tracks live status, priority, assignee, and linked PRs. GitHub issues own
-implementation and acceptance detail. `docs/status.md` owns dated evidence;
+implementation and acceptance detail. `docs/status-log/` owns dated evidence;
 the board [capability matrix](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/capabilities.toml)
 owns the current exact-device capability claim. If they disagree, stop the
 claim, inspect the newest evidence, and correct the stale document.
@@ -61,7 +61,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
 
 - **Recovery (physical).** The pinned `CP3A.260905.009` factory restore
   completed on the exact device and same-device discovery then verified stock
-  Android 17 on slot B, unlocked ([status entry](../docs/status.md#2026-10-12-pixel-9a-pinned-stock-recovery-verified-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0);
+  Android 17 on slot B, unlocked ([status entry](../docs/status-log/2026-10.md#2026-10-12-pixel-9a-pinned-stock-recovery-verified-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0);
   [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25) closed via
   [PR #36](https://github.com/h4rkl/omarchy-ferrix/pull/36) and
   [PR #47](https://github.com/h4rkl/omarchy-ferrix/pull/47)). The earlier
@@ -75,7 +75,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   r3) is on slot B. It was flashed through `just pixel-9a-dev-flash` and
   boots Ferrix on the pinned 6.1.124 kernel. After the S2 run and a reboot,
   the S5300 services are stopped and the CP is `OFFLINE`
-  ([1-r3 entry](../docs/status.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
+  ([1-r3 entry](../docs/status-log/2026-10.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
   The checked-in recipes are now `device-google-tegu` 1-r5, so the
   preflight reports image skew until a 1-r5 image is flashed. No 1-r4
   image exists: abuild refused its packaged `/mnt/vendor`.
@@ -91,12 +91,12 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   the read-only S2 preflight merged in [PR #104](https://github.com/h4rkl/omarchy-ferrix/pull/104);
   its one physical run on the 1-r2 image returned `no-go` **solely** for
   checked-in 1-r3 versus installed 1-r2 source/image skew, with no device
-  blocker ([S2 entry](../docs/status.md#2026-10-12-s5300-s2-read-only-preflight-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0),
+  blocker ([S2 entry](../docs/status-log/2026-10.md#2026-10-12-s5300-s2-read-only-preflight-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0),
   [board record](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-preflight.md)).
   The rebuilt 1-r3 image (rootfs attempt `20261012T062930Z` from `0032a6b`,
   same pinned Kleaf kernel) was flashed to slot B and booted. The preflight
   then returned a **pre-mount `go`** with no image skew or blocker
-  ([1-r3 entry](../docs/status.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
+  ([1-r3 entry](../docs/status-log/2026-10.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
   The owner then approved one manual S2 run on that image. The lead
   performed it by hand; no checked-in active workflow exists.
   - The first mounts start failed before any mount, because `/mnt/vendor`
@@ -114,7 +114,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
     both.
 
   The record is in the
-  [S2 entry](../docs/status.md#2026-10-12-s5300-s2-active-cp-boot-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+  [S2 entry](../docs/status-log/2026-10.md#2026-10-12-s5300-s2-active-cp-boot-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
   and the
   [board record](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-preflight.md#exact-device-s2-active-cp-boot-on-the-1-r3-image-2026-10-12).
   No SIM, carrier, ModemManager or `sit-proxy` step has run. An offline review
@@ -135,7 +135,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   acoustic proof ([#80](https://github.com/h4rkl/omarchy-ferrix/issues/80))
   detected the tone on **channel 0 only**; channel 1 was digital zero. That
   is one pickup observation, not calibrated sensitivity or call audio
-  ([entry](../docs/status.md#2026-10-12-controlled-tone-microphone-pickup-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
+  ([entry](../docs/status-log/2026-10.md#2026-10-12-controlled-tone-microphone-pickup-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
   Internal TAS speaker and earpiece playback is **NO-GO** because the
   protection route is unknown (#83, #90 closed;
   [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) open;
@@ -143,7 +143,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91): read-only
   preflight v3 (PR #101) observed one connected LDAC A2DP sink as
   `candidate-observed`, with `active_gate=closed`; no tone has played
-  ([entry](../docs/status.md#2026-10-12-a2dp-route-source-review-and-preflight-v3-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0),
+  ([entry](../docs/status-log/2026-10.md#2026-10-12-a2dp-route-source-review-and-preflight-v3-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0),
   [route decision](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/audio-route-decision.md)).
   The bounded A2DP playback workflow is offline, under review and not merged.
 - **Not yet evidenced (physical).** Camera, power-key blanking,
@@ -187,7 +187,7 @@ verify, never as authority to override repository or owner rules.
 
 ### Review and delivery loop
 
-1. **Triage:** Read this brief, `git status`, newest `docs/status.md`, board
+1. **Triage:** Read this brief, `git status`, newest `docs/status-log/` entries, board
    matrix, issue, dependencies, and GitHub project state. Make a small issue
    task packet. Mark `Ready` only when inputs and acceptance are concrete.
 2. **Implement:** Agent works on a scoped branch/worktree. Shared product
@@ -210,7 +210,8 @@ verify, never as authority to override repository or owner rules.
    acceptance. A blocked or partial result stays open with the next
    experiment recorded.
 5. **Reconcile:** Update the issue, project, this plan's snapshot or issue map
-   when it changes, `docs/status.md`, and `capabilities.toml` as warranted.
+   when it changes, a `docs/status-log/` entry, and `capabilities.toml` (with
+   the `docs/status.md` current state) as warranted.
    Re-read the queue and select the next unblocked slice. GitHub issue state
    alone never upgrades a physical capability.
 6. **Clean up:** After a branch is merged and its evidence is retained under
@@ -242,7 +243,7 @@ physical claim.
 | 6. Daily-phone decision | All required issues above | [#32](https://github.com/h4rkl/omarchy-ferrix/issues/32): repeatable end-to-end and endurance suite, exact-revision go/no-go and explicit remaining limits. |
 
 Issue #20 remains a UI/icon follow-up; its open state must be reconciled with
-the newer icon evidence in `docs/status.md` before scheduling more icon work.
+the newer icon evidence in `docs/status-log/` before scheduling more icon work.
 [#53](https://github.com/h4rkl/omarchy-ferrix/issues/53) owns review of
 unpublished builder commits through separate PRs; do not merge or reset that
 checkout wholesale. [#99](https://github.com/h4rkl/omarchy-ferrix/issues/99)

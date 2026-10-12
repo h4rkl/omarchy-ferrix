@@ -49,5 +49,7 @@ Tick what was run; strike out or explain anything not applicable.
 
 ## Status
 
-- [ ] `docs/status.md` is updated for any new evidence or limitation, with its
-      evidence label (or no new evidence in this PR).
+- [ ] Any new evidence or limitation is a dated entry at the top of the current
+      month's `docs/status-log/YYYY-MM.md`, with its evidence label (or no new
+      evidence in this PR). The `docs/status.md` "Current state" table is
+      updated only when a capability matrix changes.

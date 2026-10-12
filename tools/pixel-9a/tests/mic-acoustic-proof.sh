@@ -23,7 +23,9 @@ tone_tool="$root/tools/pixel-9a/mic-acoustic-tone.py"
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
 fails=0
 command -v python3 >/dev/null 2>&1 || { echo 'python3 is required for the CDC-ACM transport test' >&2; exit 1; }
-status_before=$(cksum <"$root/docs/status.md")
+# The evidence record is docs/status.md plus every docs/status-log/ month.
+status_sum() { cat "$root/docs/status.md" "$root"/docs/status-log/*.md | cksum; }
+status_before=$(status_sum)
 capabilities_before=$(cksum <"$root/targets/boards/$target_id/capabilities.toml")
 
 check() {
@@ -576,7 +578,7 @@ for item in positive:0:acoustic-tone-detected absent:8:inconclusive-tone-not-det
 done
 unset FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM
 
-check "no test edits docs/status.md" [ "$(cksum <"$root/docs/status.md")" = "$status_before" ]
+check "no test edits docs/status.md or docs/status-log/" [ "$(status_sum)" = "$status_before" ]
 check "no test edits capabilities.toml" [ "$(cksum <"$root/targets/boards/$target_id/capabilities.toml")" = "$capabilities_before" ]
 
 if [ "$fails" -ne 0 ]; then

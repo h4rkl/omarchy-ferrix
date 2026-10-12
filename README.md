@@ -30,7 +30,8 @@ the generic `qemu-aarch64` target.
 
 Read `AGENTS.md` before contributing. `plans/baseline.md` is the implementation
 authority, `plans/plan.md` the long-term direction, `docs/design.md` the visual
-system and theming contract, and `docs/status.md` the evidence log.
+system and theming contract, and `docs/status.md` the current-state summary,
+with the dated evidence log in `docs/status-log/`.
 `plans/README.md` indexes every planning document and marks it as authority,
 proposal or delivery tracker.
 
