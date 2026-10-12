@@ -42,7 +42,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # Include `labeled` so applying the opt-in label after PR creation starts
+  # the scenario job without another code change.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       qemu_runner:
@@ -331,7 +334,11 @@ jobs:
       - name: Install host prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm
+          # The virtio-gpu PCI device requests efi-virtio.rom even with
+          # -display none. Ubuntu keeps it in the recommended ipxe-qemu
+          # package, which --no-install-recommends omits.
+          sudo apt-get install -y --no-install-recommends qemu-system-arm ipxe-qemu
+          test -f /usr/lib/ipxe/qemu/efi-virtio.rom
 
       - name: Install just
         uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
@@ -358,7 +365,8 @@ jobs:
         run: just qemu-scenario-check
 
       # One result.json plus log excerpt per scenario, pass or fail, and the
-      # session's serial log.
+      # session's serial and launch logs. The launch log explains failures
+      # before the guest can write a serial record.
       - name: Upload scenario evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -368,5 +376,6 @@ jobs:
             out/qemu-aarch64/scenarios/**/result.json
             out/qemu-aarch64/scenarios/**/log-excerpt.log
             out/qemu-aarch64/agent/serial.log
+            out/qemu-aarch64/agent/launch.log
           if-no-files-found: warn
           retention-days: 14

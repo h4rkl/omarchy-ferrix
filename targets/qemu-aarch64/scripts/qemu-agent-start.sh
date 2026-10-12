@@ -37,11 +37,17 @@ case "$graphics" in
     # Ask QEMU itself to daemonize. A plain shell background job can receive
     # SIGHUP when this short-lived launcher exits (notably from automation),
     # leaving qemu-tap/qemu-swipe with a stale pid file and dead QMP socket.
+    launch_status=0
     FERRIX_QEMU_AGENT=1 FERRIX_QEMU_MODE=agent FERRIX_QEMU_DAEMONIZE=1 \
       FERRIX_QEMU_PID_FILE="$pid_file" FERRIX_QEMU_ACCEL=${FERRIX_QEMU_ACCEL:-tcg} \
       FERRIX_QEMU_GRAPHICS="$graphics" \
-      "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$launch_log" 2>&1
-    [ -s "$pid_file" ] || { cat "$launch_log" >&2; echo "QEMU did not write its pid file" >&2; exit 1; }
+      "$root/targets/qemu-aarch64/scripts/qemu-run.sh" >"$launch_log" 2>&1 || launch_status=$?
+    if [ "$launch_status" -ne 0 ] || [ ! -s "$pid_file" ]; then
+      printf '{"evidence":"QEMU","event":"agent-start-failed","reason":"qemu-launch-failed","launch_exit":%s,"launch_log":"%s"}\n' \
+        "$launch_status" "$launch_log" >&2
+      cat "$launch_log" >&2
+      exit 1
+    fi
     pid=$(cat "$pid_file")
     ;;
   *)
@@ -65,6 +71,7 @@ fail() {
   done
   printf '{"evidence":"QEMU","event":"agent-start-failed","reason":"%s","missing":[%s],"probes":%s,"seconds":%s,"serial_log":"%s"}\n' \
     "$1" "$missing" "$probes" "$(elapsed)" "$serial" >&2
+  [ ! -s "$launch_log" ] || { echo "--- QEMU launch log ($launch_log) ---" >&2; cat "$launch_log" >&2; }
   python3 "$root/targets/qemu-aarch64/scripts/qmp.py" --socket "$qmp_socket" quit 2>/dev/null || kill "$pid" 2>/dev/null || true
   rm -f "$pid_file" "$qmp_socket"
   echo "timed out or failed waiting for QEMU graphical readiness (wayland-ready + input-ready pointer + cursor-ready + home-ready)" >&2
