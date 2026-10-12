@@ -77,6 +77,8 @@ derive() {
 safe_mount='part.efs.mount=40 30 8:21 / /mnt/vendor/efs ro,nosuid,nodev,noexec,relatime - f2fs /dev/sda21 ro,lazytime,norecovery,background_gc=on'
 derive f2fs -e 's/^part\.efs\.blkid_type=ext4$/part.efs.blkid_type=f2fs/' -e "/^probe_complete=/i\\
 $safe_mount"
+derive f2fs-loop -e 's/^part\.efs\.blkid_type=ext4$/part.efs.blkid_type=f2fs/' -e '/^probe_complete=/i\
+part.efs.mount=40 30 7:3 / /mnt/vendor/efs ro,nosuid,nodev,noexec,relatime - f2fs /dev/loop3 ro,lazytime,norecovery,background_gc=on'
 derive f2fs-rw -e 's/^part\.efs\.blkid_type=ext4$/part.efs.blkid_type=f2fs/' -e '/^probe_complete=/i\
 part.efs.mount=40 30 8:21 / /mnt/vendor/efs ro,relatime - f2fs /dev/sda21 rw,lazytime'
 derive ext4-elsewhere -e '/^probe_complete=/i\
@@ -143,20 +145,25 @@ check "physical label: clean run still needs owner review" has 'issue34_safety_g
 check "physical label: transcript names the exact target" grep -Fxq 'evidence=physical:google-pixel-9a-tegu-gxq96-mp1-0' "$transcript"
 
 run f2fs f2fs
-check "f2fs: safe ro,norecovery mount meets the contract" has 'efs.mount_status=contract-met'
+check "f2fs: a direct partition mount violates the read-only-loop contract" has 'efs.mount_status=contract-violated:direct-partition-mount'
+check "f2fs: service would refuse a direct partition mount" has 'efs.service_would_accept=no'
 check "f2fs: recovery flag observed" has 'f2fs_recovery_flag_in_mountinfo=observed'
 check "f2fs: raw type reported" has 'efs.raw_type=f2fs'
 check "privacy: mountinfo source is redacted in retained transcript" \
 	sh -c 'grep -Fq "<redacted-source>" "$1" && ! grep -Fq "/dev/sda21" "$1"' sh "$transcript"
 
+run f2fs-loop f2fs-loop
+check "f2fs loop: a loop mount at the destination is not verifiable here" has 'efs.mount_status=loop-backing-not-inventoried'
+check "f2fs loop: recovery flag still observed" has 'f2fs_recovery_flag_in_mountinfo=observed'
+check "f2fs loop: not counted as service-accepted" has 'efs.service_would_accept=no'
 run f2fs-rw f2fs-rw
-check "f2fs rw: writable superblock violates the contract" has 'efs.mount_status=contract-violated:superblock-not-ro,recovery-not-suppressed'
+check "f2fs rw: writable superblock violates the contract" has 'efs.mount_status=contract-violated:direct-partition-mount,superblock-not-ro,recovery-not-suppressed'
 check "f2fs rw: service would refuse" has 'efs.service_would_accept=no'
 run physical-rw f2fs-rw 0 physical
 check "f2fs rw: physical gate blocked" has 'issue34_safety_gate=blocked'
 
 run elsewhere ext4-elsewhere
-check "mount outside destination is reported" has 'persist.mount_status=contract-violated:mounted-outside-destination'
+check "mount outside destination is reported" has 'persist.mount_status=contract-violated:direct-partition-mount,mounted-outside-destination'
 
 run unknown unknown 0 physical
 check "unknown: no signature" has 'persist.type_status=no-signature'

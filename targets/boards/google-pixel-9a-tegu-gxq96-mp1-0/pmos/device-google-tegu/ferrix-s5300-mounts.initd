@@ -1,11 +1,12 @@
 #!/sbin/openrc-run
 
 name="Ferrix S5300 read-only source mounts"
-description="Mounts the exact Pixel 9a modem image and calibration partitions read-only without journal or roll-forward recovery"
+description="Mounts the exact Pixel 9a modem image and calibration partitions only through verified read-only loop devices, without journal or roll-forward recovery"
 command="/bin/true"
 command_background="no"
 
 mount_root=/mnt/vendor
+dev_root=/dev
 partlabel_root=/dev/disk/by-partlabel
 sys_block_path=/sys/class/block
 mountinfo_path=/proc/self/mountinfo
@@ -20,6 +21,20 @@ cmdline_path=/proc/cmdline
 # only as ext4 with `ro,noload` or f2fs with `ro,norecovery`.  Any other type
 # is refused until a physical read-only inventory of this exact device has been
 # reviewed.
+#
+# Those options still leave ext4 orphan cleanup and ext4/f2fs error-superblock
+# commits on a read-only mount unless the mounted block device itself is
+# read-only, and BLKROSET on the partition only makes the 6.1 block layer warn
+# about a write (see the board README, "S5300 source mount proof").  So no
+# partition is ever mounted directly.  Each one is first marked read-only with
+# BLKROSET, then attached to an unbound loop device with `losetup --read-only`.
+# Only that loop is mounted, after sysfs shows that it is read-only, is a loop
+# (major 7), is backed by exactly that partition node, maps the whole
+# partition, and carries the probed filesystem type.  A read-only loop fails
+# every write, discard, and write-zeroes request before it reaches the
+# partition.  It does not stop other writers of the same sectors (the
+# whole-disk node, passthrough, or another opener of the partition).  The
+# partition's read-only flag is never cleared; it stays set until reboot.
 
 depend() {
 	need udev ferrix-radio-firmware
@@ -34,23 +49,42 @@ has_option() {
 	return 1
 }
 
-# Print "root fstype source mount-options super-options" for the topmost
-# mount at $1 from mountinfo.  mountinfo is used rather than /proc/mounts
-# because it separates the per-mount and superblock read-only flags: a
-# read-only bind of a writable superblock reads as `ro` in /proc/mounts.
+# Print "root major:minor fstype source mount-options super-options" for the
+# topmost mount at $1 from mountinfo.  mountinfo is used rather than
+# /proc/mounts because it separates the per-mount and superblock read-only
+# flags: a read-only bind of a writable superblock reads as `ro` in
+# /proc/mounts.
 mount_entry() {
 	awk -v wanted="$1" '
 		$5 == wanted {
 			for (i = 7; i <= NF && $i != "-"; i++) ;
 			if (i + 3 > NF) next
-			entry = $4 " " $(i + 1) " " $(i + 2) " " $6 " " $(i + 3)
+			entry = $4 " " $3 " " $(i + 1) " " $(i + 2) " " $6 " " $(i + 3)
 		}
 		END { if (entry == "") exit 1; print entry }
 	' "$mountinfo_path" 2>/dev/null
 }
 
+# Succeed if any mount in the namespace is of block device major:minor $1.
+device_mounted() {
+	awk -v dev="$1" '$3 == dev { found = 1 } END { exit !found }' "$mountinfo_path" 2>/dev/null
+}
+
 require_block_device() {
 	[ -b "$1" ]
+}
+
+sys_value() {
+	cat "$sys_block_path/$1" 2>/dev/null
+}
+
+# The kernel major:minor of partition node $1, or a refusal.
+partition_dev() {
+	part_dev=$(sys_value "${1##*/}/dev")
+	case "$part_dev" in
+		[0-9]*:[0-9]*) printf '%s\n' "$part_dev" ;;
+		*) eerror "cannot read the device number of $1"; return 1 ;;
+	esac
 }
 
 # Resolve an exact GPT partition name to its device node.  udev's by-partlabel
@@ -70,7 +104,7 @@ resolve_partition() {
 		return 1
 	}
 	owner=$(awk -F= '$1 == "DEVNAME" { print $2; exit }' "$owners")
-	[ "$owner" = "${device##*/}" ] || {
+	[ "$device" = "$dev_root/$owner" ] || {
 		eerror "partition label $label resolves to ${device##*/}, but the kernel names $owner"
 		return 1
 	}
@@ -82,13 +116,18 @@ resolve_partition() {
 # BusyBox applet has no low-level probe mode.  `-p` opens the device read-only
 # and bypasses the blkid cache; it exits 2 when no signature is found and 8
 # when signatures are ambivalent, and both are refusals.
+probe_type() {
+	fstype=$(blkid -c /dev/null -p -o value -s TYPE -- "$1" 2>/dev/null) || fstype=
+	printf '%s\n' "$fstype"
+}
+
 probe_fstype() {
 	device=$1
 	blkid -V 2>/dev/null | grep -q 'util-linux' || {
 		eerror "util-linux blkid is required to identify $device without mounting it"
 		return 1
 	}
-	fstype=$(blkid -c /dev/null -p -o value -s TYPE -- "$device" 2>/dev/null) || fstype=
+	fstype=$(probe_type "$device")
 	case "$fstype" in
 		ext4|f2fs) printf '%s\n' "$fstype" ;;
 		*)
@@ -118,6 +157,75 @@ recovery_suppressed() {
 	esac
 }
 
+# An unbound loop device whose `ro` reads 0.  The kernel never clears a loop's
+# disk read-only flag on detach (drivers/block/loop.c __loop_clr_fd), so an
+# unbound loop can still read 1 from an earlier read-only user; only a loop
+# that reads 0 before the attach proves that 1 afterwards came from this
+# read-only configuration.
+free_loop() {
+	for path in "$sys_block_path"/loop*; do
+		name=${path##*/}
+		case "$name" in loop[0-9]|loop[0-9][0-9]|loop[0-9][0-9][0-9]) ;; *) continue ;; esac
+		loop_unbound "$name" || continue
+		require_block_device "$dev_root/$name" || continue
+		printf '%s\n' "$name"
+		return 0
+	done
+	return 1
+}
+
+loop_unbound() {
+	[ ! -e "$sys_block_path/$1/loop/backing_file" ] &&
+		[ "$(sys_value "$1/ro")" = 0 ] && [ "$(sys_value "$1/size")" = 0 ]
+}
+
+# Every property of the read-only loop $1 over partition node $2 holding a
+# $3 filesystem, from sysfs and the loop's own superblock, plus the
+# partition's BLKROSET flag.
+verify_loop() {
+	loop_name=$1
+	device=$2
+	fstype=$3
+	part_name=${device##*/}
+	[ -e "$sys_block_path/$loop_name/loop/backing_file" ] || {
+		eerror "$loop_name is not bound to a backing device"
+		return 1
+	}
+	[ "$(sys_value "$loop_name/ro")" = 1 ] || {
+		eerror "refusing $loop_name: the loop is not read-only"
+		return 1
+	}
+	case "$(sys_value "$loop_name/dev")" in
+		7:[0-9]|7:[0-9][0-9]|7:[0-9][0-9][0-9]) ;;
+		*) eerror "refusing $loop_name: it is not a loop block device (major 7)"; return 1 ;;
+	esac
+	[ "$(sys_value "$loop_name/loop/backing_file")" = "$device" ] || {
+		eerror "refusing $loop_name: it is not backed by $device"
+		return 1
+	}
+	[ "$(sys_value "$loop_name/loop/offset")" = 0 ] && [ "$(sys_value "$loop_name/loop/sizelimit")" = 0 ] || {
+		eerror "refusing $loop_name: it maps only part of $device"
+		return 1
+	}
+	part_size=$(sys_value "$part_name/size")
+	case "$part_size" in
+		''|*[!0-9]*|0) eerror "cannot read the size of $device"; return 1 ;;
+	esac
+	[ "$(sys_value "$loop_name/size")" = "$part_size" ] || {
+		eerror "refusing $loop_name: its size differs from $device"
+		return 1
+	}
+	[ "$(sys_value "$part_name/ro")" = 1 ] || {
+		eerror "refusing $loop_name: $device is not marked read-only"
+		return 1
+	}
+	loop_type=$(probe_type "$dev_root/$loop_name")
+	[ "$loop_type" = "$fstype" ] || {
+		eerror "refusing $loop_name: it carries '${loop_type:-none}', not the $fstype superblock of $device"
+		return 1
+	}
+}
+
 verify_mount() {
 	device=$1
 	destination=$2
@@ -126,14 +234,26 @@ verify_mount() {
 		eerror "no mount is visible at $destination"
 		return 1
 	}
-	read -r mounted_root mounted_type mounted_source mount_options super_options <<EOF
+	read -r mounted_root mounted_dev mounted_type mounted_source mount_options super_options <<EOF
 $entry
 EOF
-	mounted_device=$(readlink -f "$mounted_source" 2>/dev/null) || mounted_device=$mounted_source
-	[ "$mounted_device" = "$device" ] && [ "$mounted_root" = / ] || {
-		eerror "refusing a foreign mount at $destination (expected all of $device)"
+	part_dev=$(partition_dev "$device") || return 1
+	! device_mounted "$part_dev" || {
+		eerror "refusing $destination: $device itself is mounted"
 		return 1
 	}
+	mounted_loop=$(readlink -f "$mounted_source" 2>/dev/null) || mounted_loop=$mounted_source
+	loop_name=${mounted_loop##*/}
+	case "$loop_name" in
+		loop[0-9]|loop[0-9][0-9]|loop[0-9][0-9][0-9]) ;;
+		*) loop_name= ;;
+	esac
+	[ -n "$loop_name" ] && [ "$mounted_loop" = "$dev_root/$loop_name" ] &&
+		[ "$mounted_dev" = "$(sys_value "$loop_name/dev")" ] && [ "$mounted_root" = / ] || {
+		eerror "refusing $destination: it is not all of a read-only loop over $device"
+		return 1
+	}
+	verify_loop "$loop_name" "$device" "$fstype" || return 1
 	[ "$mounted_type" = "$fstype" ] || {
 		eerror "refusing a $mounted_type mount at $destination (the superblock is $fstype)"
 		return 1
@@ -178,6 +298,19 @@ resolve_modem_label() {
 	esac
 }
 
+# Detach loop $1 only while it is still bound and nothing mounts it.
+detach_loop() {
+	[ -e "$sys_block_path/$1/loop/backing_file" ] || return 0
+	if device_mounted "$(sys_value "$1/dev")"; then
+		eerror "leaving $1 attached: it is still mounted"
+		return 1
+	fi
+	losetup -d "$dev_root/$1" || {
+		eerror "could not detach $1"
+		return 1
+	}
+}
+
 mount_one() {
 	label=$1
 	destination=$2
@@ -187,25 +320,73 @@ mount_one() {
 	checkpath -d -m 0755 "$destination"
 	if mount_entry "$destination" >/dev/null; then
 		# An existing mount is accepted only if it already has every
-		# property this service would have requested.
+		# property this service would have requested, including the
+		# read-only loop it would have attached.
 		verify_mount "$device" "$destination" "$fstype"
 		return
 	fi
+	part_name=${device##*/}
+	part_dev=$(partition_dev "$device") || return 1
+	! device_mounted "$part_dev" || {
+		eerror "refusing $label: $device is already mounted directly"
+		return 1
+	}
+	# util-linux opens the backing device read-only and sets
+	# LO_FLAGS_READ_ONLY for --read-only; another losetup is not trusted to.
+	losetup -V 2>/dev/null | grep -q 'util-linux' || {
+		eerror "util-linux losetup is required to attach $device read-only"
+		return 1
+	}
+	# verify_mount reuses loop_name for whatever it finds mounted, so the
+	# loop this call attached is kept separately for cleanup.
+	attached=$(free_loop) || {
+		eerror "no unbound loop device with ro=0 is available for $label"
+		return 1
+	}
+
+	# From here on the partition is read-only until reboot.
+	blockdev --setro "$device" || {
+		eerror "could not mark $device read-only"
+		return 1
+	}
+	[ "$(sys_value "$part_name/ro")" = 1 ] || {
+		eerror "$device does not report read-only after BLKROSET"
+		return 1
+	}
+	# Re-check the chosen loop immediately before the attach.  If another
+	# process takes it first, losetup fails and that binding is never touched.
+	loop_unbound "$attached" || {
+		eerror "$attached was taken before $label could be attached"
+		return 1
+	}
+	losetup --read-only -- "$dev_root/$attached" "$device" || {
+		eerror "could not attach $device to $attached read-only"
+		return 1
+	}
+	verify_loop "$attached" "$device" "$fstype" || {
+		detach_loop "$attached"
+		return 1
+	}
 	# The explicit type stops mount(8) from probing for another driver, and
 	# ext4 and f2fs fail the mount on an option they do not recognise.
-	mount -t "$fstype" -o "ro,$(recovery_option "$fstype"),nosuid,nodev,noexec" -- "$device" "$destination" || {
+	mount -t "$fstype" -o "ro,$(recovery_option "$fstype"),nosuid,nodev,noexec" -- "$dev_root/$attached" "$destination" || {
 		eerror "could not mount $label read-only at $destination"
+		detach_loop "$attached"
 		return 1
 	}
 	verify_mount "$device" "$destination" "$fstype" && return 0
 	# The kernel did not report every requested property; never hand an
 	# unconfirmed mount to the modem stack.
-	umount -- "$destination" || eerror "could not unmount unconfirmed $destination"
+	if umount -- "$destination"; then
+		detach_loop "$attached"
+	else
+		eerror "could not unmount unconfirmed $destination"
+	fi
 	return 1
 }
 
 start() {
-	ebegin "Mounting exact Pixel 9a modem inputs read-only without journal recovery"
+	ebegin "Mounting exact Pixel 9a modem inputs through read-only loops without journal recovery"
 	modem_label=$(resolve_modem_label) || { eend 1; return 1; }
 	mount_one "$modem_label" "$mount_root/modem_img" || { eend 1; return 1; }
 	mount_one efs "$mount_root/efs" || { eend 1; return 1; }
@@ -214,15 +395,57 @@ start() {
 	eend 0
 }
 
+# The exact partition label behind destination $1.
+destination_label() {
+	case "$1" in
+		"$mount_root/modem_img") resolve_modem_label ;;
+		"$mount_root/efs") printf 'efs\n' ;;
+		"$mount_root/persist") printf 'persist\n' ;;
+		"$mount_root/modem_userdata") printf 'modem_userdata\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+# Succeed only if the mount at destination $1 is exactly the read-only loop
+# over its source partition that start would have accepted; leaves the loop
+# in loop_name.
+verify_own_mount() {
+	label=$(destination_label "$1") || return 1
+	device=$(resolve_partition "$label") || return 1
+	fstype=$(probe_fstype "$device") || return 1
+	verify_mount "$device" "$1" "$fstype"
+}
+
 stop() {
 	ebegin "Unmounting exact Pixel 9a modem inputs"
 	# The daemon must be stopped by OpenRC dependency ordering before this
 	# service is stopped.  Never force an unmount: a busy mount is safer left in
-	# place than torn down while the modem owns an fd.
-	for destination in "$mount_root/modem_userdata" "$mount_root/persist" "$mount_root/efs" "$mount_root/modem_img"; do
-		if mount_entry "$destination" >/dev/null; then
-			umount -- "$destination" || { eerror "could not unmount $destination"; eend 1; return 1; }
-		fi
+	# place than torn down while the modem owns an fd.  Only a mount that
+	# passes the same verify_mount as start is unmounted, and only its own
+	# loop is detached, after its mount is gone; anything else at a
+	# destination (a direct partition mount, another source, a writable or
+	# foreign loop) is refused before any destination is touched.  The
+	# partitions stay read-only.
+	destinations="$mount_root/modem_userdata $mount_root/persist $mount_root/efs $mount_root/modem_img"
+	for destination in $destinations; do
+		mount_entry "$destination" >/dev/null || continue
+		verify_own_mount "$destination" || {
+			eerror "refusing to stop: $destination is not a verified read-only loop mount of its source"
+			eend 1
+			return 1
+		}
+	done
+	for destination in $destinations; do
+		mount_entry "$destination" >/dev/null || continue
+		# Re-verify immediately before the unmount in case the mount changed.
+		verify_own_mount "$destination" || {
+			eerror "refusing to stop: $destination changed before it could be unmounted"
+			eend 1
+			return 1
+		}
+		own_loop=$loop_name
+		umount -- "$destination" || { eerror "could not unmount $destination"; eend 1; return 1; }
+		detach_loop "$own_loop" || { eend 1; return 1; }
 	done
 	eend 0
 }

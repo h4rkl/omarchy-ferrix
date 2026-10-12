@@ -185,8 +185,14 @@ writable mount; it never guesses `_a` when Ferrix is booted from slot B.
 Each type is read with util-linux `blkid -p` (package dependency `blkid`)
 before mounting, and only ext4 `ro,noload` or f2fs `ro,norecovery` is
 accepted to suppress journal replay and f2fs roll-forward on
-`efs`/`persist`. An existing or new mount must show those flags in mountinfo
-superblock options or it is refused.
+`efs`/`persist`. No partition is mounted directly. Each one is marked
+read-only with `blockdev --setro` and attached to an unbound loop with
+util-linux `losetup --read-only` (package dependencies `util-linux-misc`, which ships `blockdev`, and
+`losetup`). Only that loop is mounted, after sysfs shows that it is
+read-only, backed by exactly that partition, and maps the whole partition
+with the probed type. An existing or new mount must be of such a loop and
+show those flags in mountinfo superblock options, or it is refused. See the
+board README, "S5300 source mount proof". This is offline stub-tested only.
 OpenRC orders the mounts, `exynos-modem`, `sit-proxy`, and the Samsung SIT
 ModemManager provider before Ferrix's telephony adapter. The reviewed factory
 layout supplies directory-valued inputs at `vendor.img:/firmware/carrierconfig`

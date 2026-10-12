@@ -171,7 +171,19 @@ observation is captured; later stages never imply earlier ones.
    for [f2fs](https://docs.kernel.org/filesystems/f2fs.html)); a plain `ro`
    ext4 mount can replay a dirty journal and write to the device. Refuse an
    unknown filesystem type. Confirm `exynos-modem` writes only under
-   `/var/lib/exynos-modem`.
+   `/var/lib/exynos-modem`. A pinned 6.1.124 source review found that these
+   options leave orphan-cleanup and error-superblock writes possible on both
+   filesystems. Only a read-only device skips them, and `BLKROSET` alone only
+   warns about writes rather than failing them. A loop attached with
+   `losetup --read-only` fails every write before it reaches the partition
+   ([README](README.md#s5300-source-mount-proof-issue-34)). The gate
+   therefore also needs `ferrix-s5300-mounts` itself to set `BLKROSET` and
+   mount only from a verified read-only loop. The checked-in service now
+   does this (offline stub-tested only). The gate also needs the guest to
+   run that exact service, and an observed
+   `just pixel-9a-s5300-mount-proof` preflight and per-role mount runs
+   reviewed by the owner. Until then the workflow reports the gate `blocked`
+   or, at best, `owner-review-required`; no result passes it.
 1. **E1 inventory** (above).
 2. **CP boot.** Start manually, not from the default runlevel, so a
    CP-crash panic cannot boot-loop:

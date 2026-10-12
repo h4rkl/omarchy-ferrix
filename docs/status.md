@@ -1,5 +1,45 @@
 # Status
 
+## 2026-10-12 (Pixel 9a: S5300 sources mount only through a read-only loop, issue #34; offline only)
+
+- **Change:** `ferrix-s5300-mounts` no longer mounts any partition directly.
+  For each of `modem_<slot>`, `efs`, `persist`, and `modem_userdata`, it
+  applies `blockdev --setro` and requires sysfs `ro=1`. It then attaches the
+  partition with util-linux `losetup --read-only` to an unbound loop whose
+  `ro` read 0. It mounts only that loop, with the existing `ro,noload` (ext4)
+  or `ro,norecovery` (f2fs) options. Before the mount, `verify_loop`
+  requires loop `ro=1`, major 7, the partition as backing file, offset and
+  sizelimit 0, equal size, the partition still `ro=1`, and the same `blkid -p`
+  type. `verify_mount` now requires the mount source to be that loop, and it
+  refuses a direct partition mount, including an existing one. Every refusal
+  after the attach detaches only the loop the service attached, and only
+  once nothing mounts it. `stop` first runs the same `verify_mount` on every
+  mounted destination and refuses, before any unmount or detach, a direct,
+  foreign, writable, or unknown mount. It never forces an unmount and never
+  clears `BLKROSET`. The device package depends on `util-linux-misc` (Alpine's
+  provider of `/sbin/blockdev`; there is no `blockdev` package) and
+  `losetup`, and the APKBUILD checksum is updated. The service stays out of the dev runlevel.
+  No CP boot was attempted, and capabilities are unchanged.
+- **Proof workflow:** `just pixel-9a-s5300-mount-proof` now gates on the
+  actual service contract. A static check covers the single loop mount
+  call, `BLKROSET`, `--read-only`, `verify_loop` on new and existing mounts,
+  the package depends, and the APKBUILD checksum. The guest also reports the
+  SHA-256 of its installed service, which must match the checked-in file.
+  The best physical result is `owner-review-required`; no run reports a
+  passed gate.
+- **Evidence:** offline only. Stub harness
+  `tools/pixel-9a/tests/s5300-mounts-service.sh`
+  (`just pixel-9a-s5300-mounts-test`, run by `just pixel-9a-rootfs-test` and
+  CI), plus the updated `just pixel-9a-s5300-mount-proof-test`. No device,
+  ADB, Fastboot, or SSH was used.
+- **Limitations:** the loop barrier on the real tegu kernel is unobserved.
+  The physical preflight and the owner-reviewed per-role mount runs are still
+  required. The barrier does not cover the whole-disk node, passthrough, or
+  another opener of the partition. Detached loops keep `ro=1`, so about
+  four start/stop cycles (16 GKI loops) exhaust them until reboot, after
+  which `start` refuses. A start that fails partway leaves the sources it
+  already mounted in place. The guest util-linux version is not pinned.
+
 ## 2026-10-12 (Pixel 9a PipeWire/UCM image boot; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The seven-image development bundle built from `f1c4fdf` (manifest SHA-256
