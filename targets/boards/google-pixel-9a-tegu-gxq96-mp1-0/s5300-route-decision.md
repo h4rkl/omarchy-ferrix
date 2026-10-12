@@ -75,7 +75,7 @@ work around.
 | **U4** Driver/firmware skew: pinned CPIF `a8976934` (android16, 6.1.124 dev GKI) vs CP3A `modem.bin` shipped with stock 6.1.162 | Unknown | E0 (offline `modinfo` of factory `cpif.ko`), S2 |
 | **U5** SIT/GEMS command vocabulary sufficient for SIM/attach/data/SMS/voice | External plugin's claim only | S3–S7 |
 | **U6** CP crash handling on Kleaf panics the AP (boot-loop risk) | Unknown | S2 under manual start |
-| **U7** `efs`/`persist`/`modem_userdata` filesystem types and whether a plain `ro` mount replays a journal | Unknown | pre-S2 gate |
+| **U7** `efs`/`persist`/`modem_userdata` filesystem types and whether a plain `ro` mount replays a journal | Physical inventory: all three are f2fs; plain `ro` is unsafe by pinned-kernel source review. One owner-approved read-only-loop mount proof per role completed without observed writes; final owner gate review pending | pre-S2 gate; issue #34 |
 
 ## Required interfaces
 
@@ -179,11 +179,16 @@ observation is captured; later stages never imply earlier ones.
    ([README](README.md#s5300-source-mount-proof-issue-34)). The gate
    therefore also needs `ferrix-s5300-mounts` itself to set `BLKROSET` and
    mount only from a verified read-only loop. The checked-in service now
-   does this (offline stub-tested only). The gate also needs the guest to
-   run that exact service, and an observed
-   `just pixel-9a-s5300-mount-proof` preflight and per-role mount runs
-   reviewed by the owner. Until then the workflow reports the gate `blocked`
-   or, at best, `owner-review-required`; no result passes it.
+   does this (offline stub-tested). The exact-device rootfs contained the
+   byte-identical service, which stayed out of runlevels. The physical
+   preflight and one gated mount proof per role completed on slot B: `modem_b`
+   ext4, plus owner-approved per-unit f2fs `efs`, `persist`, and
+   `modem_userdata`. Every proof reported a verified read-only loop, contract
+   met, no observed write anomaly, and clean unmount/detach. These observations
+   do not cover another opener, whole-disk I/O, or UFS passthrough. The owner
+   has not yet accepted the final #34 gate; the workflow correctly reports
+   `owner-review-required`. No CP boot has run. E0 and E1 are separate
+   prerequisites before a manual CP boot trial.
 1. **E1 inventory** (above).
 2. **CP boot.** Start manually, not from the default runlevel, so a
    CP-crash panic cannot boot-loop:

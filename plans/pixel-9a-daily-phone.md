@@ -66,22 +66,28 @@ the project must not silently call that a fully functioning Pixel 9a.
   `alsa-utils`; and [PR #70](https://github.com/h4rkl/omarchy-ferrix/pull/70)
   corrected the unavailable output label. The physical image built from
   `7be5d5b` booted and exposed the AoC ALSA card, UCM files and tools, but
-  PipeWire still showed only Dummy Output and no source. The inspected Sound
-  page displayed unavailable volume/mute; PR #70 has not yet booted on the
-  phone. A read-only mic-proof preflight found `EP1 capture` as PCM device 8
-  and mixer controls off, but refused because this kernel omits the expected
-  per-PCM procfs directory. No mic capture or speaker playback has run.
-  The proof workflow must be corrected, reviewed, and physically preflighted
-  before any owner-approved active microphone test. Speaker playback remains
-  blocked on TAS protection/calibration evidence. Keep audio unsupported.
+  PipeWire still showed only Dummy Output and no source. The newer `674157b`
+  image booted and its inspected Sound page correctly labels Output and Mute
+  unsupported. [PR #73](https://github.com/h4rkl/omarchy-ferrix/pull/73)
+  delivered the gated mic proof. Its revised physical preflight passed, and
+  one owner-approved capture returned 384000 PCM bytes with a very low
+  channel-0 signal and digital silence on channel 1. This proves varying
+  PCM data, not acoustic pickup; a controlled-sound test is still needed.
+  The new image still exposes only Dummy Output with no usable ALSA source.
+  Speaker playback remains blocked on TAS protection/calibration evidence.
+  Keep audio unsupported.
 - [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) remains open.
   [PR #69](https://github.com/h4rkl/omarchy-ferrix/pull/69) merged a
   read-only loop barrier for S5300 source mounts with offline proof tests.
-  Its replacement Pixel rootfs is building; the service has not been tested
-  on the phone. Transfer and hash-check that image, boot it through the
-  checked-in recovery-gated route, run the exact-target read-only preflight,
-  then review each per-unit mount before enabling CP boot. A passing host
-  fixture or image build cannot close #34.
+  The replacement rootfs was built, hash-checked, flashed through the
+  checked-in recovery-gated route and booted on the exact phone. Its service
+  matched the checked-in bytes. The read-only preflight and one proof of
+  each source partition, including three per-unit roles approved by the
+  owner, completed through verified read-only loops with no reported write
+  anomaly. The workflow still reports `owner-review-required`; the owner
+  must review the results before #34 closes or CP boot begins. Separately,
+  the CPIF E0 source decision and E1 read-only device inventory remain
+  prerequisites to a manual CP boot trial.
 - The telephony subscribe race [#66](https://github.com/h4rkl/omarchy-ferrix/issues/66)
   was closed by [PR #67](https://github.com/h4rkl/omarchy-ferrix/pull/67).
   The separate snapshot/event gap [#68](https://github.com/h4rkl/omarchy-ferrix/issues/68)
