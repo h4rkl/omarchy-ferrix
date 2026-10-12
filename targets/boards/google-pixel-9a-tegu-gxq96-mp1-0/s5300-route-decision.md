@@ -75,7 +75,7 @@ work around.
 | **U4** Driver/firmware skew: pinned CPIF `a8976934` (android16, 6.1.124 dev GKI) vs CP3A `modem.bin` shipped with stock 6.1.162 | Unknown | E0 (offline `modinfo` of factory `cpif.ko`), S2 |
 | **U5** SIT/GEMS command vocabulary sufficient for SIM/attach/data/SMS/voice | External plugin's claim only | S3–S7 |
 | **U6** CP crash handling on Kleaf panics the AP (boot-loop risk) | Unknown | S2 under manual start |
-| **U7** `efs`/`persist`/`modem_userdata` filesystem types and whether a plain `ro` mount replays a journal | Physical inventory: all three are f2fs; plain `ro` is unsafe by pinned-kernel source review. One owner-approved read-only-loop mount proof per role completed without observed writes; final owner gate review pending | pre-S2 gate; issue #34 |
+| **U7** `efs`/`persist`/`modem_userdata` filesystem types and whether a plain `ro` mount replays a journal | Physical inventory: all three are f2fs; plain `ro` is unsafe by pinned-kernel source review. One owner-approved read-only-loop mount proof per role completed without observed writes; owner accepted the final mount gate on 2026-10-12 | pre-S2 gate; issue #34 |
 
 ## Required interfaces
 
@@ -202,9 +202,11 @@ observation is captured; later stages never imply earlier ones.
    `modem_userdata`. Every proof reported a verified read-only loop, contract
    met, no observed write anomaly, and clean unmount/detach. These observations
    do not cover another opener, whole-disk I/O, or UFS passthrough. The owner
-   has not yet accepted the final #34 gate; the workflow correctly reports
-   `owner-review-required`. No CP boot has run. E0 and E1 are separate
-   prerequisites before a manual CP boot trial.
+   explicitly accepted the final #34 mount gate on 2026-10-12 after reviewing
+   these results. The workflow correctly continues to report
+   `owner-review-required`, because only the human decision passes this gate.
+   No CP boot has run. E0 and E1 are separate prerequisites before a manual
+   CP boot trial, along with adapter review and read-only NV checks.
 1. **E1 inventory** (above).
 2. **CP boot.** Start manually, not from the default runlevel, so a
    CP-crash panic cannot boot-loop:

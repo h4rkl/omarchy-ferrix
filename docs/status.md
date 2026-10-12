@@ -30,8 +30,13 @@
   `write_barrier=verified`, `mount_observation=no-write-observed`, and
   `anomalies=none`. Counter stability is not proof against another opener,
   whole-disk I/O, or UFS passthrough. The workflow deliberately reports
-  `issue34_safety_gate=owner-review-required`; the owner has not yet
-  accepted that gate, and no CP boot was attempted. #34 stays open.
+  `issue34_safety_gate=owner-review-required`; this is a prompt for a human
+  decision, not an automated pass. On 2026-10-12 the owner reviewed the four
+  results and explicitly answered “Accept the mount gate” in the project
+  session ([issue #34 record](https://github.com/h4rkl/omarchy-ferrix/issues/34#issuecomment-6116464948)).
+  The source-mount safety gate is accepted for a future manual CP boot.
+  E0/E1, target-local adapter review and read-only NV checks remain separate
+  prerequisites; no CP boot was attempted.
 
 ## 2026-10-12 (Settings Sound output label; physical observation and mock fix)
 
