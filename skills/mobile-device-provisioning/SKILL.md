@@ -764,6 +764,14 @@ Fastboot (`just pixel-9a-enter-fastboot --confirm-enter` from Android).
 6. Recovery: `just pixel-9a-factory-restore --confirm-restore` restores stock
    on the active slot (wipes data) regardless of Ferrix gate state.
 
+When you run this route from a fresh git worktree, the worktree needs two
+inputs. Hardlink the pinned factory zip into the board's `recovery/`
+directory; a symlink or a missing zip is refused. Copy the main checkout's
+`out/pixel-9a/discovery-*.txt` records, or the SKU gate refuses with
+"Fastboot variant 'N/A' does not prove GXQ96". Section 8 of
+`skills/ferrix-dev-loop/SKILL.md` gives the full worktree setup and the
+cleanup order.
+
 **Status:** Canonical Google route and the separately gated radio-first route
 are Implemented, Stub-tested only (`just pixel-9a-flash-test` and
 `just pixel-9a-flash-radio-test`). Neither has run on hardware;
