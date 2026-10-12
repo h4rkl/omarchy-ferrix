@@ -11,6 +11,139 @@
 > earlier static/split routes and the recovery history, and their
 > "unsupported"/"no Ferrix boot" statements apply to those routes only.
 
+## Document index
+
+Every Markdown document in this board directory, grouped by subsystem.
+Status: **live** = the current record or contract for its subject, kept up to
+date; **reference** = pinned source, provenance or correlation evidence that is
+still valid but changes only with its pins; **history** = superseded route or
+earlier evidence kept for the record; **moved** = a stub whose content now
+lives elsewhere (#119). The capability matrix is
+[`capabilities.toml`](capabilities.toml); current per-subsystem state is in
+[`docs/status.md`](../../../docs/status.md) and dated evidence in
+[`docs/status-log/`](../../../docs/status-log/). Nothing in this index changes
+a capability or evidence label.
+
+### Boot, flash and recovery
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| This README, [identity and route history](#identity-and-route-history) | Exact device identity, the first stock restore, and the static/split-route bundle history | history (identity table live) |
+| This README, [recovery files](#recovery-files) to [recovery choices](#recovery-choices) | Pinned factory image, unlock gate, Fastboot entry, recovery choices | live |
+| This README, [development flash route](#development-flash-route) | The 2026-10-09 owner-policy dev route (slot b), the current boot route | live |
+| This README, [gated Ferrix flash](#gated-ferrix-flash) and [inactive-slot activation](#inactive-slot-activation-and-boot) | Static/split persistent install gates | reference |
+| [`dev/README.md`](dev/README.md) | Host development profile, native builder handoff and radio-first split-artifact contracts | live |
+| [`pmos/README.md`](pmos/README.md) | Target-local postmarketOS device package and rootfs workflow | live |
+| [`linux-plan.md`](linux-plan.md) | Native Linux enablement plan: product boundary, boot composition, rootfs, gates | live |
+
+Data files: [`manifest.toml`](manifest.toml), [`recovery.pins`](recovery.pins),
+[`image-layout.toml`](image-layout.toml),
+[`static-install-candidate.toml`](static-install-candidate.toml),
+[`static-activation-candidate.toml`](static-activation-candidate.toml),
+[`native-static-artifact-contract.toml`](native-static-artifact-contract.toml),
+[`radio-split-artifact-contract.toml`](radio-split-artifact-contract.toml).
+The target composition seam crate is [`adapter/`](adapter/Cargo.toml).
+
+### Kernel
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`linux-plan.md#kernel-decision-and-pinned-source-baseline`](linux-plan.md#kernel-decision-and-pinned-source-baseline) | Kernel decision, pinned Kleaf and radio-first sources | live |
+| This README, [pinned downstream kernel build](#pinned-downstream-kernel-build-comparison-route) | Comparison-route kernel build | reference |
+
+Data files: [`kernel-sources.toml`](kernel-sources.toml),
+[`kernel-config.ferrix-gki`](kernel-config.ferrix-gki),
+[`kernel-config.tegu`](kernel-config.tegu),
+[`kernel-radio-route.toml`](kernel-radio-route.toml),
+[`kernel-radio-extra.config`](kernel-radio-extra.config) and the private-module
+patches under `kernel-patches/`.
+
+### Display and GPU
+
+No separate board document. Current state and evidence are in
+[`docs/status.md`](../../../docs/status.md) and
+[`docs/status-log/`](../../../docs/status-log/); the Mali DVFS patch is under
+`kernel-patches/private/google-modules/gpu/`.
+
+### Input
+
+No separate board document. Current state and evidence are in
+[`docs/status.md`](../../../docs/status.md) and
+[`docs/status-log/`](../../../docs/status-log/).
+
+### Network and Wi-Fi
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`wifi-firmware-source-evidence.md`](wifi-firmware-source-evidence.md) | BCM4383 kernel contract and firmware staging/hash boundary | reference |
+| This README, [radios on a booted guest](#radios-on-a-booted-guest) | Read-only radio checks on a booted guest | live |
+| [`grapheneos-radio-correlation.md`](grapheneos-radio-correlation.md) | GrapheneOS Wi-Fi, Bluetooth and S5300 facts; reuse boundary | reference |
+| [`ubuntu-touch-radio-correlation.md`](ubuntu-touch-radio-correlation.md) | Ubuntu Touch tegu port findings; Halium reuse boundary | reference |
+| [`associated-radio-audit.md`](associated-radio-audit.md) | GNSS, NFC and UWB route audit and promotion gate | reference |
+
+See also [`docs/pixel-9a-bt-wpa3-research.md`](../../../docs/pixel-9a-bt-wpa3-research.md).
+
+### Bluetooth
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`bluetooth-firmware-source-evidence.md`](bluetooth-firmware-source-evidence.md) | Broadcom HCD factory provenance and source correlation | reference |
+| This README, [Broadcom Bluetooth / Nitrous firmware provenance](#broadcom-bluetooth--nitrous-firmware-provenance) | Firmware staging in the native package | live |
+| This README, [A2DP output preflight](#bluetooth-a2dp-output-preflight-issue-91) and [A2DP active proof](#bluetooth-a2dp-active-proof-issue-91) | A2DP workflows (also audio) | live |
+
+### Audio
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`audio-route-decision.md`](audio-route-decision.md) | Audio route decision record: AoC, TAS25xx, ALSA/UCM, microphone, speaker safety, A2DP | live |
+| [`aoc-speaker-protection-research.md`](aoc-speaker-protection-research.md) | AoC speaker protection research; NO-GO for an internal speaker trial (#90) | live |
+| This README, [audio route](#audio-route) to [A2DP active proof](#bluetooth-a2dp-active-proof-issue-91) | Audio workflows and their recipes | live |
+
+### S5300 modem and telephony
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`s5300-route-decision.md`](s5300-route-decision.md) | Route and design: route decision, CPIF userspace adapter, daemon scratch directory, CPIF service integration | live |
+| [`s5300-s2-preflight.md`](s5300-s2-preflight.md) | S2 read-only preflight, exact-device S2 results and teardown findings, decision binding, active-workflow blockers | live |
+| [`s5300-s2-active-design.md`](s5300-s2-active-design.md) | #109 OpenRC teardown and disconnect-safe observation design (standalone owner-review document) | live |
+| [`s5300-source-evidence.md`](s5300-source-evidence.md) | CPIF source boundary and E0 device-free ABI comparison | reference |
+| [`s5300-cpif-adapter.md`](s5300-cpif-adapter.md), [`s5300-scratch-dir.md`](s5300-scratch-dir.md), [`s5300-cpif-integration.md`](s5300-cpif-integration.md) | Stubs; moved into `s5300-route-decision.md` | moved |
+| [`s5300-cpif-e0.md`](s5300-cpif-e0.md) | Stub; moved into `s5300-source-evidence.md` | moved |
+| [`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md) | Stub; moved into `s5300-s2-preflight.md` | moved |
+| This README, [S5300 source partition inventory](#s5300-source-partition-inventory-issue-34) to [NV metadata preflight](#s5300-nv-metadata-preflight-issue-79) | Partition inventory, E1 inventory, service integration pointer, source mount proof and NV metadata workflows | live |
+| [`pmos/README.md#s5300-native-linux-package-boundary`](pmos/README.md#s5300-native-linux-package-boundary) | S5300 package boundary | live |
+
+### Firmware
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`linux-plan.md#firmware-policy`](linux-plan.md#firmware-policy) | Firmware policy | live |
+| This README, [native Linux package, firmware, and split boot](#native-linux-package-firmware-and-split-boot) | Firmware staging in the native package | live |
+
+Data files: [`firmware-policy.toml`](firmware-policy.toml),
+[`firmware-stage-allowlist.tsv`](firmware-stage-allowlist.tsv),
+[`firmware-radio-route.tsv`](firmware-radio-route.tsv).
+
+### Android and Waydroid
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`pmos/README.md#opt-in-android-runtime-dev-route-owner-request-2026-10-09`](pmos/README.md#opt-in-android-runtime-dev-route-owner-request-2026-10-09) | Opt-in Waydroid application runtime on the dev route | live |
+
+See also [`docs/android-runtime.md`](../../../docs/android-runtime.md) and
+[ADR-005](../../../docs/adr/005-android-runtime-and-brave.md).
+
+### Development tooling
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| This README, [read-only static guest inventory](#read-only-static-guest-inventory) | Read-only guest inventory | live |
+| This README, [CDC-ACM guest probe transport](#cdc-acm-guest-probe-transport-issue-52) | Framed probe transport over USB CDC-ACM | live |
+| This README, [separate Pixel development environment](#separate-pixel-development-environment) and [source and support boundary](#source-and-support-boundary) | Build host and support boundary | live |
+| This README, [agent playbook](#agent-playbook) | Pointer to the agent skills | live |
+
+## Identity and route history
+
 This is an exact physical-target identity and stock-recovery package for the
 identified device. It is not a claim that Ferrix Linux boots on this phone.
 Ferrix product code remains target-neutral; the capability matrix is
@@ -432,12 +565,12 @@ workflow alone.
 - S5300 Kleaf CPIF userspace adapter for issue #1 (hash-pinned `exynos-modem`
   patches behind an explicit `--kernel-backend google-kleaf-cpif`; offline
   tested, not selected by any init script, not runtime evidence):
-  [`s5300-cpif-adapter.md`](s5300-cpif-adapter.md)
+  [`s5300-cpif-adapter.md`](s5300-route-decision.md#s5300-google-kleaf-cpif-userspace-adapter-issue-1)
 - S5300 daemon scratch directory for issue #81 (hash-pinned `exynos-modem`
   patch moving NV sinks and crash records from `/tmp` to a private
   `/run/exynos-modem`; offline tested; device backing and permissions
   unverified; not runtime evidence):
-  [`s5300-scratch-dir.md`](s5300-scratch-dir.md)
+  [`s5300-scratch-dir.md`](s5300-route-decision.md#s5300-daemon-scratch-directory-issue-81)
 
 The target-local postmarketOS `device-google-tegu` package and the typed
 Ferrix adapter composition are now checked in under `pmos/device-google-tegu/`
@@ -450,7 +583,7 @@ recipes behind the public ModemManager D-Bus boundary. Their integrated init
 scripts require the separately pinned radio-first `s5300_modem` WWAN kernel
 backend, not Google's stock `cpif` character-device surface. The packaged
 binaries also carry an explicit Kleaf CPIF backend that nothing selects yet
-([`s5300-cpif-adapter.md`](s5300-cpif-adapter.md)). The native Linux radio-first kernel and
+([`s5300-cpif-adapter.md`](s5300-route-decision.md#s5300-google-kleaf-cpif-userspace-adapter-issue-1)). The native Linux radio-first kernel and
 target-local userspace packages have now been built on the authorized x86_64
 builder, but the route remains unbooted and has not been observed to create a
 modem on this device. The Rust
@@ -1053,7 +1186,7 @@ modem behavior remains untested.
 
 ## S5300 CPIF service integration (issue #88)
 
-[`s5300-cpif-integration.md`](s5300-cpif-integration.md) records the
+[`s5300-cpif-integration.md`](s5300-route-decision.md#s5300-google-kleaf-cpif-service-integration-issue-88) records the
 offline-tested OpenRC/package wiring of `google-kleaf-cpif`. Each backend has
 an explicit `exynos-modem`/`sit-proxy` CLI. No S5300 service is in any
 runlevel, and ModemManager only orders after them. On CPIF, `rc-service
@@ -1292,7 +1425,7 @@ the observed stable counters alone cannot establish that none occurred.
 
 ## S5300 NV metadata preflight (issue #79)
 
-E0 ([`s5300-cpif-e0.md`](s5300-cpif-e0.md), row T1) found that the external
+E0 ([`s5300-cpif-e0.md`](s5300-source-evidence.md#s5300-e0-device-free-cpif-abi-comparison-issue-1), row T1) found that the external
 boot path streams `nv_normal.bin` and `nv_protected.bin` from the root of the
 per-unit `efs` partition, and that the CP3A TOC sizes both sections at
 `0x80000` bytes. Before any manual CP boot trial,
