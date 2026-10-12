@@ -22,7 +22,8 @@ its paths, serials or MACs.
   one has context with file paths, ordered tasks, acceptance criteria and
   the rules footer. Labels: `pixel-9a`, `qemu`, `security`, `tech-debt`,
   `product-shell`. Read cross-link comments before starting.
-- Current truth: `docs/status.md` (newest entry first) and
+- Current truth: `docs/status.md` (current state; dated entries, newest
+  first, in `docs/status-log/YYYY-MM.md`) and
   `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/capabilities.toml`.
   Older status entries can contradict newer bullets; the newest wins.
 - Before changing architecture, the shell or hardware APIs, read
@@ -140,9 +141,11 @@ personal data; never commit raw ones.
 
 - Verify on the device by looking at screenshots and checking `ui-state`
   and service state, not by trusting that "it started".
-- Record it in `docs/status.md` with the source labelled: `QEMU`, `mock`,
+- Record it as a new entry at the top of the current month's
+  `docs/status-log/YYYY-MM.md` with the source labelled: `QEMU`, `mock`,
   or `physical:google-pixel-9a-tegu-gxq96-mp1-0`. Note the limitations.
-  Only update `capabilities.toml` when you have evidence.
+  Only update `capabilities.toml` when you have evidence, and update the
+  `docs/status.md` "Current state" table only when a matrix changes.
 - Redact serials, MACs, IMEIs and SSID passwords in anything committed.
   Test Wi-Fi credentials come from the owner in chat and never go into Git.
 - Run the AGENTS.md checks before handoff (`cargo fmt --check`, clippy with

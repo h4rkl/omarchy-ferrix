@@ -66,7 +66,7 @@ body:
         - Workflow: `just ...`
         - Observation: ...
         - Label: physical:google-pixel-9a-tegu-gxq96-mp1-0
-        - Recorded in: docs/status.md and the board README
+        - Recorded in: docs/status-log/YYYY-MM.md and the board README
     validations:
       required: true
   - type: textarea
@@ -84,7 +84,7 @@ body:
     attributes:
       label: Data-collection policy
       description: What device output is captured, where it is kept (ignored `out/` or `local/`, never Git), how identifiers are redacted, and what, if anything, is committed.
-      placeholder: "Raw logs stay under out/; committed evidence is redacted and summarised in docs/status.md."
+      placeholder: "Raw logs stay under out/; committed evidence is redacted and summarised in docs/status-log/."
     validations:
       required: true
   - type: checkboxes

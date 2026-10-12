@@ -37,4 +37,4 @@ These rules apply repository-wide. Load only task-relevant detail: `docs/status.
 - Preserve user changes; keep work scoped, reproducible through checked-in scripts/`just` recipes, and do not install host tools automatically (`just host-check` reports prerequisites).
 - Prefer popular, maintained libraries and MIT/Apache-2.0-compatible dependencies from existing ecosystems. Hand-roll only with a documented fit reason.
 - Run the applicable subset before handoff: `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, and `just qemu-check`.
-- For graphical changes, also run the documented graphical workflow, inspect/capture its output, and record evidence and limitations honestly in `docs/status.md`.
+- For graphical changes, also run the documented graphical workflow, inspect/capture its output, and record evidence and limitations honestly in `docs/status.md` (`docs/status.md` current state; dated entries in `docs/status-log/`).
