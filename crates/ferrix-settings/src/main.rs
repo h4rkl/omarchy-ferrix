@@ -22,6 +22,7 @@
 //! explicit carrier APN.
 
 mod bluetooth;
+mod hidden;
 mod interaction;
 mod keyboard;
 mod model;
@@ -77,7 +78,7 @@ fn target_from_env() -> String {
 
 /// Preview page names: every [`Page`], the two absent-state variants, and
 /// the Bluetooth pairing flows.
-const PREVIEW_PAGES: &str = "root, network, bluetooth, bluetooth-absent, bluetooth-pair, \
+const PREVIEW_PAGES: &str = "root, network, network-add, bluetooth, bluetooth-absent, bluetooth-pair, \
      bluetooth-confirm, bluetooth-paired, bluetooth-failed, bluetooth-device, bluetooth-forget, \
      mobile, mobile-no-sim, display, sound, sound-unavailable, keyboard, radios, about";
 
@@ -87,6 +88,7 @@ fn preview_model(name: &str, target: &str) -> Option<Model> {
         "bluetooth-absent" => (Page::Bluetooth, true),
         "mobile-no-sim" => (Page::Mobile, true),
         "sound-unavailable" => (Page::Sound, true),
+        "network-add" => (Page::Network, false),
         other if other.starts_with("bluetooth-") => (Page::Bluetooth, false),
         other => (Page::parse(other)?, false),
     };
@@ -162,6 +164,12 @@ fn preview_model(name: &str, target: &str) -> Option<Model> {
         model.bt_view = view;
     }
     model.bt_forget_confirm = name == "bluetooth-forget";
+    if name == "network-add" {
+        model.open_add_network();
+        if let Some(form) = model.add_network.as_mut() {
+            form.ssid = "ferrix-hidden".to_owned();
+        }
+    }
     Some(model)
 }
 

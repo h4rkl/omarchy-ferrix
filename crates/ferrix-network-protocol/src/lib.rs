@@ -8,7 +8,8 @@
 //!
 //! Callers are identified by the service from kernel peer credentials, never
 //! by anything in a payload: `client_kind` is a hint for records only.
-//! Passphrases travel only in `connect` and are never echoed back.
+//! Passphrases travel only in `connect` and `join-hidden` and are never
+//! echoed back.
 
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
@@ -21,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use ferrix_network_api::{
     ApId, NetworkError, NetworkEvent, NetworkState, Passphrase, ProfileId, SCHEMA_VERSION,
+    SecurityType, Ssid,
 };
 pub use ferrix_network_api::{DEFAULT_NETWORKD_SOCKET as DEFAULT_SOCKET, NETWORKD_SOCKET_ENV};
 use serde::{Deserialize, Serialize};
@@ -80,6 +82,17 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         passphrase: Option<Passphrase>,
     },
+    /// Join a network by name (schema 2): for access points that do not
+    /// broadcast their SSID, so there is no visible access point to name.
+    /// The caller chooses `security`; the service checks the request with
+    /// [`ferrix_network_api::validate_hidden_join`] before the backend sees
+    /// it. `passphrase` is handled exactly like `connect`'s.
+    JoinHidden {
+        ssid: Ssid,
+        security: SecurityType,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        passphrase: Option<Passphrase>,
+    },
     ConnectProfile {
         profile: ProfileId,
     },
@@ -98,6 +111,7 @@ impl Request {
             Request::SetRadio { .. } => "set-radio",
             Request::Scan {} => "scan",
             Request::Connect { .. } => "connect",
+            Request::JoinHidden { .. } => "join-hidden",
             Request::ConnectProfile { .. } => "connect-profile",
             Request::Disconnect {} => "disconnect",
             Request::Forget { .. } => "forget",
@@ -112,6 +126,7 @@ impl Request {
             Request::SetRadio { .. }
                 | Request::Scan {}
                 | Request::Connect { .. }
+                | Request::JoinHidden { .. }
                 | Request::ConnectProfile { .. }
                 | Request::Disconnect {}
                 | Request::Forget { .. }
@@ -341,6 +356,22 @@ impl Client {
     pub fn connect_ap(&mut self, ap: &ApId, passphrase: Option<&str>) -> Result<(), ClientError> {
         self.request(&Request::Connect {
             ap: ap.clone(),
+            passphrase: passphrase.map(Passphrase::new),
+        })
+        .and_then(expect_ok)
+    }
+
+    /// `join-hidden`: joins the network named `ssid` with the caller's
+    /// chosen security, without a visible access point.
+    pub fn join_hidden(
+        &mut self,
+        ssid: &Ssid,
+        security: SecurityType,
+        passphrase: Option<&str>,
+    ) -> Result<(), ClientError> {
+        self.request(&Request::JoinHidden {
+            ssid: ssid.clone(),
+            security,
             passphrase: passphrase.map(Passphrase::new),
         })
         .and_then(expect_ok)
@@ -635,6 +666,30 @@ mod tests {
             r#"{"request":"hello","schema_version":1,"client_kind":"application"}"#
         );
         assert_eq!(
+            serde_json::to_string(&Request::JoinHidden {
+                ssid: Ssid::from("ferrix-hidden"),
+                security: SecurityType::Wpa2Psk,
+                passphrase: None,
+            })
+            .unwrap(),
+            r#"{"request":"join-hidden","ssid":"ferrix-hidden","security":"wpa2-psk"}"#
+        );
+        let join = Request::JoinHidden {
+            ssid: Ssid::from("ferrix-hidden"),
+            security: SecurityType::Wpa3Sae,
+            passphrase: Some(Passphrase::new("mock-passphrase")),
+        };
+        assert_eq!(join.name(), "join-hidden");
+        assert!(join.is_control());
+        assert!(!format!("{join:?}").contains("mock-passphrase"));
+        assert_eq!(
+            serde_json::from_str::<Request>(
+                r#"{"request":"join-hidden","ssid":"ferrix-hidden","security":"wpa3-sae","passphrase":"mock-passphrase"}"#
+            )
+            .unwrap(),
+            join
+        );
+        assert_eq!(
             serde_json::to_string(&Request::Scan {}).unwrap(),
             r#"{"request":"scan"}"#
         );
@@ -711,6 +766,9 @@ mod tests {
             r#"{"request":"state","ap":"ap-1"}"#,
             r#"{"request":"set-radio","enabled":true,"force":true}"#,
             r#"{"request":"connect","ap":"ap-1","bssid":"aa:bb"}"#,
+            r#"{"request":"join-hidden","ssid":"x"}"#,
+            r#"{"request":"join-hidden","ssid":"x","security":"wpa9"}"#,
+            r#"{"request":"join-hidden","ssid":"x","security":"open","ap":"ap-1"}"#,
             r#"{"request":"hello","schema_version":1,"client_kind":"application","app":"org.ferrix.x"}"#,
             r#"{"request":"reboot"}"#,
             r#"{"reply":"ok"}"#,
@@ -738,7 +796,7 @@ mod tests {
             state: Some(NetworkState::default()),
         };
         let wire = serde_json::to_value(&with_state).unwrap();
-        assert_eq!(wire["state"]["schema_version"], 1);
+        assert_eq!(wire["state"]["schema_version"], SCHEMA_VERSION);
         assert_eq!(serde_json::from_value::<Reply>(wire).unwrap(), with_state);
         assert_eq!(
             serde_json::to_string(&Reply::Ok).unwrap(),
@@ -770,7 +828,7 @@ mod tests {
     #[test]
     fn schema_mismatch_is_typed() {
         let reply = Reply::Hello {
-            schema_version: 2,
+            schema_version: 1,
             evidence: "mock".into(),
             state: None,
         };
@@ -785,8 +843,8 @@ mod tests {
         assert_eq!(
             outcome,
             Err(ClientError::SchemaMismatch {
-                service: 2,
-                client: 1
+                service: 1,
+                client: 2
             })
         );
         assert!(

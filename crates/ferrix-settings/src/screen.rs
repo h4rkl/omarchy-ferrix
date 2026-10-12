@@ -957,8 +957,9 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
         .or_else(|| model.connection_error())
     {
         let retry = model.last_error.is_none()
-            && model.retry_target().is_some()
+            && model.can_retry()
             && model.passphrase_for.is_none()
+            && model.add_network.is_none()
             && model.forget_confirm.is_none();
         notice(c, ty, l.notice_rect(retry), &error, Tone::Err);
         if retry {
@@ -982,6 +983,10 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
     }
     if model.forget_confirm.is_some() {
         forget_confirm(c, ty, l, model, input);
+        return;
+    }
+    if model.add_network.is_some() {
+        crate::hidden::draw_form(c, ty, l, model, input.pressed);
         return;
     }
     if let Some(ap_id) = &model.passphrase_for {
@@ -1031,14 +1036,6 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
         return;
     }
     section_label(c, ty, "access points", s(96), s(870));
-    let hidden = model.hidden_count();
-    if hidden > 0 {
-        // Hidden networks cannot be joined by name yet; say so instead of
-        // drawing blank rows.
-        let text = format!("{hidden} hidden \u{b7} join by name not supported");
-        let w = ty.width(dim, &text);
-        ty.text(c, dim, &text, c.width() - s(96) - w, s(870));
-    }
     let aps = model.access_points();
     if aps.is_empty() {
         ty.text(c, dim, "none \u{b7} scan to refresh", s(96), s(960));
@@ -1068,6 +1065,15 @@ fn network(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
             input.pressed == Some(Target::Ap(i)),
         );
     }
+    // Hidden networks are not listed (a nameless row could only fail);
+    // this row joins one by name.
+    crate::hidden::draw_row(
+        c,
+        ty,
+        l.add_row_rect(aps.len()),
+        model,
+        input.pressed == Some(Target::AddNetwork),
+    );
     section_label(c, ty, "saved profiles", s(96), s(1620));
     let profiles = model.profiles();
     if profiles.is_empty() {

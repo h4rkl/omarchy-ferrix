@@ -30,7 +30,7 @@ NetworkManager 1.x adapter for `ferrix-networkd` (ADR-002), built on the
   `NMDeviceType` `ETHERNET` and is reported as
   `AdapterPresence::Present { kind: ethernet-like }` with
   `RadioState::Unavailable`. It is **never** reported as Wi-Fi: `scan`,
-  `set_radio`, `connect`, and `connect_profile` return
+  `set_radio`, `connect`, `join_hidden`, and `connect_profile` return
   `Unsupported { feature: "wifi (ethernet-like transport)" }`. Its link state
   is reported through `ConnectionState` with a synthetic `link-<n>` id, and
   its `IP4Config` and the manager's connectivity state are reported normally,
@@ -40,6 +40,17 @@ NetworkManager 1.x adapter for `ferrix-networkd` (ADR-002), built on the
   OWE (not yet represented by the target-neutral security enum), and unknown
   security types return `Unsupported`; nothing imitates success.
   The passphrase goes into the `psk` secret of that call and nowhere else.
+- **Joining by name.** `join_hidden` (protocol `join-hidden`, schema 2) adds
+  a profile whose `802-11-wireless` setting carries the SSID bytes and
+  `hidden = true`, so NetworkManager probes for the name instead of waiting
+  for a beacon, with the user's chosen `key-mgmt` (`none`, `wpa-psk`,
+  `sae`), and activates it on the Wi-Fi device with no specific access
+  point. The transition-mode policy is not applied: it needs the access
+  point's RSN flags, which a nameless beacon cannot be matched to.
+  Failures arrive through the device state reason like any join (for
+  example `NO_SECRETS`/supplicant failures as `authentication-failed`,
+  `SSID_NOT_FOUND` as `not-found { id: "ssid" }`). Physical behavior is not
+  yet verified on hardware.
 - **Scan completion** is detected by `Device.Wireless.LastScan` moving past
   the value read when the scan was requested.
 

@@ -55,6 +55,16 @@ ssid = "ferrix-guest"
 security = "open"
 signal_percent = 41
 
+# A synthetic WPA2 network that broadcasts no name: it is listed with an
+# empty SSID and can only be joined by name (Settings > Wi-Fi > Add network,
+# or the `join-hidden` client verb).
+[[network.access_points]]
+ssid = "ferrix-hidden"
+security = "wpa2-psk"
+signal_percent = 63
+passphrase = "mock-passphrase"
+hidden = true
+
 # Synthetic Bluetooth devices the mock controller remembers (Settings lists
 # them). Mock only: no real names or hardware addresses.
 [[bluetooth.devices]]

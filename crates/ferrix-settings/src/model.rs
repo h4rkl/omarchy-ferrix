@@ -116,6 +116,13 @@ pub enum Action {
         ap: ApId,
         passphrase: Option<String>,
     },
+    /// Join a network by name (Add network), for one that broadcasts no
+    /// SSID. The passphrase is never recorded.
+    JoinHidden {
+        ssid: String,
+        security: SecurityType,
+        passphrase: Option<String>,
+    },
     Disconnect,
     Forget(ProfileId),
     /// Telephony radio power (airplane mode's cellular half).
@@ -167,6 +174,11 @@ pub struct Model {
     pub forget_confirm: Option<ProfileId>,
     /// The access point of the last connect request, for Retry.
     pub last_connect: Option<ApId>,
+    /// Name and security of the last join by name, for Retry (never the
+    /// passphrase).
+    pub last_hidden: Option<(String, SecurityType)>,
+    /// The Add network form, while it is open.
+    pub add_network: Option<crate::hidden::AddNetwork>,
     /// A typed error the connect request itself returned (the daemon may
     /// also report the failure through `ConnectionState::Failed`).
     pub connect_error: Option<NetworkError>,
@@ -210,6 +222,9 @@ fn is_hidden(ap: &AccessPoint) -> bool {
 /// Shown when the backend reports `authentication-failed`.
 pub const AUTH_FAILED_TEXT: &str = "Wrong password or unsupported security";
 
+/// Shown when no network answered to the name (`not-found` for `ssid`).
+pub const NOT_FOUND_TEXT: &str = "No network with that name is in range";
+
 /// Converts the optional target launch setting into the typed data profile.
 /// Invalid values are dropped at the UI boundary; `ferrix-telephonyd` still
 /// performs the authoritative validation for every socket request.
@@ -250,6 +265,8 @@ impl Model {
             target: "unknown".to_owned(),
             forget_confirm: None,
             last_connect: None,
+            last_hidden: None,
+            add_network: None,
             connect_error: None,
             core_link: Link::Connecting,
             hw: None,
@@ -293,6 +310,7 @@ impl Model {
             Page::Sound => self.sound_state_name(),
             Page::Keyboard => self.keyboard_state_name(),
             Page::Network if self.forget_confirm.is_some() => "confirm-forget".to_owned(),
+            Page::Network if self.add_network.is_some() => "add-network".to_owned(),
             Page::Network if self.auth_failed() && self.passphrase_for.is_none() => {
                 "auth-failed".to_owned()
             }
@@ -487,11 +505,15 @@ impl Model {
         match self.net.as_ref().map(|n| &n.connection) {
             None => "connection \u{b7} unknown".to_owned(),
             Some(ConnectionState::Connected { ap }) => {
+                // A hidden network may stay nameless in the scan list even
+                // once joined; the name the user typed stands in for it.
                 let ssid = self
                     .net
                     .as_ref()
                     .and_then(|n| n.access_point(ap))
+                    .filter(|ap| !is_hidden(ap))
                     .map(|ap| ap.ssid.to_string())
+                    .or_else(|| self.last_hidden.as_ref().map(|(name, _)| name.clone()))
                     .unwrap_or_else(|| ap.to_string());
                 format!("connected \u{b7} {ssid}")
             }
@@ -527,20 +549,34 @@ impl Model {
     pub fn connection_error(&self) -> Option<String> {
         self.failure().map(|error| match error {
             NetworkError::AuthenticationFailed => AUTH_FAILED_TEXT.to_owned(),
+            NetworkError::NotFound { id } if id == "ssid" => NOT_FOUND_TEXT.to_owned(),
             other => format!("connect \u{b7} {other}"),
         })
+    }
+
+    /// Whether the last failure is one a new attempt can fix (not an
+    /// unsupported security type or a missing adapter).
+    fn retryable(&self) -> bool {
+        !matches!(
+            self.failure(),
+            None | Some(NetworkError::Unsupported { .. })
+                | Some(NetworkError::NoAdapter)
+                | Some(NetworkError::Unauthorized { .. })
+        )
+    }
+
+    /// Whether Retry is offered: for a listed access point, or for the
+    /// network the last join by name named.
+    pub fn can_retry(&self) -> bool {
+        self.retry_target().is_some() || (self.retryable() && self.last_hidden.is_some())
     }
 
     /// The access point Retry would reconnect to, while it is still listed.
     /// Retry is offered after any failure a new attempt can fix (not an
     /// unsupported security type or a missing adapter).
     pub fn retry_target(&self) -> Option<&ApId> {
-        match self.failure() {
-            None
-            | Some(NetworkError::Unsupported { .. })
-            | Some(NetworkError::NoAdapter)
-            | Some(NetworkError::Unauthorized { .. }) => return None,
-            Some(_) => {}
+        if !self.retryable() {
+            return None;
         }
         self.last_connect.as_ref().filter(|id| {
             self.net
@@ -588,9 +624,9 @@ impl Model {
     /// Joinable networks, strongest first, one row per name: a network
     /// served by several access points (bands, mesh nodes) is listed once,
     /// through its strongest access point. Hidden networks (an empty or
-    /// all-NUL SSID) are left out: the network API has no join-by-name
-    /// request, so a row could only ever fail. [`Model::hidden_count`]
-    /// reports how many were omitted.
+    /// all-NUL SSID) are left out: a nameless row could only ever fail, so
+    /// they are joined through Add network (`join-hidden`) instead, and
+    /// [`Model::hidden_count`] reports how many beacons were omitted.
     pub fn access_points(&self) -> Vec<&AccessPoint> {
         let Some(net) = &self.net else {
             return Vec::new();
@@ -681,6 +717,7 @@ impl Model {
         if page != self.page {
             self.bt_view = crate::bluetooth::BtView::Main;
             self.bt_forget_confirm = false;
+            self.add_network = None;
         }
         self.page = page;
         self.last_error = None;
@@ -765,6 +802,7 @@ impl Model {
 
     fn begin_connect(&mut self, ap: ApId, passphrase: Option<String>) {
         self.last_connect = Some(ap.clone());
+        self.last_hidden = None;
         self.connect_error = None;
         self.last_error = None;
         self.pending.push(Action::Connect { ap, passphrase });
@@ -773,6 +811,15 @@ impl Model {
     /// Retry after an authentication failure: ask for the passphrase again
     /// (a saved one was evidently wrong), or reconnect an open network.
     pub fn retry_connect(&mut self) {
+        if self.retry_target().is_none()
+            && self.retryable()
+            && let Some((ssid, security)) = self.last_hidden.clone()
+        {
+            // A join by name: reopen the form with the name and security,
+            // asking for the passphrase again.
+            self.reopen_add_network(ssid, security);
+            return;
+        }
         let Some(id) = self.retry_target().cloned() else {
             return;
         };
@@ -876,6 +923,8 @@ impl Model {
     pub fn back(&mut self) {
         if self.forget_confirm.is_some() {
             self.cancel_forget();
+        } else if self.add_network.is_some() {
+            self.cancel_add_network();
         } else if self.passphrase_for.is_some() {
             self.cancel_passphrase();
         } else if self.page == Page::Bluetooth && self.bluetooth_back() {
@@ -917,10 +966,12 @@ pub fn preview_telephony() -> ferrix_telephony_api::TelephonyState {
 /// Canned network snapshot for the host preview.
 pub fn preview_network(connected: bool) -> NetworkState {
     use ferrix_network_api::{AdapterKind, IpConfig, Ssid};
+    // The empty name is a hidden network's beacon (joined via Add network).
     let aps = [
         ("ferrix-lab", 78, SecurityType::Wpa2Psk),
         ("guest-open", 54, SecurityType::Open),
         ("lab-enterprise", 31, SecurityType::Enterprise),
+        ("", 63, SecurityType::Wpa2Psk),
     ];
     let access_points: Vec<AccessPoint> = aps
         .iter()
@@ -940,7 +991,7 @@ pub fn preview_network(connected: bool) -> NetworkState {
             kind: AdapterKind::Wifi,
         },
         radio: RadioState::Enabled,
-        scan: ScanState::Completed { count: 3 },
+        scan: ScanState::Completed { count: 4 },
         connection: if connected {
             ConnectionState::Connected {
                 ap: ApId::new("ap-0"),
@@ -1362,7 +1413,8 @@ mod tests {
                 .iter()
                 .all(|ap| !ap.ssid.as_bytes().is_empty())
         );
-        assert_eq!(m.hidden_count(), 2);
+        // Two added here plus the preview's own hidden beacon.
+        assert_eq!(m.hidden_count(), 3);
     }
 
     #[test]
