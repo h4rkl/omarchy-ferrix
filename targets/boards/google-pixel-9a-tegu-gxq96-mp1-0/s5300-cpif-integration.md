@@ -208,7 +208,7 @@ teardown requirements that are still open.
 
 Issue #107 adds, in `cpif_opener_scan` (which `cpif_holders` now wraps, so
 `arm` and `start_pre` get the same checks). These are **offline only** until
-a rebuilt `device-google-tegu` 1-r4 image runs on the exact phone:
+a rebuilt `device-google-tegu` 1-r5 image runs on the exact phone:
 
 - **Positive control.** The scanning shell holds the mem-class null device
   open read-only on fd 7 for the whole scan. It is the only device the

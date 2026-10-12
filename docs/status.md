@@ -1,5 +1,38 @@
 # Status
 
+## 2026-10-12 (device-google-tegu 1-r5: /mnt/vendor via install script; builder evidence, no physical claim)
+
+- The 1-r4 image could not be built. On the builder (attempt
+  `20261012T103052Z`, origin/main `d547af7`), abuild 3.17.0 under
+  pmbootstrap 3.11.1 refused the package:
+  `device-google-tegu*: Packages must not put anything under /mnt`, then
+  `rootpkg failed`. The cause was the `install -d -m 0755 "$pkgdir"/mnt/vendor`
+  line that `02eebc7` (PR #113) added to `package()`. No 1-r4 image exists,
+  and no image has been flashed with it.
+- `device-google-tegu` 1-r5 drops that line. It declares
+  `install="$pkgname.post-install $pkgname.post-upgrade"`. The post-install
+  script runs `mkdir -p /mnt/vendor` and `chmod 0755 /mnt/vendor`, then
+  exits 0. The post-upgrade is a symlink to it, as in aports. Both scripts
+  are listed in `source=` and `sha512sums=`, and `rootfs.sh` requires them
+  before staging. The hash-pinned `ferrix-s5300-mounts` service (#34,
+  `b90d3b41…`) is unchanged and still creates only the leaf destinations.
+  This is the parent directory that the 2026-10-12 physical run (#92)
+  found missing.
+- 1-r5 is now the first buildable release with the #107 opener-scan
+  positive control. The S2 preflight reads the expected release from the
+  recipe, so any older installed image (1-r3 and before) reports
+  `pkg-device-google-tegu` skew.
+- Evidence so far: offline only. `rootfs-workflow.sh` now asserts that
+  `package()` installs nothing under `/mnt`. It also checks the
+  install-script declaration, sources and checksums, and the symlink, and
+  runs the post-install against a scratch root (creates 0755, idempotent,
+  repairs the mode). A 1-r5 builder run is still needed to confirm that
+  abuild accepts the package and that the pmbootstrap rootfs install runs
+  the script. Nothing ran on the phone.
+- `dev-compose.py` overlays device-package files onto an existing base
+  rootfs and does not run apk scripts. It does not create `/mnt/vendor`, so
+  only a rootfs rebuilt with 1-r5 carries the directory.
+
 ## 2026-10-12 (S5300 S2 active CP boot, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The owner approved the source mounts and one CP boot for this run. The

@@ -2,12 +2,16 @@
 pkgname=device-google-tegu
 pkgdesc="Google Pixel 9a native Linux device package"
 pkgver=1
-pkgrel=4
+pkgrel=5
 maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
 options="!check !archcheck"
+# /mnt/vendor, the mount_root of ferrix-s5300-mounts, is created by the
+# install scripts: abuild refuses packages with files under /mnt, and the
+# pinned service creates only its leaf destinations (#92).
+install="$pkgname.post-install $pkgname.post-upgrade"
 depends="
 	dbus
 	dbus-openrc
@@ -74,6 +78,8 @@ source="
 	99-google-tegu-sit.rules
 	ucm-aoc-snd-card.conf
 	ucm-tegu-HiFi.conf
+	$pkgname.post-install
+	$pkgname.post-upgrade
 "
 
 build() {
@@ -128,10 +134,6 @@ package() {
 		"$pkgdir"/etc/init.d/ferrix-android
 	install -Dm755 "$srcdir"/ferrix-s5300-mounts.initd \
 		"$pkgdir"/etc/init.d/ferrix-s5300-mounts
-	# The mounts service creates only the leaf destinations under its
-	# mount_root; checkpath does not create /mnt/vendor itself (physical
-	# 2026-10-12, #92: the first start failed on the missing parent).
-	install -d -m 0755 "$pkgdir"/mnt/vendor
 	install -Dm755 "$srcdir"/ferrix-radio-firmware.initd \
 		"$pkgdir"/etc/init.d/ferrix-radio-firmware
 	install -Dm755 "$srcdir"/ferrix-aoc-firmware.initd \
@@ -202,4 +204,6 @@ c4e81f9a0e463d25fdcd69ab635838e29f5a95f389ef52bb978864daeeeabd220e4fafccf9ff8514
 4a86a4c43172c61e06688dc7e579c29bdbc254524d38fa07516d7bb9d78238c84daf8d754584d75d885bbed9ec6627c7ef8b90a89667849845edc32f3f4fa0dd  99-google-tegu-sit.rules
 a63884d425a033f692cda673cef64ed3a90eea2a32092e21cbd9ffd1dc6a60bd0d7d4f29a866ec69a99d2b3544cd2497e66a8e6b34eddebd831b0663b3610278  ucm-aoc-snd-card.conf
 b9a413428e488cdcc17f95e7e30d11b200969123544c738256a43d1e4fd846e31e762aa839e718cb4cc6ba4b67a93dbcca6ffabeac2bc8e9555cc34b54fcd69c  ucm-tegu-HiFi.conf
+dbb62e00807c21c689a3c7b31646845b850be322471d3582c50aa7ca593076d3361a915e25b62129bf8e5d291b1d2db0662a482b8c36cbc3a381e09b9819c128  device-google-tegu.post-install
+dbb62e00807c21c689a3c7b31646845b850be322471d3582c50aa7ca593076d3361a915e25b62129bf8e5d291b1d2db0662a482b8c36cbc3a381e09b9819c128  device-google-tegu.post-upgrade
 "

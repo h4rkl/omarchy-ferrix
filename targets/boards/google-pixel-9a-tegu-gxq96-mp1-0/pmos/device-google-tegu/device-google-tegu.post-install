@@ -1,0 +1,9 @@
+#!/bin/sh
+# ferrix-s5300-mounts (hash-pinned, #34) creates only the leaf destinations
+# under its mount_root, so the parent must already exist: the first physical
+# start on 2026-10-12 (#92) failed on a missing /mnt/vendor. abuild refuses
+# packages that put anything under /mnt ("Packages must not put anything
+# under /mnt"), so the directory is created at install time instead.
+mkdir -p /mnt/vendor
+chmod 0755 /mnt/vendor
+exit 0

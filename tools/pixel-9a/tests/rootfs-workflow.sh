@@ -131,6 +131,42 @@ fi
 if grep -Eq 'for service in .*[[:space:]](ferrix-s5300-mounts|exynos-modem|sit-proxy)[[:space:];]' "$package_dir/APKBUILD"; then
 	fail 'device package links a manual-only S5300 service into a runlevel'
 fi
+# abuild 3.17 refuses a package with anything under /mnt (builder
+# 2026-10-12: "Packages must not put anything under /mnt"), so package()
+# installs nothing there; the install scripts create /mnt/vendor, the parent
+# the pinned ferrix-s5300-mounts service needs (#92).
+package_body=$(awk '/^package\(\) \{$/ { inside=1 } inside { print } inside && /^\}$/ { exit }' "$package_dir/APKBUILD")
+[ -n "$package_body" ] || fail 'device package APKBUILD has no package() body'
+if printf '%s\n' "$package_body" | grep -Eq '"\$pkgdir"/+mnt([/"[:space:]]|$)'; then
+	fail 'device package package() installs something under /mnt, which abuild refuses'
+fi
+grep -Fxq 'install="$pkgname.post-install $pkgname.post-upgrade"' "$package_dir/APKBUILD" ||
+	fail 'device package does not declare its post-install and post-upgrade scripts'
+for install_script in device-google-tegu.post-install device-google-tegu.post-upgrade; do
+	grep -Eq "^[[:space:]]+(\\\$pkgname|device-google-tegu)\\.${install_script##*.}\$" "$package_dir/APKBUILD" ||
+		fail "device package source list lacks $install_script"
+	grep -q "^$(sha512_file "$package_dir/$install_script")  $install_script\$" "$package_dir/APKBUILD" ||
+		fail "device package sha512sums entry for $install_script is stale"
+	sh -n "$package_dir/$install_script"
+done
+[ -L "$package_dir/device-google-tegu.post-upgrade" ] &&
+	[ "$(readlink "$package_dir/device-google-tegu.post-upgrade")" = device-google-tegu.post-install ] ||
+	fail 'device package post-upgrade is not the post-install symlink'
+grep -Fxq 'mkdir -p /mnt/vendor' "$package_dir/device-google-tegu.post-install" ||
+	fail 'device package post-install does not create /mnt/vendor'
+grep -Fxq 'chmod 0755 /mnt/vendor' "$package_dir/device-google-tegu.post-install" ||
+	fail 'device package post-install does not set /mnt/vendor to 0755'
+# Run the script against a scratch root: it creates the directory 0755 and
+# is idempotent over an existing directory with another mode.
+install_root="$work/install-script-root"
+mkdir -p "$install_root"
+sed "s#/mnt/vendor#$install_root/mnt/vendor#g" "$package_dir/device-google-tegu.post-install" >"$work/post-install"
+sh "$work/post-install" || fail 'device package post-install did not exit 0'
+[ -d "$install_root/mnt/vendor" ] || fail 'device package post-install did not create /mnt/vendor'
+[ "$(ls -ld "$install_root/mnt/vendor" | cut -c1-10)" = drwxr-xr-x ] || fail 'device package post-install left /mnt/vendor without mode 0755'
+chmod 0700 "$install_root/mnt/vendor"
+sh "$work/post-install" || fail 'device package post-install is not idempotent'
+[ "$(ls -ld "$install_root/mnt/vendor" | cut -c1-10)" = drwxr-xr-x ] || fail 'device package post-install did not repair the /mnt/vendor mode'
 grep -q 'after udev networkmanager ferrix-s5300-mounts exynos-modem sit-proxy' "$package_dir/ferrix-telephonyd.initd" ||
 	fail 'Ferrix telephony adapter ordering is incomplete'
 grep -q '^arch="aarch64"$' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/modemmanager-samsung-sit/APKBUILD" ||

@@ -19,6 +19,9 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 board="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
 pkg="$board/pmos/device-google-tegu"
+# The installed-release fixture follows the checked-in recipe (1-r5 carries
+# the /mnt/vendor install script, #92, and the #107 opener control).
+device_release=$(sed -n 's/^pkgver=//p' "$pkg/APKBUILD")-r$(sed -n 's/^pkgrel=//p' "$pkg/APKBUILD")
 mm="$board/pmos/modemmanager-samsung-sit"
 lib="$pkg/ferrix-s5300-cpif.sh"
 pins="$pkg/s5300-cpif-services.sha256"
@@ -258,7 +261,7 @@ EOF
 	cp "$pkg/s5300-userspace-sources.toml" "$fx/usr/share/ferrix/pixel-9a/"
 	cp "$pkg/99-google-tegu-sit.rules" "$fx/usr/lib/udev/rules.d/"
 	repin
-	printf 'P:device-google-tegu\nV:1-r4\n\nP:exynos-modem\nV:0.1.0_git20260731-r3\n\nP:modemmanager-samsung-sit\nV:1.25.95_git20260731-r3\n\n' \
+	printf 'P:device-google-tegu\nV:%s\n\nP:exynos-modem\nV:0.1.0_git20260731-r3\n\nP:modemmanager-samsung-sit\nV:1.25.95_git20260731-r3\n\n' "$device_release" \
 		>"$fx/lib/apk/db/installed"
 	cat >"$fx/usr/sbin/exynos-modem" <<EOF
 #!/bin/sh
@@ -481,7 +484,7 @@ check 'post-mount: verify_own_mount ran for all four destinations' sh -c '[ "$(g
 cp "$pout" "$work/post.out"
 probe_case 'post-mount with a short NV file' 'mount_sources; mkdir -p "$fx/mnt/vendor/modem_img/images/default" "$fx/mnt/vendor/efs" "$fx/mnt/vendor/persist/modem"; printf fake >"$fx/mnt/vendor/modem_img/images/default/modem.bin"; printf fake >"$fx/mnt/vendor/persist/modem/cpsha"; : >"$fx/mnt/vendor/efs/nv_normal.bin"; : >"$fx/mnt/vendor/efs/nv_protected.bin"'
 check 'post-mount short NV: the sources check fails' po check.sources=fail
-probe_case 'installed 1-r2 image' 'printf "# 1-r2 library\n" >>"$fx/usr/lib/ferrix/s5300-cpif.sh"; repin; sed -i.bak "s/^V:1-r4$/V:1-r2/" "$fx/lib/apk/db/installed"; rm "$fx/lib/apk/db/installed.bak"'
+probe_case 'installed 1-r2 image' 'printf "# 1-r2 library\n" >>"$fx/usr/lib/ferrix/s5300-cpif.sh"; repin; sed -i.bak "s/^V:$device_release\$/V:1-r2/" "$fx/lib/apk/db/installed"; rm "$fx/lib/apk/db/installed.bak"'
 check '1-r2: self-consistent on the device, but the installed library differs' sh -c 'grep -Fxq file.s5300-cpif.sh.pin=match "$1" && grep -Fxq check.package=pass "$1" && grep -Fxq pkg.device-google-tegu=1-r2 "$1" && ! grep -Fxq "file.s5300-cpif.sh.sha256=$2" "$1"' sh "$pout" "$(sha 256 "$work/lib-fixture.sh")"
 probe_case 'stale exynos-modem release' 'sed -i.bak "s/^V:0.1.0_git20260731-r3$/V:0.1.0_git20260731-r2/" "$fx/lib/apk/db/installed"; rm "$fx/lib/apk/db/installed.bak"'
 check 'stale release: the binary is not run' sh -c 'grep -Fxq check.cli=skipped "$1" && ! grep -q "^exynos-modem " "$2"' sh "$pout" "$log"
