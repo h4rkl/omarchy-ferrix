@@ -358,7 +358,8 @@ jobs:
         run: just qemu-scenario-check
 
       # One result.json plus log excerpt per scenario, pass or fail, and the
-      # session's serial log.
+      # session's serial and launch logs. The launch log explains failures
+      # before the guest can write a serial record.
       - name: Upload scenario evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -368,5 +369,6 @@ jobs:
             out/qemu-aarch64/scenarios/**/result.json
             out/qemu-aarch64/scenarios/**/log-excerpt.log
             out/qemu-aarch64/agent/serial.log
+            out/qemu-aarch64/agent/launch.log
           if-no-files-found: warn
           retention-days: 14
