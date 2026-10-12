@@ -147,11 +147,12 @@ by route R2+R5 or by R4. When they are, the proof should at least:
 
 ## Next issue steps
 
-1. Keep #90 open as **NO-GO / blocked on evidence**. Move #2 output work to a
-   Bluetooth A2DP proof issue.
-2. Owner decision on R5: whether to ask Google, publicly or through a
-   partner channel, about the AoC speaker-chain default without the HAL and
-   the `GET_MODULES` reply semantics.
+1. Keep the internal speaker decision **NO-GO**. Issue #94 tracks the missing
+   protection and gain contract. Move #2 output work to the separate
+   Bluetooth A2DP proof in issue #91.
+2. Issue #94 needs an owner decision on R5: whether to ask Google, publicly
+   or through a partner channel, about the AoC speaker-chain default without
+   the HAL and the `GET_MODULES` reply semantics.
 3. Optional research issue for R2. Write the target-local read-only AoC
    query patch, with offline build and review only. Before any phone run,
    decide how a raw `val` would be interpreted. Without R5 it stays
