@@ -140,9 +140,24 @@ Expected for GO on A:
 - The source-defined FMT payload layout and header-stripping behaviour are
   compatible enough to justify a bounded runtime test; E0 cannot prove byte
   equivalence on this device.
-- RFS writes go only to the daemon's rootfs state directory.
+- RFS NV writes and crash records go only under `/tmp`; source mounts are
+  opened read-only. Confirm the runtime `/tmp` mount before S2.
 
 Switch to B if CPIF boot needs undefined userspace data or sequencing.
+
+**E0 result (2026-10-12, [`s5300-cpif-e0.md`](s5300-cpif-e0.md)): conditional
+GO for A at the ABI level; not by itself a CP boot authorisation.** Every
+`exynos-modem` cold-boot ioctl and `read`/`write` has a GPL-defined layout in
+`a8976934`. The factory CP3A `cpif.ko` uses the same encodings (checked by
+disassembly). The undefined parts (std_dl opcodes, handover field meaning,
+TOC) are firmware behaviour that both routes only carry, so they do not
+favour B. Before any S2 run, three bounded `exynos-modem` adapters are
+required: the CP reset encoding, `GET_SRINFO` (or disabling the dump path),
+and the OEM read loop, which treats CPIF's 100 ms empty read as EOF. The
+OEM and FMT paths also need CLI arguments (`/dev/oem_ipc1`,
+`/dev/umts_ipc0/1`). U4 skew remains open: the factory module comes from
+unpublished source `fd5221767c57`. NV file sizes are also unknown. The next
+step is E1, plus read-only NV presence and size checks once S0 allows it.
 
 **E1, read-only dev-boot inventory** (lead, existing `radios.sh` CPIF probe
 or `discover_at`; nothing opened):
@@ -170,11 +185,12 @@ observation is captured; later stages never imply earlier ones.
    [ext4](https://docs.kernel.org/admin-guide/ext4.html), `ro,norecovery`
    for [f2fs](https://docs.kernel.org/filesystems/f2fs.html)); a plain `ro`
    ext4 mount can replay a dirty journal and write to the device. Refuse an
-   unknown filesystem type. Confirm `exynos-modem` writes only under
-   `/var/lib/exynos-modem`. A pinned 6.1.124 source review found that these
-   options leave orphan-cleanup and error-superblock writes possible on both
-   filesystems. Only a read-only device skips them, and `BLKROSET` alone only
-   warns about writes rather than failing them. A loop attached with
+   unknown filesystem type. Confirm `exynos-modem` opens source mounts
+   read-only and writes NV sinks and crash records only under `/tmp`; check
+   that path's runtime mount before S2. A pinned 6.1.124 source review found
+   that these options leave orphan-cleanup and error-superblock writes
+   possible on both filesystems. Only a read-only device skips them;
+   `BLKROSET` alone warns about writes rather than failing them. A loop attached with
    `losetup --read-only` fails every write before it reaches the partition
    ([README](README.md#s5300-source-mount-proof-issue-34)). The gate
    therefore also needs `ferrix-s5300-mounts` itself to set `BLKROSET` and
