@@ -1474,7 +1474,11 @@ The revised read-only preflight passed on the phone. One owner-approved 2 s
 capture returned 384000 PCM bytes: channel 0 varied at very low level and
 channel 1 was digital silence. This does not establish acoustic pickup. The
 temporary recording was deleted and the mic route restored. No speaker test
-exists.
+exists. Issue #83's source and effective-build review is **NO-GO** for a
+speaker trial. Neither the built nor the stock TAS module compiles the
+`algo/` protection or calibration code. On Android, protection comes from
+the closed audio HAL configuring AoC, which Linux does not do. See
+[`audio-route-decision.md`](audio-route-decision.md#speaker-protection-source-and-effective-build-decision-issue-83).
 
 ### Controlled-tone acoustic proof (issue #80)
 

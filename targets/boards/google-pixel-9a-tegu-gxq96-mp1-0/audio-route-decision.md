@@ -688,7 +688,8 @@ playback is safe, so no speaker test is implemented.
   `CONFIG_TAS25XX_ALGO`. That symbol has no default. The tegu
   `tegu_defconfig` and `BUILD.bazel` and the zumapro `zumapro_defconfig`
   name no `TAS25XX` symbol at all. Where Kleaf enables `SND_SOC_TAS25XX` was
-  not traced, so `ALGO` being off is likely but unproven. Per-unit calibration
+  not traced here; issue #83 later proved `ALGO` off from the built and stock
+  module binaries ([below](#speaker-protection-source-and-effective-build-decision-issue-83)). Per-unit calibration
   (`/persist/audio/smartamp_calib.bin`, `speaker.cal`) is deliberately not
   staged.
 - `TAS25XX ASI Switch`, the limiter switches and most other TAS controls are
@@ -702,6 +703,86 @@ playback is safe, so no speaker test is implemented.
 Speaker playback stays blocked until a separate owner-approved slice
 records that AoC protection state, chooses a bounded low-level stimulus, and
 defines how the TAS profile, ASI, and limiter states are restored.
+
+## Speaker-protection source and effective-build decision (issue #83)
+
+**Decision: NO-GO for an active phone-speaker trial.** Speaker protection
+on Linux is unproven, and part of it is proven absent. No playback workflow
+and no runtime preflight are added. `[audio]` stays `unsupported`.
+
+Review date 2026-10-12, offline only. No device, builder, or GitHub access.
+Evidence labels:
+
+- **built**: read from the artifacts of the `674157b` image
+  (`out/pixel-9a/images/tegu-s5300-20261012/`, manifest SHA-256 `03516f71…`).
+- **stock**: read from the pinned factory archive `0c2f9053…`
+  (CP3A.260905.009), `vendor_dlkm.img` and `vendor.img`.
+- **source**: pinned revisions in `kernel-sources.toml`.
+- **inference**: reasoning from the evidence, not proof.
+
+Nothing extracted is in Git. Copies stay in ignored scratch only.
+
+### Findings
+
+| # | Finding | Evidence |
+| --- | --- | --- |
+| P1 | The kernel TAS algorithm and calibration path is **not compiled**, either in Ferrix or in stock Android. The built `snd-soc-tas25xx.ko` (SHA-256 `6a2c8935…`, vermagic `6.1.124-android14-11-ga4662a84a15f`) defines 306 symbols. None of them is a function from `tas25xx/algo/**` (all 12 `algo/src` and `algo/platform/exynos` files were checked), and the module has no `smartamp_calib`/`/persist/audio` string. Google's stock module (`vendor_dlkm.img:/lib/modules/snd-soc-tas25xx.ko`, SHA-256 `e5df7fc1…`, `6.1.162`, `scmversion=gd06ffe62b5ed`) has the same symbol set, apart from `__UNIQUE_ID` suffixes. | built + stock |
+| P2 | How the effective config is set. `amplifiers/tas25xx/BUILD.bazel` is a Kleaf `kernel_module`, and the module `Makefile` passes `KBUILD_OPTIONS` `CONFIG_SND_SOC_TAS25XX=m`, `CONFIG_TAS25XX_MISC=m` and `CONFIG_TAS25XX_IRQ_BD=m`. The `TAS25XX_ALGO`/`TISA_KBIN_INTF` lines are commented out. The tegu `tegu_defconfig` and `Kconfig.ext.tegu` source no amplifier Kconfig. The built `Image` IKCONFIG (`CONFIG_IKCONFIG_PROC=y`) is the GKI base config and carries no vendor `TAS25XX` symbol, so the module binary (P1) is the effective-config proof. Two symbols confirm the enabled options: `tas25xx_register_misc` (MISC) and `irq_bd_show` (IRQ_BD). | source + built |
+| P3 | On Android, closed-loop speaker protection belongs to the **closed userspace HAL plus AoC firmware**, not the kernel. The stock `vendor.img:/bin/hw/android.hardware.audio.service-aidl.aoc` contains a `Tas25xxCodec` module whose strings name `InitSpeakerProtection`, `LoadCalibrationDataToAoC`, `TurnOnSpeakerProtection`/`TurnOffSpeakerProtection`, `GetExcursions`, `GetTemperatures`, `/mnt/vendor/persist/audio/speaker.cal`, `/vendor/firmware/ti_sp_tuning.bin` (4912 bytes), `using default calibration data`, `speaker protection is not assigned`, thermal/battery throttles (`PlaybackThermalThrottleByTemperature`, `Tas25xxThrottle`) and `TAS25XX PLAYBACK_VOLUME_*` writes. It talks to AoC through `/dev/acd-*` tuning channels. That the HAL configures AoC-resident protection is an **inference from strings**. The protocol, the algorithm, and its behaviour without that configuration are **unknown firmware/HAL internals**. | stock (strings) + inference |
+| P4 | The pinned `aoc` Linux driver (`ac69293d…`, `alsa/aoc_alsa_ctl.c`) has **no** speaker-protection, calibration, excursion, or temperature control. The `aoc-interface-zuma.h` IPC header lists `ASP_ID_PROT` and `ASP_ID_SPKRCOM` processing IDs, but no Linux code references them. The nearest control is `AoC Speaker Mixer ASP Mode` (block 16, component 2). Its meaning is opaque. The PM's ignored inventory read it as `ASP_ON`, which shows that speaker-chain processing is active with whatever default firmware tuning applies. That tuning's gain/EQ/DRC is unknown, so the level reaching the amplifier is not bounded by the PCM level. `aoc_audio_state` reports only service online/offline. AoC control `get` callbacks send `CMD_AUDIO_OUTPUT_GET_*` IPC rather than reading a cache. | source + inference |
+| P5 | What Linux does have is only the in-amplifier fault handling from the factory tuning. The `INTRP` block defines named fault IRQs (wired: `ti,irq-gpio` and `ti,irq-gpio2` in `zumapro-tegu-audio-common-tas2572.dtsi`, which `zumapro-tegu-mp.dts` includes through `zumapro-tegu-common.dtsi`). `tas25xx_irq_work_func` (`src/tas25xx-logic.c`) counts each IRQ and resets or shuts the channel down per action. The configured limiter and brownout settings come from opaque `PROFP`/`KCNTR` register bytes. That is fault reaction, not thermal or excursion protection. | source |
+| P6 | TAS mixer values do not show the state of the amplifier. `tas25xx_get`/`tas25xx_enum_get` (`src/tas25xx-regbin-parser.c`) return the cached `curr_val` (the tuning default or the last put). They do not read registers. The observed `LIMITER SWITCH 0`, `BOP ENABLE 0`, `IVSENSE_STATUS_* 1` and `PLAYBACK_VOLUME 110` are the driver's cached intent only. | source |
+
+### Why no read-only preflight was added
+
+Source review found these read-only observables:
+
+- `/sys/class/tas25xx_dev/irqs/<name>`, aggregate `count=`/`persist=` per fault IRQ;
+- `/sys/class/tas25xx_dev/cmd/{temp,iv_vbat,drv_opmode}`;
+- the cached TAS kcontrols;
+- the AoC ASP mode and sink state enums.
+
+None of them reports whether AoC speaker protection is running, calibrated,
+or limiting. So a preflight could not turn this result into GO. The candidates
+also carry hazards. `cmd/calib` is world-writable `0664`, and a
+`cal_init_blk` write runs the calibration register sequence. The TAS misc
+device and regmap debugfs reach registers. AoC gets are DSP IPC. The IRQ
+counters only help as before-and-after fault evidence around a trial, which
+is not justified. A later trial slice may add them then.
+
+### Missing evidence for GO
+
+All of the following are required:
+
+1. A source or vendor statement of what AoC firmware does on the speaker
+   chain when no HAL has run `InitSpeakerProtection` or loaded `speaker.cal`
+   and `ti_sp_tuning.bin`: bypass, uncalibrated default, or muted.
+2. A Linux-observable signal that protection is active, or a project-owned
+   adapter that performs the HAL's AoC configuration through a documented
+   protocol. The second is a plan-level decision and needs `plans/` review.
+   It must not reimplement the closed HAL by guesswork. Per-unit `speaker.cal`
+   would then need its own data policy.
+3. A bound on the AoC speaker-chain gain, so that a digital stimulus level
+   bounds the amplifier output.
+
+### Safe alternative
+
+For issue #2 output, prove playback first on a route that does not drive the
+internal TAS2572 speakers: a Bluetooth A2DP sink through the existing
+`pipewire-spa-bluez` stack. The earpiece (top channel) uses the same TAS/AoC
+chain and is equally blocked.
+
+Any later internal-speaker trial needs all of the following:
+
+- a separate concrete owner decision;
+- a fresh exact-device preflight;
+- the IRQ counters recorded before and after;
+- a short low-level stimulus;
+- restoration of `TDM_0_RX Mixer EP1`, `TAS25XX ASI Switch`, and
+  `CODEC PROFILE`.
+
+That trial would accept the residual unknowns above. It would not resolve
+them.
 
 ## Unknowns
 
