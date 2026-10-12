@@ -16,6 +16,70 @@
   not yet been built or booted on the phone, and speaker/mic function is still
   unproved.
 
+## 2026-10-12 (Pixel 9a internal-microphone capture proof workflow, issue #2; physical capture)
+
+- **Change:** `just pixel-9a-mic-capture-proof`
+  (`tools/pixel-9a/mic-capture-proof.sh`, guest body
+  `mic-capture-proof-remote.sh`) adds an exact-target workflow over the
+  CDC-ACM shell. It has three modes:
+  - `preflight` (the default) is read-only. It checks the exact device tree,
+    the pinned kernel, root, alsa-utils, and one `aoc-snd-card`. It
+    identifies PCM 8 from its single `00-08: EP1 capture (*) :  : capture 1`
+    line in `/proc/asound/pcm` and cross-checks the same id and name, with
+    `Subdevices: 1/1`, in `arecord -l`. If the kernel exposes
+    `/proc/asound/card0/pcm8c`, those files must agree and read `closed`. If
+    not, the state is `not-exposed` and is never read as closed. The gate is
+    then zero `/proc/*/fd` openers of `pcmC0D8c` over a complete scan, plus
+    the kernel's free-substream count. It checks that
+    `EP1 TX Mixer INTERNAL_MIC_TX` is an rw boolean reading `off`, and that
+    `TDM_0_RX Mixer EP1` and `TAS25XX ASI Switch` read `off`. It prints
+    PCM 8's id and name for review, and the typed confirmation. That phrase
+    is bound to a hash of the card, PCM 8's observed listing identity and
+    procfs exposure, the mixer numid, and the kernel.
+  - `capture` takes that phrase. It writes only the microphone route on,
+    records at most 2 s of raw S16_LE 48 kHz stereo from `hw:0,8` under
+    guest `/run`, and restores and verifies the route. It then measures the
+    PCM bytes and deletes the file; a trap covers early exit. Only aggregate
+    statistics are kept, and the result gets a silence/non-silence class.
+  - `restore` takes its own phrase and puts that one route back to `off`.
+- Nothing plays audio, and no speaker, amplifier, TAS, or volume control is
+  written. A non-silent result would not prove acoustic pickup, which needs a
+  controlled stimulus. `[audio]` stays `unsupported`.
+- Offline evidence: `just pixel-9a-mic-capture-proof-test` runs
+  host fixtures over the real transport and the exact guest probe against a
+  fake procfs with fake `amixer`/`arecord`. It covers refusals, cleanup, an
+  interrupted recording, and silence/signal classification of synthetic PCM.
+  It also covers PCM 8 with procfs info present and absent, ambiguous,
+  malformed, wrong-direction, and conflicting listings, and fd and
+  kernel-counted openers.
+- **Physical preflight, read-only** (PM-run, `physical:google-pixel-9a-tegu-gxq96-mp1-0`,
+  booted audio-tools image, pinned kernel): the earlier probe refused safely
+  because `/proc/asound/card0/pcm8c/info` and `sub0/status` do not exist on
+  this kernel. `/proc/asound/card0` holds `id`, `aoc_aocdump_state`, and
+  `aoc_audio_state` only. `/proc/asound/pcm` has the exact line
+  `00-08: EP1 capture (*) :  : capture 1`. `arecord -l` lists
+  `card 0: googleaocsndcar [google,aoc-snd-card], device 8: EP1 capture (*) []`
+  with `Subdevices: 1/1`. There was one AoC card and no PCM opener. The
+  `amixer cget` shape parsed correctly: the mic route is numid 365,
+  `BOOLEAN`, `rw------`, `off`, and the speaker route and `TAS25XX ASI
+  Switch` read `off`. No capture was attempted in that first preflight.
+- **Revised physical preflight and owner-approved capture:** on the image
+  composed from `674157b` (seven-image manifest SHA-256
+  `03516f711bcb84d3f3c6029f29ee98ad6a31c7a1384f33a56cf6a164a662d407`),
+  the revised preflight passed with `pcm_procfs=not-exposed`, the exact
+  `EP1 capture (*)` listing, `arecord -l` `Subdevices: 1/1`, zero openers,
+  and the mic and speaker-side controls off. One gated capture completed
+  from `hw:0,8` at 48 kHz, stereo S16_LE: 384000 raw bytes and 96000 frames.
+  It restored the mic route, removed the raw file, left no PCM opener, and
+  found both speaker-side controls off; `anomalies=none`. Channel 0 AC RMS
+  was 2.23 LSB (max-channel −83.3 dBFS), channel 1 was digital zero. This
+  `non-silent-low-level` result proves varying PCM bytes, not acoustic
+  pickup. There was no controlled sound stimulus. Why the kernel has no
+  per-PCM procfs (likely `CONFIG_SND_VERBOSE_PROCFS` off) is not checked.
+- A read-only review of the pinned TAS25xx and AoC sources found no evidence
+  that speaker playback is protected on Linux (`audio-route-decision.md`). No
+  speaker test is added.
+
 ## 2026-10-12 (Telephony subscribe is a gap-free snapshot plus stream, issue #68; host tests, mock only)
 
 - **Defect:** `ferrix-telephony-protocol::Client::subscribe` fetched the
@@ -66,10 +130,9 @@
   --all-targets --all-features -- -D warnings` clean; `cargo test
   --workspace` 766 passed, 0 failed; `ferrix-telephonyd` and
   `ferrix-telephony-protocol` suites 50 repeated runs, 0 failures. **Not
-  run:** `just qemu-build`/`just qemu-check`. The local Docker-compatible
-  runtime (OrbStack) was not running in this worktree's environment, and no
-  previously built `out/qemu-aarch64/` image was available here. QEMU
-  behaviour is unverified for this change.
+  run locally:** `just qemu-build`/`just qemu-check` because OrbStack was
+  unavailable. PR #71 CI subsequently passed the Rust, native sandbox, and
+  headless QEMU checks.
 
 ## 2026-10-12 (Pixel 9a: S5300 sources mount only through a read-only loop, issue #34; offline only)
 

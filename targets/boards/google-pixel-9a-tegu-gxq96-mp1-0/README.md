@@ -1258,6 +1258,27 @@ until the stock restore and recovery proof are re-established. So far it is
 stub-tested only (`just pixel-9a-audio-inventory-test`, labelled mock), and no
 audio state has been read from the physical device.
 
+## Microphone capture proof (issue #2)
+
+`just pixel-9a-mic-capture-proof [preflight|capture|restore]`
+(`tools/pixel-9a/mic-capture-proof.sh`) is the gated first active audio test.
+It uses the CDC-ACM transport below, with a two-line generated header before
+the exact `mic-capture-proof-remote.sh` body. `preflight` is read-only and
+prints the per-run `FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM` phrase. That phrase
+is bound to the observed card driver, PCM 8 identity, mixer numid, and
+kernel. PCM 8 is identified from its one `00-08` line in `/proc/asound/pcm`,
+cross-checked with `arecord -l`. This kernel has no per-PCM procfs, so the
+state is `not-exposed` and the gate is zero actual openers. `capture` sets only `EP1 TX Mixer INTERNAL_MIC_TX` on, records at
+most 2 s of raw S16_LE 48 kHz stereo from `hw:0,8` to
+`/run/ferrix-mic-capture-proof/`, restores the route, measures the PCM, and
+deletes the file. `restore` (`FERRIX_PIXEL9A_MIC_RESTORE_CONFIRM`) puts that
+route back to `off` after a lost session. Exit codes, classification, and
+limits are in [`audio-route-decision.md`](audio-route-decision.md#microphone-capture-proof-workflow-issue-2-offline-plus-read-only-physical-preflight).
+Transcripts hold aggregates only, under ignored
+`out/pixel-9a/mic-capture-proof/`. The workflow is offline-tested (`just pixel-9a-mic-capture-proof-test`).
+Only one read-only preflight has run on the phone, and no capture has. No
+speaker test exists.
+
 ## CDC-ACM guest probe transport (issue #52)
 
 The Ferrix dev rootfs is built with `--no-sshd`, so the read-only inventory
