@@ -21,12 +21,14 @@ sha256 = "324efde8cdef9c3e108cc92d9248556cdc8c0234e77a8a66218b49b978a9445f"
 sha512 = "fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952c9f60d476ccc0da635160ba5ee6aaca39c9920ab061e1272b2b3bcaa89ff4357c"
 license = "GPL-2.0-or-later"
 packages = ["exynos-modem", "sit-proxy", "samsung-sit-ffi"]
-# Target-local patches applied by the exynos-modem recipe, in order. They add
-# the explicit google-kleaf-cpif backend (../../s5300-cpif-adapter.md); the
-# recipe repeats the SHA-512 values.
+# Target-local patches applied by the exynos-modem recipe, in order. 0001 and
+# 0002 add the explicit google-kleaf-cpif backend (../../s5300-cpif-adapter.md);
+# 0003 moves the daemon's scratch output into scratch_directory
+# (../../s5300-scratch-dir.md). The recipe repeats the SHA-512 values.
 patches = [
   { file = "0001-exynos-modem-google-kleaf-cpif-backend.patch", sha256 = "2cfc977af1a7b29faca0455b1e83108770574d10b9984d7101f7e27339ad5404" },
   { file = "0002-sit-proxy-google-kleaf-cpif-nodes.patch", sha256 = "1ced496605ec0ec0f726f9310148af03cc14a17958228f301eeffe1a584547ca" },
+  { file = "0003-exynos-modem-private-scratch-directory.patch", sha256 = "f5766e39bc557f6f72f4b88e12b692b2dc85fdae5cfe26d2ca9e98ee527dca93" },
 ]
 
 [[source]]
@@ -49,12 +51,16 @@ modem_daemon = "/usr/sbin/exynos-modem"
 sit_proxy = "/usr/sbin/sit-proxy"
 carrier_config_directory = "/vendor/firmware/carrierconfig"
 uecap_directory = "/vendor/firmware/uecapconfig"
-state_directory = "/var/lib/exynos-modem"
+# Root-owned 0700 directory for the RFS NV write sinks and crash records. The
+# daemon reaches it without following symlinks and refuses it with any other
+# owner or mode; exynos-modem.initd provisions it. Its runtime backing on the
+# device (tmpfs or not) is unverified.
+scratch_directory = "/run/exynos-modem"
 
 [runtime.partitions]
 # All four sources are mounted read-only by ferrix-s5300-mounts. The daemon
-# reads stock modem/NV inputs and keeps any generated state under its writable
-# rootfs state directory; no private NV or modem image is staged in Git.
+# reads stock modem/NV inputs and writes generated scratch output only under
+# scratch_directory; no private NV or modem image is staged in Git.
 # Resolve the A/B modem label from the bootloader's
 # androidboot.slot_suffix at runtime; never hardcode the active slot.
 modem_image_label = "modem_{androidboot.slot_suffix}"

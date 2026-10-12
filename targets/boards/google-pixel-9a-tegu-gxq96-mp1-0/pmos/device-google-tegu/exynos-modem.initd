@@ -80,5 +80,8 @@ start_pre() {
 		eerror "exact persist modem/cpsha is unavailable or unreadable"
 		return 1
 	}
-	checkpath -d -m 0750 /var/lib/exynos-modem
+	# Private directory for the daemon's NV write sinks and crash records
+	# (s5300-userspace-sources.toml scratch_directory). The daemon walks to it
+	# without following symlinks and refuses it unless it is root-owned 0700.
+	checkpath -d -m 0700 -o root:root /run/exynos-modem
 }

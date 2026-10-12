@@ -112,6 +112,10 @@ code change.
   Before S2, a follow-up patch should move the sinks to a root-owned private
   directory (for example `/run/exynos-modem`, mode 0700) opened with
   `O_NOFOLLOW`.
+  **Update (issue #81):** patch 0003 does this in code for the NV sinks and
+  the crash record; see [`s5300-scratch-dir.md`](s5300-scratch-dir.md). The
+  device's runtime backing and permissions for `/run/exynos-modem` are still
+  unverified.
 
 ## Still required before a CP boot trial
 
@@ -123,7 +127,9 @@ code change.
   `sit-proxy` sockets (S3).
 - The prerequisites already listed in the route decision: E1 inventory, the
   NV file size check (≥ `0x80000`), the S0 gate, and U4 skew.
-- The `/tmp` sink finding above.
+- The `/tmp` sink finding above: fixed in code by patch 0003
+  ([`s5300-scratch-dir.md`](s5300-scratch-dir.md)); the read-only device
+  proof listed there is still required.
 
 ## Verification
 

@@ -565,8 +565,9 @@ pixel-9a-s5300-nv-metadata-test:
 pixel-9a-s5300-mounts-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-mounts-service.sh"
 
-# Offline proof of the target-local google-kleaf-cpif patches to the pinned
-# exynos-modem source (issue #1). Static pins always run. With the pinned
+# Offline proof of the target-local google-kleaf-cpif and private scratch
+# directory patches to the pinned exynos-modem source (issues #1 and #81).
+# Static pins always run. With the pinned
 # archive cached under out/, or FERRIX_S5300_ADAPTER_FETCH=1, it also applies
 # the patches the way abuild does, runs the patched tests, and checks the CLI
 # through --print-config and refusals only (Linux, or Docker on other hosts).

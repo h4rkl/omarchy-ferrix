@@ -1,0 +1,815 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Omarchy Ferrix <maintainers@omarchy.invalid>
+Date: Mon, 12 Oct 2026 00:00:00 +0000
+Subject: [PATCH] exynos-modem: keep NV sinks and crash records in a private
+ directory
+
+The root daemon created and truncated the fixed names
+/tmp/rfs-nv_{normal,protected,user}.bin and wrote
+/tmp/modem_crash_<ts>.json, following symlinks. Anyone who can write to
+/tmp could point those writes at another file.
+
+Move both into /run/exynos-modem (scratch.rs):
+
+- Each path component is opened with openat(O_DIRECTORY|O_NOFOLLOW) from
+  the previous directory's fd. Ancestors must be owned by root (or the
+  daemon's user) and not be group- or other-writable. The directory must
+  be owned by the daemon's user with mode 0700. It is created when
+  missing; an existing one with another owner or mode is refused, not
+  repaired.
+- NV sinks are opened with openat(O_CREAT|O_NOFOLLOW|O_NONBLOCK) and are
+  truncated only after fstat shows a regular file we own, with one link
+  and no group/other bits. A symlink, hard link, FIFO, directory, or
+  foreign file is refused untouched. The RFS exchange still completes
+  and the data is dropped, as upstream did when the open failed.
+- Crash records use O_CREAT|O_EXCL|O_NOFOLLOW.
+
+NV reads still come only from the read-only factory mounts. Both kernel
+backends are otherwise unchanged. --print-config prints scratch_dir.
+---
+ crates/exynos-modem/src/boot/s5300.rs |  17 +-
+ crates/exynos-modem/src/main.rs       |   2 +
+ crates/exynos-modem/src/rfs.rs        | 133 +++++--
+ crates/exynos-modem/src/scratch.rs    | 497 ++++++++++++++++++++++++++
+ 4 files changed, 623 insertions(+), 26 deletions(-)
+ create mode 100644 crates/exynos-modem/src/scratch.rs
+
+diff --git a/crates/exynos-modem/src/boot/s5300.rs b/crates/exynos-modem/src/boot/s5300.rs
+index 9e041d9..ca9ed26 100644
+--- a/crates/exynos-modem/src/boot/s5300.rs
++++ b/crates/exynos-modem/src/boot/s5300.rs
+@@ -210,8 +210,8 @@ fn pad_replay(mut buf: Vec<u8>, size: usize) -> Vec<u8> {
+     buf
+ }
+ 
+-/// Where the full crash records land; tmpfs -- diagnostics, not an archive.
+-const CRASH_RECORD_DIR: &str = "/tmp";
++// The full crash records land in the daemon's private scratch directory
++// (scratch::RUNTIME_DIR) -- diagnostics, not an archive.
+ 
+ /// Extract the decoded ASCII JSON record from a raw srinfo read: "SRINFO\0\0"
+ /// magic (8 bytes) + a 12-byte header whose last u32 is the JSON length, then
+@@ -238,7 +238,7 @@ fn json_field<'a>(json: &'a [u8], name: &str) -> Option<&'a str> {
+ 
+ /// Read the decoded crash record (IOCTL_GET_SRINFO), log its crash cause and
+ /// persist the full JSON -- crash cause, call stack, blackbox, dumppc -- to
+-/// /tmp/modem_crash_<unix ts>.json for offline analysis (e.g. call-stack
++/// <scratch dir>/modem_crash_<unix ts>.json for offline analysis (e.g. call-stack
+ /// addresses vs modem.bin).
+ fn save_crash_record(fd: RawFd, backend: KernelBackend) -> io::Result<()> {
+     let mut buf = vec![0u8; 64 * 1024];
+@@ -254,9 +254,14 @@ fn save_crash_record(fd: RawFd, backend: KernelBackend) -> io::Result<()> {
+         .duration_since(std::time::UNIX_EPOCH)
+         .map(|d| d.as_secs())
+         .unwrap_or(0);
+-    let path = format!("{}/modem_crash_{}.json", CRASH_RECORD_DIR, ts);
+-    std::fs::write(&path, json)?;
+-    eprintln!("boot: crash record saved to {}", path);
++    let name = format!("modem_crash_{}.json", ts);
++    let dir = crate::scratch::ScratchDir::runtime();
++    std::io::Write::write_all(&mut dir.create_new(&name)?, json)?;
++    eprintln!(
++        "boot: crash record saved to {}/{}",
++        dir.display_path().display(),
++        name
++    );
+     Ok(())
+ }
+ 
+diff --git a/crates/exynos-modem/src/main.rs b/crates/exynos-modem/src/main.rs
+index e0216b0..e18f907 100644
+--- a/crates/exynos-modem/src/main.rs
++++ b/crates/exynos-modem/src/main.rs
+@@ -31,6 +31,7 @@ mod boot;
+ mod oem;
+ mod pb;
+ mod rfs;
++mod scratch;
+ 
+ use std::ffi::OsString;
+ use std::path::PathBuf;
+@@ -247,6 +248,7 @@ fn main() {
+         println!("rfs_dev={}", show(&channels.rfs));
+         println!("oem_gems_dev={}", show(&channels.oem));
+         println!("uecap_dir={}", uecap_dir.display());
++        println!("scratch_dir={}", scratch::RUNTIME_DIR);
+         println!(
+             "crash_dump_boot={}",
+             if backend.crash_dump_boot() {
+diff --git a/crates/exynos-modem/src/rfs.rs b/crates/exynos-modem/src/rfs.rs
+index c2dcac4..d72ed2b 100644
+--- a/crates/exynos-modem/src/rfs.rs
++++ b/crates/exynos-modem/src/rfs.rs
+@@ -3,10 +3,12 @@
+ //! Answers the modem's file requests: it read-serves the carrier config the CP
+ //! pulls after attach (/vendor/firmware/carrierconfig, path-whitelisted like
+ //! downstream rfsd) so SETUP_DATA_CALL stops failing with "no carrier config",
+-//! and it sinks the modem's NV writes to tmpfs (a re-derivable cache -- the CP
+-//! recompiles NV every cold boot, so a volatile sink is functionally correct and
+-//! keeps us off the device's flash).  NV reads come from the factory nv_*.bin
+-//! the init mounts read-only under /mnt/vendor/efs.
++//! and it sinks the modem's NV writes to a volatile scratch file (a re-derivable
++//! cache -- the CP recompiles NV every cold boot, so a volatile sink is
++//! functionally correct and keeps us off the device's flash).  The sinks live in
++//! the daemon's private directory (scratch::RUNTIME_DIR, /run/exynos-modem),
++//! never in a shared /tmp; see scratch.rs.  NV reads come from the factory
++//! nv_*.bin the init mounts read-only under /mnt/vendor/efs.
+ //!
+ //! Wire framing (research/rfs-protocol.md, RE'd from downstream rfsd):
+ //!   u16 cmd @0, u16 token @2, u32 len @4 (payload bytes), then payload.
+@@ -19,6 +21,8 @@ use std::os::unix::io::AsRawFd;
+ use std::path::Path;
+ use std::time::Duration;
+ 
++use crate::scratch::ScratchDir;
++
+ const RFS_READ: u16 = 0x0001;
+ const RFS_WRITE: u16 = 0x0002;
+ const RFS_OP_STATUS: u16 = 0x0003;
+@@ -51,12 +55,13 @@ fn nv_path(fid: u32) -> Option<&'static str> {
+     }
+ }
+ 
++/// NV write sink, a plain file name inside the private scratch directory.
+ fn nv_sink(fid: u32) -> &'static str {
+     match fid {
+-        1 => "/tmp/rfs-nv_normal.bin",
+-        2 => "/tmp/rfs-nv_protected.bin",
+-        3 => "/tmp/rfs-nv_user.bin",
+-        _ => "/tmp/rfs-nv-x.bin",
++        1 => "rfs-nv_normal.bin",
++        2 => "rfs-nv_protected.bin",
++        3 => "rfs-nv_user.bin",
++        _ => "rfs-nv-x.bin",
+     }
+ }
+ 
+@@ -82,7 +87,7 @@ fn open_path(path: &str) -> Option<File> {
+ struct Fent {
+     used: bool,
+     fd: Option<File>,  // open file (read source)
+-    wfd: Option<File>, // tmpfs write sink
++    wfd: Option<File>, // scratch write sink
+     size: i64,         // file size reported at OPEN
+     roff: i64,         // read cursor
+     rremain: i64,      // bytes left to serve for the active read
+@@ -94,17 +99,19 @@ struct Fent {
+ struct Rfs {
+     dev: File,
+     verbose: bool,
++    scratch: ScratchDir,
+     files: Vec<Fent>,
+     txbuf: Vec<u8>,
+ }
+ 
+ impl Rfs {
+-    fn new(dev: File, verbose: bool) -> Rfs {
++    fn new(dev: File, verbose: bool, scratch: ScratchDir) -> Rfs {
+         let mut files = Vec::with_capacity(MAXFID);
+         files.resize_with(MAXFID, Fent::default);
+         Rfs {
+             dev,
+             verbose,
++            scratch,
+             files,
+             txbuf: vec![0u8; 0x14 + CHUNK + 8],
+         }
+@@ -291,19 +298,21 @@ impl Rfs {
+                     }
+                     self.read_step(fid);
+                 } else if iotype == IO_WRITE {
+-                    // tmpfs sink -- no rw vendor mount (see module header).
+-                    let sink = OpenOptions::new()
+-                        .write(true)
+-                        .create(true)
+-                        .truncate(true)
+-                        .open(nv_sink(fid))
+-                        .ok();
++                    // Scratch sink -- no rw vendor mount (see module header).  A
++                    // refused sink drops the data but still answers the CP.
++                    let sink = match self.scratch.replace(nv_sink(fid)) {
++                        Ok(f) => Some(f),
++                        Err(e) => {
++                            eprintln!("rfs: NV sink refused, discarding write: {}", e);
++                            None
++                        }
++                    };
+                     let e = &mut self.files[fid as usize];
+                     e.wfd = sink;
+                     e.woff = off as i64;
+                     e.wremain = iolen as i64;
+                     if self.verbose {
+-                        eprintln!("rfs: IO write fid={} len={} -> tmpfs", fid, iolen);
++                        eprintln!("rfs: IO write fid={} len={} -> scratch", fid, iolen);
+                     }
+                     self.write_req(fid);
+                 } else {
+@@ -351,7 +360,7 @@ impl Rfs {
+                     let woff = e.woff;
+                     let token = e.token;
+                     e.wfd = None;
+-                    eprintln!("rfs:   write done fid={} ({} bytes to tmpfs)", fid, woff);
++                    eprintln!("rfs:   write done fid={} ({} bytes to scratch)", fid, woff);
+                     self.op_status(token, fid, 0);
+                 }
+             }
+@@ -401,7 +410,7 @@ pub fn run(dev: &Path, verbose: bool) {
+     eprintln!("rfs: serving on {}", dev.display());
+     loop {
+         match OpenOptions::new().read(true).write(true).open(dev) {
+-            Ok(f) => serve(Rfs::new(f, verbose)),
++            Ok(f) => serve(Rfs::new(f, verbose, ScratchDir::runtime())),
+             Err(e) => eprintln!("rfs: {}: {}, retrying", dev.display(), e),
+         }
+         std::thread::sleep(Duration::from_secs(1));
+@@ -428,3 +437,87 @@ fn serve(mut rfs: Rfs) {
+         }
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::scratch::tests::Anchor;
++    use std::os::unix::net::UnixStream;
++
++    fn frame(cmd: u16, token: u16, words: &[u32], data: &[u8]) -> Vec<u8> {
++        let mut f = Vec::new();
++        f.extend_from_slice(&cmd.to_le_bytes());
++        f.extend_from_slice(&token.to_le_bytes());
++        f.extend_from_slice(&((words.len() * 4 + data.len()) as u32).to_le_bytes());
++        for w in words {
++            f.extend_from_slice(&w.to_le_bytes());
++        }
++        f.extend_from_slice(data);
++        f
++    }
++
++    /// One NV write the way the CP sends it: IO_REQUEST(write), then the data.
++    /// Returns the replies' commands (WRITE request, then OP_STATUS).
++    fn nv_write(a: &Anchor, fid: u32, data: &[u8]) -> Vec<u16> {
++        let (dev, mut cp) = UnixStream::pair().unwrap();
++        let mut rfs = Rfs::new(
++            File::from(std::os::fd::OwnedFd::from(dev)),
++            false,
++            a.scratch(),
++        );
++        rfs.handle(&frame(
++            RFS_IO_REQUEST,
++            7,
++            &[fid, 0, data.len() as u32, IO_WRITE],
++            &[],
++        ));
++        rfs.handle(&frame(RFS_WRITE, 7, &[0, fid, data.len() as u32], data));
++        drop(rfs);
++        let mut replies = Vec::new();
++        cp.read_to_end(&mut replies).unwrap();
++        let mut cmds = Vec::new();
++        let mut at = 0;
++        while at + 8 <= replies.len() {
++            cmds.push(le16(&replies[at..]));
++            at += 8 + le32(&replies[at + 4..]) as usize;
++        }
++        cmds
++    }
++
++    #[test]
++    fn nv_write_lands_only_in_the_private_directory() {
++        let a = Anchor::new("rfs");
++        assert_eq!(nv_write(&a, 1, b"NVDATA"), vec![RFS_WRITE, RFS_OP_STATUS]);
++        assert_eq!(fs_read(&a.private().join("rfs-nv_normal.bin")), b"NVDATA");
++        assert_eq!(std::fs::read_dir(a.private()).unwrap().count(), 1);
++        // The read source stays the read-only factory mount, never the sink.
++        assert_eq!(nv_path(1), Some("/mnt/vendor/efs/nv_normal.bin"));
++        for fid in 0..MAXFID as u32 {
++            assert!(!nv_sink(fid).contains('/'), "{}", nv_sink(fid));
++        }
++    }
++
++    #[test]
++    fn nv_write_through_a_planted_link_spares_the_source_and_answers_the_cp() {
++        let a = Anchor::new("rfslink");
++        std::fs::create_dir(a.private()).unwrap();
++        std::fs::set_permissions(
++            a.private(),
++            std::os::unix::fs::PermissionsExt::from_mode(0o700),
++        )
++        .unwrap();
++        let source = a.outside("nv_protected.bin", b"factory calibration");
++        std::os::unix::fs::symlink(&source, a.private().join("rfs-nv_protected.bin")).unwrap();
++        // The CP still gets its WRITE request and final OP_STATUS, so it does
++        // not stall; the data is dropped instead of written through the link.
++        assert_eq!(
++            nv_write(&a, 2, b"OVERWRITE"),
++            vec![RFS_WRITE, RFS_OP_STATUS]
++        );
++        assert_eq!(fs_read(&source), b"factory calibration");
++    }
++
++    fn fs_read(p: &Path) -> Vec<u8> {
++        std::fs::read(p).unwrap()
++    }
++}
+diff --git a/crates/exynos-modem/src/scratch.rs b/crates/exynos-modem/src/scratch.rs
+new file mode 100644
+index 0000000..bd7c9b9
+--- /dev/null
++++ b/crates/exynos-modem/src/scratch.rs
+@@ -0,0 +1,497 @@
++//! The daemon's private runtime directory for scratch output: the RFS NV write
++//! sinks and the crash records.
++//!
++//! The daemon runs as root, so it must not create or truncate fixed names in a
++//! world-writable directory such as /tmp: a symlink planted there would point
++//! the truncating write at any file, including a calibration partition's
++//! contents.  Instead everything goes under RUNTIME_DIR, resolved without ever
++//! following a symlink:
++//!
++//!   * every component is opened with openat(O_DIRECTORY | O_NOFOLLOW) from the
++//!     previous directory's fd, so nothing can be swapped in between checks;
++//!   * each ancestor must be owned by root (or by the daemon's user) and not be
++//!     group- or other-writable, so nobody else can rename entries in it;
++//!   * the directory itself must be owned by the daemon's user with no group
++//!     or other permission bits (0700).  It is created 0700 when missing; an
++//!     existing directory with other owner or mode is refused, never repaired;
++//!   * files are opened with openat(O_NOFOLLOW | O_NONBLOCK) relative to that
++//!     fd, and are truncated only after fstat shows a regular file that the
++//!     daemon owns, with one link and no group/other bits.  A symlink, a hard
++//!     link to another file, a FIFO, a device node, a directory, or a file
++//!     someone else owns is refused without being truncated or written.
++//!
++//! A refusal is an error to the caller; nothing falls back to another path.
++
++use std::ffi::CString;
++use std::fs::File;
++use std::io;
++use std::os::unix::ffi::OsStrExt;
++use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
++use std::path::{Component, Path, PathBuf};
++
++/// Where scratch output lands on the device (a root-owned 0700 directory).
++pub const RUNTIME_DIR: &str = "/run/exynos-modem";
++
++/// A private directory below a trusted anchor ("/" on the device).
++#[derive(Clone, Debug)]
++pub struct ScratchDir {
++    anchor: PathBuf,
++    rel: PathBuf,
++}
++
++fn refuse(what: impl std::fmt::Display) -> io::Error {
++    io::Error::new(io::ErrorKind::PermissionDenied, what.to_string())
++}
++
++fn cstr(b: &[u8]) -> io::Result<CString> {
++    CString::new(b).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))
++}
++
++fn fstat(fd: RawFd) -> io::Result<libc::stat> {
++    let mut st: libc::stat = unsafe { std::mem::zeroed() };
++    if unsafe { libc::fstat(fd, &mut st) } < 0 {
++        return Err(io::Error::last_os_error());
++    }
++    Ok(st)
++}
++
++fn openat(
++    dir: RawFd,
++    name: &CString,
++    flags: libc::c_int,
++    mode: libc::mode_t,
++) -> io::Result<OwnedFd> {
++    let fd = unsafe {
++        libc::openat(
++            dir,
++            name.as_ptr(),
++            flags | libc::O_CLOEXEC,
++            mode as libc::c_uint,
++        )
++    };
++    if fd < 0 {
++        return Err(io::Error::last_os_error());
++    }
++    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
++}
++
++const DIR_FLAGS: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW;
++
++/// A file name directly inside the directory: no separator, no `.`/`..`.
++fn leaf_name(name: &str) -> io::Result<CString> {
++    if name.is_empty() || name == "." || name == ".." || name.contains('/') {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            format!("not a plain file name: {:?}", name),
++        ));
++    }
++    cstr(name.as_bytes())
++}
++
++impl ScratchDir {
++    /// The device directory, RUNTIME_DIR below "/".
++    pub fn runtime() -> ScratchDir {
++        ScratchDir::new("/", RUNTIME_DIR.trim_start_matches('/'))
++    }
++
++    /// `rel` (relative, at least one component) below the trusted `anchor`.
++    pub fn new(anchor: impl Into<PathBuf>, rel: impl Into<PathBuf>) -> ScratchDir {
++        ScratchDir {
++            anchor: anchor.into(),
++            rel: rel.into(),
++        }
++    }
++
++    /// The directory's path, for logs.
++    pub fn display_path(&self) -> PathBuf {
++        self.anchor.join(&self.rel)
++    }
++
++    /// Walk to the directory without following symlinks and check every step.
++    fn open_dir(&self) -> io::Result<OwnedFd> {
++        let euid = unsafe { libc::geteuid() };
++        let parts: Vec<&std::ffi::OsStr> = self
++            .rel
++            .components()
++            .map(|c| match c {
++                Component::Normal(p) => Ok(p),
++                _ => Err(io::Error::new(
++                    io::ErrorKind::InvalidInput,
++                    "scratch path must be relative and plain",
++                )),
++            })
++            .collect::<io::Result<_>>()?;
++        let Some((leaf, ancestors)) = parts.split_last() else {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "empty scratch path",
++            ));
++        };
++        let anchor = cstr(self.anchor.as_os_str().as_bytes())?;
++        let mut dir = openat(libc::AT_FDCWD, &anchor, DIR_FLAGS, 0)?;
++        let mut at = self.anchor.clone();
++        check_ancestor(&dir, &at, euid)?;
++        for part in ancestors {
++            at.push(part);
++            dir = openat(dir.as_raw_fd(), &cstr(part.as_bytes())?, DIR_FLAGS, 0)
++                .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", at.display(), e)))?;
++            check_ancestor(&dir, &at, euid)?;
++        }
++        at.push(leaf);
++        let name = cstr(leaf.as_bytes())?;
++        let fd = match openat(dir.as_raw_fd(), &name, DIR_FLAGS, 0) {
++            Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
++                // The parent was checked: only its owner (root) can create here.
++                if unsafe { libc::mkdirat(dir.as_raw_fd(), name.as_ptr(), 0o700) } < 0 {
++                    let e = io::Error::last_os_error();
++                    if e.raw_os_error() != Some(libc::EEXIST) {
++                        return Err(io::Error::new(e.kind(), format!("{}: {}", at.display(), e)));
++                    }
++                }
++                openat(dir.as_raw_fd(), &name, DIR_FLAGS, 0)
++            }
++            r => r,
++        }
++        .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", at.display(), e)))?;
++        let st = fstat(fd.as_raw_fd())?;
++        if st.st_uid != euid || st.st_mode & 0o077 != 0 {
++            return Err(refuse(format!(
++                "{}: owner {} mode {:o}, need owner {} and no group/other access",
++                at.display(),
++                st.st_uid,
++                st.st_mode & 0o7777,
++                euid
++            )));
++        }
++        Ok(fd)
++    }
++
++    /// Create `name`, or reuse and truncate it when it is already a private
++    /// regular file of ours (the upstream create+truncate semantics).
++    pub fn replace(&self, name: &str) -> io::Result<File> {
++        let cname = leaf_name(name)?;
++        let dir = self.open_dir()?;
++        // O_NONBLOCK: opening a planted FIFO must not block the RFS thread.
++        let fd = openat(
++            dir.as_raw_fd(),
++            &cname,
++            libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
++            0o600,
++        )
++        .map_err(|e| {
++            io::Error::new(
++                e.kind(),
++                format!("{}/{}: {}", self.display_path().display(), name, e),
++            )
++        })?;
++        let st = fstat(fd.as_raw_fd())?;
++        let euid = unsafe { libc::geteuid() };
++        if st.st_mode & libc::S_IFMT != libc::S_IFREG
++            || st.st_uid != euid
++            || st.st_nlink != 1
++            || st.st_mode & 0o077 != 0
++        {
++            return Err(refuse(format!(
++                "{}/{}: not a private single-link regular file of ours",
++                self.display_path().display(),
++                name
++            )));
++        }
++        let f = File::from(fd);
++        f.set_len(0)?;
++        Ok(f)
++    }
++
++    /// Create `name`, refusing any existing entry (symlink included).
++    pub fn create_new(&self, name: &str) -> io::Result<File> {
++        let cname = leaf_name(name)?;
++        let dir = self.open_dir()?;
++        let fd = openat(
++            dir.as_raw_fd(),
++            &cname,
++            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_NOCTTY,
++            0o600,
++        )
++        .map_err(|e| {
++            io::Error::new(
++                e.kind(),
++                format!("{}/{}: {}", self.display_path().display(), name, e),
++            )
++        })?;
++        Ok(File::from(fd))
++    }
++}
++
++/// An ancestor nobody but root (or the daemon's user) can rename entries in.
++fn check_ancestor(dir: &OwnedFd, at: &Path, euid: libc::uid_t) -> io::Result<()> {
++    let st = fstat(dir.as_raw_fd())?;
++    if (st.st_uid != 0 && st.st_uid != euid) || st.st_mode & 0o022 != 0 {
++        return Err(refuse(format!(
++            "{}: owner {} mode {:o}; an ancestor must be root-owned and not group/other-writable",
++            at.display(),
++            st.st_uid,
++            st.st_mode & 0o7777
++        )));
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++pub(crate) mod tests {
++    use super::*;
++    use std::fs;
++    use std::io::Write;
++    use std::os::unix::fs::{MetadataExt, PermissionsExt};
++    use std::sync::atomic::{AtomicUsize, Ordering};
++
++    /// A fresh anchor with the device layout `run/exynos-modem` below it; the
++    /// `run` ancestor exists (0755), the private directory does not yet.
++    pub(crate) struct Anchor {
++        pub root: PathBuf,
++    }
++
++    impl Anchor {
++        pub(crate) fn new(tag: &str) -> Anchor {
++            static N: AtomicUsize = AtomicUsize::new(0);
++            let root = std::env::temp_dir().join(format!(
++                "exynos_modem_scratch_{}_{}_{}",
++                tag,
++                std::process::id(),
++                N.fetch_add(1, Ordering::Relaxed)
++            ));
++            let _ = fs::remove_dir_all(&root);
++            fs::create_dir_all(root.join("run")).unwrap();
++            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
++            fs::set_permissions(root.join("run"), fs::Permissions::from_mode(0o755)).unwrap();
++            Anchor { root }
++        }
++
++        pub(crate) fn scratch(&self) -> ScratchDir {
++            ScratchDir::new(&self.root, "run/exynos-modem")
++        }
++
++        pub(crate) fn private(&self) -> PathBuf {
++            self.root.join("run/exynos-modem")
++        }
++
++        /// Outside the private directory, like a source mount would be.
++        pub(crate) fn outside(&self, name: &str, content: &[u8]) -> PathBuf {
++            let p = self.root.join(name);
++            fs::write(&p, content).unwrap();
++            p
++        }
++
++        fn make_private(&self) {
++            fs::create_dir(self.private()).unwrap();
++            fs::set_permissions(self.private(), fs::Permissions::from_mode(0o700)).unwrap();
++        }
++    }
++
++    impl Drop for Anchor {
++        fn drop(&mut self) {
++            let _ = fs::remove_dir_all(&self.root);
++        }
++    }
++
++    fn denied(r: io::Result<File>) -> bool {
++        r.is_err()
++    }
++
++    #[test]
++    fn device_path_is_run_exynos_modem() {
++        assert_eq!(
++            ScratchDir::runtime().display_path(),
++            PathBuf::from("/run/exynos-modem")
++        );
++    }
++
++    #[test]
++    fn creates_a_0700_directory_and_0600_file_inside_it() {
++        let a = Anchor::new("create");
++        let mut f = a.scratch().replace("rfs-nv_normal.bin").unwrap();
++        f.write_all(b"nv").unwrap();
++        drop(f);
++        let d = fs::metadata(a.private()).unwrap();
++        assert!(d.is_dir());
++        assert_eq!(d.mode() & 0o7777, 0o700);
++        let m = fs::symlink_metadata(a.private().join("rfs-nv_normal.bin")).unwrap();
++        assert!(m.file_type().is_file());
++        assert_eq!(m.mode() & 0o777, 0o600);
++        assert_eq!(
++            fs::read(a.private().join("rfs-nv_normal.bin")).unwrap(),
++            b"nv"
++        );
++        // Nothing else appeared anywhere below the anchor.
++        let mut all = Vec::new();
++        walk(&a.root, &mut all);
++        all.sort();
++        assert_eq!(
++            all,
++            vec![
++                a.root.join("run"),
++                a.private(),
++                a.private().join("rfs-nv_normal.bin")
++            ]
++        );
++    }
++
++    fn walk(p: &Path, out: &mut Vec<PathBuf>) {
++        for e in fs::read_dir(p).unwrap() {
++            let e = e.unwrap();
++            out.push(e.path());
++            if e.file_type().unwrap().is_dir() {
++                walk(&e.path(), out);
++            }
++        }
++    }
++
++    #[test]
++    fn reuse_truncates_only_our_private_file() {
++        let a = Anchor::new("reuse");
++        a.make_private();
++        let mut f = a.scratch().replace("rfs-nv_user.bin").unwrap();
++        f.write_all(b"previous longer content").unwrap();
++        drop(f);
++        let mut f = a.scratch().replace("rfs-nv_user.bin").unwrap();
++        f.write_all(b"new").unwrap();
++        drop(f);
++        assert_eq!(
++            fs::read(a.private().join("rfs-nv_user.bin")).unwrap(),
++            b"new"
++        );
++    }
++
++    #[test]
++    fn symlinked_file_is_refused_and_its_target_untouched() {
++        let a = Anchor::new("filelink");
++        a.make_private();
++        let victim = a.outside("nv_normal.bin", b"calibration");
++        std::os::unix::fs::symlink(&victim, a.private().join("rfs-nv_normal.bin")).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_normal.bin")));
++        assert!(denied(a.scratch().create_new("rfs-nv_normal.bin")));
++        assert_eq!(fs::read(&victim).unwrap(), b"calibration");
++        // A dangling symlink must not create its target either.
++        let ghost = a.root.join("created-through-link");
++        std::os::unix::fs::symlink(&ghost, a.private().join("rfs-nv_user.bin")).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_user.bin")));
++        assert!(!ghost.exists());
++    }
++
++    #[test]
++    fn hard_link_to_another_file_is_refused_without_truncation() {
++        let a = Anchor::new("hardlink");
++        a.make_private();
++        let victim = a.outside("persist", b"keep me");
++        fs::set_permissions(&victim, fs::Permissions::from_mode(0o600)).unwrap();
++        fs::hard_link(&victim, a.private().join("rfs-nv_protected.bin")).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_protected.bin")));
++        assert_eq!(fs::read(&victim).unwrap(), b"keep me");
++    }
++
++    #[test]
++    fn fifo_directory_and_shared_file_are_refused() {
++        let a = Anchor::new("types");
++        a.make_private();
++        let fifo = cstr(a.private().join("rfs-nv_normal.bin").as_os_str().as_bytes()).unwrap();
++        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
++        // Returns at once (no reader), instead of blocking the RFS thread.
++        assert!(denied(a.scratch().replace("rfs-nv_normal.bin")));
++        fs::create_dir(a.private().join("rfs-nv_user.bin")).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_user.bin")));
++        let shared = a.private().join("rfs-nv_protected.bin");
++        fs::write(&shared, b"group readable").unwrap();
++        fs::set_permissions(&shared, fs::Permissions::from_mode(0o644)).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_protected.bin")));
++        assert_eq!(fs::read(&shared).unwrap(), b"group readable");
++    }
++
++    #[test]
++    fn symlinked_private_directory_is_refused() {
++        let a = Anchor::new("dirlink");
++        let elsewhere = a.root.join("elsewhere");
++        fs::create_dir(&elsewhere).unwrap();
++        fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o700)).unwrap();
++        std::os::unix::fs::symlink(&elsewhere, a.private()).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_normal.bin")));
++        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
++    }
++
++    #[test]
++    fn symlinked_ancestor_is_refused() {
++        let a = Anchor::new("ancestorlink");
++        let real = a.root.join("real-run");
++        fs::create_dir(&real).unwrap();
++        fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).unwrap();
++        fs::remove_dir(a.root.join("run")).unwrap();
++        std::os::unix::fs::symlink(&real, a.root.join("run")).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_normal.bin")));
++        assert_eq!(fs::read_dir(&real).unwrap().count(), 0);
++    }
++
++    #[test]
++    fn writable_ancestor_is_refused() {
++        let a = Anchor::new("ancestormode");
++        fs::set_permissions(a.root.join("run"), fs::Permissions::from_mode(0o1777)).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_normal.bin")));
++        assert!(!a.private().exists());
++    }
++
++    #[test]
++    fn existing_open_directory_is_refused_not_repaired() {
++        let a = Anchor::new("dirmode");
++        fs::create_dir(a.private()).unwrap();
++        fs::set_permissions(a.private(), fs::Permissions::from_mode(0o755)).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_normal.bin")));
++        assert_eq!(fs::metadata(a.private()).unwrap().mode() & 0o7777, 0o755);
++        assert_eq!(fs::read_dir(a.private()).unwrap().count(), 0);
++    }
++
++    #[test]
++    fn foreign_owner_is_refused() {
++        // Needs root to hand a file or directory to another user (the
++        // pinned test container runs as root).
++        if unsafe { libc::geteuid() } != 0 {
++            eprintln!("skipped: not root");
++            return;
++        }
++        let a = Anchor::new("owner");
++        a.make_private();
++        let f = a.private().join("rfs-nv_normal.bin");
++        fs::write(&f, b"theirs").unwrap();
++        fs::set_permissions(&f, fs::Permissions::from_mode(0o600)).unwrap();
++        std::os::unix::fs::chown(&f, Some(65534), Some(65534)).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_normal.bin")));
++        assert_eq!(fs::read(&f).unwrap(), b"theirs");
++        std::os::unix::fs::chown(a.private(), Some(65534), Some(65534)).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_user.bin")));
++        std::os::unix::fs::chown(a.private(), Some(0), Some(0)).unwrap();
++        std::os::unix::fs::chown(a.root.join("run"), Some(65534), Some(65534)).unwrap();
++        assert!(denied(a.scratch().replace("rfs-nv_user.bin")));
++        assert!(!a.private().join("rfs-nv_user.bin").exists());
++    }
++
++    #[test]
++    fn create_new_refuses_existing_names() {
++        let a = Anchor::new("excl");
++        let mut f = a.scratch().create_new("modem_crash_1.json").unwrap();
++        f.write_all(b"{}").unwrap();
++        drop(f);
++        assert!(denied(a.scratch().create_new("modem_crash_1.json")));
++        assert_eq!(
++            fs::read(a.private().join("modem_crash_1.json")).unwrap(),
++            b"{}"
++        );
++    }
++
++    #[test]
++    fn names_must_stay_inside_the_directory() {
++        let a = Anchor::new("names");
++        for bad in ["", ".", "..", "../escape", "a/b", "/abs"] {
++            assert!(denied(a.scratch().replace(bad)), "{:?}", bad);
++            assert!(denied(a.scratch().create_new(bad)), "{:?}", bad);
++        }
++        assert!(!a.root.join("escape").exists());
++        assert!(denied(ScratchDir::new(&a.root, "../x").replace("f")));
++        assert!(denied(ScratchDir::new(&a.root, "").replace("f")));
++    }
++}
