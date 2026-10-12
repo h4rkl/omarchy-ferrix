@@ -1358,9 +1358,22 @@ Limits:
 - Covered offline by `just pixel-9a-s5300-nv-metadata-test`
   (`tools/pixel-9a/tests/s5300-nv-metadata.sh`). The test runs the real guest
   body against stubbed sysfs, loop, mount, and stat, and runs the host through
-  the real CDC-ACM transport against a fake guest. This is not physical
-  evidence. Physical results belong in issue #1, this README, and
-  `docs/status.md` only after a reviewed exact-device run.
+  the real CDC-ACM transport against a fake guest. This is offline evidence.
+
+Physical result, 2026-10-12, exact `google-pixel-9a-tegu-gxq96-mp1-0`:
+the read-only preflight passed on the still-booted `674157b` image and pinned
+6.1.124 kernel. The accepted mount service matched, `efs` resolved uniquely
+to an unmounted, unheld f2fs partition already block-read-only, and both
+modem services were absent from runlevels. The owner then approved one new
+per-unit metadata mount. That single run verified the read-only loop and
+`ro,norecovery,nosuid,nodev,noexec` mount contract. Both allowlisted names
+were regular files of exactly 524288 bytes (`0x80000`) and met the TOC
+minimum. It unmounted and detached cleanly; post-check and write-counter
+checks reported `anomalies=none` and `mount_observation=no-write-observed`.
+The ignored transcript is under `out/pixel-9a/s5300-nv-metadata/`. No NV
+contents were opened or retained, and no CP node or service was started.
+This closes the metadata-size question only. The loop barrier cannot rule
+out other writers, and file size does not prove CP firmware acceptance.
 
 ## Audio route
 

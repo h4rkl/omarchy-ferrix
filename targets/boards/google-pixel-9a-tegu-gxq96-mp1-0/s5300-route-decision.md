@@ -230,8 +230,11 @@ observation is captured; later stages never imply earlier ones.
    only `efs`, through the unchanged #34 read-only loop and behind its own
    per-run gate, and reports only the presence, type, and size of
    `nv_normal.bin` and `nv_protected.bin` against `0x80000`. Its offline
-   tests pass; it has not run on the device. `cpsha` and the device-tree
-   identity values remain unchecked.
+   tests pass. On 2026-10-12 its one owner-approved exact-device run found
+   both files regular and exactly `0x80000` bytes, with the loop barrier
+   verified, clean teardown, and no reported write anomaly. This meets the
+   metadata-size gate only; firmware acceptance is unproved. `cpsha` and
+   the device-tree identity values remain unchecked.
 1. **E1 inventory** (above).
 2. **CP boot.** Start manually, not from the default runlevel, so a
    CP-crash panic cannot boot-loop:
