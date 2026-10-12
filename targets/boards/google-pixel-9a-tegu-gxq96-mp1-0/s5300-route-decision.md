@@ -141,7 +141,9 @@ Expected for GO on A:
   compatible enough to justify a bounded runtime test; E0 cannot prove byte
   equivalence on this device.
 - RFS NV writes and crash records go only under `/tmp`; source mounts are
-  opened read-only. Confirm the runtime `/tmp` mount before S2.
+  opened read-only. Confirm the runtime `/tmp` mount before S2. (Issue #81:
+  patch 0003 moves both to the private `/run/exynos-modem`; see
+  [`s5300-scratch-dir.md`](s5300-scratch-dir.md).)
 
 Switch to B if CPIF boot needs undefined userspace data or sequencing.
 
@@ -204,8 +206,10 @@ observation is captured; later stages never imply earlier ones.
    for [f2fs](https://docs.kernel.org/filesystems/f2fs.html)); a plain `ro`
    ext4 mount can replay a dirty journal and write to the device. Refuse an
    unknown filesystem type. Confirm `exynos-modem` opens source mounts
-   read-only and writes NV sinks and crash records only under `/tmp`; check
-   that path's runtime mount before S2. A pinned 6.1.124 source review found
+   read-only and writes NV sinks and crash records only under
+   `/run/exynos-modem` (patch 0003, [`s5300-scratch-dir.md`](s5300-scratch-dir.md);
+   code and offline tests only); check that directory's runtime backing,
+   owner, and mode read-only before S2. A pinned 6.1.124 source review found
    that these options leave orphan-cleanup and error-superblock writes
    possible on both filesystems. Only a read-only device skips them;
    `BLKROSET` alone warns about writes rather than failing them. A loop attached with

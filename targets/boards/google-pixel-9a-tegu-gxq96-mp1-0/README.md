@@ -433,6 +433,11 @@ workflow alone.
   patches behind an explicit `--kernel-backend google-kleaf-cpif`; offline
   tested, not selected by any init script, not runtime evidence):
   [`s5300-cpif-adapter.md`](s5300-cpif-adapter.md)
+- S5300 daemon scratch directory for issue #81 (hash-pinned `exynos-modem`
+  patch moving NV sinks and crash records from `/tmp` to a private
+  `/run/exynos-modem`; offline tested; device backing and permissions
+  unverified; not runtime evidence):
+  [`s5300-scratch-dir.md`](s5300-scratch-dir.md)
 
 The target-local postmarketOS `device-google-tegu` package and the typed
 Ferrix adapter composition are now checked in under `pmos/device-google-tegu/`

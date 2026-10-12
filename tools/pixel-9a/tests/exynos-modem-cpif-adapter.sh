@@ -1,6 +1,7 @@
 #!/bin/sh
-# Offline proof of the target-local google-kleaf-cpif adapter patches for the
-# pinned exynos-modem source (issue #1, s5300-cpif-adapter.md). No phone, USB,
+# Offline proof of the target-local google-kleaf-cpif adapter patches and the
+# private scratch-directory patch for the pinned exynos-modem source (issues #1
+# and #81, s5300-cpif-adapter.md, s5300-scratch-dir.md). No phone, USB,
 # ADB, Fastboot, SSH, or modem node is involved: the patched daemon is built
 # and tested on the host (or the pinned Linux Rust container) and its CLI is
 # exercised only through --print-config and refusals, which exit before any
@@ -27,7 +28,8 @@ archive_name="exynos-modem-$commit.tar.gz"
 archive_url="https://git.deusch.me/pixel-mainline/exynos-modem/archive/$commit.tar.gz"
 archive_sha256=324efde8cdef9c3e108cc92d9248556cdc8c0234e77a8a66218b49b978a9445f
 archive_sha512=fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952c9f60d476ccc0da635160ba5ee6aaca39c9920ab061e1272b2b3bcaa89ff4357c
-patches="0001-exynos-modem-google-kleaf-cpif-backend.patch 0002-sit-proxy-google-kleaf-cpif-nodes.patch"
+patches="0001-exynos-modem-google-kleaf-cpif-backend.patch 0002-sit-proxy-google-kleaf-cpif-nodes.patch 0003-exynos-modem-private-scratch-directory.patch"
+scratch_dir=/run/exynos-modem
 rust_image=rust@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f
 fails=0
 
@@ -92,13 +94,13 @@ cargo_stage() {
 	nl='
 '
 	expect 'exynos-modem default stays linux-google-tegu-wwan' \
-		"kernel_backend=linux-google-tegu-wwan${nl}boot_dev=/dev/umts_boot0${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/umts_oem1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}crash_dump_boot=enabled" \
+		"kernel_backend=linux-google-tegu-wwan${nl}boot_dev=/dev/umts_boot0${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/umts_oem1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}scratch_dir=/run/exynos-modem${nl}crash_dump_boot=enabled" \
 		"$em" --print-config
 	expect 'exynos-modem google-kleaf-cpif selects oem_ipc1 and disables dump-boot' \
-		"kernel_backend=google-kleaf-cpif${nl}boot_dev=/dev/umts_boot0${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/oem_ipc1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}crash_dump_boot=disabled" \
+		"kernel_backend=google-kleaf-cpif${nl}boot_dev=/dev/umts_boot0${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/oem_ipc1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}scratch_dir=/run/exynos-modem${nl}crash_dump_boot=disabled" \
 		"$em" --kernel-backend google-kleaf-cpif --print-config
 	expect 'exynos-modem google-kleaf-cpif accepts its explicit nodes and none' \
-		"kernel_backend=google-kleaf-cpif${nl}boot_dev=none${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/oem_ipc1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}crash_dump_boot=disabled" \
+		"kernel_backend=google-kleaf-cpif${nl}boot_dev=none${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/oem_ipc1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}scratch_dir=/run/exynos-modem${nl}crash_dump_boot=disabled" \
 		"$em" --boot-dev none --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/oem_ipc1 --kernel-backend google-kleaf-cpif --print-config
 	refuse 'the legacy OEM node on google-kleaf-cpif' \
 		"$em" --kernel-backend google-kleaf-cpif --oem-gems-dev /dev/umts_oem1 --print-config
@@ -138,7 +140,7 @@ check "static: recipe keeps the pinned archive hash" grep -q "^$archive_sha512  
 check "static: source manifest keeps the pinned archive" \
 	sh -c 'grep -q "^commit = \"$1\"$" "$3" && grep -q "^sha256 = \"$2\"$" "$3"' sh "$commit" "$archive_sha256" "$sources"
 patch_count=$(find "$pkg" -name '*.patch' | wc -l | tr -d ' ')
-check "static: no unlisted patch in the package" [ "$patch_count" -eq 2 ]
+check "static: no unlisted patch in the package" [ "$patch_count" -eq 3 ]
 for p in $patches; do
 	[ -f "$pkg/$p" ] || { check "static: $p exists" false; continue; }
 	check "static: recipe sha512 pins $p" grep -q "^$(sha 512 "$pkg/$p")  $p\$" "$pkg/APKBUILD"
@@ -164,6 +166,16 @@ for initd in exynos-modem.initd sit-proxy.initd; do
 done
 check "static: exynos-modem recipe installs no service or runlevel" \
 	sh -c '! grep -nE "rc-update|openrc|initd|install_if" "$1"' sh "$pkg/APKBUILD"
+# The daemon's scratch output goes to one root-owned 0700 directory. The init
+# script provisions exactly that directory; the daemon re-checks it itself.
+check "static: source manifest names the private scratch directory" \
+	grep -q "^scratch_directory = \"$scratch_dir\"\$" "$sources"
+check "static: exynos-modem.initd provisions the scratch directory root-owned 0700" \
+	grep -q "^	checkpath -d -m 0700 -o root:root $scratch_dir\$" "$device/exynos-modem.initd"
+check "static: nothing provisions the unused /var/lib/exynos-modem or /tmp sinks" \
+	sh -c '! cat "$1" "$2" | grep -v "^[[:space:]]*#" | grep -nE "/var/lib/exynos-modem|/tmp"' sh "$device/exynos-modem.initd" "$sources"
+check "static: 0003 adds no /tmp path literal" \
+	sh -c '! grep -E "^\+.*\"/tmp" "$1"' sh "$pkg/0003-exynos-modem-private-scratch-directory.patch"
 
 # --- archive, patch application, and cargo stage.
 out=${FERRIX_OUT_DIR:-"$root/out"}/pixel-9a/s5300-cpif-adapter
@@ -203,6 +215,17 @@ done
 leftovers=$(find "$src" \( -name '*.rej' -o -name '*.orig' \) | wc -l | tr -d ' ')
 check "patch: no rejects or backup files" [ "$leftovers" -eq 0 ]
 check "patch: workspace lockfile is unchanged" sh -c 'tar -xzOf "$1" exynos-modem/Cargo.lock | cmp -s - "$2/Cargo.lock"' sh "$archive" "$src"
+# Non-test daemon code (each file's #[cfg(test)] module is last): only the
+# scratch module may create, truncate, or append to a file, and no /tmp path
+# remains. Every other write-capable open is a device node opened without
+# O_CREAT, and the factory NV/modem sources stay File::open (read-only).
+find "$src/crates/exynos-modem/src" -name '*.rs' ! -name scratch.rs | sort | while read -r f; do
+	awk '/^#\[cfg\(test\)\]/{t=1} !t{print FILENAME ":" FNR ": " $0}' "$f"
+done >"$work/daemon-code.txt"
+check "patch: daemon code was collected" [ -s "$work/daemon-code.txt" ]
+check "patch: only scratch.rs can create, truncate, or append to a file" \
+	sh -c '! grep -E "create(_new)?\(true\)|truncate\(true\)|append\(true\)|fs::write|File::create|O_CREAT|O_TRUNC|O_APPEND" "$1"' sh "$work/daemon-code.txt"
+check "patch: the daemon names no /tmp path" sh -c '! grep -F "\"/tmp" "$1"' sh "$work/daemon-code.txt"
 [ "$fails" -eq 0 ] || { printf '%s check(s) failed; not building\n' "$fails"; exit 1; }
 
 cargo_home="$out/cargo-home"

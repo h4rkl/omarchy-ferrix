@@ -2,15 +2,18 @@
 # The source archive is external and immutable; no modem image, NV, UECAP, or
 # other device data is included in this repository.
 #
-# The two hash-pinned target-local patches add an explicit
+# The first two hash-pinned target-local patches add an explicit
 # `--kernel-backend google-kleaf-cpif` to exynos-modem and sit-proxy for Google's
 # Kleaf CPIF ABI (s5300-cpif-e0.md rows R1, R2, O1 and P1). The default backend
 # stays linux-google-tegu-wwan with unchanged behaviour, and nothing in this
-# package selects CPIF; see ../../s5300-cpif-adapter.md.
+# package selects CPIF; see ../../s5300-cpif-adapter.md. The third moves the
+# root daemon's NV write sinks and crash records out of /tmp into the private
+# /run/exynos-modem directory, opened without following symlinks, on both
+# backends; see ../../s5300-scratch-dir.md.
 maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 pkgname=exynos-modem
 pkgver=0.1.0_git20260731
-pkgrel=2
+pkgrel=3
 pkgdesc="Native-Linux userspace daemon and SIT proxy for the Exynos S5300"
 url="https://git.deusch.me/pixel-mainline/exynos-modem"
 arch="aarch64"
@@ -28,6 +31,7 @@ _cargo_target=aarch64-alpine-linux-musl
 source="$pkgname-$_commit.tar.gz::https://git.deusch.me/pixel-mainline/exynos-modem/archive/$_commit.tar.gz
 	0001-exynos-modem-google-kleaf-cpif-backend.patch
 	0002-sit-proxy-google-kleaf-cpif-nodes.patch
+	0003-exynos-modem-private-scratch-directory.patch
 	"
 builddir="$srcdir/$pkgname"
 
@@ -86,4 +90,5 @@ sha512sums="
 fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952c9f60d476ccc0da635160ba5ee6aaca39c9920ab061e1272b2b3bcaa89ff4357c  exynos-modem-634e8eb404c3fcf959dce6a0b0d97b33ba0fc346.tar.gz
 cce87dfd0e5cccb947186259819fab0db9dc7d36dc3a608005ef8dc944ffc5d31f12af70c6c10f0830f527810ce523913e481f13bdbb4d95193b7c8d5d1e5ab8  0001-exynos-modem-google-kleaf-cpif-backend.patch
 7a0a551808c7177899e44f7f82c4b14790764b744e6d995ff833e06fc8ad07495aaa20e2e2ab2984866dcc5f1552fae744dfc17beed178b35b71a2de41d518f7  0002-sit-proxy-google-kleaf-cpif-nodes.patch
+23da799811fe6c749186b44e039b1dd8d01f82a179d29d6b527ac163c9a2d657af2a293d90265c4a7f61d7888acdc5a5170884fae81b837e1311c6133623feed  0003-exynos-modem-private-scratch-directory.patch
 "
