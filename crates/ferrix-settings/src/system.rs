@@ -326,6 +326,13 @@ impl Model {
     pub fn output_route_label(&self) -> String {
         match self.core_ready() {
             None => self.core_label(),
+            Some(hw) if !hw.audio.available.contains(hw.audio.route) => {
+                if self.capability_status(Capability::Audio) == CapabilityStatus::Unsupported {
+                    "audio \u{b7} not supported on this target".to_owned()
+                } else {
+                    "output \u{b7} unavailable".to_owned()
+                }
+            }
             Some(hw) => format!("{} \u{b7} set by the audio service", hw.audio.route.name()),
         }
     }
@@ -699,6 +706,7 @@ mod tests {
         // until WirePlumber exposes a sink).
         let mut hw = preview_hardware();
         hw.audio.output = None;
+        hw.audio.available = ferrix_hardware_api::AudioRouteAvailability::default();
         let unsupported =
             preview_capabilities().with(Capability::Audio, CapabilityStatus::Unsupported);
         let mut m = Model::new();
@@ -713,6 +721,10 @@ mod tests {
             Some("audio \u{b7} not supported on this target")
         );
         assert_eq!(m.sound_state_name(), "no-output-level");
+        assert_eq!(
+            m.output_route_label(),
+            "audio \u{b7} not supported on this target"
+        );
 
         // Mocked audio without a level (the QEMU profile today).
         let mut m = Model::new();
@@ -721,6 +733,7 @@ mod tests {
             m.sound_block(),
             Err("volume \u{b7} not exposed by this target")
         );
+        assert_eq!(m.output_route_label(), "output \u{b7} unavailable");
 
         // A reported level stays controllable while the matrix still says
         // unsupported, and the caption keeps that status visible.

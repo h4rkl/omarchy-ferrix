@@ -139,8 +139,9 @@ fn preview_model(name: &str, target: &str) -> Option<Model> {
     }
     let mut capabilities = system::preview_capabilities();
     if absent && page == Page::Sound {
-        // An audio service without a mixer level on an unsupported target.
+        // An unsupported target with no output route or mixer level.
         hw.audio.output = None;
+        hw.audio.available = ferrix_hardware_api::AudioRouteAvailability::default();
         capabilities = capabilities.with(
             ferrix_hardware_api::Capability::Audio,
             ferrix_hardware_api::CapabilityStatus::Unsupported,
