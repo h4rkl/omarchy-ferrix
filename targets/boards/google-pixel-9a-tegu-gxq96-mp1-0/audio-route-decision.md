@@ -785,6 +785,10 @@ also needs all of the following:
 
 The owner decision does not substitute for the protection and gain evidence.
 
+Issue #90 reviewed the pinned AoC IPC and ALSA sources for a Linux protection
+route and a read-only protection-active signal. It found neither and stays
+**NO-GO**; see [`aoc-speaker-protection-research.md`](aoc-speaker-protection-research.md).
+
 ## Unknowns
 
 - Whether the pinned `aoc` tree builds an ALSA/ASoC machine driver for tegu,
