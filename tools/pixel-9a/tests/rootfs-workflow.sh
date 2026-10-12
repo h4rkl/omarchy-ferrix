@@ -550,7 +550,9 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 } >"$fake_bin/python3"
 {
 	printf '%s\n' '#!/bin/sh' 'set -eu' 'config=' 'action=' 'while [ "$#" -gt 0 ]; do' \
-		'  case "$1" in' '    --config) config=$2; shift 2 ;;' '    init|install|shutdown) action=$1; shift ;;' '    *) shift ;;' '  esac' \
+		'  case "$1" in' '    --config) config=$2; shift 2 ;;' '    init|install|shutdown) action=$1; shift ;;' \
+		'    --password|--password=*) echo "rootfs password reached pmbootstrap argv" >&2; exit 2 ;;' \
+		'    *) shift ;;' '  esac' \
 		'done' '[ -n "$config" ]' 'build_work=$(sed -n "s/^work = //p" "$config")' \
 		'aports=$(sed -n "s/^aports = //p" "$config")' \
 		'[ "$action" = shutdown ] && exit 0' \
@@ -561,6 +563,7 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'[ "$action" = init ] || [ "$action" = install ]' \
 		'if [ "$action" = shutdown ]; then exit 0; fi' \
 		'if [ "$action" = init ]; then mkdir -p "$build_work"; printf "%s\\n" 6 >"$build_work/version"; exit 0; fi' \
+		'[ "${FERRIX_PMB_ROOTFS_PASSWORD-}" = "${FAKE_ROOTFS_PASSWORD:-test-password}" ]' \
 		'[ -f "$aports/device/testing/exynos-modem/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/modemmanager-samsung-sit/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/device-google-tegu/s5300-userspace-sources.toml" ]' \
@@ -631,6 +634,10 @@ grep -q 'pmaports path is not a Git checkout' "$work/fresh-cache.err" ||
 [ -d "$work/cache" ] || fail 'rootfs build did not create its cache parent before mktemp'
 mkdir -p "$work/cache"
 
+# A generated one-time password may begin with "-". Use one for the successful
+# build below so argv handling regressions (issue #99) fail offline.
+leading_hyphen_password='-Ferrix-OTP-leading-hyphen-7f3a'
+
 # A clean tracked diff must not allow untracked pmaports inputs into the
 # archived source tree. The validator should stop before pmbootstrap runs.
 printf '%s\n' 'untracked source input' >"$pmaports/UNTRACKED-FIXTURE"
@@ -665,11 +672,18 @@ FERRIX_PIXEL9A_PRODUCT_DIR="$product" \
 FERRIX_PIXEL9A_FIRMWARE_DIR="$firmware" \
 FERRIX_PIXEL9A_PROFILE="$product/profile.toml" \
 FERRIX_PIXEL9A_ROOTFS_BUILD=I-understand-this-runs-pmbootstrap \
-FERRIX_PIXEL9A_ROOTFS_PASSWORD=test-password \
+FERRIX_PIXEL9A_ROOTFS_PASSWORD="$leading_hyphen_password" \
+FAKE_ROOTFS_PASSWORD="$leading_hyphen_password" \
 FERRIX_PIXEL9A_PMAPORTS_DIR="$pmaports" \
 FERRIX_PIXEL9A_PMAPORTS_COMMIT="$pmaports_commit" \
 FERRIX_PIXEL9A_ROOTFS_IMAGE_SIZE_MIB=256 \
-	"$script" build >/dev/null
+	"$script" build >"$work/build.out" 2>"$work/build.err" ||
+	fail "rootfs build rejected a leading-hyphen one-time password: $(tail -n 5 "$work/build.err")"
+# The one-time password must reach pmbootstrap only through the wrapper's
+# environment handoff and never appear in build output or generated artifacts.
+if grep -rF -- "$leading_hyphen_password" "$work/build.out" "$work/build.err" "$out" >/dev/null 2>&1; then
+	fail 'rootfs build exposed the one-time password in output or artifacts'
+fi
 
 rootfs_artifact="$out/pixel-9a/rootfs/tegu/rootfs.tar"
 rootfs_image="$out/pixel-9a/rootfs/tegu/rootfs.img"
@@ -822,6 +836,63 @@ cmp -s "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google
 	"$staged/usr/share/ferrix/pixel-9a/s5300-channels.toml" || fail 'staged S5300 channel metadata changed'
 cmp -s "$package_dir/s5300-userspace-sources.toml" \
 	"$staged/usr/share/ferrix/pixel-9a/s5300-userspace-sources.toml" || fail 'staged S5300 source metadata changed'
+
+# The pmbootstrap wrapper owns the password handoff. Run it against a stub
+# pmb package that, like pmbootstrap 3.11.1, logs argv while parsing: the
+# leading-hyphen password must reach the parsed install arguments, never argv,
+# the log, or the environment inherited by pmbootstrap subprocesses.
+wrapper="$root/tools/pixel-9a/pmbootstrap-rootfs.py"
+pmb_stub="$work/pmb-stub"
+mkdir -p "$pmb_stub/pmb/chroot" "$pmb_stub/pmb/parse"
+: >"$pmb_stub/pmb/chroot/__init__.py"
+printf '%s\n' 'def build(_chroot):' '    raise SystemExit("pmbootstrap initfs hook was not replaced")' \
+	>"$pmb_stub/pmb/chroot/initfs.py"
+{
+	printf '%s\n' 'import sys, types'
+	printf '%s\n' 'def arguments():'
+	printf '%s\n' '    print("$ " + " ".join(sys.argv))'
+	printf '%s\n' '    action = next(a for a in sys.argv[1:] if a in ("install", "shutdown"))'
+	printf '%s\n' '    return types.SimpleNamespace(action=action, password=None)'
+} >"$pmb_stub/pmb/parse/__init__.py"
+{
+	printf '%s\n' 'import os'
+	printf '%s\n' 'def main():'
+	printf '%s\n' '    import pmb.chroot.initfs, pmb.parse'
+	printf '%s\n' '    args = pmb.parse.arguments()'
+	printf '%s\n' '    pmb.chroot.initfs.build(None)'
+	printf '%s\n' '    inherited = "FERRIX_PMB_ROOTFS_PASSWORD" in os.environ'
+	printf '%s\n' '    with open(os.environ["FAKE_PMB_RESULT"], "w", encoding="utf-8") as result:'
+	printf '%s\n' '        result.write(f"{args.password}\n{inherited}\n")'
+	printf '%s\n' '    return 0'
+} >"$pmb_stub/pmb/__init__.py"
+wrapper_result="$work/pmb-wrapper.result"
+FERRIX_PMB_EXTERNAL_KERNEL=1 FERRIX_PMB_ROOTFS_PASSWORD="$leading_hyphen_password" \
+FAKE_PMB_RESULT="$wrapper_result" PYTHONPATH="$pmb_stub" PYTHONDONTWRITEBYTECODE=1 \
+	python3 "$wrapper" --details-to-stdout -y install --no-image >"$work/pmb-wrapper.out" 2>&1 ||
+	fail "pmbootstrap wrapper rejected a leading-hyphen password: $(tail -n 5 "$work/pmb-wrapper.out")"
+[ "$(sed -n 1p "$wrapper_result")" = "$leading_hyphen_password" ] ||
+	fail 'pmbootstrap wrapper did not pass the leading-hyphen password to install'
+[ "$(sed -n 2p "$wrapper_result")" = False ] ||
+	fail 'pmbootstrap wrapper left the password in the inherited environment'
+grep -Fx -- '$ pmbootstrap --details-to-stdout -y install --no-image' "$work/pmb-wrapper.out" >/dev/null ||
+	fail 'pmbootstrap wrapper changed the logged pmbootstrap argv'
+if grep -F -- "$leading_hyphen_password" "$work/pmb-wrapper.out" >/dev/null; then
+	fail 'pmbootstrap wrapper exposed the password in pmbootstrap output'
+fi
+if FERRIX_PMB_EXTERNAL_KERNEL=1 FERRIX_PMB_ROOTFS_PASSWORD="$leading_hyphen_password" \
+FAKE_PMB_RESULT="$wrapper_result" PYTHONPATH="$pmb_stub" PYTHONDONTWRITEBYTECODE=1 \
+	python3 "$wrapper" -y install "--password=$leading_hyphen_password" >"$work/pmb-wrapper-argv.out" 2>&1; then
+	fail 'pmbootstrap wrapper accepted a password in argv'
+fi
+if FERRIX_PMB_EXTERNAL_KERNEL=1 FAKE_PMB_RESULT="$wrapper_result" PYTHONPATH="$pmb_stub" PYTHONDONTWRITEBYTECODE=1 \
+	python3 "$wrapper" -y install >"$work/pmb-wrapper-missing.out" 2>&1; then
+	fail 'pmbootstrap wrapper accepted a missing rootfs password'
+fi
+if FERRIX_PMB_EXTERNAL_KERNEL=1 FERRIX_PMB_ROOTFS_PASSWORD="$leading_hyphen_password" \
+FAKE_PMB_RESULT="$wrapper_result" PYTHONPATH="$pmb_stub" PYTHONDONTWRITEBYTECODE=1 \
+	python3 "$wrapper" -y shutdown >"$work/pmb-wrapper-action.out" 2>&1; then
+	fail 'pmbootstrap wrapper supplied the password to a non-install action'
+fi
 
 if rg -n '^[[:space:]]*(adb|fastboot|pmbootstrap[[:space:]]+flasher)([[:space:]]|$)' "$script" >/dev/null; then
 	echo "FAIL: rootfs workflow contains device or flashing commands" >&2
