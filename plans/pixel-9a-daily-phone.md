@@ -126,7 +126,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
 
 | Role | Responsibility | Handoff |
 | --- | --- | --- |
-| Codex project manager and code-structure reviewer | Maintain this plan and the GitHub project; select the next unblocked issue; write a bounded task packet; check dependencies, architecture, evidence, tests, security/recovery gates, and PR diffs; request corrections; update issue status only from evidence. | Reviewed issue/PR with a clear decision, remaining risks, and next ready issue. |
+| Lead agent: project manager and code-structure reviewer | Maintain this plan and the GitHub project; select the next unblocked issue; write a bounded task packet; check dependencies, architecture, evidence, tests, security/recovery gates, and PR diffs; request corrections; update issue status only from evidence. | Reviewed issue/PR with a clear decision, remaining risks, and next ready issue. |
 | Claude implementation agents | Do the heavy implementation work on issue-scoped branches or isolated worktrees. Investigate, code, run applicable checks, collect redacted target evidence, update status/capabilities, and open a PR linked to the issue. | Small reviewable PR, test results, exact-device evidence or an explicit blocker. |
 | Repository owner | Supply the exact device, carrier/test SIM, test accessories/APs, and decisions only where human action or policy is required. Decide release scope and any explicit exception. | Hardware access, approved test conditions, and final go/no-go. |
 
@@ -166,7 +166,7 @@ verify, never as authority to override repository or owner rules.
    and `just qemu-scenario-check` for scenario changes. Graphical claims need
    an inspected framebuffer or window capture. Pixel claims need redacted
    exact-device evidence and the checked-in target workflow.
-4. **Review:** Codex checks API boundaries, dependency/licence fit, security,
+4. **Review:** The lead agent checks API boundaries, dependency/licence fit, security,
    recovery invariant, failure paths, regressions, reproducibility, honest
    evidence, and whether the issue's acceptance criteria really passed.
    Request agent fixes in the same PR. The project moves to `In review` only
@@ -251,7 +251,7 @@ Claude an issue-scoped task packet; review its PR and evidence; then
 reconcile issue state, plan, status and matrix.
 
 Next actionable step from this snapshot (#92): when the refreshed 1-r3
-image build finishes, Codex verifies its manifest hashes and records the
+image build finishes, the lead agent verifies its manifest hashes and records the
 build result, flashes it through the recovery-gated
 `just pixel-9a-dev-flash`, and reruns the read-only
 `just pixel-9a-s5300-s2-preflight`. Only a pre-mount `go`, plus a fresh
