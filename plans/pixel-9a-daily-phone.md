@@ -111,7 +111,9 @@ the project must not silently call that a fully functioning Pixel 9a.
   the package and exact-device ownership proof remain. [#88](https://github.com/h4rkl/omarchy-ferrix/issues/88)
   stages the CPIF service and explicit preflight. It passed offline checks;
   a fresh postmarketOS rootfs/image and physical package proof are next,
-  without starting CP. Runtime-skew review remains before a manual CP boot.
+  without starting CP. [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92)
+  owns the bounded manual CP boot workflow, opener-scan hardening, stop order,
+  and fresh owner decision after the staging proof.
   The source review also found that the Rust seven-byte FMT
   codec is described as a tegu SIT envelope without source support;
   [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) tracks correction

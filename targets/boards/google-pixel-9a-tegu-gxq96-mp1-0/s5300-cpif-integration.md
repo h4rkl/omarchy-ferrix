@@ -171,7 +171,8 @@ The intended manual order for a future S2/S3 run is therefore:
 `rc-service ferrix-s5300-mounts start` → `rc-service exynos-modem provision`
 → `preflight` → `arm` → `start` → (only after an S2 GO) `rc-service sit-proxy
 start`. That run needs its own checked-in, bounded workflow; this change does
-not perform or authorise it.
+not perform or authorise it. Issue #92 owns that workflow and its fresh
+owner decision, including opener-scan hardening and enforced stop order.
 
 ## Files
 
