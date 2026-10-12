@@ -1,5 +1,38 @@
 # Status
 
+## 2026-10-12 (Pixel 9a S5300 source-mount proof; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The image composed from `674157b` (seven-image manifest SHA-256
+  `03516f711bcb84d3f3c6029f29ee98ad6a31c7a1384f33a56cf6a164a662d407`)
+  passed the checked-in exact-device slot-B recovery preflight and flash,
+  then booted the pinned kernel and Ferrix Home. Inspected framebuffer
+  captures show Home, Settings, and Sound. The Sound page now labels Mute and
+  Output unsupported, as PR #70 intended. The read-only audio inventory
+  still shows Dummy Output and no `alsa_output.*` or `alsa_input.*` node;
+  audio remains unsupported. Captures and raw device records are ignored
+  under `out/`.
+- The final rootfs archive includes `util-linux-misc`, `losetup`,
+  `alsa-utils`, and the PipeWire provider, omits
+  `pulseaudio-wireplumber`, and installs a
+  `ferrix-s5300-mounts` service byte-identical to the checked-in one
+  (SHA-256 `b90d3b41ac175c93e5da5db0858327157da414bc9ca06d403c598108db22f74b`).
+  On the exact phone the read-only S5300 preflight found slot B, four
+  uniquely resolved and unmounted source partitions with no holders, a free
+  loop, the expected ext4/f2fs types, and both modem services out of every
+  runlevel. It reported `preflight_problems=none` and
+  `service_installed=matches-checkout`.
+- One separately confirmed `modem_b` ext4 proof and, after the owner's
+  specific approval, one each for per-unit f2fs `efs`, `persist`, and
+  `modem_userdata` completed. Each set its source block device read-only,
+  attached a whole-partition loop with `ro=1`, met the checked-in mount
+  contract, read only a directory-entry count, unmounted and detached,
+  and left no bound loop or mount. Every run reported
+  `write_barrier=verified`, `mount_observation=no-write-observed`, and
+  `anomalies=none`. Counter stability is not proof against another opener,
+  whole-disk I/O, or UFS passthrough. The workflow deliberately reports
+  `issue34_safety_gate=owner-review-required`; the owner has not yet
+  accepted that gate, and no CP boot was attempted. #34 stays open.
+
 ## 2026-10-12 (Settings Sound output label; physical observation and mock fix)
 
 - `physical:google-pixel-9a-tegu-gxq96-mp1-0`: the image composed from

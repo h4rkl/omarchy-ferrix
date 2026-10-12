@@ -961,10 +961,12 @@ under `FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE=mock`), is written to ignored
 `unknown`. Whether the kernel shows those flags in mountinfo is also unknown
 until an observed mount shows them.
 
-This workflow is offline fixture-tested only
-(`just pixel-9a-s5300-source-inventory-test`). The issue #25 pinned stock
-recovery proof is established; a physical run still needs a Ferrix boot on
-this exact device.
+The workflow passed its offline fixtures
+(`just pixel-9a-s5300-source-inventory-test`) and ran on the exact device
+after a recovery-gated Ferrix boot. The physical preflight found all four
+source roles uniquely resolved and unmounted, with no holders; `modem_b` is
+ext4 and `efs`, `persist`, and `modem_userdata` are f2fs. It reported
+`preflight_problems=none` and left the issue gate at `owner-review-required`.
 
 ## S5300 source mount proof (issue #34)
 
@@ -1176,10 +1178,16 @@ has no service or a different one, it is
 `mount_observation=no-write-observed` with
 `issue34_safety_gate=owner-review-required`. No run reports a passed gate,
 and the static check does not prove the service correct. Transcripts go to
-ignored `out/pixel-9a/s5300-mount-proof/`. The workflow is offline
-fixture-tested only (`just pixel-9a-s5300-mount-proof-test`); no mount has
-been run. The physical preflight and the owner-reviewed mount runs are
-still required before the issue #34 gate can be reviewed.
+ignored `out/pixel-9a/s5300-mount-proof/`. The workflow passed its offline
+fixtures (`just pixel-9a-s5300-mount-proof-test`). On the exact phone, one
+gated proof of each source role completed after the read-only preflight.
+The three per-unit proofs had explicit owner approval. Each set the source
+read-only, used a verified read-only whole-partition loop, mounted with the
+checked-in recovery-suppressed options, read a directory-entry count, then
+unmounted and detached without a reported write anomaly or leftover mount.
+The owner review of the final issue #34 safety gate is pending. The loop
+barrier does not cover a separate opener, whole-disk I/O, or UFS passthrough;
+the observed stable counters alone cannot establish that none occurred.
 
 ## Audio route
 
@@ -1273,11 +1281,14 @@ most 2 s of raw S16_LE 48 kHz stereo from `hw:0,8` to
 `/run/ferrix-mic-capture-proof/`, restores the route, measures the PCM, and
 deletes the file. `restore` (`FERRIX_PIXEL9A_MIC_RESTORE_CONFIRM`) puts that
 route back to `off` after a lost session. Exit codes, classification, and
-limits are in [`audio-route-decision.md`](audio-route-decision.md#microphone-capture-proof-workflow-issue-2-offline-plus-read-only-physical-preflight).
+limits are in [`audio-route-decision.md`](audio-route-decision.md#microphone-capture-proof-workflow-issue-2-physical-pcm-capture).
 Transcripts hold aggregates only, under ignored
 `out/pixel-9a/mic-capture-proof/`. The workflow is offline-tested (`just pixel-9a-mic-capture-proof-test`).
-Only one read-only preflight has run on the phone, and no capture has. No
-speaker test exists.
+The revised read-only preflight passed on the phone. One owner-approved 2 s
+capture returned 384000 PCM bytes: channel 0 varied at very low level and
+channel 1 was digital silence. This does not establish acoustic pickup. The
+temporary recording was deleted and the mic route restored. No speaker test
+exists.
 
 ## CDC-ACM guest probe transport (issue #52)
 
