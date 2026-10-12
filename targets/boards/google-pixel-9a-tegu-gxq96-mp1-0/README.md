@@ -1580,8 +1580,15 @@ cleanup, and owner audible confirmation separately. Audible confirmation
 always stays `owner-pending`. The design, guards, limits, and residual risks
 are in
 [`audio-route-decision.md`](audio-route-decision.md#a2dp-active-proof-workflow-issue-91).
-Offline tests: `just pixel-9a-a2dp-active-proof-test`. **It has not run on
-the phone.** A `play` run needs an explicit owner decision for that run. The
+Offline tests: `just pixel-9a-a2dp-active-proof-test`. On 2026-10-12
+(`physical:google-pixel-9a-tegu-gxq96-mp1-0`, 1-r3 dev image, workflow at
+`6c231b9`) two `play` runs reported `route-held-tone-delivered` with cleanup
+`clean`, and the owner heard the tone. Two earlier runs refused before any
+tone because the graph guard misparsed multi-line Module `args`; `6c231b9`
+fixed that, checked by a replay of live `pw-mon` output on the device's
+busybox awk. Details and limits are in
+[`audio-route-decision.md`](audio-route-decision.md#physical-play-runs-2026-10-12).
+Each `play` run needs an explicit owner decision for that run. The
 internal speaker and earpiece stay NO-GO, and `[audio]` stays `unsupported`.
 
 ## CDC-ACM guest probe transport (issue #52)

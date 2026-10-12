@@ -62,7 +62,9 @@ set -eu
 # block from another board) reports route_safety=unverified, runs one
 # read-only observation, and exits 7; codes 3 and 5 are dry-only. A guest that
 # refuses at its device-tree gate (exit 4) or before any tone (exit 6) keeps
-# that code.
+# that code. A play refusal after the guards started also reports each
+# guard's first reason (guard_trip_*, refusal_trips) in the transcript and
+# the refusal message.
 #
 # Internal speaker and earpiece playback stays NO-GO; nothing here routes to
 # them, and the guards stop the tone if anything could. capabilities.toml is
@@ -347,13 +349,26 @@ if [ "$(a active_complete)" = refused ]; then
 		[ -z "$p" ] || emit preflight_problems "$p"
 	fi
 	emit active_refusal "$(a active_refusal)"
+	# A play refusal after the guards started carries each guard's first
+	# reason; all four or none.
+	refusal_trips=''
+	n_trip=0
+	for g in graph pcm ctl live; do
+		v=$(a "guard_trip_$g")
+		[ -n "$v" ] || continue
+		n_trip=$((n_trip + 1))
+		emit "guard_trip_$g" "$v"
+		[ "$v" = none ] || refusal_trips="${refusal_trips:+$refusal_trips,}$g:$v"
+	done
+	[ "$n_trip" -eq 0 ] || { [ "$mode" = play ] && [ "$n_trip" -eq 4 ]; } || fail 'guest refused with an incomplete set of guard reasons' 5
+	[ -z "$refusal_trips" ] || emit refusal_trips "$refusal_trips"
 	[ -z "$(a sink_volume)" ] || emit sink_volume "$(a sink_volume)"
 	[ -z "$(a sink_mute)" ] || emit sink_mute "$(a sink_mute)"
 	emit tone_started no
 	emit audio_capability unsupported
 	cp "$transcript" "$out/$mode-latest.txt"
 	printf 'transcript=%s\n' "$transcript"
-	die "guest refused before any tone ($(a active_refusal))" 6
+	die "guest refused before any tone ($(a active_refusal)${refusal_trips:+; guard trips $refusal_trips})" 6
 fi
 [ "$session_status" -eq 0 ] && [ "$(a active_complete)" = yes ] || fail 'guest did not complete the active probe' 5
 [ -f "$work/pre.out" ] || fail 'malformed probe output (no in-session preflight block)' 5

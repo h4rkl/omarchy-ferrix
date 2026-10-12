@@ -33,6 +33,44 @@
   rootfs and does not run apk scripts. It does not create `/mnt/vendor`, so
   only a rootfs rebuilt with 1-r5 carries the directory.
 
+## 2026-10-12 (A2DP active proof play; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The session that operates the phone ran `play` four times on the exact
+  phone with the 1-r3 dev image. Transcripts stay in ignored
+  `out/pixel-9a/a2dp-active-proof/`.
+- 08:42:39 and 09:55:45 UTC: both refused before any tone
+  (`kernel-guard-tripped-before-tone`). The PCM and control guards read
+  clean. Read-only replays of live `pw-mon -N -a -p` output through
+  `guard_awk`, on the device's busybox awk with no audio, showed the cause:
+  the graph guard tripped `graph-observation-malformed` on normal startup
+  output. PipeWire Module objects print a quoted `args:` value over several
+  lines, and protocol-native's holds blank lines, which the guard took as
+  the end of the block.
+- Fixed in `6c231b9`. The guard consumes a quoted value that spans lines
+  up to its closing quote. It still trips if the quote is open at the next
+  event header or when pw-mon ends. A graph trip before the review now
+  refuses as `graph-guard-tripped-before-tone`, and every pre-tone refusal
+  carries the four `guard_trip_*` reasons. A live capture replayed through
+  the fixed guard on the device's busybox awk gave no trip (final
+  `no 0 no no none`).
+- 10:21:57 and 10:22:36 UTC, workflow at `6c231b9`: both
+  `route-held-tone-delivered`. Every `guard_trip_*` was `none`;
+  `route_safety=held`, `tone_delivery=linked-active`, two own links, and
+  our node seen removed. The final observation showed zero streams, both
+  speaker controls `off`, and a complete opener scan with zero playback
+  PCM openers, so cleanup was `clean`. The sink was LDAC at volume 0.30.
+  The owner confirmed by ear that the tone was audible ("i hear it").
+- Offline: `just pixel-9a-a2dp-active-proof-test` now runs 256 checks on
+  macOS, plus three mawk-only checks where the host awk is mawk (not run
+  here).
+  New checks replay the device's Module block shape through `guard_awk` and
+  cover pre-tone refusals that carry guard reasons.
+- Limits: one headset, one codec (LDAC), one boot; the owner's ear is the
+  only audibility evidence. This shows one guarded tone to one bound A2DP
+  sink, not general audio output. The internal speaker and earpiece stay
+  NO-GO, and `[audio]` stays `unsupported`; the capability matrix is
+  unchanged.
+
 ## 2026-10-12 (S5300 S2 active CP boot, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The owner approved the source mounts and one CP boot for this run. The
@@ -235,8 +273,8 @@
   both watched speaker controls `off`. The host issued one per-run
   decision, kept with the transcripts in ignored
   `out/pixel-9a/a2dp-active-proof/`.
-- `dry` starts no graph guard or poller, so `play`, the guards, and audio
-  output remain unverified on hardware. That decision has expired and is
+- `dry` starts no graph guard or poller, so this entry does not verify
+  `play`, the guards, or audio output (see the play entry above). That decision has expired and is
   unusable: it predates the volume gate, binding v2 and the recorded
   decision origin, so `play` refuses it. A `play` run needs a fresh `dry`
   with the current scripts and a fresh explicit owner decision. `[audio]`
@@ -246,7 +284,7 @@
   guard never arms and `play` refuses (`graph-guard-not-armed`), which is
   a checked refusal case. Check counts are in the workflow entry below.
 
-## 2026-10-12 (A2DP active proof workflow; offline/mock only, google-pixel-9a-tegu-gxq96-mp1-0)
+## 2026-10-12 (A2DP active proof workflow; mock, google-pixel-9a-tegu-gxq96-mp1-0)
 
 - `tools/pixel-9a/a2dp-active-proof.sh` implements the #91 active-proof
   gate as a separate exact-target workflow:
@@ -277,10 +315,9 @@
   also covers the device-tree serial.
 - Evidence is `mock` only: 236 fake-tool, fake-guest, and transport
   checks (`just pixel-9a-a2dp-active-proof-test`; 239 where the host awk
-  is mawk, which this macOS run did not exercise). It has **not** run on the
-  phone.
-  pw-mon output shape, kill latency, and false-trip behaviour on hardware
-  are unverified. The kernel-side guards are polled, not event-driven
+  is mawk, which this macOS run did not exercise). When this entry was
+  written it had not run on the phone; the physical `play` runs are in the
+  play entry above. Kill latency on hardware is still unmeasured. The kernel-side guards are polled, not event-driven
   (limits in `audio-route-decision.md`, "A2DP active proof workflow").
 - A `play` run needs a fresh `dry` run on the phone and an explicit owner
   decision for that run. Internal TAS playback remains NO-GO, and `[audio]`

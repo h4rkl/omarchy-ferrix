@@ -804,8 +804,8 @@ the [filter and WirePlumber contract](#a2dp-route-source-review-issue-91)
 below. A read-only v3 run on the exact phone reported
 `candidate-observed` with the connected headset. **The preflight has no
 playback mode.** Playback is the separate
-[active proof workflow](#a2dp-active-proof-workflow-issue-91), which has not
-run on the phone.
+[active proof workflow](#a2dp-active-proof-workflow-issue-91), which
+delivered two guarded tones on the phone on 2026-10-12.
 
 - **Transport and identity.** One CDC-ACM session sends the exact probe body.
   The guest's first action is the exact tegu device-tree gate (exit 4). The
@@ -1140,10 +1140,12 @@ kernel-side guards (see below).
 `tools/pixel-9a/a2dp-active-proof.sh` (guest body
 `a2dp-active-proof-remote.sh`) implements the gate above. It is fixture-,
 fake-tool- and fake-guest-tested (`just pixel-9a-a2dp-active-proof-test`,
-236 checks, 239 where the host awk is mawk). Only `dry` has run on the phone
-([physical dry runs](#physical-dry-runs-2026-10-12)); **`play` has not run.**
-No code, mock, or `dry` result is evidence of audible output, and `[audio]`
-stays `unsupported`.
+256 checks, plus three where the host awk is mawk). It has run on the phone in
+both modes ([physical dry runs](#physical-dry-runs-2026-10-12),
+[physical play runs](#physical-play-runs-2026-10-12)): two guarded tones were
+delivered to the bound A2DP sink with the route held and cleanup clean, and
+the owner heard them. No code, mock, or `dry` result is evidence of audible
+output, and `[audio]` stays `unsupported`.
 
 - **One composed session per mode.** The host sends a three-line header
   (`proof_mode`, a secret salt, the expected binding). Then come the v3
@@ -1363,6 +1365,52 @@ could not be used anyway: it records no origin, so `play` refuses it. A
 `play` run needs a fresh `dry` with the current scripts and a fresh explicit
 owner decision for that run.
 
+#### Physical play runs (2026-10-12)
+
+Evidence: `physical:google-pixel-9a-tegu-gxq96-mp1-0`, 1-r3 dev image, run
+by the session that operates the phone, each after a fresh `dry` and an
+explicit owner decision for that run. Transcripts stay in ignored
+`out/pixel-9a/a2dp-active-proof/`.
+
+- **08:42:39 and 09:55:45 UTC, refused before any tone.** Both reported
+  `kernel-guard-tripped-before-tone`; the PCM and control guards read
+  clean. Read-only replays of live `pw-mon -N -a -p` output through the
+  exact `guard_awk`, on the device's busybox awk and with no audio, found
+  the cause: the graph guard tripped `graph-observation-malformed` on
+  normal startup output. PipeWire Module objects print a quoted
+  `args: "{ ... }"` value over several lines, and protocol-native's
+  contains blank lines. The guard took a blank line for the end of the
+  block, so the first half had no `object.serial` and the rest arrived
+  outside any block.
+- **Fix, `6c231b9`.** A block line that opens a double-quoted value without
+  closing it now consumes the following lines verbatim up to the closing
+  quote. Those lines never end the block, never set a property or the
+  change mark, and never trip. A quote still open at the next event header
+  or when pw-mon ends trips `graph-observation-malformed`. Nothing else
+  was loosened. A graph trip before the review now refuses as
+  `graph-guard-tripped-before-tone`, and every pre-tone refusal after the
+  guards start carries `guard_trip_graph`, `_pcm`, `_ctl` and `_live`;
+  the host prints them as `refusal_trips`. Replaying a live capture
+  through the fixed guard on the device's busybox awk gave no trip and a
+  final `no 0 no no none`.
+- **10:21:57 and 10:22:36 UTC, workflow at `6c231b9`: both
+  `route-held-tone-delivered`.** Every `guard_trip_*` was `none`.
+  `route_safety=held`, `tone_delivery=linked-active`, two own links, and
+  our node seen removed after the tone. The final observation showed zero
+  streams, both speaker controls `off`, and a complete opener scan with
+  zero playback PCM openers: cleanup `clean`. The sink was LDAC at volume
+  0.30. The owner confirmed by ear that the tone was audible ("i hear it").
+
+This settles, for this headset and boot, the hardware unknowns listed
+below. pw-mon's output parses once multi-line values are handled, and the
+guard armed on its own client. The busybox awk handles FIFO lines as they
+arrive (the guard armed and acknowledged). The bound sink and its device
+made no change the guard disallows. PipeWire removed our objects within
+the bound. It does not
+measure kill latency, does not exercise a trip during a tone on hardware,
+and covers one headset, one codec and one boot. The owner's ear is the only
+audibility evidence. `[audio]` stays `unsupported`.
+
 #### Residual limits
 
 - **Detection, not prevention.** The graph guard sees every new object,
@@ -1380,8 +1428,10 @@ owner decision for that run.
   guard also sees a route for it. The final observation rereads both. A
   device node created with `mknod` in another namespace is seen only through
   `/proc/*/fd`.
-- **Unverified on hardware.** Three points are inferred from source and
-  fake tests, not observed:
+- **Hardware observations.** The points below were inferred from source
+  and fake tests. The two passing 2026-10-12 play runs observed all four,
+  for one headset, codec and boot only (the first needed the `6c231b9`
+  multi-line fix):
   - pw-mon's exact output, and that its own client carries
     `pipewire.sec.pid` when run as root against the uid-1000 socket;
   - the awk in the image (busybox `awk.c` `awk_getline` uses `safe_read`,
@@ -1395,8 +1445,8 @@ owner decision for that run.
     within the 5 s removal bound after `pw-cat` exits or is killed (if not,
     the run reads `unverified`).
 
-  A false trip reads `route-not-verified`, never a pass. The physical `dry`
-  runs do not touch any of these: `dry` starts no pw-mon, guard, or poller.
+  A false trip reads `route-not-verified` or a pre-tone refusal, never a
+  pass; the two refused play runs were such false trips.
 - **Sink volume is checked, not held.** The volume is read once, just before
   the tone, and never written. A change between that read and the end of
   the tone (headset buttons, AVRCP absolute volume, another client) is not
@@ -1406,9 +1456,10 @@ owner decision for that run.
   would expose Props, but it was not reviewed. With A2DP hardware volume
   the headset applies its own gain, so 0.50 bounds the requested level, not
   the sound pressure.
-- **Property-change trip is untested on hardware.** Whether the bound sink
-  changes its properties when a stream starts is unknown. If it does, `play`
-  trips with `bound-sink-props-changed` (fail closed, never a pass).
+- **Property-change trip is untested on hardware.** On the 2026-10-12
+  runs the bound LDAC sink did not change its properties when the stream
+  started. Whether other headsets or codecs do is unknown. If one does,
+  `play` trips with `bound-sink-props-changed` (fail closed, never a pass).
 - **No acoustic claim.** `linked-active` shows that PipeWire linked and ran
   the stream to the bound sink. Whether the headset played it audibly is for
   the owner to confirm by ear. It is recorded with the transcript, not by
@@ -1416,14 +1467,14 @@ owner decision for that run.
 
 The ordered next steps:
 
-1. On the phone, with the headset connected, run `dry` and review its
-   context. Done once on 2026-10-12 (above); that decision is not reusable,
-   so repeat it immediately before any `play`.
-2. Get an explicit owner decision for one `play` run, using the phrase from
-   that fresh `dry` run.
-3. Record the transcript's `route_safety`, `tone_delivery`, and `cleanup`,
-   and the owner's audible confirmation. Then decide whether `[audio]`
-   evidence is sufficient. Mock or code evidence never is.
+1. Done on 2026-10-12: fresh `dry`, an explicit owner decision per run,
+   and two `play` runs with `route_safety=held`, `tone_delivery=linked-active`,
+   cleanup `clean`, and the owner's audible confirmation (above).
+2. Every further `play` run still needs a fresh `dry` and its own owner
+   decision.
+3. Whether `[audio]` evidence is sufficient is a separate owner decision.
+   One headset, codec and boot does not make it so, and mock or code
+   evidence never does.
 
 The internal speaker and earpiece stay NO-GO under #83/#90. This workflow
 does not change that, and it never falls back to them.
@@ -1476,7 +1527,8 @@ them as WirePlumber's BlueZ source loopback, and probe v3 observed exactly
 that bound pair on the phone. The
 [active proof workflow](#a2dp-active-proof-workflow-issue-91) is now checked
 in and offline-tested. Its `dry` mode refused safely with the headset
-disconnected and passed with it connected on the exact phone; `play` has not
-run. Its next step is a fresh `dry`, then an explicit owner decision for one
-`play` run. Keep `[audio]` unsupported until an audible output route and its
-routing are proved.
+disconnected and passed with it connected on the exact phone. After the
+`6c231b9` guard fix, two `play` runs delivered a guarded tone to the bound
+A2DP sink with the route held and cleanup clean, and the owner heard it.
+That is one headset, one codec and one boot. Keep `[audio]` unsupported
+until the owner decides the output evidence is sufficient.
