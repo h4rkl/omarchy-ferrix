@@ -5,9 +5,10 @@
 #
 # Nothing here opens a CPIF character device. Opening /dev/umts_boot0 or
 # /dev/umts_ipc* runs the link's init_comm hook, so /dev paths are touched only
-# by shell file tests (-e -L -c) and stat(2), and open files only by stat(2)
-# through the /proc/<pid>/task/<tid>/fd links. No per-unit file content is read: the modem image, NV files, and
-# cpsha are checked by stat(2) metadata only. The only programs run are
+# by shell file tests (-e -L -c) and stat(2), including stat through the
+# /proc/<pid>/task/<tid>/fd links. No CPIF device is opened. No per-unit file
+# content is read: the modem image, NV files, and cpsha are checked by
+# stat(2) metadata only. The only programs run are
 # sha256sum on installed package files, the util-linux probes that the
 # accepted ferrix-s5300-mounts verify path itself runs, and the two patched
 # binaries with --print-config, which resolve their CLI and exit before any
@@ -224,11 +225,12 @@ cpif_init_pidns='pid:[4026531836]'
 # mount namespace that reaches the same device counts, and every thread's fd
 # table is read. stat(2) never opens the file. Returns 2 if the scan could be
 # incomplete: this shell is outside the initial PID namespace, a live task's
-# fd directory cannot be listed, or a live fd cannot be stat'ed. A task or fd that is gone when it is
-# re-checked has exited or closed (process churn) and is skipped. The scan is
+# fd directory cannot be listed, or a live fd cannot be stat'ed. A task or fd
+# that is gone when re-checked has exited or closed (process churn) and is
+# skipped. The scan is
 # a snapshot: an open after a task was read is not seen, and SCM_RIGHTS fds in
 # flight or kernel-internal references are not visible at all
-# (s5300-cp-boot.md).
+# (s5300-cpif-integration.md).
 cpif_holders() {
 	[ "$(readlink "$cpif_proc/self/ns/pid" 2>/dev/null)" = "$cpif_init_pidns" ] || {
 		eerror "the opener scan must run in the initial PID namespace" >&2

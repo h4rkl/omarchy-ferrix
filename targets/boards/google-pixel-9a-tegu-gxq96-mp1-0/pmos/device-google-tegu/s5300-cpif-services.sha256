@@ -4,6 +4,6 @@
 df0a817bd0b52f9f9d8b9093e2f2b8e79e754f595146949fc9f6cbc9acaf73b5  /etc/init.d/sit-proxy
 b90d3b41ac175c93e5da5db0858327157da414bc9ca06d403c598108db22f74b  /etc/init.d/ferrix-s5300-mounts
 4d73041607f761ed11ed69926da73d0f78d1fdc5b0cc80482edb0b8de62f364a  /etc/init.d/modemmanager
-854c82b9d708057ddf62abb9a46bbd8563ef3dcb59396d4d5dc7080e70b8a686  /usr/lib/ferrix/s5300-cpif.sh
+06dc80324bb58c463371cfcf9493cf6e069d51fd075eab1a3ab9ea70d7b88347  /usr/lib/ferrix/s5300-cpif.sh
 e65776cdf8b5d6567185db201fe1d691a3d565c4da26426bf0a952f8d58f667e  /usr/share/ferrix/pixel-9a/s5300-userspace-sources.toml
 57fef587ee6af9f284bccfa87f446c2eb8328d9300f26c171112b336839baa55  /usr/lib/udev/rules.d/99-google-tegu-sit.rules

@@ -202,8 +202,8 @@ Remaining limits: the scan is a snapshot, so an open after a task was read
 is not seen. A later scan (for example `start_pre` after `arm`) narrows this
 window but does not close it. SCM_RIGHTS fds in flight, io_uring fixed files,
 mappings whose fd was closed, and kernel-internal references are not visible.
-The cost is one `stat` per task plus a slow path for failures, so it grows
-with the thread count. It has not been timed on the device.
+The cost is one `stat` per open descriptor plus a slow path for failures, so
+it grows with task and descriptor counts. It has not been timed on the device.
 
 ## Files
 
