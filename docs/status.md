@@ -1,5 +1,72 @@
 # Status
 
+## 2026-10-12 (S5300 S2 active CP boot, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The owner approved the source mounts and one CP boot for this run. The
+  lead ran the steps by hand over the CDC-ACM dev shell. No checked-in
+  active S2 workflow exists yet, and the blockers in
+  `s5300-s2-active-blockers.md` stay open.
+- Image: the 1-r3 dev bundle (`tegu-kleaf-dev-20261012T062930Z`; rootfs
+  from `0032a6b` with `device-google-tegu` 1-r3, `exynos-modem` r3 and
+  `modemmanager-samsung-sit` r3; kernel
+  `6.1.124-android14-11-ga4662a84a15f`) on slot B.
+- The pre-mount `just pixel-9a-s5300-s2-preflight` returned `go`. The
+  first `ferrix-s5300-mounts` start then failed before any mount, because
+  `/mnt/vendor` did not exist (`checkpath` creates only the leaf
+  directories). No loop was attached and nothing was mounted.
+- Recovery followed rule C6:
+  - a reboot;
+  - a one-off operator step on the device,
+    `install -d -m 0755 -o root -g root /mnt/vendor`;
+  - a pre-mount preflight, still `go`;
+  - a successful mounts start.
+
+  The package fix (`02eebc7`, APKBUILD installs `/mnt/vendor`) merged with
+  PR #113 and ships in `device-google-tegu` 1-r4.
+- All four sources (`modem_img` ext4; `efs`, `persist`, `modem_userdata`
+  f2fs) were mounted `ro,norecovery` on read-only loops. Each loop and
+  partition had `ro=1`, with BLKROSET set. The post-mount preflight
+  returned `go` with `check.sources=pass`.
+- `rc-service exynos-modem provision` created `/run/exynos-modem`
+  (root, 0700). The service `preflight` passed, then `arm` and `start` ran.
+  `start` returned at 08:34:26 UTC.
+- The CP completed a normal boot about 3 s after the start, by the kernel
+  log. `modem_state` was `ONLINE` at the first poll, 08:34:40 UTC (uptime
+  206 s). It was still `ONLINE` at the last sample, 08:48:31 UTC (uptime
+  1038 s), about 13.9 minutes later. All samples were on the same AP boot,
+  and the daemon was alive in every one.
+- Sampling was not continuous. Polls ran about every 45 s from 08:34:40 to
+  08:42:13 (11 samples), and there was one more sample at 08:48:31. The
+  S2 GO criterion "ONLINE ≥10 min, no panic" was met by these samples. The
+  other GO criterion, "RFS requests are served", could not be observed,
+  because the service sets no `output_log`. That remains a gap.
+- The kernel-log keyword hits (9, then 10 from 08:41) were all benign:
+  - CPIF `bootdump_*` open/ioctl lines from the normal boot sequence;
+  - `cmd_phone_start_handler: Set crash_reason type:65535`, the "none"
+    sentinel;
+  - one Wi-Fi `dhd_dump_mod_pkt_timer` line.
+
+  There were no crash, panic, silent-reset or watchdog lines. The
+  board-record section lists these signatures as known benign.
+- Teardown and the two findings:
+  - `sit-proxy` was already stopped. `exynos-modem` stop returned 0 and the
+    daemon exited, but the CP stayed `ONLINE` in six reads after the stop.
+    Stopping the daemon does not power down or reset the CP; only a reboot
+    returned it to `OFFLINE`.
+  - `ferrix-s5300-mounts` stop returned 0 and left no `/mnt/vendor` mount,
+    and the arm token was absent. But the four role loop devices stayed
+    attached (`autoclear=1`, `ro=1`, no holders, not mounted). Only a
+    reboot detached them.
+- After the reboot, the pre-mount preflight returned `go`: CP `OFFLINE`, no
+  vendor mount, no role-backed loop, `partition_ro_flag_since_boot=no`.
+- The run used the 1-r3 opener scan, from before the #107 positive control.
+  It reported `clean` at every preflight, but on this image that result was
+  not shown to detect a holder.
+- Nothing ran for SIM, carrier, ModemManager binding or `sit-proxy`. This
+  is S2 evidence only; S3 has not started. `[telephony]` and `[audio]`
+  remain `unsupported`. The transcripts and logs are ignored under
+  `out/pixel-9a/`.
+
 ## 2026-10-12 (S5300 S2 decision binding, issue #108; offline only, no physical claim)
 
 - The read-only `just pixel-9a-s5300-s2-preflight` now reports a redacted

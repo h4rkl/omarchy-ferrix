@@ -6,10 +6,12 @@ This is a read-only slice of issue #92 that must land before any manual CP
 boot. It adds a checked-in, bounded preflight that collects the facts a
 reviewer needs for a later one-shot S2 manual CP boot, and returns a
 machine-readable GO/NO-GO for those facts. **It does not boot the CP, start
-or arm a service, mount anything, or implement any active S2 step.** The owner
-has not authorised a CP boot. The implementation pass was offline; the PM
-subsequently ran the read-only preflight once on the exact phone. No mount,
-service start, CPIF node open, or CP boot was performed.
+or arm a service, mount anything, or implement any active S2 step.** The
+implementation pass was offline. The preflight itself has never mounted,
+started, armed or booted anything, or opened a CPIF node. Later, the owner
+approved one manual S2 run, which the lead performed by hand around this
+preflight. Its result is in
+[S2 active CP boot](#exact-device-s2-active-cp-boot-on-the-1-r3-image-2026-10-12).
 
 Route context: [`s5300-route-decision.md`](s5300-route-decision.md) (stage 2),
 [`s5300-cpif-integration.md`](s5300-cpif-integration.md) (services, library,
@@ -168,11 +170,148 @@ only the later S2 workflow can observe it.
 | Stale/partial mounts (pre-mount) | mountinfo, loop `backing_file`, holders | no `/mnt/vendor` mount, no role-backed loop, no holder | now |
 | Partial mounts (post-mount) | same | each destination exactly one read-only loop mount; one loop per role; BLKROSET set | **after mounts** |
 | Sources | `cpif_check_sources` | pass | **after mounts** |
-| Scratch provision, arm, token use, `start_pre` re-check, CP boot, logs, ONLINE ≥10 min, teardown | — | — | **active** (not implemented) |
+| Scratch provision, arm, token use, `start_pre` re-check, CP boot, logs, ONLINE ≥10 min, teardown | — | — | **active** (no checked-in workflow; one manual, owner-approved run, see below) |
 
 `partition_ro_flag_since_boot=yes` is informational. BLKROSET stays set
 until reboot after any earlier mount in this boot. It only tightens the
 barrier, but it shows that this boot is not fresh.
+
+### Exact-device S2 active CP boot on the 1-r3 image (2026-10-12)
+
+Evidence label: `physical:google-pixel-9a-tegu-gxq96-mp1-0`. The owner
+approved three steps for one run: the S5300 source mounts, the steps that
+follow them, and one CP boot. The lead ran each step by hand over the
+CDC-ACM dev shell, around this checked-in preflight. **No active S2 workflow
+is checked in.** This run does not close any blocker in
+[`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md). It answers
+some of their open questions on the device (see "Effect on the open
+blockers" below).
+
+Image: dev bundle `tegu-kleaf-dev-20261012T062930Z` on slot B. Its rootfs
+was built from `0032a6b` with `device-google-tegu` 1-r3, `exynos-modem` r3
+and `modemmanager-samsung-sit` r3. The kernel is
+`6.1.124-android14-11-ga4662a84a15f`. All times below are UTC.
+
+| Step | Time | Result |
+| --- | --- | --- |
+| Pre-mount preflight | 08:29 | `go` (AP uptime 54 min, not a fresh boot) |
+| `rc-service ferrix-s5300-mounts start` | 08:29 | **failed before any mount**: `checkpath` could not create `/mnt/vendor/modem_img` because `/mnt/vendor` did not exist. No role loop was attached and nothing was mounted. |
+| Recovery (rule C6) | 08:30–08:32 | Reboot. Then a one-off operator step on the device: `install -d -m 0755 -o root -g root /mnt/vendor`. This is not a checked-in workflow step. |
+| Pre-mount preflight | 08:32 | `go` |
+| `ferrix-s5300-mounts start` | 08:33 | rc 0, service `started` |
+| Post-mount preflight | 08:33 | `go`, `check.sources=pass`, `vendor_mounts=4`, `partition_ro_flag_since_boot=yes` |
+| `rc-service exynos-modem provision` | 08:33:53 | rc 0; `/run/exynos-modem` root:root 0700 |
+| `rc-service exynos-modem preflight` | 08:33 | rc 0 (no CPIF node opened) |
+| `arm`, then `start` | 08:34:08–08:34:26 | both rc 0; `modem_state` read `OFFLINE` as `start` returned |
+| Observation | 08:34:40–08:48:31 | `ONLINE` in every sample (below) |
+| Teardown | 08:49:01 | both stops rc 0; two findings (below) |
+| Reboot, pre-mount preflight | 08:53 | `go`: CP `OFFLINE`, no vendor mount, no role-backed loop, `partition_ro_flag_since_boot=no` |
+
+**Sources.** `modem_img` (ext4) and `efs`, `persist` and `modem_userdata`
+(f2fs) were each mounted read-only with `norecovery`, plus
+`nosuid,nodev,noexec`. Each was on its own loop. Every loop and every
+partition read `ro=1`, with BLKROSET set. Every role had one loop, no
+direct mount and no holder.
+
+**CP boot.** In the kernel log, the daemon opened `umts_boot0` and issued
+`IOCTL_POWER_ON`, then `IOCTL_START_CP_BOOTLOADER` (normal boot mode), then
+`IOCTL_COMPLETE_NORMAL_BOOTUP`, about 2.5 s after power-on. The kernel then
+logged `cmd_phone_start_handler`. `modem_state` was `ONLINE` at the first
+poll, 08:34:40 (uptime 206 s). It was still `ONLINE` at the last sample,
+08:48:31 (uptime 1038 s). That is about 13.9 minutes of samples from the
+same AP boot, with an unchanged boot identity. Every sample showed the
+daemon alive and the service `started`.
+
+Sampling was not continuous. A read-only host poll ran about every 45 s
+from 08:34:40 to 08:42:13 (11 samples). One more sample was taken at
+08:48:31. Nothing was sampled between those two times. With the same boot
+identity at both ends, an AP reset in that gap is ruled out. A brief CP
+state change in that gap is not ruled out.
+
+**S2 GO assessment** (route decision stage 2):
+
+- *ONLINE ≥10 min, no CP crash dump or AP panic*: **met**, within the
+  sampling limits above.
+- *RFS requests are served*: **not observed**. The `exynos-modem` service
+  sets no `output_log`, so no daemon output was kept. The CP reaching and
+  holding `ONLINE` is consistent with RFS working, but it is not evidence
+  of it. This stays an evidence gap (blocker 6, #109).
+
+**Known-benign kernel-log signatures.** The poll counted lines in the new
+kernel log that matched
+`crash|panic|silent reset|cp_fail|watchdog|cp crash|dump`. It found 9 hits,
+then 10 from 08:41. Every hit is one of these signatures. Future runs need
+not re-investigate them:
+
+| Signature | Why it matches | Classification |
+| --- | --- | --- |
+| `cpif: bootdump_open/_release/_ioctl: umts_boot0 …` (`IOCTL_HANDOVER_BLOCK_INFO`, `IOCTL_POWER_ON`, `IOCTL_START_CP_BOOTLOADER`, `normal boot mode`, `IOCTL_COMPLETE_NORMAL_BOOTUP`) | `dump` in the CPIF boot-device function names | normal CP boot sequence |
+| `cpif: cmd_phone_start_handler: Set crash_reason type:65535` | `crash` | `65535` is the "none" sentinel that the kernel sets at phone start; it is not a crash |
+| `[dhd][wlan]dhd_dump_mod_pkt_timer: Arm the pktcnt timer. reason=3` | `dump` | Wi-Fi driver, unrelated to the CP |
+
+No line reported a CP crash, a silent reset, a watchdog or an AP panic.
+This list is not a reviewed CPIF crash-signature list. That review remains
+#109 work. A new signature must still be investigated.
+
+**Teardown findings.** Each one needs its own follow-up issue.
+
+1. **Stopping the daemon does not stop the CP.** `sit-proxy` was already
+   stopped. `rc-service exynos-modem stop` returned 0, and 3 s later the
+   daemon was gone and the service `stopped`. `modem_state` then read
+   `ONLINE` in six consecutive reads. The checked-in service has no
+   `stop()` override, so OpenRC's default stop only signals the daemon.
+   The checked-in patches add no stop-time power-off or reset of the CP. A
+   reboot was required to return the CP to `OFFLINE`. Two consequences:
+   - every daemon stop leaves the CP running with no userspace;
+   - `cpif_modem_preflight` requires `OFFLINE`, so every re-arm after a
+     stop also needs a reboot.
+
+   This relates to findings F2 and F5 of the #109 design (PR #114), which
+   cover the daemon's own CP re-boot loop and the `RESET` and `OFFLINE`
+   states.
+2. **Role loops are not detached on stop.** `rc-service ferrix-s5300-mounts
+   stop` returned 0, unmounted all four destinations, and left no
+   `/mnt/vendor/*` mount. The arm token was absent. All four role loop
+   devices stayed attached, each with `autoclear=1`, `ro=1`, no holders and
+   no mount. A reboot detached them. `stop()` runs `losetup -d` on each loop
+   after its unmount and treats its exit status 0 as success. Possible
+   cause, not verified: the kernel's deferred detach. That path sets
+   autoclear instead of detaching while the loop is still open, and returns
+   0. Whatever the cause, the outcome does not match the documented "detach
+   that loop", and a start/stop cycle without a reboot uses up role loops
+   faster than expected.
+
+An ad-hoc holder grep before the mounts stop counted 2 processes. Both were
+`python3` holding `/dev/binderfs`: the pattern matched the substring `rfs`.
+Neither held a CPIF node or a `/mnt/vendor` file. The checked-in opener scan
+does not use that grep.
+
+**Effect on the open blockers.**
+
+- Blocker 2: on the device, `arm` worked on a stopped service. The token was
+  used once (absent after the run), and `stop` on a live pidfile daemon
+  returned 0. A failed or killed `start_pre`, and stop on a crashed daemon,
+  were not exercised.
+- Blocker 6: the CP does **not** return to `OFFLINE` after the daemon stops;
+  this is no longer unknown. Daemon output and RFS service are still not
+  observable.
+- Blocker 1 was not exercised: the failed start stopped before any mount.
+  Blockers 3–5 are unchanged.
+- The opener scans in this run used the 1-r3 library. That library predates
+  the #107 positive control. Each scan reported `clean`, but it was not
+  shown to be able to detect a holder.
+
+**Next.** First, a rebuilt 1-r4 image. It carries `/mnt/vendor` (`02eebc7`)
+and the #107 opener-scan control. Then a pre-mount preflight `go` with
+`opener_positive_control=detected`. S3 (`sit-proxy`, ModemManager, SIM)
+has not started. S3 planning waits on the owner review of the #109 design.
+Each mounts start and CP boot still needs a fresh owner decision.
+
+Not done in this run: anything for SIM or carrier, `sit-proxy`,
+ModemManager binding, and any write to a per-unit partition. `[telephony]`
+and `[audio]` remain `unsupported`. The raw shell log, poll output and
+preflight transcripts are ignored under `out/pixel-9a/`. This record
+contains no serial, IMEI, block device name, loop backing name or boot ID.
 
 ### Exact-device result on the rebuilt 1-r3 image (2026-10-12)
 
@@ -206,9 +345,10 @@ unique, unmounted, unheld and not loop-backed, and
 a mounts start. The run reported `cp_boot_authorized=no`.
 
 This GO is a pre-mount fact only. It does not authorise the mounts start or
-a CP boot. The owner has not given a decision for either, and
-[`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md) still blocks
-an active S2 workflow. The transcript and summary are ignored under
+a CP boot. The owner had not yet decided on either; the later, separately
+approved run is recorded above.
+[`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md) still blocks a
+checked-in active S2 workflow. The transcript and summary are ignored under
 `out/pixel-9a/s5300-s2-preflight/` (`20261012T073650Z`).
 
 ### Earlier exact-device result on the 1-r2 image
@@ -600,12 +740,16 @@ for a fail-closed active command; see
   automatically, because the service has no respawn by design.
 - Teardown, in this order and never forced: `sit-proxy` (not started in S2),
   then `exynos-modem` stop. Record `modem_state` after the stop without
-  forcing it; whether the CP returns to `OFFLINE` is unknown. Then require no
-  CPIF holder, run `ferrix-s5300-mounts` stop with its own verified,
-  non-forced unmount, require no `/mnt/vendor` mount and no role-backed
-  loop, and require the arm token to be absent. If any step refuses, stop and
-  reboot rather than escalate. After any teardown or reboot, re-run E1 and
-  this preflight.
+  forcing it. On 2026-10-12 the CP stayed `ONLINE` after the daemon
+  stopped, so a stop does not return the CP to `OFFLINE`. Only a reboot
+  does, and a later arm needs one. Then require no CPIF holder, and run
+  `ferrix-s5300-mounts` stop with its own verified, non-forced unmount.
+  Require no `/mnt/vendor` mount and the arm token to be absent. Record
+  the role-backed loops rather than require none: on 2026-10-12 they
+  stayed attached after a successful stop. If any step refuses, stop and
+  reboot rather than escalate. The teardown is complete only after the
+  reboot that clears the CP state and the loops. After any teardown or
+  reboot, re-run E1 and this preflight.
 - Panic or boot-loop handling: the start stays manual-only and the token
   lives on tmpfs, so a panic costs at most one reboot. A device that does not
   return needs the human to hold Volume Down + Power (AGENTS.md).

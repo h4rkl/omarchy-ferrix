@@ -36,7 +36,9 @@ produce, and the preflight compares it.
 Why no respawn on CPIF: the daemon already handles CP recovery itself
 (adapter, row R1). A daemon that exits should stay stopped until someone has
 looked at the kernel log and run the preflight again, rather than reopening
-`umts_boot0` every two seconds.
+`umts_boot0` every two seconds. A stopped daemon does not stop the CP: on
+the exact device a clean stop left it `ONLINE` until a reboot (see
+Limitations).
 
 ## Runlevel and dependency policy
 
@@ -349,10 +351,12 @@ abuild/pmbootstrap packaging, and anything on the device.
   fork's source; it was not guessed.
 - **No log capture.** As before, the services set no `output_log`. An S2
   workflow must collect the daemon's output and `dmesg` itself.
-- **Re-arming after a crash.** If the daemon exits after the CP left
-  `OFFLINE`, the next preflight refuses until `modem_state` is `OFFLINE`
-  again. That is deliberate, but recovering from a mid-boot CP may need a
-  reboot.
+- **Re-arming after a crash or a stop.** If the daemon exits after the CP
+  left `OFFLINE`, the next preflight refuses until `modem_state` is
+  `OFFLINE` again. That is deliberate. On the exact device (2026-10-12, S2
+  run), a clean `rc-service exynos-modem stop` also left the CP `ONLINE`.
+  The service does not power down or reset the CP, so any re-arm after
+  a CP boot currently needs a reboot.
 - The `cp_interface` driver name, `cpif` class, and kernel release are pinned
   to the values E1 observed on the `674157b` image. A rebuilt Kleaf kernel
   with any difference is refused, not accepted.

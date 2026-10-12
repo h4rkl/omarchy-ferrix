@@ -259,6 +259,11 @@ observation is captured; later stages never imply earlier ones.
      served.
    - STOP: repeated crash, handshake timeout, or AP reset. Capture dmesg and
      the boot log, then re-check U4.
+   - Observed 2026-10-12 (`physical:google-pixel-9a-tegu-gxq96-mp1-0`, one
+     manual owner-approved run on 1-r3): `ONLINE` for about 13.9 minutes of
+     samples, with no panic. RFS service was not observable (no daemon
+     output). Stopping the daemon left the CP `ONLINE`. See
+     [`s5300-s2-preflight.md`](s5300-s2-preflight.md#exact-device-s2-active-cp-boot-on-the-1-r3-image-2026-10-12).
 3. **Control path.** Start `sit-proxy` on `umts_ipc0/1`, then the patched
    ModemManager.
    - GO: `mmcli -L` lists one modem using the `samsung-sit` plugin; IMEI is
