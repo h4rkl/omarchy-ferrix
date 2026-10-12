@@ -118,7 +118,7 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   and the
   [board record](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-preflight.md#exact-device-s2-active-cp-boot-on-the-1-r3-image-2026-10-12).
   No SIM, carrier, ModemManager or `sit-proxy` step has run. An offline review
-  ([blockers](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-active-blockers.md))
+  ([blockers](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-preflight.md#s5300-s2-active-workflow-blocker-analysis-issue-92))
   found that a checked-in active S2 workflow cannot yet be made fail-closed. Its follow-ups
   are [#107](https://github.com/h4rkl/omarchy-ferrix/issues/107) (opener-scan
   positive control; offline fix merged in PR #113, device check pending a

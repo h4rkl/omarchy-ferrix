@@ -11,19 +11,31 @@ Target: `google-pixel-9a-tegu-gxq96-mp1-0` (`tegu` / `GXQ96` / `MP1.0`) only.
 > needs its own review, and any physical step needs its own owner decision.
 
 Scope: blockers 2, 5 and 6 of
-[`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md) (parent #92).
+[`s5300-s2-active-blockers.md`](s5300-s2-preflight.md#s5300-s2-active-workflow-blocker-analysis-issue-92) (parent #92).
 Blocker 3 (opener scan) is #107, blocker 4 (identity and decision binding)
 is #108, and blocker 1 (mounts rollback) is #110. This design consumes the
 #108 record contract but does not change it.
 
 Inputs read for this design: [`s5300-route-decision.md`](s5300-route-decision.md)
 (S2 GO/STOP), [`s5300-s2-preflight.md`](s5300-s2-preflight.md),
-[`s5300-cpif-integration.md`](s5300-cpif-integration.md),
-[`s5300-cpif-adapter.md`](s5300-cpif-adapter.md),
-[`s5300-cpif-e0.md`](s5300-cpif-e0.md), the four `pmos/device-google-tegu/`
+[`s5300-cpif-integration.md`](s5300-route-decision.md#s5300-google-kleaf-cpif-service-integration-issue-88),
+[`s5300-cpif-adapter.md`](s5300-route-decision.md#s5300-google-kleaf-cpif-userspace-adapter-issue-1),
+[`s5300-cpif-e0.md`](s5300-source-evidence.md#s5300-e0-device-free-cpif-abi-comparison-issue-1), the four `pmos/device-google-tegu/`
 files named below, [`acm-probe.py`](../../../tools/pixel-9a/acm-probe.py),
 and the #108 binding design on branch `issue108-s2-binding` (not on `main`
 when this was written; cited by branch path).
+
+> **Line citations after #119 (2026-10-13).** `doc.md:N` citations into
+> other S5300 documents point at those files as written for this design
+> (commit `841aed7`, PR #114); read them with
+> `git show 841aed7:targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/<doc>.md`.
+> Since then the adapter, scratch-directory and CPIF integration documents
+> have moved into [`s5300-route-decision.md`](s5300-route-decision.md#document-map),
+> E0 into [`s5300-source-evidence.md`](s5300-source-evidence.md#document-map),
+> and the blocker analysis into
+> [`s5300-s2-preflight.md`](s5300-s2-preflight.md#document-map), so their
+> current line numbers differ. This design document itself is unchanged
+> apart from this note and its link targets.
 
 Citation forms: `exynos-modem.initd:175` means
 `pmos/device-google-tegu/exynos-modem.initd` line 175 in this directory;
