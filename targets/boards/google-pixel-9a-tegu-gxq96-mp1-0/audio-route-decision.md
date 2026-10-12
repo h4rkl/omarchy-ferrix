@@ -797,7 +797,8 @@ route and a read-only protection-active signal. It found neither and stays
 [safe alternative](#safe-alternative) above: playback proof through a
 Bluetooth A2DP sink, never the internal TAS2572 speakers or earpiece. It is
 fixture-, fake-tool- and fake-guest-tested
-(`just pixel-9a-a2dp-output-preflight-test`). **It has not run on the phone.**
+(`just pixel-9a-a2dp-output-preflight-test`). One read-only preflight also
+ran on the exact phone on 2026-10-12 and returned the expected blocked result.
 **No playback mode exists.** The
 [active-proof gate](#a2dp-active-proof-gate) below lists what is missing.
 
@@ -870,17 +871,17 @@ fixture-, fake-tool- and fake-guest-tested
   the exact board, 5 malformed output. Every run also prints
   `active_proof=not-implemented`, `active_gate=closed`, and
   `audio_capability=unsupported`. `capabilities.toml` is never edited.
-- **Expected result on the current image.** The read-only inventory for #91
-  found BlueZ, `ferrix-pipewire`, and `ferrix-audio` started, with
-  `pipewire-spa-bluez` installed. It also found no paired sink and no
-  `bluez_output` node. On that state the preflight is expected to report
-  `blocked` with `no-paired-audio-sink`,
+- **Exact-device result.** On the newly staged Kleaf image, the read-only
+  preflight found BlueZ 5.86-r2, PipeWire 1.6.8-r4, WirePlumber 0.5.15-r0,
+  `pipewire-spa-bluez` 1.6.8-r4, and `pipewire-tools` 1.6.8-r4. One powered
+  Bluetooth controller was present, but zero audio sinks were paired or
+  connected. The reachable PipeWire graph had one null sink, no ALSA or
+  BlueZ A2DP sink, and the default sink was null. Speaker controls remained
+  off; the complete playback-PCM opener scan found zero openers. The result
+  was `blocked` solely on `no-paired-audio-sink`,
   `connected-audio-sink-count-not-one`, and
-  `bluez-a2dp-sink-count-not-one`. This is the fake-guest model of that
-  state. It is not a physical run. The image may also lack `pw-cat`:
-  `pmbootstrap.cfg` does not list `pipewire-tools`, and whether a
-  dependency pulls it in is not checked here. The preflight would report
-  that as `pw-cat-missing`.
+  `bluez-a2dp-sink-count-not-one`. No playback or pairing ran. The redacted
+  transcript stays ignored under `out/pixel-9a/a2dp-output-preflight/`.
 
 ### A2DP active-proof gate
 
@@ -894,18 +895,20 @@ That cannot be shown offline:
    and its policy properties. Those properties include `node.dont-fallback`,
    `node.dont-reconnect`, `node.autoconnect`, and the target-object
    handling. It also matters whether the target is given as a serial or a
-   name. The on-image versions have not been recorded. Neither source nor
-   behaviour was reviewed for them. Guessing them would not be fail-closed.
+   name. The on-image versions are recorded above, but neither their source
+   nor behaviour was reviewed for this contract. Guessing them would not be
+   fail-closed.
 2. **The A2DP sink shape is unobserved.** No paired device has been seen on
    this image. The node-name format, the `api.bluez5.profile` value, and
    the address property are standard PipeWire spellings. They are not yet
    physical observations. The classifier is fail-closed on them: a
    different shape reads `bluez-other` or `inspect-failed`, which blocks.
-3. **Stimulus tool presence is unknown.** See `pw-cat-missing` above.
+3. **Stimulus tool presence is established, but routing is not.** The phone
+   has `pipewire-tools`; presence alone does not prove safe playback.
 
 What a later slice needs, in order:
 
-- **A physical preflight run.** It needs an owner-paired, connected,
+- **A candidate physical preflight run.** It needs an owner-paired, connected,
   A2DP-profile headset or speaker. Pairing goes through Ferrix Settings,
   and pairing keys stay on the device. No other Bluetooth audio device may
   be connected, and Android/Waydroid must not be playing. The run must
@@ -968,16 +971,16 @@ does not change that, and it never falls back to them.
 
 The read-only `audio-inventory.sh` and its mock tests are checked in. The
 AoC card and UCM profile were observed on the exact target. The revised
-preflight and one bounded capture have passed on the `674157b` image, but
-the very low channel-0 level and silent channel 1 do not establish acoustic
-pickup. The controlled-tone `acoustic` mode
-([above](#controlled-tone-acoustic-proof-workflow-issue-80)) is checked in
-and offline-tested; one run of it needs a separate owner decision. Its
-per-channel result also bears on the channel split. Recheck the
-PipeWire graph on the new image. Speaker playback stays blocked by the
+preflight and one bounded capture passed on the `674157b` image. A subsequent
+owner-approved controlled-tone `acoustic` run
+([above](#controlled-tone-acoustic-proof-workflow-issue-80)) detected the Mac
+speaker tone on channel 0 on the exact phone; channel 1 remained digital
+zero. This proves one controlled acoustic pickup, not calibrated sensitivity
+or call audio. Speaker playback stays blocked by the
 protection review above. For output, the read-only
 [A2DP preflight](#bluetooth-a2dp-output-preflight-issue-91) (#91) is
-offline-tested. A physical run needs an owner-paired A2DP device, and no
+offline-tested and returned the expected blocked result on the exact phone.
+The next preflight needs an owner-paired A2DP device, and no
 playback mode exists until its
-[active-proof gate](#a2dp-active-proof-gate) is closed. Keep `[audio]` unsupported until both an audible
-output route and actual acoustic microphone response are observed.
+[active-proof gate](#a2dp-active-proof-gate) is closed. Keep `[audio]`
+unsupported until an audible output route and its routing are proved.

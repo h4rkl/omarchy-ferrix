@@ -1,5 +1,21 @@
 # Status
 
+## 2026-10-12 (Bluetooth A2DP output preflight; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The checked-in read-only #91 preflight ran on the newly staged Kleaf image.
+  BlueZ 5.86-r2, PipeWire 1.6.8-r4, WirePlumber 0.5.15-r0,
+  `pipewire-spa-bluez` 1.6.8-r4, and `pipewire-tools` 1.6.8-r4 were installed.
+  One Bluetooth controller was powered, but no audio sink was paired or
+  connected. PipeWire was reachable with one null sink, no ALSA or A2DP
+  sink, and a null default. Speaker controls stayed off and a complete
+  playback-PCM opener scan found zero openers. The preflight returned
+  `blocked` for only the missing paired, connected, and A2DP sink conditions.
+  No pairing or playback ran. The aggregate transcript remains ignored under
+  `out/pixel-9a/a2dp-output-preflight/`.
+- An A2DP accessory, exact sink shape, explicit PipeWire routing contract,
+  bounded active workflow, owner decision, and audible proof remain pending.
+  Internal TAS playback remains NO-GO and `[audio]` stays `unsupported`.
+
 ## 2026-10-12 (controlled-tone microphone pickup; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - After the owner's separate one-run approval and documented Mac-speaker setup,

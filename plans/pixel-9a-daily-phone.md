@@ -84,7 +84,9 @@ the project must not silently call that a fully functioning Pixel 9a.
   AoC protection without Android HAL setup and output gain remain unknown.
   A separate Bluetooth A2DP output proof can advance #2 without driving TAS.
   [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) tracks that path;
-  the exact phone has the BlueZ and PipeWire components but no paired sink.
+  the read-only exact-phone preflight found the BlueZ and PipeWire components,
+  a powered controller, and a null default sink, but no paired or connected
+  audio sink. It made no audio or pairing changes.
   [#90](https://github.com/h4rkl/omarchy-ferrix/issues/90) reviewed the pinned
   public AoC source and found no Linux protection-active signal or documented
   default without Android HAL setup. Its decision remains **NO-GO**.
