@@ -82,8 +82,8 @@ looked at the kernel log and run the preflight again, rather than reopening
   No CPIF node is handed to ModemManager. Binding the SIT plugin to CPIF
   (or through the `sit-proxy` sockets) is S3 work and is **not** done here.
   ModemManager's own probing of the `cpif` class was not reviewed in the
-  pinned fork's source. The preflight's open-file check (below) will catch it
-  if ModemManager, or anything else, holds a CPIF node.
+  pinned fork's source. The preflight's open-file check (below) can detect a
+  direct `/dev` opener, subject to the issue #92 scan limitation.
 
 ## The google-kleaf-cpif preflight
 
@@ -91,8 +91,11 @@ The checks live in `pmos/device-google-tegu/ferrix-s5300-cpif.sh`, which is
 installed as `/usr/lib/ferrix/s5300-cpif.sh` and sourced by both init scripts.
 They never open a CPIF node. `/dev` is touched only by `-L`/`-c` file tests,
 `stat(2)`, and `readlink(2)` of `/proc/<pid>/fd` links. Per-unit files are
-checked by `stat(2)` only. No firmware or NV byte is read or copied. Every
-check fails closed.
+checked by `stat(2)` only. No firmware or NV byte is read or copied. Package,
+identity, node and mount mismatches are refusals. The `/proc/<pid>/fd` opener
+scan is a snapshot and can miss an inaccessible link or an alternate name
+for the same character device; issue #92 must harden and review that scan
+before an active CP boot.
 
 `rc-service exynos-modem preflight` checks, in order:
 
