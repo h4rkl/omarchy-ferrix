@@ -530,6 +530,22 @@ pixel-9a-s5300-mount-proof *args:
 pixel-9a-s5300-mount-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-mount-proof.sh"
 
+# Issue #79 metadata-only NV preflight on a booted exact Ferrix dev guest over
+# CDC-ACM, before any manual CP boot. It refuses unless the guest body, the
+# issue #34 probe whose read-only-loop barrier it copies, and the service are
+# the pinned reviewed files. With no argument it is a read-only preflight of
+# efs. `mount` is a separate run gated by a typed phrase plus the recorded
+# per-unit owner decision: one read-only loop mount of efs that reports only
+# the type and lstat size of nv_normal.bin and nv_protected.bin against the
+# 0x80000 TOC minimum, then unmounts, detaches, and post-checks. It never
+# reads contents, starts cpif services, or authorises a CP boot.
+# Metadata-only S5300 NV preflight of efs (issue #79); `mount` is gated.
+pixel-9a-s5300-nv-metadata *args:
+    @sh "{{root}}/tools/pixel-9a/s5300-nv-metadata.sh" {{args}}
+
+pixel-9a-s5300-nv-metadata-test:
+    @sh "{{root}}/tools/pixel-9a/tests/s5300-nv-metadata.sh"
+
 # Offline contract of the exact Pixel ferrix-s5300-mounts service: every source
 # is mounted only through a verified read-only loop over a BLKROSET partition,
 # with every refusal and cleanup path exercised against stubs. Not physical

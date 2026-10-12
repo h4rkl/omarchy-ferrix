@@ -225,6 +225,13 @@ observation is captured; later stages never imply earlier ones.
    `owner-review-required`, because only the human decision passes this gate.
    No CP boot has run. E0 and E1 are separate prerequisites before a manual
    CP boot trial, along with adapter review and read-only NV checks.
+   The NV check is the separate issue #79 workflow
+   ([README](README.md#s5300-nv-metadata-preflight-issue-79)). It mounts
+   only `efs`, through the unchanged #34 read-only loop and behind its own
+   per-run gate, and reports only the presence, type, and size of
+   `nv_normal.bin` and `nv_protected.bin` against `0x80000`. Its offline
+   tests pass; it has not run on the device. `cpsha` and the device-tree
+   identity values remain unchecked.
 1. **E1 inventory** (above).
 2. **CP boot.** Start manually, not from the default runlevel, so a
    CP-crash panic cannot boot-loop:
