@@ -131,7 +131,8 @@ personal data; never commit raw ones.
   `shell-put.py` / `shell-get.py` for files (sha256-checked). It is a
   root shell on `/dev/cu.usbmodemferrix_tegu3`; there is no ADB in Ferrix.
   Give long commands a larger WAIT. Only one process may use the port at a
-  time.
+  time. Payloads longer than a short command go through `acm-probe.py`
+  (section 9).
 - `scripts/boot-health.sh` gives a quick summary of services, sockets,
   radios and kernel errors.
 
@@ -162,7 +163,86 @@ personal data; never commit raw ones.
 - Merge worktree branches into `main` one at a time, re-run the checks,
   then deploy once.
 
-## 8. Lessons that cost time
+## 8. Build and flash from an isolated worktree
+
+The owner's main checkout is often dirty, and the builder's original checkout
+must stay as it is. Build and flash from a fresh worktree instead. Each
+worktree starts with an empty, ignored `out/`, so it has to be given the
+inputs that the gates check. `B` below is
+`targets/boards/google-pixel-9a-tegu-gxq96-mp1-0`.
+
+**Mac flash worktree** (`git worktree add … origin/main`):
+
+- Hardlink the pinned factory zip into `$B/recovery/`, using
+  `ln MAIN/$B/recovery/<zip> $B/recovery/`. The zip is the file named in the
+  `factory` row of `$B/recovery.pins`. Never copy the zip: it is about 4 GB.
+  Never symlink it either: `tools/pixel-9a/dev-flash.sh` refuses a symlinked
+  archive, and so does `just pixel-9a-factory-restore`.
+- Copy the main checkout's `out/pixel-9a/discovery-*.txt` records into the
+  worktree's `out/pixel-9a/`. Without them the plan refuses with "Fastboot
+  variant 'N/A' does not prove GXQ96". The bootloader does not report the
+  SKU, so the SKU gate (`tools/pixel-9a/adb-correlation.sh`) matches the
+  device against an earlier `just pixel-9a-discover` record.
+- Copy `out/dev-loop.env`, or `local/dev/dev-loop.env`, so that the
+  `scripts/` helpers find the builder and the port.
+
+**Builder worktree** (`git worktree add --detach <dir> <commit>`, run from
+the builder's checkout):
+
+- `out/pixel-9a` and `.cache/ferrix/pixel-9a` may be symlinks to the
+  original checkout. `tools/pixel-9a/native-builder.sh` bind-mounts both
+  into the container by path.
+- `out/android` must be real files. Inside the container the repo is
+  mounted read-only at `/workspace`, so an absolute symlink that points at
+  the original checkout does not resolve. Build it with `cp -al` hardlinks:
+  - `out/android/waydroid/<pinned build>/`, using `cp -al`;
+  - `out/android/waydroid/current`, using `cp -P` so it stays the relative
+    link that `dev-compose.py` reads;
+  - `out/android/fulguris/`, using `cp -al`.
+- A rootfs build also needs the factory zip hardlinked into `$B/recovery/`.
+  It also needs `FERRIX_PIXEL9A_FIRMWARE_DIR` set to the firmware attempt's
+  `staged/` directory (by default `out/pixel-9a/firmware/tegu/staged`).
+  `tools/pixel-9a/rootfs.sh` refuses to run without it and never extracts
+  firmware itself.
+- A rootfs attempt needs a product build under the same attempt id.
+  `tools/pixel-9a/attempt-env.sh` points `FERRIX_PIXEL9A_PRODUCT_DIR` at
+  `out/pixel-9a/product/tegu-<attempt>`, so run the product build for that
+  attempt first.
+
+**Cleanup.** First move any evidence you want to keep into the main
+checkout's `out/`. Then clean up in this order:
+
+1. Unlink the `out/pixel-9a` and `.cache/ferrix/pixel-9a` symlinks. Do not
+   `rm -rf` through them.
+2. `rm -rf out/android`. It holds hardlinks, so the originals survive.
+3. Unlink the factory zip in `$B/recovery/`.
+4. `git worktree remove <dir>`.
+
+## 9. Transport, headset and packaging limits
+
+- **Long payloads over CDC-ACM.** The interactive tty truncates input lines
+  at about 4 KiB. `devtest/shell-run.py` is for short commands only. For
+  anything longer, put the payload in a file and run
+  `tools/pixel-9a/acm-probe.py --probe FILE --timeout S --max-bytes N`.
+  It sends the file as base64-framed lines and runs it only if the guest's
+  SHA-256 matches the host's. The output comes back between nonce markers,
+  and the exit status is the guest's status (255 means the transport
+  failed). As with every serial helper, only one process may use the port
+  at a time.
+- **Bluetooth headsets.** After any reboot, and after a spell of idling, the
+  headset drops its connection. Until the owner reconnects it,
+  `just pixel-9a-a2dp-output-preflight` reports
+  `connected-audio-sink-count-not-one`. Ask for the reconnect before you
+  treat that as a failure. A reflash also erases the pairing, because the
+  rootfs lives in userdata, so the headset has to be paired again.
+- **pmbootstrap/abuild and `/mnt`.** abuild refuses packages that install
+  anything under `/mnt`. Create such directories from the package's install
+  scripts instead. For example, `device-google-tegu` 1-r5 (#121) creates
+  `/mnt/vendor` in `device-google-tegu.post-install` and `.post-upgrade`;
+  see the comment in its
+  [`APKBUILD`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/APKBUILD).
+
+## 10. Lessons that cost time
 
 - The bring-up shell echoes input; `shell-run.py` brackets output with a
   marker. Multi-line commands work but are noisier. Prefer `;`-joined lines.
