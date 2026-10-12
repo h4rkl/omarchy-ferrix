@@ -55,13 +55,15 @@
   decision, kept with the transcripts in ignored
   `out/pixel-9a/a2dp-active-proof/`.
 - `dry` starts no graph guard or poller, so `play`, the guards, and audio
-  output remain unverified on hardware. That decision expires after 10
-  minutes; a `play` run needs a fresh `dry` and a fresh explicit owner
-  decision. `[audio]` stays `unsupported`.
+  output remain unverified on hardware. That decision has expired and is
+  unusable: it predates the volume gate, binding v2 and the recorded
+  decision origin, so `play` refuses it. A `play` run needs a fresh `dry`
+  with the current scripts and a fresh explicit owner decision. `[audio]`
+  stays `unsupported`.
 - The offline test now also runs under Ubuntu's dash and mawk. mawk only
   feeds the graph guard line by line with `-W interactive`; without it the
   guard never arms and `play` refuses (`graph-guard-not-armed`), which is
-  now a checked refusal case (189 checks, 192 where the host awk is mawk).
+  a checked refusal case. Check counts are in the workflow entry below.
 
 ## 2026-10-12 (A2DP active proof workflow; offline/mock only, google-pixel-9a-tegu-gxq96-mp1-0)
 
@@ -80,8 +82,22 @@
     transient object, or incomplete observation.
   - The result separates route safety, delivery, cleanup, and owner audible
     confirmation; audible confirmation is always `owner-pending`.
-- Evidence is `mock` only: 186 fake-tool, fake-guest, and transport checks
-  (`just pixel-9a-a2dp-active-proof-test`). It has **not** run on the phone.
+- Review fixes (offline only): `route_safety=held` now needs the graph
+  guard to have seen our own node added and, after the tone, removed; a
+  bounded wait replaced the fixed 0.5 s sleep, and a never-linked stream or
+  a stalled pw-mon reads `unverified`. Both modes read the bound sink
+  volume once (`wpctl get-volume`, never written) and refuse muted, above
+  0.50 on wpctl's cubic scale (about −18 dB), or unparseable; the value is
+  in the summary. A bound-sink property change during the tone trips; a
+  volume change during the tone is not detectable (residual limit). Every
+  post-session `play` failure now reports `unverified`, runs the read-only
+  observation, and exits 7. The decision records its mock or physical
+  origin, the salt stays inside the repository's `out/`, and the binding
+  also covers the device-tree serial.
+- Evidence is `mock` only: 236 fake-tool, fake-guest, and transport
+  checks (`just pixel-9a-a2dp-active-proof-test`; 239 where the host awk
+  is mawk, which this macOS run did not exercise). It has **not** run on the
+  phone.
   pw-mon output shape, kill latency, and false-trip behaviour on hardware
   are unverified. The kernel-side guards are polled, not event-driven
   (limits in `audio-route-decision.md`, "A2DP active proof workflow").
