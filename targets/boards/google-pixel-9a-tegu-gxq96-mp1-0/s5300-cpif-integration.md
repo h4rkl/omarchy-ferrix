@@ -204,6 +204,47 @@ teardown requirements that are still open.
   exited or closed and skipped. That is a bounded race and is not a
   refusal.
 
+Issue #107 adds, in `cpif_opener_scan` (which `cpif_holders` now wraps, so
+`arm` and `start_pre` get the same checks). These are **offline only** until
+a rebuilt `device-google-tegu` 1-r4 image runs on the exact phone:
+
+- **Positive control.** The scanning shell holds the mem-class null device
+  open read-only on fd 7 for the whole scan. It is the only device the
+  library opens, and only after `stat(2)` shows a character device (not a
+  symlink) with the number in `/sys/class/mem/null/dev`, under no CPIF major.
+  The same proc walk, `stat -L` format, and awk matcher must report it as
+  held by the shell's own pid (`/proc/self/stat`, read by the same process).
+  Otherwise the scan is `incomplete`, never `clean`. The descriptor is scoped
+  to the scan subshell, so it is closed on every path.
+- **Format control.** `1:3` reads the same in decimal and hex, so every
+  `/dev` character device named like a `cpif` class entry must also print
+  that entry's sysfs number through the same format and matcher.
+- **Task directories.** A pid that still exists but whose `task` directory
+  is missing, empty, or unlistable makes the scan `incomplete` (it used to
+  drop out). A pid or task that has gone is skipped and counted
+  (`opener_vanished`).
+- **CPIF majors.** Every character device under a CPIF major in
+  `/sys/dev/char` and under `/dev` (a `find` walk; `stat(2)` only) must be
+  the `cpif` class entry of that name and number, and every class entry must
+  be in `/sys/dev/char`. Any other device is counted (never named) and
+  refused. An open fd on such a device is a holder (`+foreign`).
+
+Facts, one line each after the `holder PID NAME` lines:
+`fact opener_positive_control=detected|missing`,
+`fact opener_format_control=matched|mismatch|missing`,
+`fact opener_major_foreign=<count>|unknown`, `fact opener_vanished=<count>`,
+and `fact opener_scan=clean|held|incomplete`. The S2 preflight forwards them
+([`s5300-s2-preflight.md`](s5300-s2-preflight.md)). Offline coverage in
+`s5300-cpif-services.sh`: control detected, missing, under another pid,
+own pid unknown, unopenable, symlinked, a CPIF node, under a CPIF major, and
+absent from sysfs (none of these opens a node); descriptor closed after the
+scan; unlistable, missing, and empty task directories; vanished pids and
+tasks; foreign sysfs and `/dev` names, an alias under another name, a class
+entry missing from `/sys/dev/char`, and a held foreign device; GNU, BusyBox,
+and upper-case `stat` output (clean, holder detected) and decimal and
+zero-padded output (`incomplete`, never `clean`); and the same cases under
+mawk, gawk, and BusyBox awk when installed.
+
 Remaining limits: the scan is a snapshot, so an open after a task was read
 is not seen. A later scan (for example `start_pre` after `arm`) narrows this
 window but does not close it. SCM_RIGHTS fds in flight, io_uring fixed files,
@@ -219,7 +260,7 @@ it grows with task and descriptor counts. It has not been timed on the device.
 | `pmos/device-google-tegu/sit-proxy.initd` | per-backend CLI/supervision; per-backend `depend()` (CPIF: `use` the mounts and `exynos-modem`); CPIF `preflight` and `start_pre` |
 | `pmos/device-google-tegu/ferrix-s5300-cpif.sh` | new check library (`/usr/lib/ferrix/s5300-cpif.sh`) |
 | `pmos/device-google-tegu/s5300-cpif-services.sha256` | new installed pin list |
-| `pmos/device-google-tegu/APKBUILD` | pkgrel 3 (issue #92 opener scan; was 2); installs the two new files; S5300 services out of the runlevel list; sha512 re-pins |
+| `pmos/device-google-tegu/APKBUILD` | pkgrel 4 (issue #107 positive control and CPIF-major checks; 3 was the issue #92 opener scan, 2 before that); installs the two new files; S5300 services out of the runlevel list; sha512 re-pins |
 | `pmos/device-google-tegu/s5300-userspace-sources.toml` | records `start_policy = "manual-only"` and both backends |
 | `pmos/device-google-tegu/ferrix-backends.env` | comment only; the package value stays `linux-google-tegu-wwan` |
 | `pmos/modemmanager-samsung-sit/{modemmanager.initd,APKBUILD}` | `need` → `use`; pkgrel 3 |
@@ -325,7 +366,7 @@ On the exact booted phone, from an image built through the checked-in
 builder and flashed through the recovery-gated workflow, with no modem
 service started and no CPIF node opened:
 
-1. The installed `device-google-tegu` is pkgrel 3 (issue #92 library), `modemmanager-samsung-sit`
+1. The installed `device-google-tegu` is pkgrel 4 (issue #107 library), `modemmanager-samsung-sit`
    pkgrel 3, and `exynos-modem` `0.1.0_git20260731-r3`. Each path in
    `/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256` matches
    (`sha256sum -c`), and `/etc/init.d/ferrix-s5300-mounts` still hashes to

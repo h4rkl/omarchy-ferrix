@@ -218,15 +218,29 @@ for s2_node in $s2_class_nodes; do
 	case " $cpif_nodes " in *" $s2_node "*) ;; *) s2_extra=$((s2_extra + 1)) ;; esac
 done
 printf 'class_extra_nodes=%s\n' "$s2_extra"
-s2_holders=
+# The library's scan carries its own positive control and the CPIF-major
+# checks (issue #107); its facts are re-validated here before they leave.
+s2_scan_out=
 if [ -z "$s2_class_nodes" ]; then
 	s2_scan=not-run
-elif s2_holders=$(cpif_holders $s2_class_nodes 2>/dev/null); then
-	if [ -z "$s2_holders" ]; then s2_scan=clean; else s2_scan=held; fi
 else
-	s2_scan=incomplete
+	s2_scan_out=$(cpif_opener_scan $s2_class_nodes 2>/dev/null) || :
+	s2_scan=$(printf '%s\n' "$s2_scan_out" | sed -n 's/^fact opener_scan=//p' | sed -n '1p')
+	case "$s2_scan" in clean|held) ;; *) s2_scan=incomplete ;; esac
 fi
+s2_holders=$(printf '%s\n' "$s2_scan_out" | sed -n 's/^holder //p')
+s2_scan_fact() { printf '%s\n' "$s2_scan_out" | sed -n "s/^fact $1=//p" | sed -n '1p'; }
+s2_control=$(s2_scan_fact opener_positive_control)
+case "$s2_control" in detected) ;; *) s2_control=missing ;; esac
+s2_format=$(s2_scan_fact opener_format_control)
+case "$s2_format" in matched|mismatch) ;; *) s2_format=missing ;; esac
+s2_foreign=$(s2_scan_fact opener_major_foreign)
+case "$s2_foreign" in ''|*[!0-9]*) s2_foreign=unknown ;; esac
+s2_vanished=$(s2_scan_fact opener_vanished)
+case "$s2_vanished" in ''|*[!0-9]*) s2_vanished=0 ;; esac
 printf 'opener_scan=%s\n' "$s2_scan"
+printf 'opener_positive_control=%s\nopener_format_control=%s\n' "$s2_control" "$s2_format"
+printf 'opener_major_foreign=%s\nopener_vanished=%s\n' "$(printf '%s' "$s2_foreign" | cut -c1-6)" "$(printf '%s' "$s2_vanished" | cut -c1-6)"
 s2_pids=$(printf '%s\n' "$s2_holders" | awk 'NF { print $1 }' | sort -u)
 s2_held=$(printf '%s\n' "$s2_holders" | awk -v known="$cpif_nodes" '
 	BEGIN { split(known, names, " "); for (i in names) allowed[names[i]] = 1 }

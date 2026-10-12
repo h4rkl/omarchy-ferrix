@@ -141,8 +141,18 @@ for path in paths:
     except OSError:
         status = 1
         continue
-    rdev, kind = "", "regular file"
-    if stat.S_ISDIR(st.st_mode):
+    rdev, kind = "", "regular empty file" if st.st_size == 0 else "regular file"
+    if stat.S_ISREG(st.st_mode):
+        # A regular file named in $FAKE_RDEV/regular stands in for the
+        # character device the opener scan holds as its positive control.
+        name = os.path.basename(os.path.realpath(path) if follow else path)
+        try:
+            with open(os.path.join(os.environ["FAKE_RDEV"], "regular", name)) as f:
+                rdev = f.read().strip()
+            kind = "character special file"
+        except OSError:
+            pass
+    elif stat.S_ISDIR(st.st_mode):
         kind = "directory"
     elif stat.S_ISLNK(st.st_mode):
         kind = "symbolic link"
@@ -231,7 +241,7 @@ EOF
 	cp "$pkg/s5300-userspace-sources.toml" "$fx/usr/share/ferrix/pixel-9a/"
 	cp "$pkg/99-google-tegu-sit.rules" "$fx/usr/lib/udev/rules.d/"
 	repin
-	printf 'P:device-google-tegu\nV:1-r3\n\nP:exynos-modem\nV:0.1.0_git20260731-r3\n\nP:modemmanager-samsung-sit\nV:1.25.95_git20260731-r3\n\n' \
+	printf 'P:device-google-tegu\nV:1-r4\n\nP:exynos-modem\nV:0.1.0_git20260731-r3\n\nP:modemmanager-samsung-sit\nV:1.25.95_git20260731-r3\n\n' \
 		>"$fx/lib/apk/db/installed"
 	cat >"$fx/usr/sbin/exynos-modem" <<EOF
 #!/bin/sh
@@ -250,6 +260,15 @@ EOF
 	ln -s /dev/null "$fx/proc/100/task/100/fd/0"
 	ln -s /dev/null "$fx/proc/100/task/101/fd/0"
 	printf 'ModemManager\n' >"$fx/proc/100/comm"
+	# Issue #107 positive control: /dev/null as sysfs names it, held on fd 7
+	# by the scanning shell (pid 4242 here).
+	mkdir -p "$fx/rdev/regular" "$fx/sys/class/mem/null" "$fx/sys/dev/char" "$fx/proc/4242/task/4242/fd"
+	: >"$fx/dev/null"
+	echo '1 3' >"$fx/rdev/regular/null"
+	echo 1:3 >"$fx/sys/class/mem/null/dev"
+	ln -s ../../class/mem/null "$fx/sys/dev/char/1:3"
+	printf '4242 (sh) S 1 4242 4242 0 -1 4194304\n' >"$fx/proc/self/stat"
+	ln -s "$fx/dev/null" "$fx/proc/4242/task/4242/fd/7"
 	cp_dev="$fx/sys/bus/platform/devices/cp"
 	mkdir -p "$cp_dev/of_node"
 	printf 'samsung,exynos-cp\000' >"$cp_dev/of_node/compatible"
@@ -262,6 +281,7 @@ EOF
 		mkdir -p "$fx/sys/class/cpif/$node"
 		printf '227:%d\n' "$minor" >"$fx/sys/class/cpif/$node/dev"
 		ln -s ../../../class/cpif "$fx/sys/class/cpif/$node/subsystem"
+		ln -s "../../class/cpif/$node" "$fx/sys/dev/char/227:$minor"
 		minor=$((minor + 1))
 	done
 	for spec in modem_a:sda10:10 modem_b:sda11:11 efs:sda12:12 persist:sda13:13 modem_userdata:sda14:14; do
@@ -368,6 +388,7 @@ probe_case 'clean pre-mount'
 check 'clean: identity, slot, revision, and PID namespace' sh -c 'grep -Fxq slot_suffix=_b "$1" && grep -Fxq slot_source=bootconfig "$1" && grep -Fxq hw_revision=MP1.0 "$1" && grep -Fxq pidns=initial "$1" && grep -Fxq env.target=exact "$1" && grep -Fxq env.backend=google-kleaf-cpif "$1"' sh "$pout"
 check 'clean: target, package, CLI, surface, run checks pass' sh -c 'for k in target package cli surface run; do grep -Fxq "check.$k=pass" "$1" || exit 1; done' sh "$pout"
 check 'clean: every node passes and the scan is clean' sh -c '[ "$(grep -c "^node\..*=pass$" "$1")" -eq 12 ] && grep -Fxq opener_scan=clean "$1" && grep -Fxq class_node_count=12 "$1"' sh "$pout"
+check 'clean: the positive and format controls pass and no foreign device exists' sh -c 'grep -Fxq opener_positive_control=detected "$1" && grep -Fxq opener_format_control=matched "$1" && grep -Fxq opener_major_foreign=0 "$1" && grep -Fxq opener_vanished=0 "$1"' sh "$pout"
 check 'clean: on-device pins match and the CP is OFFLINE' sh -c '[ "$(grep -c "^file\..*\.pin=match$" "$1")" -eq 7 ] && grep -Fxq modem_state=OFFLINE "$1" && grep -Fxq cp_driver=cp_interface "$1"' sh "$pout"
 check 'clean: services stopped, ModemManager started, no links or overrides' sh -c 'grep -Fxq service.exynos-modem=stopped "$1" && grep -Fxq service.ferrix-s5300-mounts=stopped "$1" && grep -Fxq service.modemmanager=started "$1" && grep -Fxq runlevel.exynos-modem=0 "$1" && grep -Fxq confd.modemmanager=expected "$1" && grep -Fxq rc_conf_mentions=0 "$1" && grep -Fxq udev_overrides=0 "$1"' sh "$pout"
 check 'clean: no token, scratch not provisioned, nothing mounted, sources deferred' sh -c 'grep -Fxq arm_token=absent "$1" && grep -Fxq scratch=absent "$1" && grep -Fxq vendor_mounts=0 "$1" && grep -Fxq part.efs.loops=0 "$1" && grep -Fxq part.modem.count=1 "$1" && grep -Fxq check.sources=deferred "$1"' sh "$pout"
@@ -380,10 +401,18 @@ probe_case 'holder comm is private' 'printf "SECRETIMEI1\n" >"$fx/proc/100/comm"
 check 'holder comm: only other leaves the guest' sh -c 'grep -Fxq opener_holder_comms=other "$1" && ! grep -Fq SECRETIMEI1 "$1"' sh "$pout"
 probe_case 'held by a non-leader thread' 'ln -s "$fx/dev/umts_rfs0" "$fx/proc/100/task/101/fd/4"'
 check 'thread: held' po opener_held_nodes=umts_rfs0
-probe_case 'held extra class node' 'mkfifo "$fx/umts_router"; echo "e3 40" >"$fx/rdev/umts_router"; mkdir -p "$fx/sys/class/cpif/umts_router"; echo 227:64 >"$fx/sys/class/cpif/umts_router/dev"; ln -s "$fx/umts_router" "$fx/proc/100/task/100/fd/5"'
+probe_case 'held extra class node' 'mkfifo "$fx/umts_router"; echo "e3 40" >"$fx/rdev/umts_router"; mkdir -p "$fx/sys/class/cpif/umts_router"; echo 227:64 >"$fx/sys/class/cpif/umts_router/dev"; ln -s ../../../class/cpif "$fx/sys/class/cpif/umts_router/subsystem"; ln -s ../../class/cpif/umts_router "$fx/sys/dev/char/227:64"; ln -s "$fx/umts_router" "$fx/proc/100/task/100/fd/5"'
 check 'extra class node: counted and held without retaining its name' sh -c 'grep -Fxq class_extra_nodes=1 "$1" && grep -Fxq opener_held_nodes=other "$1" && ! grep -Fq umts_router "$1"' sh "$pout"
 probe_case 'unlistable fd directory' 'chmod 000 "$fx/proc/100/task/101/fd"'
 check 'unlistable: the scan is incomplete, not clean' po opener_scan=incomplete
+probe_case 'positive control not seen' 'rm "$fx/proc/4242/task/4242/fd/7"'
+check 'control missing: reported and the scan is incomplete, not clean' sh -c 'grep -Fxq opener_positive_control=missing "$1" && grep -Fxq opener_scan=incomplete "$1"' sh "$pout"
+probe_case 'unlistable task directory' 'mkdir -p "$fx/proc/300/task"; chmod 000 "$fx/proc/300/task"'
+check 'unlistable task directory: the scan is incomplete' po opener_scan=incomplete
+probe_case 'vanished pid' 'ln -s "$fx/gone" "$fx/proc/303"'
+check 'vanished pid: skipped and counted, scan still clean' sh -c 'grep -Fxq opener_vanished=1 "$1" && grep -Fxq opener_scan=clean "$1"' sh "$pout"
+probe_case 'foreign device under a CPIF major' 'mkfifo "$fx/dev/secretname"; echo "e3 20" >"$fx/rdev/secretname"; mkdir -p "$fx/sys/devices/virtual/misc/secretname"; ln -s ../../../../class/misc "$fx/sys/devices/virtual/misc/secretname/subsystem"; ln -s ../../devices/virtual/misc/secretname "$fx/sys/dev/char/227:32"'
+check 'foreign: counted, never named' sh -c 'grep -Fxq opener_major_foreign=2 "$1" && ! grep -q secretname "$1"' sh "$pout"
 probe_case 'other PID namespace' 'rm "$fx/proc/self/ns/pid"; ln -s "pid:[4026532001]" "$fx/proc/self/ns/pid"'
 check 'pidns: reported and the scan is incomplete' sh -c 'grep -Fxq pidns=other "$1" && grep -Fxq opener_scan=incomplete "$1"' sh "$pout"
 probe_case 'online CP' 'echo ONLINE >"$fx/sys/bus/platform/devices/cp/modem_state"'
@@ -402,7 +431,7 @@ check 'post-mount: verify_own_mount ran for all four destinations' sh -c '[ "$(g
 cp "$pout" "$work/post.out"
 probe_case 'post-mount with a short NV file' 'mount_sources; mkdir -p "$fx/mnt/vendor/modem_img/images/default" "$fx/mnt/vendor/efs" "$fx/mnt/vendor/persist/modem"; printf fake >"$fx/mnt/vendor/modem_img/images/default/modem.bin"; printf fake >"$fx/mnt/vendor/persist/modem/cpsha"; : >"$fx/mnt/vendor/efs/nv_normal.bin"; : >"$fx/mnt/vendor/efs/nv_protected.bin"'
 check 'post-mount short NV: the sources check fails' po check.sources=fail
-probe_case 'installed 1-r2 image' 'printf "# 1-r2 library\n" >>"$fx/usr/lib/ferrix/s5300-cpif.sh"; repin; sed -i.bak "s/^V:1-r3$/V:1-r2/" "$fx/lib/apk/db/installed"; rm "$fx/lib/apk/db/installed.bak"'
+probe_case 'installed 1-r2 image' 'printf "# 1-r2 library\n" >>"$fx/usr/lib/ferrix/s5300-cpif.sh"; repin; sed -i.bak "s/^V:1-r4$/V:1-r2/" "$fx/lib/apk/db/installed"; rm "$fx/lib/apk/db/installed.bak"'
 check '1-r2: self-consistent on the device, but the installed library differs' sh -c 'grep -Fxq file.s5300-cpif.sh.pin=match "$1" && grep -Fxq check.package=pass "$1" && grep -Fxq pkg.device-google-tegu=1-r2 "$1" && ! grep -Fxq "file.s5300-cpif.sh.sha256=$2" "$1"' sh "$pout" "$(sha 256 "$work/lib-fixture.sh")"
 probe_case 'stale exynos-modem release' 'sed -i.bak "s/^V:0.1.0_git20260731-r3$/V:0.1.0_git20260731-r2/" "$fx/lib/apk/db/installed"; rm "$fx/lib/apk/db/installed.bak"'
 check 'stale release: the binary is not run' sh -c 'grep -Fxq check.cli=skipped "$1" && ! grep -q "^exynos-modem " "$2"' sh "$pout" "$log"
@@ -433,6 +462,12 @@ derive skew -e "s/^file\\.s5300-cpif\\.sh\\.sha256=.*/file.s5300-cpif.sh.sha256=
 derive online -e 's/^modem_state=OFFLINE$/modem_state=ONLINE/' -e 's/^check\.surface=pass$/check.surface=fail/'
 derive held -e 's/^opener_scan=clean$/opener_scan=held/' -e 's/^opener_holder_count=0$/opener_holder_count=1/' -e 's/^opener_held_nodes=none$/opener_held_nodes=umts_boot0/'
 derive incomplete-scan -e 's/^opener_scan=clean$/opener_scan=incomplete/'
+derive control-missing -e 's/^opener_positive_control=detected$/opener_positive_control=missing/'
+derive format-mismatch -e 's/^opener_format_control=matched$/opener_format_control=mismatch/'
+derive foreign -e 's/^opener_major_foreign=0$/opener_major_foreign=1/'
+derive foreign-unknown -e 's/^opener_major_foreign=0$/opener_major_foreign=unknown/'
+derive bad-control -e 's/^opener_positive_control=detected$/opener_positive_control=assumed/'
+derive missing-control -e '/^opener_positive_control=/d'
 derive token -e 's/^arm_token=absent$/arm_token=present/'
 derive runlevel -e 's/^runlevel\.exynos-modem=0$/runlevel.exynos-modem=1/'
 derive confd -e 's/^confd\.sit-proxy=absent$/confd.sit-proxy=override/'
@@ -508,7 +543,7 @@ check 'go: source checks are deferred until the manual mount start' has 'deferre
 check 'go: active-workflow steps are listed as deferred' sh -c 'printf "%s\n" "$1" | grep -q "^deferred_to_active_workflow=scratch-provision,arm,"' sh "$out"
 check 'go: host recovery evidence is separate and verified' sh -c 'printf "%s\n" "$1" | grep -Fxq host_recovery_factory_archive=verified && grep -Fxq "## host artifact evidence (this host; not a device fact)" "$2"' sh "$out" "$transcript"
 check 'go: no blockers, skew, or unknowns' sh -c 'printf "%s\n" "$1" | grep -Fxq device_blockers=none && printf "%s\n" "$1" | grep -Fxq image_skew=none && printf "%s\n" "$1" | grep -Fxq unknown_facts=none' sh "$out"
-check 'go: JSON summary parses and records the decision' python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d["preflight_result"] == "go" and d["cp_boot_authorized"] is False and d["state_changes"] == "none" and d["evidence"] == "mock" and d["device_blockers"] == [] and "arm" in d["deferred_to_active_workflow"]' "$summary"
+check 'go: JSON summary parses and records the decision' python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d["preflight_result"] == "go" and d["opener_positive_control"] == "detected" and d["cp_boot_authorized"] is False and d["state_changes"] == "none" and d["evidence"] == "mock" and d["device_blockers"] == [] and "arm" in d["deferred_to_active_workflow"]' "$summary"
 check 'go: transcript and summary are private (0600)' sh -c '[ "$(stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1")" = 600 ] && [ "$(stat -c %a "$2" 2>/dev/null || stat -f %Lp "$2")" = 600 ]' sh "$transcript" "$summary"
 check 'privacy: port path is neither printed nor retained' sh -c '! printf "%s\n" "$1" | grep -Fq "$2" && ! grep -rFq "$2" "$3"' sh "$out" "$port" "$work/run-go"
 
@@ -529,6 +564,10 @@ check 'skew: image skew lists the library and the device package' has 'image_ske
 nogo online online cp-not-offline
 nogo held held cpif-node-held
 nogo incomplete-scan incomplete-scan opener-scan-incomplete
+nogo control-missing control-missing opener-positive-control-missing
+nogo format-mismatch format-mismatch opener-format-control-mismatch
+nogo foreign foreign cpif-major-foreign-device
+nogo foreign-unknown foreign-unknown opener-major-enumeration-incomplete
 nogo token token arm-token-present
 nogo runlevel runlevel runlevel-link-exynos-modem
 nogo confd confd openrc-override-confd-sit-proxy
@@ -577,6 +616,8 @@ refuse bad-value bad-value 5
 refuse bad-holder-comm bad-holder-comm 5
 refuse bad-held-node bad-held-node 5
 refuse not-complete not-complete 5
+refuse bad-control bad-control 5
+refuse missing-control missing-control 5
 refuse qemu qemu 4
 refuse identity go 4 4
 refuse no-library go 5 5

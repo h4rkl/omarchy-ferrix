@@ -151,7 +151,18 @@ for initd in exynos-modem.initd sit-proxy.initd; do
 done
 # The library touches /dev only through the node path built in
 # cpif_check_node, and that path only through file tests and stat.
-grep -n 'cpif_dev' "$lib" | grep -vE '^[0-9]+:cpif_dev=/dev$|path="\$cpif_dev/\$node"' && fail 'static: library uses /dev outside cpif_check_node' || true
+grep -n 'cpif_dev' "$lib" | grep -vE '^[0-9]+:cpif_dev=/dev$|path="\$cpif_dev/\$node"|^[0-9]+:cpif_control_dev="\$cpif_dev/null"$|^[0-9]+:		devs=\$\(find "\$cpif_dev" ! -type d ! -type l 2>/dev/null\) \|\| echo unreadable$' &&
+	fail 'static: library uses /dev outside cpif_check_node, the control, and the /dev walk' || true
+# Issue #107: the positive control is the only device the library opens. It
+# is opened read-only on fd 7, once, only after the stat(2) check, and never
+# written; nothing else names it.
+[ "$(grep -c 'cpif_control_dev' "$lib")" -eq 3 ] &&
+	grep -qx '		scan=$(cpif_scan_body 7<"$cpif_control_dev") || scan=' "$lib" &&
+	grep -Fqx "			[ \"\$(stat -c '%t:%T|%F' -- \"\$cpif_control_dev\" 2>/dev/null | tr 'A-F' 'a-f')\" = \"\$control_key|character special file\" ] &&" "$lib" &&
+	[ "$(grep -cE '[0-9]<[^&(]|<>' "$lib")" -eq 1 ] &&
+	ok 'static: the positive control is the only opened device, read-only, after its stat check' ||
+	fail 'static: the positive control is opened other than once, read-only, after its stat check'
+grep -nE 'exec [0-9]|[0-9]>[^&]' "$lib" | grep -v '2>/dev/null' && fail 'static: library opens or writes a numbered descriptor' || true
 grep -n '"\$path"' "$lib" | grep -vE '\[ ! -L "\$path" \] && \[ -c "\$path" \]|stat -c .%t %T. "\$path"|eerror ' &&
 	fail 'static: library uses a node path other than by file test or stat' || true
 grep -Eqn '(<|>|exec|dd |cat |head |od |hexdump).*\$(path|cpif_dev)' "$lib" && fail 'static: library may open a node' || true
@@ -174,6 +185,10 @@ fmt, paths = args[1], args[2:]
 if paths[:1] == ["--"]:
     paths = paths[1:]
 vanish = os.environ.get("FAKE_VANISH", "")
+# FAKE_STAT_FLAVOR: gnu (coreutils) and busybox print the same %t/%T/%F/%n
+# tokens and differ only in diagnostics; upper, decimal, and padded are
+# hostile formats that the opener scan must never read as clean.
+flavor = os.environ.get("FAKE_STAT_FLAVOR", "gnu")
 status = 0
 for path in paths:
     if vanish and path == vanish:
@@ -181,11 +196,25 @@ for path in paths:
         os.unlink(path)
     try:
         st = os.stat(path) if follow else os.lstat(path)
-    except OSError:
+    except OSError as e:
+        if flavor == "busybox":
+            sys.stderr.write("stat: can't stat '%s': %s\n" % (path, e.strerror))
+        else:
+            sys.stderr.write("stat: cannot stat '%s': %s\n" % (path, e.strerror))
         status = 1
         continue
-    rdev, kind = "", "regular file"
-    if stat.S_ISDIR(st.st_mode):
+    rdev, kind = "", "regular empty file" if st.st_size == 0 else "regular file"
+    if stat.S_ISREG(st.st_mode):
+        # A regular file named in $FAKE_RDEV/regular stands in for a
+        # character device that the scanner may open (the positive control).
+        name = os.path.basename(os.path.realpath(path) if follow else path)
+        try:
+            with open(os.path.join(os.environ["FAKE_RDEV"], "regular", name)) as f:
+                rdev = f.read().strip()
+            kind = "character special file"
+        except OSError:
+            pass
+    elif stat.S_ISDIR(st.st_mode):
         kind = "directory"
     elif stat.S_ISLNK(st.st_mode):
         kind = "symbolic link"
@@ -201,6 +230,12 @@ for path in paths:
         except OSError:
             kind = "fifo"
     major, minor = (rdev.split() + ["", ""])[:2]
+    if rdev and flavor == "upper":
+        major, minor = major.upper(), minor.upper()
+    elif rdev and flavor == "decimal":
+        major, minor = str(int(major, 16)), str(int(minor, 16))
+    elif rdev and flavor == "padded":
+        major, minor = major.zfill(4), minor.zfill(4)
     values = {"t": major, "T": minor, "u": str(st.st_uid), "g": str(st.st_gid),
               "a": "%o" % stat.S_IMODE(st.st_mode), "h": str(st.st_nlink), "s": str(st.st_size),
               "n": path, "F": kind}
@@ -304,6 +339,15 @@ EOF
 	ln -s /dev/null "$fx/proc/100/task/100/fd/0"
 	ln -s /dev/null "$fx/proc/100/task/101/fd/0"
 	ln -s 'pid:[4026531836]' "$fx/proc/self/ns/pid"
+	# Issue #107 positive control: /dev/null as the sysfs mem class names it,
+	# held on fd 7 by the scanning shell, which is pid 4242 here.
+	mkdir -p "$fx/rdev/regular" "$fx/sys/class/mem/null" "$fx/sys/dev/char" "$fx/proc/4242/task/4242/fd"
+	: >"$fx/dev/null"
+	echo '1 3' >"$fx/rdev/regular/null"
+	echo 1:3 >"$fx/sys/class/mem/null/dev"
+	ln -s ../../class/mem/null "$fx/sys/dev/char/1:3"
+	printf '4242 (sh) S 1 4242 4242 0 -1 4194304\n' >"$fx/proc/self/stat"
+	ln -s "$fx/dev/null" "$fx/proc/4242/task/4242/fd/7"
 	cp_dev="$fx/sys/bus/platform/devices/cp"
 	mkdir -p "$cp_dev/of_node"
 	printf 'samsung,exynos-cp\000' >"$cp_dev/of_node/compatible"
@@ -318,6 +362,7 @@ EOF
 		mkdir -p "$fx/sys/class/cpif/$node"
 		printf '227:%d\n' "$minor" >"$fx/sys/class/cpif/$node/dev"
 		ln -s ../../../class/cpif "$fx/sys/class/cpif/$node/subsystem"
+		ln -s "../../class/cpif/$node" "$fx/sys/dev/char/227:$minor"
 		minor=$((minor + 1))
 	done
 	chmod 755 "$fx/run"
@@ -328,7 +373,7 @@ EOF
 		python3 -c 'import sys; open(sys.argv[1], "wb").truncate(524288)' "$fx/mnt/vendor/efs/$nv"
 	done
 	export FAKE_STARTED='ferrix-s5300-mounts ferrix-radio-firmware'
-	unset FAKE_MOUNT_BAD FAKE_STALE_BINARY
+	unset FAKE_MOUNT_BAD FAKE_STALE_BINARY FAKE_STAT_FLAVOR FAKE_VANISH
 }
 
 # run_case NAME want(ok|fail) PATTERN SERVICE ACTION [MUTATION]
@@ -509,7 +554,7 @@ pf 'a node held through another path to the same device' '/dev/umts_boot0 is alr
 pf 'a node held only by a non-leader thread' '/dev/umts_rfs0 is already open (pid 100)' \
 	'ln -s "$fx/dev/umts_rfs0" "$fx/proc/100/task/101/fd/4"'
 pf 'a held CPIF device outside the twelve E1 names' '/dev/umts_router is already open (pid 100)' \
-	'mkfifo "$fx/umts_router"; echo "e3 40" >"$fx/rdev/umts_router"; mkdir -p "$fx/sys/class/cpif/umts_router"; echo 227:64 >"$fx/sys/class/cpif/umts_router/dev"; ln -s "$fx/umts_router" "$fx/proc/100/task/100/fd/5"'
+	'mkfifo "$fx/umts_router"; echo "e3 40" >"$fx/rdev/umts_router"; mkdir -p "$fx/sys/class/cpif/umts_router"; echo 227:64 >"$fx/sys/class/cpif/umts_router/dev"; ln -s ../../../class/cpif "$fx/sys/class/cpif/umts_router/subsystem"; ln -s ../../class/cpif/umts_router "$fx/sys/dev/char/227:64"; ln -s "$fx/umts_router" "$fx/proc/100/task/100/fd/5"'
 pf 'an fd directory that cannot be listed' 'could not read every open file' 'chmod 000 "$fx/proc/100/task/101/fd"'
 pf 'a live fd that cannot be stated' 'could not read every open file' 'ln -s "$fx/gone" "$fx/proc/100/task/100/fd/8"'
 pf 'a scan outside the initial PID namespace' 'initial PID namespace' \
@@ -520,7 +565,90 @@ run_case 'cpif: an fd closed during the scan is churn, not a refusal' ok '' exyn
 run_case 'cpif: a task that exits during the scan is churn, not a refusal' ok '' exynos-modem preflight \
 	'mkdir -p "$fx/proc/200/task"; ln -s "$fx/gone" "$fx/proc/200/task/200"'
 run_case 'cpif: a held non-CPIF character device is not a holder' ok '' exynos-modem preflight \
-	'ln -s /dev/null "$fx/proc/100/task/100/fd/3"; mkfifo "$fx/other"; echo "e3 63" >"$fx/rdev/other"; ln -s "$fx/other" "$fx/proc/100/task/100/fd/6"'
+	'ln -s /dev/null "$fx/proc/100/task/100/fd/3"; mkfifo "$fx/other"; echo "e4 63" >"$fx/rdev/other"; ln -s "$fx/other" "$fx/proc/100/task/100/fd/6"'
+
+# Issue #107: the positive control, task-directory failures, and foreign
+# devices under the CPIF majors. `scan` runs the opener scan over the whole
+# cpif class and prints its output; `fact KEY=VALUE` checks one fact.
+scan='load_cpif_checks; scan_out=$(cpif_opener_scan $(cpif_class_nodes)) || :; printf "%s\n" "$scan_out"
+fact() { printf "%s\n" "$scan_out" | grep -Fqx "fact $1"; }'
+run_case 'cpif #107: a clean scan detects its own positive control and matches the CPIF format' ok '' exynos-modem \
+	"$scan"'; fact opener_positive_control=detected && fact opener_format_control=matched && fact opener_major_foreign=0 && fact opener_vanished=0 && fact opener_scan=clean && ! printf "%s\n" "$scan_out" | grep -q "^holder "'
+run_case 'cpif #107: the control is reported only for the scanning shell, not as a CPIF holder' ok '' exynos-modem \
+	"$scan"'; fact opener_scan=clean && [ "$(printf "%s\n" "$scan_out" | grep -c "^fact ")" -eq 5 ]' \
+	'ln -s "$fx/dev/null" "$fx/proc/100/task/100/fd/7"'
+run_case 'cpif #107: the control descriptor is closed after the scan' ok '' exynos-modem \
+	'load_cpif_checks && cpif_holders $(cpif_class_nodes) >/dev/null && ! ( : <&7 ) 2>/dev/null'
+pf '#107 a positive control the scan does not see' 'positive control was not detected' 'rm "$fx/proc/4242/task/4242/fd/7"'
+pf '#107 a positive control seen only under another pid' 'positive control was not detected' \
+	'rm "$fx/proc/4242/task/4242/fd/7"; ln -s "$fx/dev/null" "$fx/proc/100/task/100/fd/7"'
+pf '#107 an unreadable /proc/self/stat (own pid unknown)' 'positive control was not detected' 'rm "$fx/proc/self/stat"'
+pf '#107 a control device that cannot be opened' 'could not read every open file' 'chmod 000 "$fx/dev/null"'
+pf '#107 a symlinked control device (never opened)' 'is not the mem-class null device' \
+	'rm "$fx/dev/null"; ln -s umts_boot0 "$fx/dev/null"'
+pf '#107 a control device that is a CPIF node (never opened)' 'is not the mem-class null device' \
+	'rm "$fx/dev/null"; mkfifo "$fx/dev/null"; echo "e3 0" >"$fx/rdev/null"'
+pf '#107 a control under a CPIF major in sysfs (never opened)' 'is not the mem-class null device' \
+	'echo 227:3 >"$fx/sys/class/mem/null/dev"'
+pf '#107 no sysfs mem-class null device' 'is not the mem-class null device' 'rm "$fx/sys/class/mem/null/dev"'
+run_case 'cpif #107: a missing control is never clean' ok '' exynos-modem \
+	"$scan"'; fact opener_positive_control=missing && fact opener_scan=incomplete' 'rm "$fx/proc/4242/task/4242/fd/7"'
+pf '#107 a pid whose task directory cannot be listed' 'could not read every open file' \
+	'mkdir -p "$fx/proc/300/task"; chmod 000 "$fx/proc/300/task"'
+pf '#107 a live pid with no task directory' 'could not read every open file' 'mkdir -p "$fx/proc/301"'
+pf '#107 a live pid with an empty task directory' 'could not read every open file' 'mkdir -p "$fx/proc/302/task"'
+run_case 'cpif #107: a pid that vanished mid-scan is skipped and counted' ok '' exynos-modem \
+	"$scan"'; fact opener_scan=clean && fact opener_vanished=2' \
+	'ln -s "$fx/gone" "$fx/proc/303"; mkdir -p "$fx/proc/304/task"; ln -s "$fx/gone" "$fx/proc/304/task/304"'
+run_case 'cpif #107: a preflight with a vanished pid still passes' ok '' exynos-modem preflight 'ln -s "$fx/gone" "$fx/proc/303"'
+pf '#107 a foreign sysfs device under a CPIF major' 'is not the cpif class entry of that name' \
+	'mkdir -p "$fx/sys/devices/virtual/misc/secretname"; ln -s ../../../../class/misc "$fx/sys/devices/virtual/misc/secretname/subsystem"; ln -s ../../devices/virtual/misc/secretname "$fx/sys/dev/char/227:32"'
+pf '#107 a foreign /dev name under a CPIF major' 'is not the cpif class entry of that name' \
+	'mkfifo "$fx/dev/secretname"; echo "e3 20" >"$fx/rdev/secretname"'
+pf '#107 a /dev alias of a CPIF device under another name' 'is not the cpif class entry of that name' \
+	'mkdir -p "$fx/dev/sub"; mkfifo "$fx/dev/sub/secretname"; cp "$fx/rdev/umts_boot0" "$fx/rdev/secretname"'
+pf '#107 a cpif class entry missing from /sys/dev/char' 'could not read every open file' 'rm "$fx/sys/dev/char/227:3"'
+run_case 'cpif #107: a foreign device is counted, never named' ok '' exynos-modem \
+	"$scan"'; fact opener_major_foreign=2 && fact opener_scan=clean && ! printf "%s\n" "$scan_out" | grep -q secretname' \
+	'mkfifo "$fx/dev/secretname"; echo "e3 20" >"$fx/rdev/secretname"; mkdir -p "$fx/sys/devices/virtual/misc/secretname"; ln -s ../../../../class/misc "$fx/sys/devices/virtual/misc/secretname/subsystem"; ln -s ../../devices/virtual/misc/secretname "$fx/sys/dev/char/227:32"'
+pf '#107 a held device under a CPIF major outside the cpif class' 'outside the cpif class is already open (pid 100)' \
+	'mkfifo "$fx/other"; echo "e3 63" >"$fx/rdev/other"; ln -s "$fx/other" "$fx/proc/100/task/100/fd/6"'
+# stat(1) output formats: GNU and BusyBox print the same tokens; a hostile
+# format (decimal or zero-padded numbers) makes the scan incomplete, never
+# clean, even when it would hide a holder.
+for flavor in gnu busybox upper; do
+	run_case "cpif #107 stat $flavor: clean with the control detected" ok '' exynos-modem \
+		"$scan"'; fact opener_positive_control=detected && fact opener_format_control=matched && fact opener_scan=clean' \
+		"export FAKE_STAT_FLAVOR=$flavor"
+	pf "#107 stat $flavor: a held node is still detected" '/dev/umts_ipc0 is already open (pid 100)' \
+		"export FAKE_STAT_FLAVOR=$flavor; ln -s \"\$fx/dev/umts_ipc0\" \"\$fx/proc/100/task/101/fd/9\""
+done
+run_case 'cpif #107 stat decimal: the format control fails and a holder is not missed as clean' ok '' exynos-modem \
+	"$scan"'; fact opener_format_control=mismatch && fact opener_scan=incomplete && ! fact opener_scan=clean' \
+	'export FAKE_STAT_FLAVOR=decimal; ln -s "$fx/dev/umts_ipc0" "$fx/proc/100/task/101/fd/9"'
+run_case 'cpif #107 stat padded: the control is not opened and the scan is incomplete' ok '' exynos-modem \
+	"$scan"'; fact opener_positive_control=missing && fact opener_format_control=mismatch && fact opener_scan=incomplete' \
+	'export FAKE_STAT_FLAVOR=padded'
+run_case 'cpif #107 stat decimal: the opener check refuses on its own' fail 'could not read every open file' exynos-modem \
+	'load_cpif_checks && cpif_check_unheld $(cpif_class_nodes)' 'export FAKE_STAT_FLAVOR=decimal'
+# awk implementations: the same cases with mawk and gawk where installed.
+for impl in mawk gawk busybox; do
+	if [ "$impl" = busybox ]; then
+		command -v busybox >/dev/null 2>&1 && busybox awk 'BEGIN { exit 0 }' 2>/dev/null || { printf 'skip cpif #107 awk %s: not installed\n' "$impl"; continue; }
+		printf '#!/bin/sh\nexec busybox awk "$@"\n' >"$bin/awk"
+	else
+		command -v "$impl" >/dev/null 2>&1 || { printf 'skip cpif #107 awk %s: not installed\n' "$impl"; continue; }
+		printf '#!/bin/sh\nexec %s "$@"\n' "$(command -v "$impl")" >"$bin/awk"
+	fi
+	chmod 755 "$bin/awk"
+	run_case "cpif #107 awk $impl: clean with the control detected" ok '' exynos-modem \
+		"$scan"'; fact opener_positive_control=detected && fact opener_scan=clean'
+	pf "#107 awk $impl: a held node through an alias" '/dev/umts_boot0 is already open (pid 100)' \
+		'mkdir -p "$fx/elsewhere"; mkfifo "$fx/elsewhere/alias"; cp "$fx/rdev/umts_boot0" "$fx/rdev/alias"; ln -s "$fx/elsewhere/alias" "$fx/proc/100/task/100/fd/9"'
+	pf "#107 awk $impl: a missing control" 'positive control was not detected' 'rm "$fx/proc/4242/task/4242/fd/7"'
+	pf "#107 awk $impl: a foreign device" 'is not the cpif class entry of that name' 'mkfifo "$fx/dev/secretname"; echo "e3 20" >"$fx/rdev/secretname"'
+	rm -f "$bin/awk"
+done
 
 # --- source mounts and inputs -----------------------------------------------
 pf 'unstarted source mounts' 'start ferrix-s5300-mounts manually' 'export FAKE_STARTED=ferrix-radio-firmware'

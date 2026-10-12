@@ -37,6 +37,7 @@ Outputs go, mode 0600, to the ignored `out/pixel-9a/s5300-s2-preflight/`:
 - `summary-<stamp>.json` and `summary-latest.json`: `preflight_result`,
   `preflight_gate`, `preflight_phase`, `device_blockers`, `image_skew`,
   `host_blockers`, `unknown_facts`, `deferred_until_mounts`,
+  `opener_scan`, `opener_positive_control`,
   `deferred_to_active_workflow`, `cp_nodes_opened: false`,
   `state_changes: "none"`, `cp_boot_authorized: false`, and
   `active_s2_workflow: "not-implemented"`.
@@ -62,7 +63,8 @@ output; 6 a host input was refused before the port was opened.
   `b90d3b41…f74b`, and the library must pin that same hash.
 - The pin list must name each of the seven pinned files exactly once. The
   expected releases are read from the recipes: `device-google-tegu`
-  `1-r3`, `modemmanager-samsung-sit` `1.25.95_git20260731-r3`, and
+  `1-r4` (issue #107 opener-scan hardening), `modemmanager-samsung-sit`
+  `1.25.95_git20260731-r3`, and
   `exynos-modem` `0.1.0_git20260731-r3`.
 
 **Host recovery artifact evidence.** This is a fact about this host, never
@@ -100,7 +102,7 @@ The guest checks its SHA-256 before running it. The body:
 ## Check matrix
 
 "Now" means the check can pass on the current installed image. "New image"
-means it cannot pass until an image rebuilt with `device-google-tegu` 1-r3
+means it cannot pass until an image rebuilt with `device-google-tegu` 1-r4
 is flashed. "After mounts" means it is evaluated only after an
 owner-approved manual `rc-service ferrix-s5300-mounts start`. "Active" means
 only the later S2 workflow can observe it.
@@ -115,14 +117,18 @@ only the later S2 workflow can observe it.
 | PID namespace | `/proc/self/ns/pid` | initial namespace | now |
 | Backend | `backends.env` (parsed) | target exact, `google-kleaf-cpif` | now (composer sets it) |
 | Library `cpif_check_target` | — | pass | now |
-| Installed files vs checked-in | SHA-256 of the 7 pinned paths | all equal to the checked-in pins | **new image**: `s5300-cpif.sh` differs on 1-r2 |
-| On-device pins | `s5300-cpif-services.sha256` | `cpif_check_package` pass | now (1-r2 is self-consistent) |
-| Releases | apk db | device 1-r3, modem r3, MM r3 | **new image**: device package is 1-r2 |
+| Installed files vs checked-in | SHA-256 of the 7 pinned paths | all equal to the checked-in pins | **new image**: `s5300-cpif.sh` differs on 1-r3 and older |
+| On-device pins | `s5300-cpif-services.sha256` | `cpif_check_package` pass | now (older images are self-consistent) |
+| Releases | apk db | device 1-r4, modem r3, MM r3 | **new image**: any 1-r3 or older device package is skew |
 | Mounts service | installed SHA-256 | #34-accepted `b90d3b41…` | now |
 | CLI | `exynos-modem --print-config` | exact reviewed text | now (binary is r3) |
 | Surface | modules, platform, driver, `modem_state`, WWAN | three modules `Live`, one `cp_interface`, `OFFLINE`, no WWAN | now |
 | Nodes | twelve E1 nodes | each passes `cpif_check_node` | now |
 | Openers | every `cpif` class entry, alias-aware, every thread | `clean`; `held`, `incomplete`, or `not-run` is NO-GO | now (the checked-in library is sent to the guest) |
+| Opener positive control (#107) | `opener_positive_control` | `detected`; `missing` is NO-GO and makes the scan `incomplete` | **offline only**: never observed on the device |
+| Opener format control (#107) | `opener_format_control` | `matched`; `mismatch` or `missing` is NO-GO | **offline only** |
+| Foreign devices under CPIF majors (#107) | `opener_major_foreign` | `0`; a count is NO-GO, `unknown` is NO-GO | **offline only** |
+| Vanished pids/tasks (#107) | `opener_vanished` | informational count | **offline only** |
 | S5300 daemons | task names | none running | now |
 | Services | `/run/openrc/<state>/` | `exynos-modem` and `sit-proxy` stopped; no stale daemon record or pidfile; mounts `stopped` (pre-mount) or `started` (post-mount) | now |
 | Runlevels | `/etc/runlevels/*/<svc>[.*]` | none for the three S5300 services | now |
@@ -192,7 +198,13 @@ The S5300 services were stopped with no runlevel link or arm token; scratch
 was root-owned, mode 0700 and empty on tmpfs; all four source roles were
 unique, unmounted, unheld and not loop-backed. Source verification remains
 deferred. The aggregate transcript is ignored under
-`out/pixel-9a/s5300-s2-preflight/`. A rebuilt and reflashed 1-r3 image is
+`out/pixel-9a/s5300-s2-preflight/`. That run predates the issue #107
+scan hardening, so it reported none of the `opener_positive_control`,
+`opener_format_control`, `opener_major_foreign`, or `opener_vanished`
+facts, and its `clean` was never shown to be able to detect a holder. The
+checked-in expectation is now `device-google-tegu` 1-r4: a 1-r3 image also
+reports `file-s5300-cpif.sh,pkg-device-google-tegu` skew. A rebuilt and
+reflashed 1-r4 image is
 required before the preflight can return `go`.
 
 ### Phases
@@ -210,8 +222,53 @@ required before the preflight can return `go`.
 A `failed`/`starting`/`stopping`/`inactive` mounts state, or an unreadable
 OpenRC state directory, is NO-GO or `incomplete`.
 
+## Opener scan hardening (issue #107, offline only)
+
+The guest body now runs the library's `cpif_opener_scan` and re-validates
+its facts before they leave the guest. The library is pinned, so these
+checks reach `arm`/`start_pre` only from a rebuilt `device-google-tegu`
+1-r4 image. **None of them has run on the exact phone yet.** Until a
+rebuilt image runs this preflight on `google-pixel-9a-tegu-gxq96-mp1-0`,
+they are offline (fixture) evidence only.
+
+- `opener_positive_control=detected|missing`. The scanning shell holds the
+  sysfs mem-class null device (`/dev/null`) open read-only on fd 7 for the
+  whole scan. It is opened only after `stat(2)` shows a character device,
+  not a symlink, with the sysfs `class/mem/null/dev` number, under no CPIF
+  major. The same `/proc/<pid>/task/<tid>/fd` walk, the same
+  `stat -L -c '%n|%t:%T|%F'` format, and the same awk matcher must report
+  that device as held by the shell's own pid (from `/proc/self/stat`, read
+  by the same process). `missing` makes the scan `incomplete`. Blocker:
+  `opener-positive-control-missing`.
+- `opener_format_control=matched|mismatch|missing`. The null device reads
+  `1:3` in decimal and in hex, so the control alone cannot catch a numeric
+  format difference. Every `/dev` character device named like a `cpif`
+  class entry must print, through the same format and matcher, exactly
+  that entry's sysfs number. Blocker: `opener-format-control-<value>`.
+- `opener_major_foreign=<count>|unknown`. Every character device under a
+  CPIF major, in `/sys/dev/char` and anywhere under `/dev` (a `find` walk,
+  `stat(2)` only), must be the `cpif` class entry of that name and number,
+  and every class entry must be listed in `/sys/dev/char`. Others are
+  counted, never named. An fd on such a device is also a holder (reported
+  as `other`). Blockers: `cpif-major-foreign-device`,
+  `opener-major-enumeration-incomplete`.
+- `opener_vanished=<count>`: pids or tasks that were listed but had gone
+  when re-checked. They are skipped. A pid that still exists but whose
+  `task` directory is missing, empty, or unlistable makes the scan
+  `incomplete`; before #107 such a pid dropped out silently.
+
+The physical run must show, on a rebuilt 1-r4 image:
+`opener_positive_control=detected`, `opener_format_control=matched`,
+`opener_major_foreign=0`, and `opener_scan=clean`. If the CPIF devices
+share a major with another driver, `opener_major_foreign` will block, and
+that needs its own review rather than a relaxed check.
+
 ## Limits
 
+- The positive control proves the scan can detect the scanner's own fd on
+  the null device. It does not prove that every other task is visible, and
+  in the offline fixture the control's fd entry is a static symlink, so the
+  fixture cannot show that the open happened; only a device run can.
 - Snapshot only. Every check, including the opener scan, describes one
   moment, so the active workflow must repeat its own checks immediately
   before `arm` and again in `start_pre` (the library already does this). The
@@ -310,6 +367,10 @@ for a fail-closed active command; see
   `just pixel-9a-dev-flash` by the lead, then a pre-mount `go` from this
   preflight on the exact device (see the result above). Re-run the
   preflight after any reflash or reboot.
+- After #107 (`device-google-tegu` 1-r4, opener-scan positive control): a
+  rebuilt 1-r4 image flashed the same way, and a pre-mount `go` that reports
+  `opener_positive_control=detected`, `opener_format_control=matched` and
+  `opener_major_foreign=0` on the exact device.
 - A fresh, recorded owner decision for one S2 run, a per-run typed phrase
   naming the exact target, and refusal of an ambiguous or second device.
 - The sequence, with each step bounded and logged: preflight (pre-mount) →
@@ -381,7 +442,18 @@ for a fail-closed active command; see
 `tools/pixel-9a/tests/s5300-mounts-service.sh` adds the partial-start
 characterisation above.
 
-Run on 2026-10-12 (macOS arm64 host, offline): `s5300-s2-preflight.sh`
+Issue #107 (offline only): the real composed probe adds a detected
+positive control on the clean case, and cases for a control the scan does
+not see, an unlistable task directory, a vanished pid, and a foreign device
+under a CPIF major (counted, never named). The host workflow adds NO-GO
+cases for a missing control, a format mismatch, a foreign device, and an
+unknown enumeration, and refuses an out-of-set or missing control fact.
+Run on 2026-10-12 (macOS arm64 host, offline), `s5300-s2-preflight.sh`
+passed all 275 checks and `s5300-cpif-services.sh` all 141 checks. Not
+run: anything on the phone, BusyBox, mawk, or gawk (none is installed on
+this host; the services suite runs its awk cases with each one it finds).
+
+Earlier run on 2026-10-12 (macOS arm64 host, offline): `s5300-s2-preflight.sh`
 passed all 238 checks. `s5300-mounts-service.sh` (with the new partial-start
 characterisation), `s5300-cpif-services.sh` (108 checks), and
 `s5300-cpif-inventory.sh` (144 checks) also passed, and `git diff --check`

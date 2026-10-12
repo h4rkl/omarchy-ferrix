@@ -1,5 +1,22 @@
 # Status
 
+## 2026-10-12 (S5300 CPIF opener-scan positive control, issue #107; offline only)
+
+- The pinned CPIF library (`ferrix-s5300-cpif.sh`, `device-google-tegu`
+  1-r4) now holds the mem-class null device on fd 7 during the opener scan
+  and counts the scan only if the same matcher reports it for the scanner's
+  own pid. It also checks the CPIF numbers' `stat` format, fails closed on a
+  live pid whose task directory cannot be listed (vanished pids are skipped
+  and counted), and refuses any character device under a CPIF major that is
+  not the `cpif` class entry of that name. The S2 preflight forwards these
+  as `opener_positive_control`, `opener_format_control`,
+  `opener_major_foreign`, and `opener_vanished`.
+- Offline fixture tests only (GNU/BusyBox-style and hostile `stat`
+  formats; mawk/gawk/BusyBox awk cases skip when absent, as on this host).
+  Nothing has run on the phone. A rebuilt 1-r4 image must report the
+  control `detected` and the scan `clean` on the exact device before this
+  counts as evidence. `[telephony]` remains `unsupported`.
+
 ## 2026-10-12 (1-r3 image and S5300 S2 pre-mount GO, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - Rebuilt the native rootfs from reviewed source `0032a6b`

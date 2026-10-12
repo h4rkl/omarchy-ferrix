@@ -38,7 +38,7 @@ checked-in S2 workflow.
    teardown that must be verified by its outcome needs these semantics first.
    A read-only, device-side characterisation can supply them. It must not
    start any S5300 service.
-3. **The opener scan lacks a positive control on the device.** The scan
+3. **The opener scan lacks a positive control on the device.** *(Offline fix in #107, `device-google-tegu` 1-r4; open until a rebuilt image passes on the exact phone.)* The scan
    matches holders by `stat -L` device number on every thread's fd table, and
    it fails closed on unreadable entries. On the one exact-device run it
    returned `clean`, but it has never been shown to *detect* a holder with

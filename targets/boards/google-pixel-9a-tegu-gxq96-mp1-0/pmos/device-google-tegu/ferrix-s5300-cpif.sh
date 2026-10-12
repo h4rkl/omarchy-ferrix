@@ -5,8 +5,11 @@
 #
 # Nothing here opens a CPIF character device. Opening /dev/umts_boot0 or
 # /dev/umts_ipc* runs the link's init_comm hook, so /dev paths are touched only
-# by shell file tests (-e -L -c) and stat(2), including stat through the
-# /proc/<pid>/task/<tid>/fd links. No CPIF device is opened. No per-unit file
+# by shell file tests (-e -L -c), stat(2), and find(1)'s directory walk,
+# including stat through the /proc/<pid>/task/<tid>/fd links. No CPIF device
+# is opened. The one device the library opens is the opener scan's positive
+# control, /dev/null, read-only, and only after stat(2) shows that it is the
+# mem-class null device under no CPIF major (issue #107). No per-unit file
 # content is read: the modem image, NV files, and cpsha are checked by
 # stat(2) metadata only. The only programs run are
 # sha256sum on installed package files, the util-linux probes that the
@@ -218,75 +221,275 @@ cpif_check_node() {
 # does /proc list every task on the system.
 cpif_init_pidns='pid:[4026531836]'
 
-# cpif_holders NAME...: print "PID NAME" for each task with an open file that
-# is the character device sysfs names NAME (cpif_check_node has matched it to
-# /dev/NAME). Matching is by device number from stat(2) through each
+# The opener scan's positive control (issue #107): a harmless character
+# device that is not CPIF, held open read-only by the scanning shell itself
+# while it scans. It is the null device of the sysfs mem class. It is opened
+# only after stat(2) shows that the node is a character device (not a
+# symlink) with exactly that device number, under no CPIF major.
+cpif_control_dev="$cpif_dev/null"
+cpif_control_sys="$cpif_sys/class/mem/null/dev"
+
+# cpif_rdev_key MAJOR:MINOR: a decimal sysfs device number in the "%t:%T"
+# form stat(1) prints (lower-case hex). Fails on anything else.
+cpif_rdev_key() {
+	case "$1" in
+		[0-9]*:[0-9]*) ;;
+		*) return 1 ;;
+	esac
+	case "${1%%:*}${1#*:}" in *[!0-9]*) return 1 ;; esac
+	case "$1" in 0[0-9]*|*:0[0-9]*) return 1 ;; esac
+	printf '%x:%x' "${1%%:*}" "${1#*:}"
+}
+
+# cpif_opener_scan NAME...: the opener scan. It prints "holder PID NAME" for
+# each task with an open file that is the character device sysfs names NAME
+# in the cpif class (cpif_check_node has matched it to /dev/NAME), and
+# "holder PID +foreign" for an open character device under a CPIF major that
+# is not in the cpif class at all. Then it prints these facts, once each:
+#
+#   fact opener_positive_control=detected|missing
+#   fact opener_format_control=matched|mismatch|missing
+#   fact opener_major_foreign=<count>|unknown
+#   fact opener_vanished=<count>
+#   fact opener_scan=clean|held|incomplete
+#
+# Matching is by device number from stat(2) through each
 # /proc/<pid>/task/<tid>/fd magic link, so any path, alias, deleted node, or
 # mount namespace that reaches the same device counts, and every thread's fd
-# table is read. stat(2) never opens the file. Returns 2 if the scan could be
-# incomplete: this shell is outside the initial PID namespace, a live task's
-# fd directory cannot be listed, or a live fd cannot be stat'ed. A task or fd
-# that is gone when re-checked has exited or closed (process churn) and is
-# skipped. The scan is
-# a snapshot: an open after a task was read is not seen, and SCM_RIGHTS fds in
+# table is read. stat(2) never opens the file.
+#
+# Positive control: the shell that runs the scan holds the control device
+# open on fd 7 for the whole scan. The scan counts only if the same stat
+# format, the same /proc walk and the same matcher report that device as held
+# by that shell's own pid (read from /proc/self/stat by the same process). A
+# stat(1) output format, /proc layout, or pid parse that the matcher does not
+# understand therefore reads as `incomplete`, never as `clean`. Because the
+# null device's numbers (1:3) read the same in decimal and hex, the format
+# control adds the CPIF numbers themselves: every /dev character device named
+# like a cpif class entry must print, through the same stat format and
+# matcher, exactly that entry's sysfs number.
+#
+# Every character device under a CPIF major, in sysfs (/sys/dev/char) and in
+# /dev, must be the cpif class entry of that name and number. Others are
+# counted (never named) in opener_major_foreign. Every cpif class entry must
+# appear in /sys/dev/char.
+#
+# The scan is `incomplete` (status 2) if this shell is outside the initial
+# PID namespace; a live pid's task directory or a live task's fd directory
+# cannot be listed, or is empty; a live fd or /dev entry cannot be stat'ed;
+# /dev cannot be walked; the positive or format control fails; a cpif class
+# entry is missing from /sys/dev/char; or the scan subshell does not reach its
+# completion line. A pid, task, or fd that is gone when re-checked has exited
+# or closed (process churn): it is skipped, and pids and tasks are counted in
+# opener_vanished. Status 2 also follows a foreign device. The scan is a
+# snapshot: an open after a task was read is not seen, and SCM_RIGHTS fds in
 # flight or kernel-internal references are not visible at all
 # (s5300-cpif-integration.md).
-cpif_holders() {
+cpif_opener_scan() (
+	control=missing format=missing foreign=unknown vanished=0 result=incomplete
+	cpif_scan_facts() {
+		printf 'fact opener_positive_control=%s\nfact opener_format_control=%s\nfact opener_major_foreign=%s\nfact opener_vanished=%s\nfact opener_scan=%s\n' \
+			"$control" "$format" "$foreign" "$vanished" "$result"
+	}
 	[ "$(readlink "$cpif_proc/self/ns/pid" 2>/dev/null)" = "$cpif_init_pidns" ] || {
 		eerror "the opener scan must run in the initial PID namespace" >&2
-		return 2
+		cpif_scan_facts
+		exit 2
 	}
 	[ "$#" -gt 0 ] || {
 		eerror "no CPIF device was named for the opener scan" >&2
-		return 2
+		cpif_scan_facts
+		exit 2
 	}
+	# Every cpif class entry by its stat(1) key, and its decimal major.
+	class=
+	majors=
+	for entry in "$cpif_sys/class/$cpif_class"/*; do
+		[ -e "$entry/dev" ] || continue
+		name=${entry##*/}
+		rdev=$(cat "$entry/dev" 2>/dev/null) || rdev=
+		key=$(cpif_rdev_key "$rdev") && case "$name" in *[!A-Za-z0-9_.-]*) false ;; esac || {
+			eerror "cannot read the cpif class entry $name" >&2
+			cpif_scan_facts
+			exit 2
+		}
+		class="$class $key=$name"
+		majors="$majors ${rdev%%:*}"
+	done
 	wanted=
 	for node; do
 		rdev=$(cat "$cpif_sys/class/$cpif_class/$node/dev" 2>/dev/null) || rdev=
-		case "$rdev" in
-			[0-9]*:[0-9]*) ;;
-			*) eerror "cannot read the device number of $node" >&2; return 2 ;;
-		esac
-		case "${rdev%:*}${rdev#*:}" in *[!0-9]*) eerror "cannot read the device number of $node" >&2; return 2 ;; esac
-		wanted="$wanted $(printf '%x:%x' "${rdev%:*}" "${rdev#*:}")=$node"
+		key=$(cpif_rdev_key "$rdev") || {
+			eerror "cannot read the device number of $node" >&2
+			cpif_scan_facts
+			exit 2
+		}
+		wanted="$wanted $key=$node"
 	done
-	# The scan ends with a "complete" line, so a subshell that failed part way
-	# can never read as an empty, clean scan.
-	scan=$(
-		for task in "$cpif_proc"/[0-9]*/task/[0-9]*; do
-			[ -d "$task" ] || continue
-			set -- "$task"/fd/[0-9]*
+	# The control is opened only if it is the mem-class null device and its
+	# major is no CPIF major.
+	control_key=$(cpif_rdev_key "$(cat "$cpif_control_sys" 2>/dev/null)") || control_key=
+	control_ok=no
+	case "$control_key: $class " in
+		:*|*" ${control_key%%:*}:"*) ;;
+		*)
+			[ "$(stat -c '%t:%T|%F' -- "$cpif_control_dev" 2>/dev/null | tr 'A-F' 'a-f')" = "$control_key|character special file" ] &&
+				control_ok=yes
+			;;
+	esac
+	cpif_scan_task() {
+		set -- "$1"/fd/[0-9]*
+		task=${1%/fd/*}
+		if [ "$#" -eq 1 ] && [ ! -e "$1" ] && [ ! -L "$1" ]; then
+			# No open fd, a directory that cannot be listed, or a task that
+			# has exited.
+			ls -A "$task/fd" >/dev/null 2>&1 && return
+			if [ -e "$task" ]; then echo unreadable; else echo vanished; fi
+			return
+		fi
+		stat -L -c 'fd|%n|%t:%T|%F' -- "$@" 2>/dev/null && return
+		for fd; do
+			[ -L "$fd" ] || continue
+			stat -L -c %F -- "$fd" >/dev/null 2>&1 || [ ! -L "$fd" ] || echo unreadable
+		done
+	}
+	# Runs with the control on fd 7, in the process whose pid it reports.
+	cpif_scan_body() {
+		self=
+		read -r self _ 2>/dev/null <"$cpif_proc/self/stat" || self=
+		echo "self ${self:-none}"
+		for pid in "$cpif_proc"/[0-9]*; do
+			case "${pid##*/}" in *[!0-9]*) continue ;; esac
+			set -- "$pid"/task/[0-9]*
 			if [ "$#" -eq 1 ] && [ ! -e "$1" ] && [ ! -L "$1" ]; then
-				# No open fd, or a directory that cannot be listed.
-				ls -A "$task/fd" >/dev/null 2>&1 || [ ! -d "$task" ] || echo "unreadable ${task#"$cpif_proc"/}"
+				# A live process always has a task; an empty or unlistable
+				# task directory blocks unless the pid has gone.
+				if [ -e "$pid" ]; then echo unreadable; else echo vanished; fi
 				continue
 			fi
-			stat -L -c '%n|%t:%T|%F' -- "$@" 2>/dev/null && continue
-			for fd; do
-				[ -L "$fd" ] || continue
-				stat -L -c %F -- "$fd" >/dev/null 2>&1 || [ ! -L "$fd" ] || echo "unreadable ${fd#"$cpif_proc"/}"
+			for task; do
+				cpif_scan_task "$task"
 			done
 		done
+		set -f
+		old_ifs=$IFS
+		IFS='
+'
+		devs=$(find "$cpif_dev" ! -type d ! -type l 2>/dev/null) || echo unreadable
+		set -- $devs
+		IFS=$old_ifs
+		set +f
+		if [ "$#" -gt 0 ] && ! stat -c 'dev|%n|%t:%T|%F' -- "$@" 2>/dev/null; then
+			for entry; do
+				stat -c %F -- "$entry" >/dev/null 2>&1 || { [ ! -e "$entry" ] && [ ! -L "$entry" ]; } || echo unreadable
+			done
+		fi
+		for entry in "$cpif_sys"/dev/char/*; do
+			number=${entry##*/}
+			case " $majors " in *" ${number%%:*} "*) ;; *) continue ;; esac
+			key=$(cpif_rdev_key "$number") || key=bad
+			name=$(readlink "$entry" 2>/dev/null) && subsystem=$(readlink "$entry/subsystem" 2>/dev/null) || {
+				echo unreadable
+				continue
+			}
+			echo "sys|${name##*/}|$key|${subsystem##*/}"
+		done
 		echo complete
-	)
-	scan_status=0
-	printf '%s\n' "$scan" | awk -v wanted="$wanted" -v proc="$cpif_proc/" '
-		BEGIN { n = split(wanted, w, " "); for (i = 1; i <= n; i++) { eq = index(w[i], "="); node[substr(w[i], 1, eq - 1)] = substr(w[i], eq + 1) } }
-		$0 == "complete" { done = 1; next }
-		$1 == "unreadable" { bad = 1; next }
-		{
-			split($0, f, "|")
-			if (f[3] != "character special file" || !(f[2] in node)) next
-			path = substr(f[1], length(proc) + 1)
-			pid = substr(path, 1, index(path, "/") - 1)
-			key = pid " " node[f[2]]
-			if (!(key in seen)) { seen[key] = 1; print key }
-		}
-		END { exit (bad || !done) ? 2 : 0 }' || scan_status=2
-	[ "$scan_status" -eq 0 ] || {
-		eerror "the CPIF opener scan could not read every open file; refusing" >&2
-		return 2
 	}
+	# The scan ends with a "complete" line, so a subshell that failed part
+	# way can never read as an empty, clean scan.
+	if [ "$control_ok" = yes ]; then
+		scan=$(cpif_scan_body 7<"$cpif_control_dev") || scan=
+	else
+		eerror "the opener scan's positive control is not the mem-class null device; not opening it" >&2
+		scan=$(cpif_scan_body) || scan=
+	fi
+	printf '%s\n' "$scan" | awk -v wanted="$wanted" -v class="$class" -v ctl="$control_key" -v ctl_ok="$control_ok" \
+		-v proc="$cpif_proc/" -v cls_name="$cpif_class" '
+		function major(k) { return substr(k, 1, index(k, ":") - 1) }
+		function load(list, arr,    n, w, i, eq) {
+			n = split(list, w, " ")
+			for (i = 1; i <= n; i++) { eq = index(w[i], "="); arr[substr(w[i], 1, eq - 1)] = substr(w[i], eq + 1) }
+		}
+		BEGIN {
+			load(wanted, want); load(class, cls)
+			for (k in cls) { majors[major(k)] = 1; byname[cls[k]] = k }
+		}
+		$0 == "complete" { done = 1; next }
+		$0 == "unreadable" { bad = 1; next }
+		$0 == "vanished" { gone++; next }
+		$1 == "self" && NF == 2 { if ($2 ~ /^[0-9]+$/) self = $2; next }
+		{
+			n = split($0, f, "|")
+			if (n < 4) { bad = 1; next }
+			kind = f[n]; k = tolower(f[n - 1]); path = f[2]
+			for (i = 3; i < n - 1; i++) path = path "|" f[i]
+		}
+		f[1] == "fd" {
+			if (kind != "character special file") next
+			rel = substr(path, length(proc) + 1)
+			pid = substr(rel, 1, index(rel, "/") - 1)
+			if (k == ctl) { if (ctl_ok == "yes" && self != "" && pid == self) control = 1; next }
+			if (k in want) name = want[k]
+			else if (k in cls) next
+			else if (major(k) in majors) name = "+foreign"
+			else next
+			key = pid " " name
+			if (!(key in seen)) { seen[key] = 1; holder[++held] = key }
+			next
+		}
+		f[1] == "dev" {
+			if (kind != "character special file") next
+			b = path; sub(/.*\//, "", b)
+			if (b in byname) { if (byname[b] == k) fmt_ok++; else fmt_bad++ }
+			if ((major(k) in majors) && !((k in cls) && cls[k] == b)) foreign++
+			next
+		}
+		f[1] == "sys" {
+			if (k == "bad") { bad = 1; next }
+			if (kind == cls_name && (k in cls) && cls[k] == path) listed[k] = 1
+			else foreign++
+			next
+		}
+		{ bad = 1 }
+		END {
+			for (k in cls) if (!(k in listed)) unlisted = 1
+			for (i = 1; i <= held; i++) print "holder " holder[i]
+			fmt = fmt_bad ? "mismatch" : (fmt_ok ? "matched" : "missing")
+			incomplete = bad || !done || unlisted || !control || fmt != "matched"
+			printf "fact opener_positive_control=%s\n", control ? "detected" : "missing"
+			printf "fact opener_format_control=%s\n", fmt
+			printf "fact opener_major_foreign=%s\n", (bad || !done || unlisted) ? "unknown" : foreign + 0
+			printf "fact opener_vanished=%d\n", gone
+			printf "fact opener_scan=%s\n", incomplete ? "incomplete" : (held ? "held" : "clean")
+			exit ((incomplete || foreign) ? 2 : 0)
+		}'
+)
+
+# cpif_holders NAME...: print "PID NAME" for each holder that the opener scan
+# above reports. Returns 2, with nothing printed, if the scan is incomplete
+# or found a foreign device under a CPIF major.
+cpif_holders() {
+	scan_out=$(cpif_opener_scan "$@") || :
+	case "$scan_out" in
+		*"fact opener_scan=clean"*|*"fact opener_scan=held"*) ;;
+		*)
+			case "$scan_out" in
+				*"fact opener_positive_control=detected"*) ;;
+				*) eerror "the CPIF opener scan's positive control was not detected" >&2 ;;
+			esac
+			eerror "the CPIF opener scan could not read every open file; refusing" >&2
+			return 2
+			;;
+	esac
+	case "$scan_out" in
+		*"fact opener_major_foreign=0"*) ;;
+		*)
+			eerror "a character device under a CPIF major is not the cpif class entry of that name; refusing" >&2
+			return 2
+			;;
+	esac
+	printf '%s\n' "$scan_out" | sed -n 's/^holder //p'
 }
 
 # Every entry of the cpif sysfs class, so that the modem preflight also sees
@@ -306,7 +509,10 @@ cpif_check_unheld() {
 	holders=$(cpif_holders "$@") || return 1
 	[ -z "$holders" ] || {
 		set -- $holders
-		eerror "/dev/$2 is already open (pid $1)"
+		case "$2" in
+			+foreign) eerror "a character device under a CPIF major outside the cpif class is already open (pid $1)" ;;
+			*) eerror "/dev/$2 is already open (pid $1)" ;;
+		esac
 		return 1
 	}
 }
