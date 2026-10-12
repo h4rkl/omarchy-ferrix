@@ -1352,6 +1352,81 @@ fn socket_server_serves_hello_state_subscribe_and_rejects_garbage() {
     let _ = std::fs::remove_dir_all(&h.dir);
 }
 
+/// Holds the subscribe `ok` write open until the test releases it, so an
+/// event can be raised at the exact moment a client could observe the ack.
+struct GatedSink {
+    sink: MemorySink,
+    gate: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+}
+
+impl std::io::Write for GatedSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.sink.write(buf)?;
+        if let Some((acked, proceed)) = self.gate.take() {
+            acked.send(()).unwrap();
+            proceed.recv().unwrap();
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_event_raised_once_subscribe_is_acked_reaches_the_subscriber() {
+    let h = harness("subscribe-ack");
+    let sink = MemorySink::new();
+    let (acked_tx, acked) = std::sync::mpsc::channel();
+    let (proceed, proceed_rx) = std::sync::mpsc::channel();
+    let gated = GatedSink {
+        sink: sink.clone(),
+        gate: Some((acked_tx, proceed_rx)),
+    };
+    let service = Arc::clone(&h.service);
+    let subscriber = std::thread::spawn(move || {
+        service.subscribe_authorized(
+            None,
+            Arc::new(AllowAll),
+            AllowAll.identify(None),
+            Box::new(gated),
+        )
+    });
+    acked.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    // The `ok` is on the wire; an event raised now must not be lost.
+    let (published_tx, published) = std::sync::mpsc::channel();
+    let service = Arc::clone(&h.service);
+    let publisher = std::thread::spawn(move || {
+        service.handle_backend_event(BackendEvent::CallAdded {
+            handle: CallHandle::from("h1"),
+            direction: Direction::Incoming,
+            number: number(),
+            state: CallState::Ringing,
+        });
+        published_tx.send(()).unwrap();
+    });
+    // Registration and the ack are atomic, so the publisher waits for the
+    // subscribe to finish. The bound only lets an unfixed service (which
+    // drops the event immediately) be observed deterministically.
+    let _ = published.recv_timeout(Duration::from_millis(200));
+    proceed.send(()).unwrap();
+    subscriber.join().unwrap().unwrap();
+    publisher.join().unwrap();
+
+    let values = sink.values();
+    assert_eq!(values[0], serde_json::json!({"reply": "ok"}));
+    assert_eq!(
+        values[1..]
+            .iter()
+            .map(|v| v["event"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        ["call-changed"]
+    );
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
 // ---------------------------------------------------------------------------
 // Incoming-call attention
 // ---------------------------------------------------------------------------
