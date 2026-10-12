@@ -41,15 +41,20 @@
   drains it to the existing subscribers under the same state lock that
   copies the snapshot. Socket writes and per-event appd identity checks
   never run under the state lock. The snapshot is projected for the identity
-  re-resolved at registration, not the one seen at dispatch, and a peer
-  revoked by then gets nothing. Each event still re-resolves the peer.
+  re-resolved at registration (under the subscribers lock, immediately
+  before the reply), not the one seen at dispatch or before a wait for the
+  lock, and a peer revoked by then gets nothing. Each event still
+  re-resolves the peer.
 - **Tests (host, `mock`):** a socket test raises an event between a `state`
   reply and `subscribe` (the former boundary) and requires it in the
   subscribe snapshot and not replayed on the stream. An in-crate test
   registers a subscriber while an applied event is still unflushed. A
   gated-reply test raises an event while the snapshot is being written. A
   redaction/authorization test covers a grant downgraded between dispatch
-  and registration, plus a revoked peer. A stress test runs four mutating
+  and registration, plus a revoked peer; an in-crate test holds the
+  subscribers lock after the fail-fast check passes, revokes or downgrades
+  the peer, then releases it: the revoked peer gets no snapshot and is not
+  registered, the downgraded one gets the redacted snapshot. A stress test runs four mutating
   threads while 16 full and redacted subscribers join; each stream must
   fold to the final service state with no duplicate transition. Protocol
   tests check the client sends only `hello`,`subscribe` and rejects a bare

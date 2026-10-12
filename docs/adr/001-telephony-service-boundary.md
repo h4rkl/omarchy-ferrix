@@ -79,7 +79,9 @@ under the subscribers lock, and registration drains it (to the existing
 subscribers) under the same state lock that copies the snapshot. Socket
 writes and per-event identity re-resolution therefore never run under the
 state lock. The snapshot is projected for the identity re-resolved at
-registration, and each later event re-resolves again (ADR-004).
+registration, after the subscribers lock is held and immediately before the
+reply is written, so grants revoked or narrowed while registration waited
+for the lock are honoured; each later event re-resolves again (ADR-004).
 
 Until 2026-10-12 `subscribe` replied `ok` and the client fetched the snapshot
 with a separate `state` request first, so an event between the two was in

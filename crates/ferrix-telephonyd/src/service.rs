@@ -298,8 +298,10 @@ impl Service {
     }
 
     /// Production subscription with continuous authorization. The peer is
-    /// re-resolved here, so the snapshot is projected for the grants it holds
-    /// now rather than those seen at dispatch (`_dispatch_identity`); each
+    /// re-resolved here to fail fast, and again by [`Service::register`] once
+    /// it holds the subscribers lock, so the snapshot is projected for the
+    /// grants the peer holds when it is written rather than those seen at
+    /// dispatch (`_dispatch_identity`) or before a wait for the lock; each
     /// later event re-resolves again and drops the stream on revocation.
     pub fn subscribe_authorized(
         &self,
@@ -310,10 +312,7 @@ impl Service {
     ) -> std::io::Result<()> {
         let current = identity_source.identify(peer_pid);
         if !current.has(CAP_STATE) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "telephony-state grant was revoked",
-            ));
+            return Err(state_revoked());
         }
         self.register(Subscriber {
             identity: current,
@@ -331,6 +330,14 @@ impl Service {
     /// snapshot (applied before it, never sent to this stream) or after it
     /// (enqueued later, flushed to this stream in apply order): no gap, no
     /// duplicate, and no event precedes the reply.
+    ///
+    /// The lock may be contended for an unbounded time (other registrations,
+    /// slow subscriber writes, per-event identity checks), so an
+    /// authorized subscriber's identity is resolved again after the backlog
+    /// is delivered, immediately before the snapshot is projected: a peer
+    /// revoked meanwhile gets nothing and is not registered, and a downgraded
+    /// one gets the narrower projection. Like [`Service::deliver`], this
+    /// resolves under the subscribers lock but never under the state lock.
     fn register(&self, mut subscriber: Subscriber) -> std::io::Result<()> {
         let mut subscribers = lock(&self.subscribers);
         let (pending, snapshot) = {
@@ -339,6 +346,13 @@ impl Service {
         };
         for event in pending {
             self.deliver(&mut subscribers, &event);
+        }
+        if let Some(source) = &subscriber.identity_source {
+            let identity = source.identify(subscriber.peer_pid);
+            if !identity.has(CAP_STATE) {
+                return Err(state_revoked());
+            }
+            subscriber.identity = identity;
         }
         write_json(
             &mut subscriber.sink,
@@ -1175,6 +1189,13 @@ fn lose_backend(state: &mut State, events: &mut Vec<TelephonyEvent>) -> bool {
     changed
 }
 
+fn state_revoked() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "telephony-state grant was revoked",
+    )
+}
+
 fn write_json(
     sink: &mut (impl Write + ?Sized),
     value: &impl serde::Serialize,
@@ -1188,9 +1209,10 @@ fn write_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::AllowAll;
+    use crate::identity::{AllowAll, CAP_SMS, StaticIdentity};
     use crate::testing::{FakeBackend, MemorySink, temp_data_dir};
     use ferrix_telephony_api::Signal;
+    use std::sync::mpsc::SyncSender;
 
     /// The window a separate-snapshot design cannot close: an event applied
     /// to state but not yet fanned out when a subscriber registers. Reached
@@ -1234,6 +1256,96 @@ mod tests {
         assert_eq!(late.len(), 1, "no replay after the snapshot: {late:?}");
         assert_eq!(late[0]["reply"], "state");
         assert_eq!(late[0]["state"]["signal"]["bars"], 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reports each resolution so a test knows the fail-fast check passed.
+    struct Observed {
+        inner: StaticIdentity,
+        resolved: Mutex<SyncSender<()>>,
+    }
+
+    impl Identity for Observed {
+        fn identify(&self, pid: Option<u32>) -> IdentityInfo {
+            let info = self.inner.identify(pid);
+            let _ = lock(&self.resolved).send(());
+            info
+        }
+
+        fn name(&self) -> &'static str {
+            "observed"
+        }
+    }
+
+    /// Codex review on #68: authorization passes, then registration waits
+    /// for the subscribers lock while the peer's grants change. The
+    /// snapshot must use the grants at write time. Deterministic: the test
+    /// holds the lock across the change, so registration cannot proceed
+    /// until it is released, whether or not it has reached the lock yet.
+    #[test]
+    fn grants_changed_while_registration_waits_for_the_lock_are_honoured() {
+        const PID: u32 = 4242;
+        let dir = temp_data_dir("register-wait");
+        let (recorder, _records) = Recorder::capturing("mock");
+        let service = Service::new(
+            Arc::new(FakeBackend::ready()),
+            SmsStore::new(&dir),
+            recorder,
+            ServiceOptions::default(),
+        )
+        .unwrap();
+        service.handle_backend_event(BackendEvent::SmsReceived {
+            from: E164::new("+15550100042").unwrap(),
+            body: "secret".into(),
+        });
+        let full = IdentityInfo::granted(Some("org.ferrix.messages"), &[CAP_STATE, CAP_SMS]);
+
+        let run = |changed: Option<IdentityInfo>| {
+            let (tx, rx) = std::sync::mpsc::sync_channel(4);
+            let source = Arc::new(Observed {
+                inner: StaticIdentity::new().with(PID, full.clone()),
+                resolved: Mutex::new(tx),
+            });
+            let sink = MemorySink::new();
+            let held = lock(&service.subscribers);
+            let before = held.len();
+            let result = thread::scope(|scope| {
+                let waiter = scope.spawn(|| {
+                    service.subscribe_authorized(
+                        Some(PID),
+                        Arc::clone(&source) as Arc<dyn Identity>,
+                        full.clone(),
+                        Box::new(sink.clone()),
+                    )
+                });
+                rx.recv().expect("fail-fast authorization ran");
+                match &changed {
+                    Some(info) => source.inner.set(PID, info.clone()),
+                    None => source.inner.remove(PID),
+                }
+                drop(held);
+                waiter.join().unwrap()
+            });
+            let registered = lock(&service.subscribers).len() - before;
+            (result, sink, registered)
+        };
+
+        let (result, sink, registered) = run(None);
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(sink.lines().is_empty(), "revoked: no snapshot");
+        assert_eq!(registered, 0, "revoked: not registered");
+
+        let downgraded = IdentityInfo::granted(Some("org.ferrix.messages"), &[CAP_STATE]);
+        let (result, sink, registered) = run(Some(downgraded));
+        result.unwrap();
+        assert_eq!(registered, 1);
+        let text = sink.lines().concat();
+        assert!(text.starts_with(r#"{"reply":"state""#), "{text}");
+        assert!(!text.contains("secret"), "downgraded: redacted {text}");
+        assert!(!text.contains("0100042"), "downgraded: redacted {text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
