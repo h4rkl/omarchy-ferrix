@@ -495,6 +495,18 @@ pixel-9a-mic-capture-proof *args:
 pixel-9a-mic-capture-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/mic-capture-proof.sh"
 
+# Issue #80 controlled-tone acoustic proof: `acoustic` mode of the same
+# workflow, with its own phrase (FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM, printed
+# by a ready preflight). The host plays a generated, gated 1180 Hz tone on its
+# own speaker at the existing volume during one 2 s capture; the guest folds
+# stimulus and control-bin Goertzel amplitudes and deletes the recording.
+# Never plays on the phone or changes a host volume or device.
+pixel-9a-mic-acoustic-proof:
+    @sh "{{root}}/tools/pixel-9a/mic-capture-proof.sh" acoustic
+
+pixel-9a-mic-acoustic-proof-test:
+    @sh "{{root}}/tools/pixel-9a/tests/mic-acoustic-proof.sh"
+
 # Read-only issue #34 filesystem inventory of the four S5300 modem source
 # partitions on a booted exact Ferrix dev guest over its CDC-ACM bring-up
 # shell. Never mounts or writes, and never reports the safety gate as passed.

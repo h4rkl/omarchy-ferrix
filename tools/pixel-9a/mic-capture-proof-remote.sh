@@ -3,7 +3,7 @@
 # CDC-ACM shell (acm-probe.py, piped to the guest `sh`) by
 # mic-capture-proof.sh, which prepends exactly two validated assignments:
 #
-#   proof_mode=preflight|capture|restore
+#   proof_mode=preflight|capture|acoustic|restore
 #   proof_binding=        (capture: the 64-hex binding the preflight printed)
 #
 # preflight is read-only. It checks the exact device tree, the pinned Kleaf
@@ -31,6 +31,15 @@
 # the control and deletes the file if the session ends early. Only aggregate
 # statistics leave the guest; no sample, byte, or audio content is printed.
 #
+# acoustic (issue #80; only after the host's own typed confirmation, while the
+# host plays its gated reference tone) is capture with the same checks,
+# write, recording, restore, and cleanup, plus one more aggregate pass over
+# the same transient file before it is deleted: per 50 ms window, the
+# Goertzel amplitude at the stimulus frequency and at two control
+# frequencies, folded at the stimulus gating period (see tone_measure). Only
+# the folded per-channel means and cycle counts leave the guest; the
+# per-window values stay inside awk.
+#
 # restore (only after the host's typed confirmation) writes `off` to the same
 # single control if it reads `on` and removes the fixed proof directory. It
 # exists for a capture session whose transport failed before its cleanup
@@ -55,13 +64,20 @@ rate=48000
 channels=2
 seconds=2
 expected_bytes=384000
+# acoustic: the host's reference tone (mic-acoustic-tone.py) is gated on for
+# 200 ms and off for 200 ms. A 2400-frame (50 ms) window holds whole cycles
+# of every analysed frequency, so the Goertzel bins are exact and DC-free.
+tone_hz=1180
+control_hz='1060 1280'
+tone_window_frames=2400
+tone_period_windows=8
 
 model=$(tr '\000' '\n' <"$dt_root/model" 2>/dev/null | sed -n '1p')
 compatible=$(tr '\000' '\n' <"$dt_root/compatible" 2>/dev/null)
 [ "$model" = 'ZUMA PRO TEGU MP on ZUMA PRO' ] || exit 4
 printf '%s\n' "$compatible" | grep -Fxq 'google,ZUMA PRO TEGU' || exit 4
 
-case "${proof_mode:-}" in preflight|capture|restore) ;; *) exit 5 ;; esac
+case "${proof_mode:-}" in preflight|capture|acoustic|restore) ;; *) exit 5 ;; esac
 case "${proof_binding:-}" in '') ;; *[!0-9a-f]*) exit 5 ;; esac
 
 # Keep every reported value inside the host's reviewed character set.
@@ -447,6 +463,82 @@ measure() {
 }
 # --- measure end -----------------------------------------------------------------
 
+# --- tone measure begin -----------------------------------------------------------
+# tone_measure FILE: aggregate stimulus-locked statistics of the same raw
+# stereo S16_LE file. Per channel and 2400-frame window it computes the
+# Goertzel amplitude (LSB) at tone_hz and at each control_hz, and the window
+# AC RMS. The host tone is a square on/off gate of tone_period_windows
+# windows (half on), whose phase relative to the recording is unknown, so
+# the phase that maximises the on-minus-off tone amplitude is chosen. Means
+# are then taken over the two core windows of each half (positions 1-2 on,
+# 5-6 off), which lie wholly inside a half for any sub-window offset. A
+# cycle is usable when it holds all four core windows and gated when its
+# on-core tone mean exceeds twice its off-core mean. Per-window values
+# never leave awk.
+tone_measure() {
+	run_t 60 od -An -v -t d2 "$1" | awk -v ch=2 -v win="$tone_window_frames" -v per="$tone_period_windows" \
+		-v rate="$rate" -v f0="$tone_hz" -v fc="$control_hz" '
+		BEGIN {
+			nf = 1 + split(fc, cf, " "); fr[0] = f0; for (k = 1; k < nf; k++) fr[k] = cf[k]
+			pi = atan2(0, -1)
+			for (k = 0; k < nf; k++) co[k] = 2 * cos(2 * pi * fr[k] / rate)
+		}
+		function close_window(   c, k, p, m, r) {
+			for (c = 0; c < ch; c++) {
+				for (k = 0; k < nf; k++) {
+					p = q1[c, k] * q1[c, k] + q2[c, k] * q2[c, k] - co[k] * q1[c, k] * q2[c, k]
+					if (p < 0) p = 0
+					amp[c, k, nw] = 2 * sqrt(p) / win
+					q1[c, k] = 0; q2[c, k] = 0
+				}
+				m = ws[c] / win; r = ws2[c] / win - m * m; if (r < 0) r = 0
+				rms[c, nw] = sqrt(r); ws[c] = 0; ws2[c] = 0
+			}
+			nw++; fn = 0
+		}
+		{
+			for (i = 1; i <= NF; i++) {
+				v = $i + 0; c = n % ch; n++
+				for (k = 0; k < nf; k++) { q0 = v + co[k] * q1[c, k] - q2[c, k]; q2[c, k] = q1[c, k]; q1[c, k] = q0 }
+				ws[c] += v; ws2[c] += v * v
+				if (c == ch - 1 && ++fn == win) close_window()
+			}
+		}
+		function core(p) { return p == 1 || p == 2 ? 1 : (p == 5 || p == 6 ? -1 : 0) }
+		END {
+			half = per / 2
+			printf "tone_windows=%d\n", nw
+			for (c = 0; c < ch; c++) {
+				best = -1; bscore = 0
+				for (ph = 0; ph < per; ph++) {
+					sc = 0
+					for (w = 0; w < nw; w++) sc += ((w + ph) % per < half ? 1 : -1) * amp[c, 0, w]
+					if (best < 0 || sc > bscore) { best = ph; bscore = sc }
+				}
+				on = 0; off = 0; con = 0; coff = 0; ron = 0; roff = 0; non = 0; noff = 0
+				delete cy_on; delete cy_off; delete cy_non; delete cy_noff
+				for (w = 0; w < nw; w++) {
+					p = (w + best) % per; y = int((w + best) / per); s = core(p)
+					cs = 0; for (k = 1; k < nf; k++) cs += amp[c, k, w]; cs /= (nf - 1)
+					if (s > 0) { on += amp[c, 0, w]; con += cs; ron += rms[c, w]; non++; cy_on[y] += amp[c, 0, w]; cy_non[y]++ }
+					if (s < 0) { off += amp[c, 0, w]; coff += cs; roff += rms[c, w]; noff++; cy_off[y] += amp[c, 0, w]; cy_noff[y]++ }
+				}
+				usable = 0; gated = 0
+				for (y in cy_non) if (cy_non[y] == 2 && cy_noff[y] == 2) {
+					usable++
+					if (cy_on[y] > 2 * cy_off[y]) gated++
+				}
+				if (!non) non = 1
+				if (!noff) noff = 1
+				printf "ch%d.tone_phase=%d\nch%d.tone_on=%.3f\nch%d.tone_off=%.3f\n", c, best, c, on / non, c, off / noff
+				printf "ch%d.control_on=%.3f\nch%d.control_off=%.3f\n", c, con / non, c, coff / noff
+				printf "ch%d.rms_on=%.2f\nch%d.rms_off=%.2f\n", c, ron / non, c, roff / noff
+				printf "ch%d.tone_cycles_usable=%d\nch%d.tone_cycles_gated=%d\n", c, usable, c, gated
+			}
+		}'
+}
+# --- tone measure end -------------------------------------------------------------
+
 measure_exit=not-run
 if [ -f "$raw" ]; then
 	measured=$(measure "$raw")
@@ -456,6 +548,17 @@ else
 	printf 'pcm_bytes=0\n'
 fi
 printf 'measure_exit=%s\npcm_bytes_expected=%s\n' "$measure_exit" "$expected_bytes"
+if [ "$proof_mode" = acoustic ]; then
+	printf 'tone_hz=%s\ntone_control_hz=%s\ntone_window_frames=%s\ntone_period_windows=%s\n' "$tone_hz" \
+		"$(printf '%s' "$control_hz" | tr ' ' ',')" "$tone_window_frames" "$tone_period_windows"
+	tone_exit=not-run
+	if [ "$measure_exit" = 0 ]; then
+		toned=$(tone_measure "$raw")
+		tone_exit=$?
+		printf '%s\n' "$toned"
+	fi
+	printf 'tone_exit=%s\n' "$tone_exit"
+fi
 rm -f "$raw"
 rmdir "$proof_dir" 2>/dev/null
 raw_removed=yes

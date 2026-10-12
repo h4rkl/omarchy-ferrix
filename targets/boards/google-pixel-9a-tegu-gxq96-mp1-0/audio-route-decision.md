@@ -516,9 +516,9 @@ capture ran on the exact phone, with the limits below.
   a failed one is `capture-failed-*`.
 - **What a pass would mean.** A non-silent class shows that the AoC capture
   path delivered varying samples through PCM 8. It does not prove acoustic
-  pickup. That needs a controlled stimulus, such as two captures with and
-  without a known sound, and stays out of this slice. `[audio]` stays
-  `unsupported`, and the workflow never edits `capabilities.toml`.
+  pickup. That needs a controlled stimulus; the `acoustic` mode below
+  (issue #80) is the checked-in design. `[audio]` stays `unsupported`, and
+  the workflow never edits `capabilities.toml`.
 - **Physical read-only preflight** (PM-run on
   `physical:google-pixel-9a-tegu-gxq96-mp1-0`, booted audio-tools image,
   pinned kernel; no capture attempted). The earlier probe refused safely
@@ -554,6 +554,120 @@ capture ran on the exact phone, with the limits below.
   of the mic endpoints has side effects. The Linux AoC firmware's own mic
   gain, and whether a mic needs a bias or power control that this route
   does not cover.
+
+## Controlled-tone acoustic proof workflow (issue #80)
+
+`just pixel-9a-mic-acoustic-proof`
+(`tools/pixel-9a/mic-capture-proof.sh acoustic`, tone generator
+`mic-acoustic-tone.py`) is the checked-in controlled-stimulus companion to
+the capture proof above. It is offline-tested
+(`just pixel-9a-mic-acoustic-proof-test`, also in CI) and has **not** run on
+the phone. Running it is a new active capture and needs a separate owner
+decision; the approval for the first capture was one run and is consumed.
+
+- **What is the same.** It is one more mode of the same workflow and guest
+  body. It runs the same fresh read-only preflight, the same fail-closed
+  checks (exact device tree, pinned kernel, card driver, PCM 8 listing and
+  `arecord -l` identity, zero fd and kernel-counted openers, mic route a
+  single rw boolean reading `off`, `TDM_0_RX Mixer EP1` and
+  `TAS25XX ASI Switch` reading `off`, no leftover proof directory), and the
+  guest re-checks all of them and the full binding before its first write. It
+  writes only `EP1 TX Mixer INTERNAL_MIC_TX` `off -> on -> off`, records the
+  same single bounded 2 s raw S16_LE 48 kHz stereo file from `hw:0,8` under
+  `/run/ferrix-mic-capture-proof/`, restores and verifies the route before
+  any analysis, deletes the file, and re-reads the speaker-side controls
+  and PCM 8 openers afterwards. The same trap, the same post-transport-failure
+  read-only check, and the same `restore` mode apply. Nothing is ever played
+  on the phone, and no speaker, TAS, amplifier, or volume control is written.
+- **Typed confirmation.** A ready preflight prints a separate phrase,
+  `FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM='play the gated 1180 Hz host tone and
+  record 2s from hw:0,8 with EP1 TX Mixer INTERNAL_MIC_TX binding <12 hex> on
+  google-pixel-9a-tegu-gxq96-mp1-0'`. The plain capture phrase does not
+  authorise an acoustic run and the acoustic phrase does not authorise a
+  plain capture. The session timeout is limited to 120 s so the tone outlasts
+  the session.
+- **Stimulus.** The host writes a deterministic mono 24 kHz WAV under ignored
+  `out/pixel-9a/mic-capture-proof/stimulus-*/`: 1180 Hz at −20 dBFS peak,
+  gated 200 ms on and 200 ms off with 5 ms raised-cosine edges, for the
+  session timeout plus 15 s. Its SHA-256 goes into the transcript. 1180 Hz and
+  the control bins 1060 Hz and 1280 Hz are whole cycles per 50 ms window and
+  are not harmonics of 50 or 60 Hz mains. The host plays it with `afplay`
+  (macOS), or `pw-play`/`paplay`, at the default output device and the
+  current volume. The workflow never selects a device or changes a volume.
+  It refuses before any guest change if the player is not still playing after
+  a 1 s lead-in. It starts the capture session only then, stops the player
+  when the session returns, deletes the WAV, and records whether the player
+  was still playing at the end.
+- **Timing.** The CDC-ACM transport cannot tell the host when `arecord`
+  starts, so the design does not rely on it. The gate is periodic and plays
+  for the whole capture session. The 2 s recording therefore holds five gate
+  cycles at an unknown phase. The guest finds that phase from the recording
+  itself.
+- **Metric (guest, aggregate only).** Before deleting the file, the guest
+  splits each channel into 40 windows of 2400 frames. For each window it
+  computes the Goertzel amplitude at 1180 Hz, at the two control bins, and
+  the AC RMS. It picks the gate phase (0–7 windows) that maximises the
+  on-minus-off tone amplitude. It averages only the two core windows of each
+  half-cycle, which lie wholly inside a half for any sub-window offset. It
+  counts usable cycles and gated cycles (on-core more than twice off-core).
+  Only these folded per-channel means and counts leave the guest. Per-window
+  values stay inside `awk`, and no sample or audio leaves the phone.
+- **Baseline and controls.** The tone-off windows of the same recording are
+  the baseline, and the control bins are the spectral control. The host
+  computes, per channel, the tone gate (on/off), tone over control (on), the
+  control gate (control on/off), and baseline tone over control (off), all in
+  dB with amplitudes floored at 0.001 LSB. The pre-registered classes are
+  checked in this order:
+  - `digital-zero` or `saturated` (more than 1 % clipped);
+  - `tone-detected`: tone on ≥ 0.5 LSB, gate ≥ 10 dB, tone over control
+    ≥ 10 dB, control gate < 6 dB, at least four usable cycles, and at most one
+    usable cycle not gated;
+  - `broadband-modulation`: gate ≥ 6 dB with the control bins gated ≥ 6 dB,
+    for example clicks or electrical pickup that follow the gate;
+  - `inconsistent-gating`: a gated narrowband tone in too few cycles;
+  - `contaminated-baseline`: tone-frequency energy ≥ 10 dB over the control
+    bins while the tone is off, for example a room tone or a continuously
+    playing source;
+  - otherwise `tone-not-detected`.
+- **Results and exit status.** `acoustic-tone-detected` (`acoustic_class=positive`,
+  exit 0) needs a `tone-detected` channel, a clean capture and cleanup, and a
+  player that was still playing when the session returned. `inconclusive-*`
+  (exit 8) covers `tone-not-detected`, `contaminated-baseline`,
+  `broadband-modulation`, `inconsistent-gating`, `saturated`, and
+  `stimulus-interrupted`. `capture-failed-*` (exit 9) covers a route that
+  did not enable, a recording error, a short capture, digital silence on
+  both channels, and a failed analysis. A cleanup anomaly is exit 7,
+  transport failure exit 3, and refusal exit 6, never positive. Synthetic
+  checks cover: a 60 LSB copy of the generated tone (positive); white noise
+  at the observed 2.2 LSB; noise whose level varies randomly, plus 50 Hz hum;
+  a continuous 1180 Hz tone; gated broadband bursts; and digital zero.
+  These classify as positive, not detected, not detected, contaminated,
+  broadband, and capture failed, in that order.
+- **Physical setup (not enforceable from code).** Use the host's built-in
+  speaker, not headphones, Bluetooth, or AirPlay; check the default output
+  device before running. Set a modest volume beforehand (a comfortable
+  listening level, well below maximum). Lay the phone screen-up on a
+  hard surface with its bottom edge, where the primary microphone is
+  expected, about 20 cm from and facing the host speaker. Nothing may touch
+  or cover the phone, and the room should be quiet, with no other tone or
+  music. Do not move anything during the run. Record the distance and volume
+  setting with the result. Because the workflow cannot verify any of this, a
+  wrong setup is meant to read `inconclusive`, not positive.
+- **What a positive would mean.** Under the documented setup, PCM 8
+  carried narrowband 1180 Hz energy locked to the host's gate, well above
+  the same recording's tone-off baseline and above neighbouring frequencies
+  that stayed ungated. It shows acoustic response of the internal-mic path
+  in this route. It is not calibrated sensitivity, frequency response, or
+  identification of which physical microphone feeds which channel. One
+  residual path is not excluded by a single capture: the phone is
+  USB-powered from the same host, so gate-locked electrical coupling at
+  exactly the tone frequency is implausible but possible. If a positive
+  needs that ruled out, a separately approved follow-up can repeat the run
+  with the host speaker muted while the player still runs; it should then
+  read `tone-not-detected`. A negative or inconclusive result does not show
+  the microphone is broken: the level, distance, or AoC gain may be
+  inadequate. `[audio]` stays `unsupported` either way; the workflow never
+  edits `capabilities.toml`.
 
 ## Speaker playback safety review (issue #2)
 
@@ -624,8 +738,10 @@ The read-only `audio-inventory.sh` and its mock tests are checked in. The
 AoC card and UCM profile were observed on the exact target. The revised
 preflight and one bounded capture have passed on the `674157b` image, but
 the very low channel-0 level and silent channel 1 do not establish acoustic
-pickup. A separate approved controlled-stimulus test should compare quiet
-and known-sound captures and investigate the channel split. Recheck the
+pickup. The controlled-tone `acoustic` mode
+([above](#controlled-tone-acoustic-proof-workflow-issue-80)) is checked in
+and offline-tested; one run of it needs a separate owner decision. Its
+per-channel result also bears on the channel split. Recheck the
 PipeWire graph on the new image. Speaker playback stays blocked by the
 protection review above. Keep `[audio]` unsupported until both an audible
 output route and actual acoustic microphone response are observed.
