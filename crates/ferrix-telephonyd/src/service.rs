@@ -72,6 +72,11 @@ struct State {
     handle_by_call: BTreeMap<CallId, CallHandle>,
     sms_by_handle: BTreeMap<SmsHandle, MessageId>,
     pending: BTreeMap<(String, u16), PendingMultipart>,
+    /// Events applied to `telephony` but not yet fanned out, in apply order.
+    /// Filled under this lock and drained only under the subscribers lock,
+    /// so a snapshot taken while registering a subscriber covers exactly the
+    /// events it will not be sent (see [`Service::register`]).
+    outbox: Vec<TelephonyEvent>,
 }
 
 pub struct Service {
@@ -166,6 +171,7 @@ impl Service {
             handle_by_call: BTreeMap::new(),
             sms_by_handle: BTreeMap::new(),
             pending: BTreeMap::new(),
+            outbox: Vec::new(),
         };
         apply_snapshot(&mut state, backend.snapshot());
         let service = Arc::new(Self {
@@ -182,8 +188,14 @@ impl Service {
             barrier_reached: Condvar::new(),
             attention: Mutex::new(None),
         });
-        let snapshot = lock(&service.state).telephony.clone();
-        service.publish(TelephonyEvent::ServiceRestarted { state: snapshot });
+        {
+            let mut state = lock(&service.state);
+            let snapshot = state.telephony.clone();
+            state
+                .outbox
+                .push(TelephonyEvent::ServiceRestarted { state: snapshot });
+        }
+        service.flush();
         Ok(service)
     }
 
@@ -270,7 +282,8 @@ impl Service {
         }
     }
 
-    /// Registers a subscriber and writes the `ok` reply on its stream first.
+    /// Registers a subscriber and writes the `state` reply (its projected
+    /// snapshot) on its stream first.
     pub fn subscribe(
         &self,
         identity: IdentityInfo,
@@ -284,35 +297,55 @@ impl Service {
         })
     }
 
-    /// Production subscription with continuous authorization. The initial
-    /// identity is retained only for the already-authorized subscribe reply;
-    /// each event re-resolves the peer and drops the stream on revocation.
+    /// Production subscription with continuous authorization. The peer is
+    /// re-resolved here, so the snapshot is projected for the grants it holds
+    /// now rather than those seen at dispatch (`_dispatch_identity`); each
+    /// later event re-resolves again and drops the stream on revocation.
     pub fn subscribe_authorized(
         &self,
         peer_pid: Option<u32>,
         identity_source: Arc<dyn Identity>,
-        identity: IdentityInfo,
+        _dispatch_identity: IdentityInfo,
         sink: Box<dyn Write + Send>,
     ) -> std::io::Result<()> {
-        if !identity_source.identify(peer_pid).has(CAP_STATE) {
+        let current = identity_source.identify(peer_pid);
+        if !current.has(CAP_STATE) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "telephony-state grant was revoked",
             ));
         }
         self.register(Subscriber {
-            identity,
+            identity: current,
             peer_pid,
             identity_source: Some(identity_source),
             sink,
         })
     }
 
-    /// Writes the `ok` and registers under one lock: a client that has read
-    /// the ack is already registered, and no event precedes the ack.
+    /// The gap-free handshake (issue #68). Under the subscribers lock, events
+    /// still in the outbox are fanned out to the existing subscribers and the
+    /// snapshot is taken under the same state lock that drained them; the
+    /// snapshot is written as the `state` reply and the stream registered
+    /// before the lock is released. Every event therefore lies either in the
+    /// snapshot (applied before it, never sent to this stream) or after it
+    /// (enqueued later, flushed to this stream in apply order): no gap, no
+    /// duplicate, and no event precedes the reply.
     fn register(&self, mut subscriber: Subscriber) -> std::io::Result<()> {
         let mut subscribers = lock(&self.subscribers);
-        write_json(&mut subscriber.sink, &Reply::Ok)?;
+        let (pending, snapshot) = {
+            let mut state = lock(&self.state);
+            (std::mem::take(&mut state.outbox), state.telephony.clone())
+        };
+        for event in pending {
+            self.deliver(&mut subscribers, &event);
+        }
+        write_json(
+            &mut subscriber.sink,
+            &Reply::State {
+                state: project_state(&snapshot, &subscriber.identity),
+            },
+        )?;
         subscribers.push(subscriber);
         Ok(())
     }
@@ -356,12 +389,25 @@ impl Service {
         })
     }
 
-    fn publish(&self, event: TelephonyEvent) {
+    /// Fans out everything in the outbox, in apply order. Every mutator
+    /// calls this after releasing the state lock; whichever caller drains an
+    /// event delivers it, so a mutator returns only once its events are out.
+    fn flush(&self) {
+        let mut subscribers = lock(&self.subscribers);
+        let pending = std::mem::take(&mut lock(&self.state).outbox);
+        for event in pending {
+            self.deliver(&mut subscribers, &event);
+        }
+    }
+
+    /// Records one event and writes its per-peer projection to every
+    /// subscriber that still holds `telephony-state`. Called only under the
+    /// subscribers lock.
+    fn deliver(&self, subscribers: &mut Vec<Subscriber>, event: &TelephonyEvent) {
         if let Some(capture) = lock(&self.capture).as_mut() {
             capture.push(event.name().to_owned());
         }
-        self.recorder.telephony_event(&event);
-        let mut subscribers = lock(&self.subscribers);
+        self.recorder.telephony_event(event);
         subscribers.retain_mut(|subscriber| {
             if let Some(source) = &subscriber.identity_source {
                 let identity = source.identify(subscriber.peer_pid);
@@ -370,7 +416,7 @@ impl Service {
                 }
                 subscriber.identity = identity;
             }
-            let projected = project_event(&event, &subscriber.identity);
+            let projected = project_event(event, &subscriber.identity);
             write_json(&mut subscriber.sink, &projected).is_ok()
         });
     }
@@ -540,10 +586,9 @@ impl Service {
             if persist {
                 self.persist(&state);
             }
+            state.outbox.append(&mut events);
         }
-        for event in events {
-            self.publish(event);
-        }
+        self.flush();
         if ringing {
             let attention = lock(&self.attention).clone();
             if let Some(attention) = attention {
@@ -568,10 +613,10 @@ impl Service {
         let number = E164::classify_dial_string(number)?;
         self.require_feature(TelephonyFeature::Voice)?;
         let handle = self.backend.dial(&number)?;
-        let (call, event) = {
+        let call = {
             let mut state = lock(&self.state);
             if let Some(id) = state.call_by_handle.get(&handle).cloned() {
-                (state.telephony.calls[&id].clone(), None)
+                state.telephony.calls[&id].clone()
             } else {
                 let call = new_call(
                     &mut state,
@@ -580,12 +625,13 @@ impl Service {
                     number,
                     CallState::Dialing,
                 );
-                (call.clone(), Some(TelephonyEvent::CallChanged { call }))
+                state
+                    .outbox
+                    .push(TelephonyEvent::CallChanged { call: call.clone() });
+                call
             }
         };
-        if let Some(event) = event {
-            self.publish(event);
-        }
+        self.flush();
         Ok(call)
     }
 
@@ -617,16 +663,19 @@ impl Service {
             return Err(TelephonyError::invalid_state(current, op));
         }
         f(self.backend.as_ref(), &handle)?;
-        let (call, event) = {
+        let call = {
             let mut state = lock(&self.state);
             match set_call_state(&mut state, &handle, next, end_reason) {
-                Some(call) => (call.clone(), Some(TelephonyEvent::CallChanged { call })),
-                None => (state.telephony.calls[id].clone(), None),
+                Some(call) => {
+                    state
+                        .outbox
+                        .push(TelephonyEvent::CallChanged { call: call.clone() });
+                    call
+                }
+                None => state.telephony.calls[id].clone(),
             }
         };
-        if let Some(event) = event {
-            self.publish(event);
-        }
+        self.flush();
         Ok(call)
     }
 
@@ -761,7 +810,7 @@ impl Service {
         let handle = self.backend.send_sms(&to, body)?;
         let sms = {
             let mut state = lock(&self.state);
-            if let Some(id) = state.sms_by_handle.get(&handle).cloned() {
+            let sms = if let Some(id) = state.sms_by_handle.get(&handle).cloned() {
                 state.telephony.sms[&id].clone()
             } else {
                 let id = next_message_id(&mut state);
@@ -779,9 +828,13 @@ impl Service {
                 state.telephony.sms.insert(id, sms.clone());
                 self.persist(&state);
                 sms
-            }
+            };
+            state
+                .outbox
+                .push(TelephonyEvent::SmsChanged { sms: sms.clone() });
+            sms
         };
-        self.publish(TelephonyEvent::SmsChanged { sms: sms.clone() });
+        self.flush();
         Ok(sms)
     }
 
@@ -835,9 +888,12 @@ impl Service {
                 state.sms_by_handle.retain(|_, v| v != id);
             }
             self.persist(&state);
+            state
+                .outbox
+                .push(TelephonyEvent::SmsChanged { sms: sms.clone() });
             sms
         };
-        self.publish(TelephonyEvent::SmsChanged { sms: sms.clone() });
+        self.flush();
         Ok(sms)
     }
 }
@@ -1127,4 +1183,57 @@ fn write_json(
     text.push('\n');
     sink.write_all(text.as_bytes())?;
     sink.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::AllowAll;
+    use crate::testing::{FakeBackend, MemorySink, temp_data_dir};
+    use ferrix_telephony_api::Signal;
+
+    /// The window a separate-snapshot design cannot close: an event applied
+    /// to state but not yet fanned out when a subscriber registers. Reached
+    /// deterministically by enqueueing without flushing, as a mutator does
+    /// between releasing the state lock and calling `flush`.
+    #[test]
+    fn an_applied_but_unflushed_event_is_in_the_snapshot_and_not_resent() {
+        let dir = temp_data_dir("outbox");
+        let (recorder, _records) = Recorder::capturing("mock");
+        let service = Service::new(
+            Arc::new(FakeBackend::ready()),
+            SmsStore::new(&dir),
+            recorder,
+            ServiceOptions::default(),
+        )
+        .unwrap();
+        let early = MemorySink::new();
+        service
+            .subscribe(AllowAll.identify(None), Box::new(early.clone()))
+            .unwrap();
+
+        let signal = Signal::bars(3);
+        {
+            let mut state = lock(&service.state);
+            state.telephony.signal = signal;
+            state.outbox.push(TelephonyEvent::SignalChanged { signal });
+        }
+        let late = MemorySink::new();
+        service
+            .subscribe(AllowAll.identify(None), Box::new(late.clone()))
+            .unwrap();
+        // The mutator's own flush, arriving after the registration.
+        service.flush();
+
+        // The early subscriber gets the event once, before the late one
+        // registered; the late one has it only in its snapshot.
+        let early = early.values();
+        assert_eq!(early.len(), 2, "{early:?}");
+        assert_eq!(early[1]["event"], "signal-changed");
+        let late = late.values();
+        assert_eq!(late.len(), 1, "no replay after the snapshot: {late:?}");
+        assert_eq!(late[0]["reply"], "state");
+        assert_eq!(late[0]["state"]["signal"]["bars"], 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

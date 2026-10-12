@@ -16,6 +16,56 @@
   not yet been built or booted on the phone, and speaker/mic function is still
   unproved.
 
+## 2026-10-12 (Telephony subscribe is a gap-free snapshot plus stream, issue #68; host tests, mock only)
+
+- **Defect:** `ferrix-telephony-protocol::Client::subscribe` fetched the
+  snapshot with a `state` request and then sent `subscribe`; a call or SMS
+  event applied between the two was in neither. #67 had closed only the
+  later ack-versus-registration window. Separately, the daemon released the
+  state lock before fanning an event out, so a snapshot taken at
+  registration could include an event that was then also sent (duplicate),
+  and concurrent mutators could fan events out in a different order from
+  the one they were applied in.
+- **Contract:** `subscribe` now replies `{"reply":"state","state":...}`, the
+  caller's projected snapshot, taken atomically with registration. This
+  matches the shared convention in `docs/adr/README.md` and the existing
+  `ferrix-networkd` handshake. Every later event on the stream was applied
+  after the snapshot and arrives once, in apply order (ADR-001, "Subscription
+  handshake"). The client makes one round trip. `Subscription`,
+  `Reconnector`, and the apps that use them are unchanged. Schema stays `1`
+  because the data model did not change. A mixed old/new pair fails closed
+  on the reply shape (old client: unexpected `state`; new client: bare `ok`
+  rejected) and never silently drops events.
+- **Daemon:** events are applied and appended to an outbox under the state
+  lock. The outbox is drained only under the subscribers lock. Registration
+  drains it to the existing subscribers under the same state lock that
+  copies the snapshot. Socket writes and per-event appd identity checks
+  never run under the state lock. The snapshot is projected for the identity
+  re-resolved at registration, not the one seen at dispatch, and a peer
+  revoked by then gets nothing. Each event still re-resolves the peer.
+- **Tests (host, `mock`):** a socket test raises an event between a `state`
+  reply and `subscribe` (the former boundary) and requires it in the
+  subscribe snapshot and not replayed on the stream. An in-crate test
+  registers a subscriber while an applied event is still unflushed. A
+  gated-reply test raises an event while the snapshot is being written. A
+  redaction/authorization test covers a grant downgraded between dispatch
+  and registration, plus a revoked peer. A stress test runs four mutating
+  threads while 16 full and redacted subscribers join; each stream must
+  fold to the final service state with no duplicate transition. Protocol
+  tests check the client sends only `hello`,`subscribe` and rejects a bare
+  `ok`. On the d8af2e0 service the new and updated tests fail. A
+  deliberately naive variant (atomic snapshot and registration with no
+  outbox drain) fails the in-crate test, and the stress test 5 of 5 runs
+  with `event already in the snapshot`. No timeout was changed.
+- **Validation:** `cargo fmt --check` clean; `cargo clippy --workspace
+  --all-targets --all-features -- -D warnings` clean; `cargo test
+  --workspace` 766 passed, 0 failed; `ferrix-telephonyd` and
+  `ferrix-telephony-protocol` suites 50 repeated runs, 0 failures. **Not
+  run:** `just qemu-build`/`just qemu-check`. The local Docker-compatible
+  runtime (OrbStack) was not running in this worktree's environment, and no
+  previously built `out/qemu-aarch64/` image was available here. QEMU
+  behaviour is unverified for this change.
+
 ## 2026-10-12 (Pixel 9a: S5300 sources mount only through a read-only loop, issue #34; offline only)
 
 - **Change:** `ferrix-s5300-mounts` no longer mounts any partition directly.

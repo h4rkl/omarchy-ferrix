@@ -66,6 +66,29 @@ packet-data bearers), and `telephony-radio` (set cellular radio power without
 voice-call control). Emergency numbers are **rejected** with
 `Unsupported { feature: emergency }`; no emergency path exists.
 
+### Subscription handshake (issue #68)
+
+`subscribe` is answered with `{"reply":"state","state":...}`: the caller's
+projected snapshot, taken atomically with registration, as the shared
+convention in `docs/adr/README.md` and `ferrix-networkd` already require.
+Every event that follows was applied after that snapshot and is sent once, in
+apply order, so a client replaces local state with the snapshot and folds
+each event without deduplication. The daemon applies an event to its state
+and appends it to an outbox under the state lock; the outbox is drained only
+under the subscribers lock, and registration drains it (to the existing
+subscribers) under the same state lock that copies the snapshot. Socket
+writes and per-event identity re-resolution therefore never run under the
+state lock. The snapshot is projected for the identity re-resolved at
+registration, and each later event re-resolves again (ADR-004).
+
+Until 2026-10-12 `subscribe` replied `ok` and the client fetched the snapshot
+with a separate `state` request first, so an event between the two was in
+neither. The schema stays `1`: the data model is unchanged, the daemon and
+its only subscribers ship from one workspace, and a client expecting the old
+`ok` fails closed on the `state` reply (and a new client on a bare `ok`)
+instead of silently missing events. `state` remains a standalone read, not a
+subscription anchor.
+
 ## Adapter contract (`ferrix-telephony-adapter-api`, internal)
 
 `trait ModemBackend: Send + Sync` with synchronous operations

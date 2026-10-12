@@ -597,7 +597,17 @@ fn state_clients_see_redacted_parties_and_no_bodies() {
         state: CallState::Active,
         end_reason: None,
     });
-    assert_eq!(status_sink.values()[0]["reply"], "ok");
+    // The subscribe reply is the snapshot, projected like `state`.
+    let status_snapshot = status_sink.lines()[0].clone();
+    assert!(
+        status_snapshot.starts_with(r#"{"reply":"state""#),
+        "{status_snapshot}"
+    );
+    assert!(!status_snapshot.contains("0100042"), "{status_snapshot}");
+    assert!(!status_snapshot.contains("secret"), "{status_snapshot}");
+    let phone_snapshot = phone_sink.lines()[0].clone();
+    assert!(phone_snapshot.contains(NUMBER), "{phone_snapshot}");
+    assert!(!phone_snapshot.contains("secret"), "{phone_snapshot}");
     let status_event = &status_sink.values()[1];
     assert_eq!(status_event["event"], "call-changed");
     assert_eq!(status_event["call"]["party"]["party_redacted"], "+***0042");
@@ -923,7 +933,7 @@ fn subscriber_is_dropped_when_state_grant_is_revoked() {
             Box::new(sink.clone()),
         )
         .unwrap();
-    assert_eq!(sink.values().len(), 1, "initial ok reply");
+    assert_eq!(sink.values()[0]["reply"], "state", "initial snapshot reply");
     h.identity.remove(PHONE_PID);
     h.service.handle_backend_event(BackendEvent::BackendLost {
         reason: "revocation probe".into(),
@@ -1352,8 +1362,9 @@ fn socket_server_serves_hello_state_subscribe_and_rejects_garbage() {
     let _ = std::fs::remove_dir_all(&h.dir);
 }
 
-/// Holds the subscribe `ok` write open until the test releases it, so an
-/// event can be raised at the exact moment a client could observe the ack.
+/// Holds the first write (the subscribe snapshot reply) open until the test
+/// releases it, so an event can be raised at the exact moment a client could
+/// observe the reply.
 struct GatedSink {
     sink: MemorySink,
     gate: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
@@ -1395,7 +1406,7 @@ fn an_event_raised_once_subscribe_is_acked_reaches_the_subscriber() {
     });
     acked.recv_timeout(Duration::from_secs(2)).unwrap();
 
-    // The `ok` is on the wire; an event raised now must not be lost.
+    // The snapshot is on the wire; an event raised now must not be lost.
     let (published_tx, published) = std::sync::mpsc::channel();
     let service = Arc::clone(&h.service);
     let publisher = std::thread::spawn(move || {
@@ -1416,7 +1427,7 @@ fn an_event_raised_once_subscribe_is_acked_reaches_the_subscriber() {
     publisher.join().unwrap();
 
     let values = sink.values();
-    assert_eq!(values[0], serde_json::json!({"reply": "ok"}));
+    assert_eq!(values[0]["reply"], "state");
     assert_eq!(
         values[1..]
             .iter()
@@ -1424,6 +1435,280 @@ fn an_event_raised_once_subscribe_is_acked_reaches_the_subscriber() {
             .collect::<Vec<_>>(),
         ["call-changed"]
     );
+    // The event was applied after the snapshot: absent from it, sent once.
+    let (snapshot, events) = full_stream(&sink);
+    assert!(snapshot.calls.is_empty());
+    assert_eq!(fold_full(snapshot, &events), h.service.state());
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+// ---------------------------------------------------------------------------
+// Gap-free snapshot plus stream (issue #68)
+// ---------------------------------------------------------------------------
+
+/// The snapshot reply and following events of a full-grant subscriber.
+fn full_stream(
+    sink: &MemorySink,
+) -> (
+    ferrix_telephony_api::TelephonyState,
+    Vec<ferrix_telephony_api::TelephonyEvent>,
+) {
+    let mut lines = sink.lines().into_iter();
+    let first = lines.next().expect("snapshot reply");
+    let snapshot = match serde_json::from_str::<Reply>(&first).unwrap() {
+        Reply::State {
+            state: StateView::Full(state),
+        } => state,
+        other => panic!("expected a full snapshot reply, got {other:?}"),
+    };
+    let events = lines
+        .map(|line| match serde_json::from_str::<Event>(&line).unwrap() {
+            Event::Full(event) => event,
+            other => panic!("expected a full event, got {other:?}"),
+        })
+        .collect();
+    (snapshot, events)
+}
+
+fn fold_full(
+    mut state: ferrix_telephony_api::TelephonyState,
+    events: &[ferrix_telephony_api::TelephonyEvent],
+) -> ferrix_telephony_api::TelephonyState {
+    for event in events {
+        event.apply_to(&mut state);
+    }
+    state
+}
+
+/// Folds any subscriber's stream into its redacted view.
+fn fold_redacted(sink: &MemorySink) -> ferrix_telephony_api::RedactedTelephonyState {
+    let mut lines = sink.lines().into_iter();
+    let mut state = match serde_json::from_str::<Reply>(&lines.next().unwrap()).unwrap() {
+        Reply::State { state } => state.redacted(),
+        other => panic!("expected a snapshot reply, got {other:?}"),
+    };
+    for line in lines {
+        serde_json::from_str::<Event>(&line)
+            .unwrap()
+            .apply_redacted(&mut state);
+    }
+    state
+}
+
+fn read_line_json(reader: &mut std::io::BufReader<std::os::unix::net::UnixStream>) -> String {
+    let mut line = String::new();
+    std::io::BufRead::read_line(reader, &mut line).unwrap();
+    line
+}
+
+/// Regression for #68 at the former boundary: the old client took its
+/// snapshot from a `state` request and then sent `subscribe`. An event raised
+/// between the two (here from another thread, joined so the point is exact)
+/// was in neither. The subscribe reply now carries the snapshot it anchors,
+/// so the event is in it, and it is not sent again on the stream.
+#[test]
+fn an_event_between_state_and_subscribe_is_in_the_subscribe_snapshot() {
+    let h = harness("gap");
+    let socket = h.dir.join("telephonyd.sock");
+    let listener = Server::bind(&socket).unwrap();
+    let server = Arc::new(Server::new(Arc::clone(&h.service), Arc::new(AllowAll)));
+    std::thread::spawn(move || server.serve(listener));
+
+    let mut raw = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+    raw.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut reader = std::io::BufReader::new(raw.try_clone().unwrap());
+    write_line(&mut raw, &hello(SCHEMA_VERSION)).unwrap();
+    assert!(read_line_json(&mut reader).starts_with(r#"{"reply":"hello""#));
+    write_line(&mut raw, &Request::State {}).unwrap();
+    let old_snapshot = read_line_json(&mut reader);
+    assert!(!old_snapshot.contains(r#""c1""#), "{old_snapshot}");
+
+    // The former boundary: after the state reply, before subscribe.
+    let service = Arc::clone(&h.service);
+    std::thread::spawn(move || {
+        service.handle_backend_event(BackendEvent::CallAdded {
+            handle: CallHandle::from("h1"),
+            direction: Direction::Incoming,
+            number: number(),
+            state: CallState::Ringing,
+        });
+    })
+    .join()
+    .unwrap();
+
+    write_line(&mut raw, &Request::Subscribe {}).unwrap();
+    let state = match serde_json::from_str::<Reply>(&read_line_json(&mut reader)).unwrap() {
+        Reply::State {
+            state: StateView::Full(state),
+        } => state,
+        other => panic!("subscribe must answer with the snapshot: {other:?}"),
+    };
+    assert_eq!(state.calls[&CallId::from("c1")].state, CallState::Ringing);
+
+    // The next line is the next event, not a replay of the ringing call.
+    h.service.handle_backend_event(BackendEvent::CallChanged {
+        handle: CallHandle::from("h1"),
+        state: CallState::Active,
+        end_reason: None,
+    });
+    let event = match serde_json::from_str::<Event>(&read_line_json(&mut reader)).unwrap() {
+        Event::Full(event) => event,
+        other => panic!("expected a full event, got {other:?}"),
+    };
+    assert!(matches!(
+        &event,
+        TelephonyEvent::CallChanged { call } if call.state == CallState::Active
+    ));
+    assert_eq!(fold_full(state, &[event]), h.service.state());
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+/// The snapshot is projected for the grants the peer holds when it
+/// registers, not those seen at dispatch, and a peer revoked by then gets
+/// neither a snapshot nor a stream.
+#[test]
+fn subscribe_snapshot_is_authorized_and_redacted_at_registration() {
+    let h = harness("subscribe-auth");
+    h.service.handle_backend_event(BackendEvent::CallAdded {
+        handle: CallHandle::from("h1"),
+        direction: Direction::Incoming,
+        number: number(),
+        state: CallState::Ringing,
+    });
+    h.service.handle_backend_event(BackendEvent::SmsReceived {
+        from: number(),
+        body: "secret".into(),
+    });
+    let source = h.identity.clone() as Arc<dyn Identity>;
+
+    // Dispatch saw the phone grants; by registration only state remains.
+    let dispatch_identity = h.identity.identify(Some(PHONE_PID));
+    h.identity.set(
+        PHONE_PID,
+        IdentityInfo::granted(Some("org.ferrix.phone"), &[CAP_STATE]),
+    );
+    let downgraded = MemorySink::new();
+    h.service
+        .subscribe_authorized(
+            Some(PHONE_PID),
+            Arc::clone(&source),
+            dispatch_identity,
+            Box::new(downgraded.clone()),
+        )
+        .unwrap();
+    h.service.handle_backend_event(BackendEvent::CallChanged {
+        handle: CallHandle::from("h1"),
+        state: CallState::Active,
+        end_reason: None,
+    });
+    let text = downgraded.lines().concat();
+    assert!(text.starts_with(r#"{"reply":"state""#), "{text}");
+    assert!(!text.contains("0100042"), "{text}");
+    assert!(!text.contains("secret"), "{text}");
+    assert!(text.contains(r#""party_redacted":"+***0042""#), "{text}");
+    assert_eq!(fold_redacted(&downgraded), h.service.state().redacted());
+
+    // Revoked before registration: nothing is written, nothing registered.
+    let dispatch_identity = h.identity.identify(Some(MESSAGES_PID));
+    h.identity.remove(MESSAGES_PID);
+    let revoked = MemorySink::new();
+    let err = h
+        .service
+        .subscribe_authorized(
+            Some(MESSAGES_PID),
+            source,
+            dispatch_identity,
+            Box::new(revoked.clone()),
+        )
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    h.service
+        .handle_backend_event(BackendEvent::Signal(ferrix_telephony_api::Signal::bars(1)));
+    assert!(revoked.lines().is_empty());
+    let _ = std::fs::remove_dir_all(&h.dir);
+}
+
+/// Subscribers join while several threads mutate state. Whatever the
+/// interleaving, each stream is the snapshot followed by every later event
+/// exactly once, in apply order: folding it reproduces the service state
+/// (full and redacted), and a late joiner never sees an event twice.
+#[test]
+fn concurrent_subscribers_fold_to_the_service_state() {
+    let h = harness("subscribe-stress");
+    let source = h.identity.clone() as Arc<dyn Identity>;
+    let mut publishers = Vec::new();
+    for worker in 0..4u8 {
+        let service = Arc::clone(&h.service);
+        publishers.push(std::thread::spawn(move || {
+            for round in 0..40u8 {
+                service.handle_backend_event(BackendEvent::Signal(
+                    ferrix_telephony_api::Signal::bars((worker + round) % 5),
+                ));
+                let handle = CallHandle::from(format!("h{worker}-{round}").as_str());
+                service.handle_backend_event(BackendEvent::CallAdded {
+                    handle: handle.clone(),
+                    direction: Direction::Incoming,
+                    number: number(),
+                    state: CallState::Ringing,
+                });
+                service.handle_backend_event(BackendEvent::CallChanged {
+                    handle,
+                    state: CallState::Ended,
+                    end_reason: Some(CallEndReason::RemoteHangup),
+                });
+                service.handle_backend_event(BackendEvent::SmsReceived {
+                    from: number(),
+                    body: format!("w{worker} r{round}"),
+                });
+            }
+        }));
+    }
+    let mut full = Vec::new();
+    let mut redacted = Vec::new();
+    for _ in 0..8 {
+        let sink = MemorySink::new();
+        h.service
+            .subscribe(AllowAll.identify(None), Box::new(sink.clone()))
+            .unwrap();
+        full.push(sink);
+        let sink = MemorySink::new();
+        h.service
+            .subscribe_authorized(
+                Some(STATUS_PID),
+                Arc::clone(&source),
+                h.identity.identify(Some(STATUS_PID)),
+                Box::new(sink.clone()),
+            )
+            .unwrap();
+        redacted.push(sink);
+        std::thread::yield_now();
+    }
+    for publisher in publishers {
+        publisher.join().unwrap();
+    }
+    let final_state = h.service.state();
+    for sink in &full {
+        let (snapshot, events) = full_stream(sink);
+        let mut seen = std::collections::BTreeSet::new();
+        for event in &events {
+            if let TelephonyEvent::CallChanged { call } = event {
+                assert!(
+                    seen.insert((call.id.clone(), call.state.name())),
+                    "call transition delivered twice: {event:?}"
+                );
+                assert!(
+                    snapshot.calls.get(&call.id) != Some(call),
+                    "event already in the snapshot: {event:?}"
+                );
+            }
+        }
+        assert_eq!(fold_full(snapshot, &events), final_state);
+    }
+    for sink in &redacted {
+        let text = sink.lines().concat();
+        assert!(!text.contains("0100042"), "redaction held for every line");
+        assert_eq!(fold_redacted(sink), final_state.redacted());
+    }
     let _ = std::fs::remove_dir_all(&h.dir);
 }
 
