@@ -36,6 +36,16 @@ pub enum Target {
     /// Forget confirmation: confirm or keep the saved profile.
     ForgetConfirm,
     ForgetCancel,
+    /// The "Add network" row under the access points.
+    AddNetwork,
+    /// Add network form: name field, a security segment by index,
+    /// passphrase field, its show/hide toggle, Connect, Cancel.
+    AddName,
+    AddSecurity(usize),
+    AddPassphrase,
+    AddReveal,
+    AddConnect,
+    AddCancel,
     Key(Key),
     Airplane,
     Wifi,
@@ -349,8 +359,16 @@ impl Layout {
         self.pass_cancel_rect()
     }
 
+    /// Access-point rows (at most four, so Add network fits below them).
     pub fn ap_rects(&self, count: usize) -> Vec<Rect> {
-        list_rects(self.size, self.s(900), count.min(5), 120)
+        list_rects(self.size, self.s(900), count.min(4), 120)
+    }
+
+    /// The Add network row: the slot after `aps` access-point rows (after
+    /// the "none" line when the list is empty).
+    pub fn add_row_rect(&self, aps: usize) -> Rect {
+        let slot = aps.clamp(1, 4);
+        list_rects(self.size, self.s(900), slot + 1, 120)[slot]
     }
 
     pub fn profile_rects(&self, count: usize) -> Vec<Rect> {
@@ -412,7 +430,7 @@ impl Layout {
 }
 
 pub fn keyboard_visible(model: &Model) -> bool {
-    (model.page == Page::Network && model.passphrase_for.is_some())
+    (model.page == Page::Network && (model.passphrase_for.is_some() || model.add_network.is_some()))
         || model.pin_entry()
         || (model.page == Page::Keyboard && model.kbd_try_focused)
 }
@@ -466,6 +484,9 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
                 }
                 return contains(l.forget_cancel_rect(), position).then_some(Target::ForgetCancel);
             }
+            if model.add_network.is_some() {
+                return crate::hidden::hit(model, &l, position);
+            }
             if model.passphrase_for.is_some() {
                 if contains(l.pass_field_rect(), position) {
                     return Some(Target::PassField);
@@ -478,15 +499,19 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
                 }
                 return contains(l.pass_cancel_rect(), position).then_some(Target::PassCancel);
             }
-            if model.retry_target().is_some() && contains(l.retry_rect(), position) {
+            if model.can_retry() && contains(l.retry_rect(), position) {
                 return Some(Target::Retry);
             }
+            let aps = model.access_points().len();
             if let Some(i) = l
-                .ap_rects(model.access_points().len())
+                .ap_rects(aps)
                 .into_iter()
                 .position(|r| contains(r, position))
             {
                 return Some(Target::Ap(i));
+            }
+            if contains(l.add_row_rect(aps), position) {
+                return Some(Target::AddNetwork);
             }
             l.profile_rects(model.profiles().len())
                 .into_iter()
@@ -606,6 +631,17 @@ pub fn activate(model: &mut Model, target: Target) {
         Target::Retry => model.retry_connect(),
         Target::ForgetConfirm => model.confirm_forget(),
         Target::ForgetCancel => model.cancel_forget(),
+        Target::AddNetwork => model.open_add_network(),
+        Target::AddName => model.add_network_focus(crate::hidden::AddField::Name),
+        Target::AddSecurity(i) => model.add_network_security(i),
+        Target::AddPassphrase => model.add_network_focus(crate::hidden::AddField::Passphrase),
+        Target::AddReveal => model.toggle_add_network_reveal(),
+        Target::AddConnect => {
+            if let Err(reason) = model.submit_add_network() {
+                model.last_error = Some(reason);
+            }
+        }
+        Target::AddCancel => model.cancel_add_network(),
         Target::Key(key) => key_press(model, key),
         Target::Airplane => model.toggle_airplane(),
         Target::Cellular => model.toggle_cellular(),
@@ -646,7 +682,7 @@ pub fn key_press(model: &mut Model, key: Key) {
         model.pin_key(key);
         return;
     }
-    if model.keyboard_key(key) || model.passphrase_for.is_none() {
+    if model.keyboard_key(key) || model.add_network_key(key) || model.passphrase_for.is_none() {
         return;
     }
     let mut osk = model.osk;

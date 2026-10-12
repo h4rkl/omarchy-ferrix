@@ -43,7 +43,8 @@ backend mutations (`state`, `set-adapter`, `set-radio`, `set-access-points`,
 `scan-result`, `set-connect-result`, `set-connectivity`, `disconnect`,
 `set-ip`, `tick`, `crash-backend`) are forwarded to the mock adapter; the
 test-only **client verbs** `scan`, `connect {ssid, passphrase?}`,
-`disconnect-request`, `forget {ssid}`, and `set-radio-enabled {enabled}`
+`join-hidden {ssid, security, passphrase?}` (by name; the SSID need not be
+visible), `disconnect-request`, `forget {ssid}`, and `set-radio-enabled {enabled}`
 are executed through the same `dispatch` path a protocol client uses,
 under the synthetic identity `host.tool.mock-control` holding both network
 capabilities. Typed rejections come back as `{"status":"error",...}`. The

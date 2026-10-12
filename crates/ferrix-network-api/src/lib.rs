@@ -1,4 +1,4 @@
-//! Stable, target-neutral networking contract (ADR-002, schema 1).
+//! Stable, target-neutral networking contract (ADR-002, schema 2).
 //!
 //! Every process that talks about Wi-Fi or connectivity (the networking
 //! service, the protocol client, applications, scenario tooling) shares the
@@ -19,7 +19,18 @@ use sha2::{Digest, Sha256};
 
 /// Current schema version of every serialized type in this crate and of the
 /// networking service wire protocol built on it.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// History (ADR-002):
+/// - 1: access points, connect/disconnect, saved profiles, typed failures.
+/// - 2: adds the `join-hidden` request (join a network by name, for access
+///   points that do not broadcast their SSID) and [`validate_hidden_join`].
+///   No existing message changed shape; the handshake is still an exact
+///   match, so a schema-1 peer is refused with a typed mismatch rather than
+///   meeting a request it cannot parse.
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// Longest SSID 802.11 allows, in bytes.
+pub const SSID_MAX_LEN: usize = 32;
 
 /// Default socket path of the networking service inside the guest.
 pub const DEFAULT_NETWORKD_SOCKET: &str = "/run/ferrix/networkd.sock";
@@ -213,6 +224,61 @@ impl Passphrase {
 impl fmt::Debug for Passphrase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Passphrase(<redacted>)")
+    }
+}
+
+/// Security types a network can be joined with by name (`join-hidden`).
+/// Hidden networks advertise no beacon to read the type from, so the user
+/// chooses it; WEP and enterprise networks are not offered.
+pub const HIDDEN_JOIN_SECURITY: [SecurityType; 3] = [
+    SecurityType::Open,
+    SecurityType::Wpa2Psk,
+    SecurityType::Wpa3Sae,
+];
+
+/// Checks a `join-hidden` request before any backend sees it. The error
+/// text names the field and the rule, never the passphrase.
+///
+/// - `ssid`: 1..=[`SSID_MAX_LEN`] bytes and not all NUL (an all-NUL name
+///   is what a hidden beacon carries, not a name).
+/// - `security`: one of [`HIDDEN_JOIN_SECURITY`] (`wpa-psk` is accepted as
+///   the WPA1 spelling of the same pre-shared key setup).
+/// - `passphrase`: absent for open networks; for WPA2 8..=63 characters
+///   or 64 hex digits; for WPA3 (SAE) at least one character.
+pub fn validate_hidden_join(
+    ssid: &Ssid,
+    security: SecurityType,
+    passphrase: Option<&Passphrase>,
+) -> Result<(), NetworkError> {
+    let invalid = |reason: &str| NetworkError::Protocol {
+        reason: format!("join-hidden: {reason}"),
+    };
+    let bytes = ssid.as_bytes();
+    if bytes.is_empty() || bytes.iter().all(|b| *b == 0) {
+        return Err(invalid("ssid is empty"));
+    }
+    if bytes.len() > SSID_MAX_LEN {
+        return Err(invalid("ssid is longer than 32 bytes"));
+    }
+    if !(HIDDEN_JOIN_SECURITY.contains(&security) || security == SecurityType::WpaPsk) {
+        return Err(NetworkError::Unsupported {
+            feature: format!("joining {security} networks by name"),
+        });
+    }
+    match (security, passphrase.map(Passphrase::expose)) {
+        (SecurityType::Open, None) => Ok(()),
+        (SecurityType::Open, Some(_)) => Err(invalid("open networks take no passphrase")),
+        (_, None) | (_, Some("")) => Err(invalid("passphrase is required")),
+        (SecurityType::Wpa3Sae, Some(_)) => Ok(()),
+        (_, Some(secret)) => {
+            let chars = secret.chars().count();
+            let hex = secret.len() == 64 && secret.chars().all(|c| c.is_ascii_hexdigit());
+            if hex || (8..=63).contains(&chars) {
+                Ok(())
+            } else {
+                Err(invalid("passphrase must be 8 to 63 characters"))
+            }
+        }
     }
 }
 
@@ -1086,6 +1152,62 @@ mod tests {
         assert_eq!(NetworkError::TimedOut.name(), "timed-out");
         assert!(SecurityType::Wpa2Psk.needs_passphrase());
         assert!(!SecurityType::Open.needs_passphrase());
+    }
+
+    #[test]
+    fn hidden_join_validation_names_the_rule_never_the_secret() {
+        let name = Ssid::from("ferrix-hidden");
+        let secret = Passphrase::new("mock-passphrase");
+        assert_eq!(
+            validate_hidden_join(&name, SecurityType::Wpa2Psk, Some(&secret)),
+            Ok(())
+        );
+        assert_eq!(
+            validate_hidden_join(&name, SecurityType::Wpa3Sae, Some(&Passphrase::new("x"))),
+            Ok(())
+        );
+        assert_eq!(
+            validate_hidden_join(&name, SecurityType::Open, None),
+            Ok(())
+        );
+        let hex = Passphrase::new("ab".repeat(32));
+        assert_eq!(
+            validate_hidden_join(&name, SecurityType::Wpa2Psk, Some(&hex)),
+            Ok(())
+        );
+        for (ssid, security, passphrase) in [
+            (Ssid::from(""), SecurityType::Open, None),
+            (Ssid::new(vec![0, 0]), SecurityType::Open, None),
+            (Ssid::from("x".repeat(33)), SecurityType::Open, None),
+            (name.clone(), SecurityType::Open, Some(&secret)),
+            (name.clone(), SecurityType::Wpa2Psk, None),
+            (
+                name.clone(),
+                SecurityType::Wpa3Sae,
+                Some(&Passphrase::new("")),
+            ),
+            (
+                name.clone(),
+                SecurityType::Wpa2Psk,
+                Some(&Passphrase::new("short")),
+            ),
+        ] {
+            let error = validate_hidden_join(&ssid, security, passphrase).unwrap_err();
+            assert_eq!(error.name(), "protocol", "{ssid:?} {security}");
+            assert!(!error.to_string().contains("mock-passphrase"));
+        }
+        for security in [
+            SecurityType::Wep,
+            SecurityType::Enterprise,
+            SecurityType::Unknown,
+        ] {
+            assert_eq!(
+                validate_hidden_join(&name, security, Some(&secret))
+                    .unwrap_err()
+                    .name(),
+                "unsupported"
+            );
+        }
     }
 
     #[test]

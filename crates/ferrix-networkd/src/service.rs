@@ -15,7 +15,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ferrix_network_adapter_api::{BackendEvent, NetworkBackend};
+use ferrix_network_adapter_api::{BackendError, BackendEvent, NetworkBackend};
 use ferrix_network_api::{NetworkError, NetworkEvent, NetworkState, RadioState};
 use ferrix_network_protocol::{Reply, Request};
 
@@ -247,6 +247,19 @@ impl Service {
             Request::Connect { ap, passphrase } => self
                 .backend
                 .connect(ap, passphrase.as_ref().map(|p| p.expose())),
+            Request::JoinHidden {
+                ssid,
+                security,
+                passphrase,
+            } => ferrix_network_api::validate_hidden_join(ssid, *security, passphrase.as_ref())
+                .map_err(BackendError::from)
+                .and_then(|()| {
+                    self.backend.join_hidden(
+                        ssid,
+                        *security,
+                        passphrase.as_ref().map(|p| p.expose()),
+                    )
+                }),
             Request::ConnectProfile { profile } => self.backend.connect_profile(profile),
             Request::Disconnect {} => self.backend.disconnect(),
             Request::Forget { profile } => self.backend.forget(profile),

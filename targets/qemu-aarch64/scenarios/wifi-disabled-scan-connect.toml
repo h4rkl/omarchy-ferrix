@@ -1,6 +1,6 @@
 schema_version = 1
 name = "wifi-disabled-scan-connect"
-description = "Wi-Fi radio disabled, then enabled; a scan lists the synthetic access points; connecting to ferrix-lab completes and connectivity becomes full."
+description = "Wi-Fi radio disabled, then enabled; a scan lists the synthetic access points (the hidden one without a name); connecting to ferrix-lab completes and connectivity becomes full."
 
 [[step]]
 service = "network"
@@ -36,7 +36,7 @@ note = "client verb through the normal service path; the mock advances on ticks"
 [[step]]
 service = "network"
 command = { cmd = "tick", ms = 3000 }
-expect = [ { event = "network-event", kind = "scan-changed", scan = { state = "completed", count = 2 } } ]
+expect = [ { event = "network-event", kind = "scan-changed", scan = { state = "completed", count = 3 } } ]
 note = "deterministic time, never wall clock"
 
 [[step]]

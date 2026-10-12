@@ -11,7 +11,7 @@ milestone ("summary only; `ferrix-networkd` is authoritative"). Product
 `HardwareCommand::SetWifiEnabled` continues to work through `ferrix-core`;
 quick settings move to `ferrix-networkd` when it is reachable.
 
-## Contract (`ferrix-network-api`, schema 1)
+## Contract (`ferrix-network-api`, schema 2)
 
 - `AdapterPresence`: `absent | present { kind: wifi | ethernet-like }` — the
   QEMU virtio-net device is `ethernet-like`; it is **never** reported as Wi-Fi.
@@ -30,7 +30,26 @@ quick settings move to `ferrix-networkd` when it is reachable.
 
 Capabilities: `network-state` (snapshot, subscribe, list APs with hashed
 BSSIDs), `network-control` (enable/disable radio, scan, connect to profile or
-AP with a supplied passphrase, forget profile).
+AP with a supplied passphrase, join a network by name, forget profile).
+
+### Schema history
+
+- **1:** the contract above without `join-hidden`.
+- **2 (2026-10-13, issue #7):** adds the control request
+  `join-hidden { ssid, security, passphrase? }` for networks that broadcast
+  no SSID (their access points are listed with an empty name and cannot be
+  joined as such). `security` is the caller's choice of `open | wpa2-psk |
+  wpa3-sae` (`wpa-psk` is accepted as the same pre-shared-key setup);
+  `ferrix_network_api::validate_hidden_join` checks the request in the
+  service before any backend sees it (non-empty name of at most 32 bytes,
+  no passphrase for open, 8..=63 characters or 64 hex digits for WPA2, at
+  least one character for WPA3). The passphrase is handled exactly like
+  `connect`'s: on the wire only in the request, `Debug` redacted, never in
+  records. Progress and failure use the existing connection states and
+  errors; a name nobody answers to fails `not-found { id: "ssid" }`. No
+  existing message changed shape, but the hello check stays an exact match,
+  so a schema-1 peer is refused with a typed mismatch. All peers ship from
+  this workspace together.
 
 ## Adapter contract (`ferrix-network-adapter-api`, internal)
 
@@ -43,7 +62,11 @@ AP with a supplied passphrase, forget profile).
   (`org.freedesktop.NetworkManager`, `Device.Wireless`, `AccessPoint`,
   `Settings`, `ActiveConnection`, `IP4Config`, connectivity state). Linux-only,
   feature `production`. Handles NetworkManager restart by re-resolving object
-  paths and republishing a snapshot.
+  paths and republishing a snapshot. `join-hidden` adds a profile with
+  `802-11-wireless.hidden = true` and the chosen `key-mgmt` (`none`,
+  `wpa-psk`, `sae`; the transition-mode policy needs the access point's RSN
+  flags and so does not apply) and activates it on the Wi-Fi device; the
+  device state reason is mapped by the same table as any join.
 
 ## Transport truth
 

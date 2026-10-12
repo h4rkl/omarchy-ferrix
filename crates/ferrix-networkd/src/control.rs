@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferrix_mock_control::{Ack, Handler};
-use ferrix_network_api::{ApId, Passphrase, ProfileId, Ssid};
+use ferrix_network_api::{ApId, Passphrase, ProfileId, SecurityType, Ssid};
 use ferrix_network_protocol::{Reply, Request};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,6 +40,13 @@ pub enum ClientCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         passphrase: Option<Passphrase>,
     },
+    /// `Request::JoinHidden`: joins by name, so `ssid` need not be visible.
+    JoinHidden {
+        ssid: String,
+        security: SecurityType,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        passphrase: Option<Passphrase>,
+    },
     /// `Request::Disconnect` (named apart from the backend `disconnect`
     /// mutation, which simulates the network dropping the station).
     DisconnectRequest {},
@@ -51,9 +58,10 @@ pub enum ClientCommand {
 }
 
 impl ClientCommand {
-    pub const NAMES: [&'static str; 5] = [
+    pub const NAMES: [&'static str; 6] = [
         "scan",
         "connect",
+        "join-hidden",
         "disconnect-request",
         "forget",
         "set-radio-enabled",
@@ -63,6 +71,7 @@ impl ClientCommand {
         match self {
             ClientCommand::Scan {} => "scan",
             ClientCommand::Connect { .. } => "connect",
+            ClientCommand::JoinHidden { .. } => "join-hidden",
             ClientCommand::DisconnectRequest {} => "disconnect-request",
             ClientCommand::Forget { .. } => "forget",
             ClientCommand::SetRadioEnabled { .. } => "set-radio-enabled",
@@ -116,6 +125,15 @@ impl MockControl {
                     passphrase: passphrase.clone(),
                 }
             }
+            ClientCommand::JoinHidden {
+                ssid,
+                security,
+                passphrase,
+            } => Request::JoinHidden {
+                ssid: Ssid::from(ssid.as_str()),
+                security: *security,
+                passphrase: passphrase.clone(),
+            },
             ClientCommand::DisconnectRequest {} => Request::Disconnect {},
             ClientCommand::Forget { ssid } => {
                 let wanted = Ssid::from(ssid.as_str());
@@ -286,11 +304,29 @@ mod tests {
                 .handle(r#"{"cmd":"forget","ssid":"ferrix-lab"}"#)
                 .is_ok()
         );
+        // Joining by name needs no visible access point of that name.
+        assert!(
+            control
+                .handle(r#"{"cmd":"join-hidden","ssid":"ferrix-hidden","security":"wpa2-psk","passphrase":"mock-passphrase"}"#)
+                .is_ok()
+        );
         let calls: Vec<&str> = backend.calls().iter().map(|c| c.op).collect::<Vec<_>>();
         assert_eq!(
             calls,
-            ["scan", "connect", "set-radio:off", "disconnect", "forget"]
+            [
+                "scan",
+                "connect",
+                "set-radio:off",
+                "disconnect",
+                "forget",
+                "join-hidden"
+            ]
         );
+        assert_eq!(
+            backend.calls()[5].id.as_deref(),
+            Some(Ssid::from("ferrix-hidden").hash().as_str())
+        );
+        assert!(backend.calls()[5].passphrase_present);
         assert_eq!(backend.calls()[1].id.as_deref(), Some("ap-1"));
         assert!(backend.calls()[1].passphrase_present);
         assert_eq!(backend.calls()[4].id.as_deref(), Some("profile-1"));
@@ -336,6 +372,14 @@ mod tests {
             r#"{"cmd":"connect","ssid":"ferrix-nowhere"}"#,
             r#"{"cmd":"forget","ssid":"ferrix-guest"}"#,
             r#"{"cmd":"set-radio-enabled"}"#,
+            r#"{"cmd":"join-hidden","ssid":"ferrix-hidden"}"#,
+            r#"{"cmd":"join-hidden","ssid":"ferrix-hidden","security":"wpa2-psk","ap":"ap-1"}"#,
+            // Checked by the service before the backend: a secret is required,
+            // open takes none, enterprise is not offered by name.
+            r#"{"cmd":"join-hidden","ssid":"ferrix-hidden","security":"wpa2-psk"}"#,
+            r#"{"cmd":"join-hidden","ssid":"ferrix-hidden","security":"open","passphrase":"mock-passphrase"}"#,
+            r#"{"cmd":"join-hidden","ssid":"ferrix-hidden","security":"enterprise","passphrase":"mock-passphrase"}"#,
+            r#"{"cmd":"join-hidden","ssid":"","security":"open"}"#,
         ] {
             let ack = control.handle(line);
             assert!(!ack.is_ok(), "{line}");

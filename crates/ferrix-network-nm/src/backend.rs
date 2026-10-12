@@ -691,6 +691,48 @@ impl NetworkBackend for NetworkManagerBackend {
         Ok(())
     }
 
+    /// Adds a profile with `802-11-wireless.hidden = true` (NetworkManager
+    /// then probes for the name instead of waiting for a beacon) and
+    /// activates it on the Wi-Fi device without a specific access point.
+    /// Progress and failure arrive like any join: the refresh thread maps
+    /// the device state and its reason (wrong secret, SSID not found)
+    /// through [`map::connection_state`]. The passphrase goes only into the
+    /// settings dictionary; no error path formats it.
+    fn join_hidden(
+        &self,
+        ssid: &Ssid,
+        security: SecurityType,
+        passphrase: Option<&str>,
+    ) -> Result<(), BackendError> {
+        let device = self.wifi_device()?;
+        self.require_radio()?;
+        let key_mgmt = map::hidden_key_mgmt(security).ok_or_else(|| {
+            BackendError::unsupported(format!("joining {security} networks by name"))
+        })?;
+        let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
+        let mut connection = HashMap::new();
+        connection.insert("type", Value::from("802-11-wireless"));
+        connection.insert("id", Value::from(ssid.to_string()));
+        settings.insert("connection", connection);
+        let mut wireless = HashMap::new();
+        wireless.insert("ssid", Value::from(ssid.as_bytes().to_vec()));
+        wireless.insert("hidden", Value::from(true));
+        settings.insert("802-11-wireless", wireless);
+        if security.needs_passphrase() {
+            let secret = passphrase.ok_or(NetworkError::AuthenticationFailed)?;
+            let mut wireless_security = HashMap::new();
+            wireless_security.insert("key-mgmt", Value::from(key_mgmt));
+            wireless_security.insert("psk", Value::from(secret));
+            settings.insert("802-11-wireless-security", wireless_security);
+        }
+        let root = ObjectPath::try_from(ROOT_PATH)
+            .map_err(|e| BackendError::unavailable(e.to_string()))?;
+        self.manager()?
+            .add_and_activate_connection(settings, &device, &root)
+            .map_err(bus_error)?;
+        Ok(())
+    }
+
     fn connect_profile(&self, profile: &ProfileId) -> Result<(), BackendError> {
         let device = self.wifi_device()?;
         self.require_radio()?;

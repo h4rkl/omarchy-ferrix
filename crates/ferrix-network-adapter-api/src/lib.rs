@@ -13,7 +13,9 @@
 use std::fmt;
 use std::sync::mpsc::Sender;
 
-use ferrix_network_api::{ApId, NetworkError, NetworkEvent, NetworkState, ProfileId};
+use ferrix_network_api::{
+    ApId, NetworkError, NetworkEvent, NetworkState, ProfileId, SecurityType, Ssid,
+};
 
 /// What a backend pushes to the service.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +116,19 @@ pub trait NetworkBackend: Send + Sync {
     /// Joins a visible access point. The passphrase is used for this attempt
     /// (and the resulting saved profile) and must never be logged.
     fn connect(&self, ap: &ApId, passphrase: Option<&str>) -> Result<(), BackendError>;
+
+    /// Joins the network named `ssid`, which need not be visible (a hidden
+    /// network broadcasts no name). `security` is the caller's choice and
+    /// the service has already checked the request with
+    /// `ferrix_network_api::validate_hidden_join`. A successful join saves
+    /// a profile like [`connect`](Self::connect); the passphrase must never
+    /// be logged.
+    fn join_hidden(
+        &self,
+        ssid: &Ssid,
+        security: SecurityType,
+        passphrase: Option<&str>,
+    ) -> Result<(), BackendError>;
 
     fn connect_profile(&self, profile: &ProfileId) -> Result<(), BackendError>;
 

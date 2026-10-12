@@ -439,6 +439,9 @@ pub struct ProfileAccessPoint {
     /// Synthetic passphrase; mock only, never a real secret.
     #[serde(default)]
     pub passphrase: String,
+    /// Advertised without a name: joinable only by name (`join-hidden`).
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// Optional `[network]` section: the mock Wi-Fi adapter's boot state.
@@ -486,6 +489,7 @@ impl NetworkSection {
                     security: ProfileSecurityType::Open,
                     signal_percent: 70,
                     passphrase: String::new(),
+                    hidden: false,
                 }],
                 ..NetworkSection::default()
             },
@@ -947,7 +951,16 @@ signal_percent = 41
         assert_eq!(telephony.sim_pin, "0000");
         let network = p.network.expect("[network] present");
         assert_eq!(network.connected, "ferrix-lab");
-        assert_eq!(network.access_points.len(), 2);
+        assert_eq!(network.access_points.len(), 3);
+        assert_eq!(
+            network
+                .access_points
+                .iter()
+                .filter(|ap| ap.hidden)
+                .map(|ap| ap.ssid.as_str())
+                .collect::<Vec<_>>(),
+            ["ferrix-hidden"]
+        );
         let bluetooth = p.bluetooth.expect("[bluetooth] present");
         assert_eq!(bluetooth.devices.len(), 3);
         assert!(bluetooth.discoverable.len() >= 3);
