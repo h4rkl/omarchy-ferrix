@@ -31,8 +31,7 @@ set -eu
 # Neither result opens the active proof. No playback mode exists: the
 # pinned-source review (audio-route-decision.md, "A2DP route source review")
 # names the stream properties that keep a stream off every sink but its
-# target, but the revised classifier and the A2DP sink shape have not yet
-# been observed on the target.
+# target. An active playback workflow has not yet been implemented.
 # The guest never plays or records audio, pairs, connects, trusts, powers,
 # scans, selects a profile or default, changes a volume, writes a mixer
 # control, loads modules, or starts or stops a service. capabilities.toml is
@@ -56,7 +55,7 @@ out="${FERRIX_OUT_DIR:-$root/out}/pixel-9a/a2dp-output-preflight"
 dt_model='ZUMA PRO TEGU MP on ZUMA PRO'
 dt_compatible='google,ZUMA PRO TEGU'
 pinned_kernel=6.1.124-android14-11-ga4662a84a15f
-active_gate_reason=revised-preflight-unobserved-on-target
+active_gate_reason=active-playback-workflow-not-implemented
 # Versions whose source and packaged configuration were reviewed for #91.
 reviewed_pipewire=1.6.8-r4
 reviewed_wireplumber=0.5.15-r0

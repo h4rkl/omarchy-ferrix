@@ -1,6 +1,6 @@
 # Status
 
-## 2026-10-12 (A2DP route source review and preflight v3; offline only)
+## 2026-10-12 (A2DP route source review and preflight v3; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - Probe v2 ran on the exact phone with one paired, connected Audio Sink
   (reported by the session that operates the phone). Every check held except
@@ -15,11 +15,18 @@
 - Read-only probe v3 accepts only that pair bound to the matched sink. It
   also pins the reviewed builds and requires the reviewed WirePlumber
   invocation, no override files, and the packaged configuration-tree
-  digest. It is fake-guest-tested (`just pixel-9a-a2dp-output-preflight-test`)
-  and has **not** run on the phone.
-- No playback mode was added. The active gate stays closed until a v3
-  phone run reports `candidate-observed`. Internal TAS playback remains
-  NO-GO and `[audio]` stays `unsupported`.
+  digest. It passed 223 fake-guest cases
+  (`just pixel-9a-a2dp-output-preflight-test`). On the exact phone, a v3
+  read-only run with the headset connected reported `candidate-observed`:
+  one LDAC bluez-a2dp default sink matched the connected Audio Sink, and
+  the two filters matched the bound BlueZ source-loopback pair. The two
+  speaker controls were off, the PCM opener scan was complete with zero
+  openers, and the reviewed WirePlumber daemon/configuration checks passed.
+  An earlier v3 run blocked while the accessory was disconnected. Aggregate
+  transcripts remain ignored under `out/pixel-9a/a2dp-output-preflight/`.
+- No playback mode was added; `active_gate=closed`. An audible proof and a
+  separate owner decision remain. Internal TAS playback remains NO-GO and
+  `[audio]` stays `unsupported`.
 
 ## 2026-10-12 (Bluetooth A2DP output preflight; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 

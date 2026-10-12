@@ -687,7 +687,7 @@ check "host candidate: the guest got the exact probe body" cmp -s "$ACM_GUEST_CT
 check "host candidate: reports candidate-observed with the active gate closed" \
 	sh -c 'printf "%s\n" "$1" | grep -Fxq a2dp_preflight=candidate-observed && printf "%s\n" "$1" | grep -Fxq active_proof=not-implemented &&
 		printf "%s\n" "$1" | grep -Fxq active_gate=closed && printf "%s\n" "$1" | grep -Fxq audio_capability=unsupported &&
-		printf "%s\n" "$1" | grep -Fxq active_gate_reason=revised-preflight-unobserved-on-target' sh "$out"
+		printf "%s\n" "$1" | grep -Fxq active_gate_reason=active-playback-workflow-not-implemented' sh "$out"
 check "host candidate: reports versions for the gate review" \
 	sh -c 'printf "%s\n" "$1" | grep -Fxq pkg.wireplumber=0.5.15-r0 && printf "%s\n" "$1" | grep -Fxq pkg.pipewire=1.6.8-r4' sh "$out"
 check "host candidate: never offers a playback phrase" sh -c '! printf "%s\n" "$1" | grep -Eiq "confirm|phrase|pw-cat --target"' sh "$out"

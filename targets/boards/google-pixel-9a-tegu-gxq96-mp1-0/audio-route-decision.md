@@ -801,8 +801,8 @@ fixture-, fake-tool- and fake-guest-tested
 on the exact phone twice on 2026-10-12, both times blocked (see
 [exact-device results](#a2dp-exact-device-results)). Probe version 3 adds
 the [filter and WirePlumber contract](#a2dp-route-source-review-issue-91)
-below. It is offline-tested only and **has not run on the phone**.
-**No playback mode exists.** The
+below. A read-only v3 run on the exact phone reported
+`candidate-observed` with the connected headset. **No playback mode exists.** The
 [active-proof gate](#a2dp-active-proof-gate) below lists what is missing.
 
 - **Transport and identity.** One CDC-ACM session sends the exact probe body.
@@ -949,6 +949,16 @@ below. It is offline-tested only and **has not run on the phone**.
   target value were **not** captured. The pair identification is therefore
   inferred from source, not observed.
 
+  Probe v3 then ran read-only on the same exact phone. Its first run blocked
+  while the headset was disconnected. After reconnection, it reported
+  `candidate-observed`: one LDAC bluez-a2dp default sink matched the one
+  paired and connected Audio Sink; the two filters formed one bound BlueZ
+  source-loopback capture/source pair. The reviewed WirePlumber daemon,
+  invocation, configuration tree, and no-override checks passed. Both
+  speaker-path controls stayed off and the complete playback-PCM opener
+  scan found zero openers. Aggregate output stays in ignored
+  `out/pixel-9a/a2dp-output-preflight/`. No playback was attempted.
+
 ### A2DP route source review (issue #91)
 
 Offline review, 2026-10-12, of the exact builds the exact-device runs
@@ -1068,9 +1078,9 @@ named like a section header.
 #### Inference limits
 
 - The pair identification comes from source and the observed key names.
-  The node names, media classes, target, and link group of the two phone
-  filters were not captured. Only a probe-v3 run on the phone can show
-  that the classifier recognises them.
+  A probe-v3 read-only run on the exact phone classified both nodes as the
+  bound BlueZ source-loopback pair; the output exposed only aggregate
+  counts and matches. This does not establish audible output.
 - The review covers Lua scripts and configuration, which the v3 probe
   fingerprints, and the C sources named above. It does not cover the
   installed binaries beyond their apk versions. It does not cover
@@ -1086,10 +1096,10 @@ named like a section header.
 A bounded A2DP stimulus/restore mode is **not** implemented, and this
 slice deliberately does not add one. The source review above settles the
 earlier open point: which stream properties keep a stream off every sink
-but its target. But the revised classifier and the exact sink and filter
-shapes have not yet been observed on the phone, and playback code built
-on unobserved shapes would not be fail-closed. Every run prints
-`active_gate_reason=revised-preflight-unobserved-on-target`.
+but its target. The revised classifier observed the exact sink and filter
+shapes on the phone in a read-only v3 preflight. An active
+playback workflow remains to be implemented and reviewed. Every run prints
+`active_gate_reason=active-playback-workflow-not-implemented`.
 
 Design for a later, separately reviewed mode, from S4 and S5:
 
@@ -1124,11 +1134,11 @@ Design for a later, separately reviewed mode, from S4 and S5:
 
 The ordered next steps:
 
-1. A probe-v3 read-only run on the phone with the same headset reports
-   `candidate-observed`.
-2. A reviewed active-mode slice implements the design above, with offline
+1. A reviewed active-mode slice implements the design above, with offline
    tests.
-3. A separate owner decision per run.
+2. A fresh read-only preflight in the active session reports
+   `candidate-observed` with the connected headset.
+3. A separate owner decision per active run.
 
 The internal speaker and earpiece stay NO-GO under #83/#90. This workflow
 does not change that, and it never falls back to them.
@@ -1177,8 +1187,8 @@ protection review above. For output, the read-only
 offline-tested and returned the expected blocked result on the exact phone.
 Probe v2 then blocked on the owner-paired headset only because of two
 filters. The [source review](#a2dp-route-source-review-issue-91) identifies
-them as WirePlumber's BlueZ source loopback, and probe v3 accepts exactly
-that bound pair. The next step is a probe-v3 read-only run. No playback
-mode exists until the [active-proof gate](#a2dp-active-proof-gate) is
-closed. Keep `[audio]`
-unsupported until an audible output route and its routing are proved.
+them as WirePlumber's BlueZ source loopback, and probe v3 observed exactly
+that bound pair on the phone. The next step is a reviewed active workflow.
+No playback mode exists until the [active-proof gate](#a2dp-active-proof-gate)
+is closed. Keep `[audio]` unsupported until an audible output route and its
+routing are proved.

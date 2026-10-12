@@ -1542,13 +1542,15 @@ device name, node name, or serial. The result is `candidate-observed`
 accepts are WirePlumber's BlueZ source-loopback pair bound to the matched
 A2DP sink, and it requires the reviewed PipeWire 1.6.8-r4 and WirePlumber
 0.5.15-r0 builds and configuration. Every run prints `active_gate=closed`.
-No playback mode exists, because the revised classifier and the sink and
-filter shapes are not yet observed on the phone. Checks, the pinned-source
-review, limits, and the remaining gate are in
+No playback mode exists yet. The revised classifier observed the sink and
+filter shapes on the exact phone while the headset was connected; active
+playback still needs a separate workflow and owner decision. Checks, the
+pinned-source review, limits, and the remaining gate are in
 [`audio-route-decision.md`](audio-route-decision.md#bluetooth-a2dp-output-preflight-issue-91).
 Transcripts go to ignored `out/pixel-9a/a2dp-output-preflight/`. Offline
 tests: `just pixel-9a-a2dp-output-preflight-test`. Probe v2 ran on the
-phone and blocked; probe v3 has not run on the phone.
+phone and blocked on two filters; probe v3 reported `candidate-observed`
+with the bound pair.
 
 ## CDC-ACM guest probe transport (issue #52)
 
