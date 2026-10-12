@@ -1,5 +1,50 @@
 # Status
 
+## 2026-10-12 (Typed output volume/mute and Settings Sound; host tests and mock previews only)
+
+- **Contract:** `ferrix-hardware-api::AudioState` gains an optional
+  `output: Option<AudioOutputLevel { volume_percent, muted }>`. It is
+  `serde(default)`, and `None` is omitted when serialized, so existing QEMU
+  snapshots stay byte-identical. `Audio` gains `set_audio_volume`/`set_audio_muted`,
+  and product clients get `HardwareCommand::SetAudioVolume { percent }` /
+  `SetAudioMuted { muted }` (`set-audio-volume`/`set-audio-muted`) through
+  `ferrix-core`. A target with no level returns `unsupported`.
+- **WirePlumber adapter:** reads the default sink's level with
+  `wpctl get-volume <id>` (reported scale, clamped 0–100; no `Volume:` line means
+  no mixer). It writes `wpctl set-volume <id> 0.NN --limit 1.0` and
+  `wpctl set-mute <id> 1|0` only to the current default sink's numeric ID. Each
+  write is re-read authoritatively, and a write WirePlumber did not apply
+  becomes a typed `failed`. External level changes arrive as `audio-changed`
+  through the existing poller. A route change now targets the route's active
+  sink. The commands were checked against upstream `wpctl.c`; tests use an
+  in-memory transport plus a fake `wpctl` script that pins exact argv.
+- **Pixel 9a composition:** unchanged wiring. The exact-target adapter already
+  composes `WirePlumberAudio::connect()` and falls back to the unsupported
+  adapter, which now also refuses level changes. Settings therefore drives the
+  phone's volume/mute through the typed API whenever WirePlumber exposes a
+  classified default sink with a mixer. `capabilities.toml` `[audio]` stays
+  `unsupported`, and the Settings caption shows that status instead of
+  upgrading it. Cross-target `cargo clippy --target aarch64-unknown-linux-gnu`
+  of the adapter is clean; nothing ran on the phone.
+- **Settings:** a new Sound page (root row after Display) has a volume rail
+  (dragged, committed on release), playback Mute, and a read-only Output row.
+  Without a level it names the reason (`core · unavailable`,
+  `audio · not supported on this target`, `volume · not exposed by this
+  target`). The ui-state names are `volume-N-muted|unmuted`, `no-output-level`,
+  and `unavailable`. Host `--preview` captures of `root`, `sound`, and
+  `sound-unavailable` (mock data) were inspected.
+- **Emulator:** `[audio] volume_percent`/`muted` are optional profile fields.
+  The checked-in QEMU profile sets neither, so QEMU behaviour is unchanged:
+  output level `None`, and the new commands answer `unsupported` (covered by a
+  `ferrix-core` test against the checked-in profile).
+- **Limitations:** no speaker playback, mic capture, audible volume change,
+  route switching, or capture/uplink mute is claimed on any physical target.
+  WirePlumber's level is a mixer value, not loudness. Volume/mute act on the
+  default sink only, and source/mic mute remains open. `just qemu-check` was not
+  run in this worktree: guest artifacts were absent, and `qemu-build` needs a
+  Docker runtime that was unavailable. `cargo fmt --check`, workspace clippy
+  `-D warnings`, and `cargo test --workspace` passed on the macOS host.
+
 ## 2026-10-12 (Pixel 9a temporary UCM and PipeWire route probe; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - On the running, exact-device verified #61 TAS image, two reviewed

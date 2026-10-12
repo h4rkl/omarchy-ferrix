@@ -2,7 +2,9 @@
 //!
 //! WirePlumber remains authoritative for graph and policy decisions. This
 //! crate maps its available/default sinks into the deliberately coarse Ferrix
-//! route model and never opens ALSA, Bluetooth, or vendor devices directly.
+//! route model, reports and sets the default sink's volume and mute through
+//! WirePlumber's mixer, and never opens ALSA, Bluetooth, or vendor devices
+//! directly.
 
 use std::collections::BTreeMap;
 #[cfg(any(feature = "production", test))]
@@ -15,8 +17,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
 use ferrix_hardware_api::{
-    Audio, AudioRoute, AudioRouteAvailability, AudioState, Capability, EventSource, HardwareError,
-    HardwareEvent,
+    Audio, AudioOutputLevel, AudioRoute, AudioRouteAvailability, AudioState, Capability,
+    EventSource, HardwareError, HardwareEvent,
 };
 
 #[cfg(feature = "production")]
@@ -27,6 +29,9 @@ struct RouteEndpoint {
     id: String,
     route: AudioRoute,
     active: bool,
+    /// WirePlumber's mixer level; transports read it for the default sink
+    /// only, and `None` means the node exposes no volume.
+    level: Option<AudioOutputLevel>,
 }
 
 #[cfg(any(feature = "production", test))]
@@ -38,6 +43,10 @@ enum TransportEvent {
 trait WirePlumberTransport: Send + Sync {
     fn endpoints(&self) -> Result<Vec<RouteEndpoint>, String>;
     fn set_default(&self, id: &str) -> Result<(), String>;
+    /// Sets the node's mixer volume, `0..=100` on the scale reported by
+    /// WirePlumber, never above 100%.
+    fn set_volume(&self, id: &str, percent: u8) -> Result<(), String>;
+    fn set_muted(&self, id: &str, muted: bool) -> Result<(), String>;
     #[cfg(any(feature = "production", test))]
     fn watch(&self, sender: Sender<TransportEvent>) -> Result<(), String>;
 }
@@ -46,6 +55,8 @@ trait WirePlumberTransport: Send + Sync {
 struct State {
     audio: AudioState,
     endpoints: BTreeMap<AudioRoute, String>,
+    /// The node behind `audio.route`, which volume and mute act on.
+    default_sink: String,
     subscribers: Vec<Sender<HardwareEvent>>,
 }
 
@@ -68,12 +79,13 @@ impl WirePlumberAudio {
     fn from_transport(
         transport: Arc<dyn WirePlumberTransport>,
     ) -> Result<Arc<Self>, HardwareError> {
-        let (audio, endpoints) = map_endpoints(transport.endpoints().map_err(failed)?)?;
+        let snapshot = map_endpoints(transport.endpoints().map_err(failed)?)?;
         let adapter = Arc::new(Self {
             transport,
             state: Mutex::new(State {
-                audio,
-                endpoints,
+                audio: snapshot.audio,
+                endpoints: snapshot.endpoints,
+                default_sink: snapshot.default_sink,
                 subscribers: Vec::new(),
             }),
             commands: Mutex::new(()),
@@ -95,9 +107,11 @@ impl WirePlumberAudio {
     }
 
     fn refresh(&self) -> Result<AudioState, HardwareError> {
-        let (audio, endpoints) = map_endpoints(self.transport.endpoints().map_err(failed)?)?;
+        let snapshot = map_endpoints(self.transport.endpoints().map_err(failed)?)?;
+        let audio = snapshot.audio;
         let mut state = lock(&self.state);
-        state.endpoints = endpoints;
+        state.endpoints = snapshot.endpoints;
+        state.default_sink = snapshot.default_sink;
         if state.audio != audio {
             state.audio = audio;
             let event = HardwareEvent::AudioChanged(audio);
@@ -106,6 +120,16 @@ impl WirePlumberAudio {
                 .retain(|subscriber| subscriber.send(event).is_ok());
         }
         Ok(audio)
+    }
+
+    /// The default sink to apply a level change to, refusing with
+    /// `unsupported` when WirePlumber exposes no mixer level for it.
+    fn level_target(&self) -> Result<String, HardwareError> {
+        let state = lock(&self.state);
+        if state.audio.output.is_none() {
+            return Err(HardwareError::unsupported(Capability::Audio));
+        }
+        Ok(state.default_sink.clone())
     }
 }
 
@@ -136,6 +160,40 @@ impl Audio for WirePlumberAudio {
         }
         Ok(audio)
     }
+
+    fn set_audio_volume(&self, percent: u8) -> Result<AudioState, HardwareError> {
+        if percent > 100 {
+            return Err(HardwareError::invalid(
+                Capability::Audio,
+                format!("volume {percent} is outside 0..=100"),
+            ));
+        }
+        let _command = lock(&self.commands);
+        let sink = self.level_target()?;
+        self.transport.set_volume(&sink, percent).map_err(failed)?;
+        let audio = self.refresh()?;
+        // wpctl reports two decimals of its volume value; allow one step.
+        match audio.output {
+            Some(level) if level.volume_percent.abs_diff(percent) <= 1 => Ok(audio),
+            _ => Err(failed(format!(
+                "WirePlumber did not apply volume {percent}% to the default sink"
+            ))),
+        }
+    }
+
+    fn set_audio_muted(&self, muted: bool) -> Result<AudioState, HardwareError> {
+        let _command = lock(&self.commands);
+        let sink = self.level_target()?;
+        self.transport.set_muted(&sink, muted).map_err(failed)?;
+        let audio = self.refresh()?;
+        match audio.output {
+            Some(level) if level.muted == muted => Ok(audio),
+            _ => Err(failed(format!(
+                "WirePlumber did not {} the default sink",
+                if muted { "mute" } else { "unmute" }
+            ))),
+        }
+    }
 }
 
 impl EventSource for WirePlumberAudio {
@@ -154,23 +212,38 @@ fn watch_loop(adapter: Weak<WirePlumberAudio>, receiver: mpsc::Receiver<Transpor
     }
 }
 
-fn map_endpoints(
-    endpoints: Vec<RouteEndpoint>,
-) -> Result<(AudioState, BTreeMap<AudioRoute, String>), HardwareError> {
+struct Snapshot {
+    audio: AudioState,
+    endpoints: BTreeMap<AudioRoute, String>,
+    default_sink: String,
+}
+
+fn map_endpoints(endpoints: Vec<RouteEndpoint>) -> Result<Snapshot, HardwareError> {
     let mut available = AudioRouteAvailability::default();
     let mut representatives = BTreeMap::new();
-    let mut active = None;
+    let mut active: Option<RouteEndpoint> = None;
     for endpoint in endpoints {
         available.insert(endpoint.route);
         representatives
             .entry(endpoint.route)
             .or_insert_with(|| endpoint.id.clone());
-        if endpoint.active && active.replace(endpoint.route).is_some() {
+        if endpoint.active && active.replace(endpoint).is_some() {
             return Err(failed("WirePlumber reported multiple default sinks"));
         }
     }
-    let route = active.ok_or_else(|| failed("WirePlumber exposes no classified default sink"))?;
-    Ok((AudioState { route, available }, representatives))
+    let active = active.ok_or_else(|| failed("WirePlumber exposes no classified default sink"))?;
+    // The default sink is the route's representative, so a route change
+    // targets the node that is actually default.
+    representatives.insert(active.route, active.id.clone());
+    Ok(Snapshot {
+        audio: AudioState {
+            route: active.route,
+            available,
+            output: active.level,
+        },
+        endpoints: representatives,
+        default_sink: active.id,
+    })
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -193,6 +266,8 @@ mod tests {
         endpoints: Mutex<Result<Vec<RouteEndpoint>, String>>,
         watchers: Mutex<Vec<Sender<TransportEvent>>>,
         writes: Mutex<Vec<String>>,
+        /// Accept mixer writes without applying them (a policy override).
+        ignore_level_writes: Mutex<bool>,
     }
 
     impl MockTransport {
@@ -201,6 +276,7 @@ mod tests {
                 endpoints: Mutex::new(Ok(endpoints)),
                 watchers: Mutex::new(Vec::new()),
                 writes: Mutex::new(Vec::new()),
+                ignore_level_writes: Mutex::new(false),
             }
         }
 
@@ -210,6 +286,26 @@ mod tests {
 
         fn signal(&self) {
             lock(&self.watchers).retain(|sender| sender.send(TransportEvent::Changed).is_ok());
+        }
+
+        /// Applies a mixer write unless the mock was told to ignore them.
+        fn change_level(
+            &self,
+            id: &str,
+            change: impl FnOnce(&mut AudioOutputLevel),
+        ) -> Result<(), String> {
+            if *lock(&self.ignore_level_writes) {
+                return Ok(());
+            }
+            let mut endpoints = lock(&self.endpoints);
+            let endpoint = endpoints
+                .as_mut()
+                .map_err(|error| error.clone())?
+                .iter_mut()
+                .find(|endpoint| endpoint.id == id)
+                .ok_or_else(|| format!("no node {id}"))?;
+            change(endpoint.level.as_mut().ok_or("node has no volume")?);
+            Ok(())
         }
     }
 
@@ -227,6 +323,16 @@ mod tests {
             Ok(())
         }
 
+        fn set_volume(&self, id: &str, percent: u8) -> Result<(), String> {
+            lock(&self.writes).push(format!("volume {id} {percent}"));
+            self.change_level(id, |level| level.volume_percent = percent)
+        }
+
+        fn set_muted(&self, id: &str, muted: bool) -> Result<(), String> {
+            lock(&self.writes).push(format!("mute {id} {muted}"));
+            self.change_level(id, |level| level.muted = muted)
+        }
+
         fn watch(&self, sender: Sender<TransportEvent>) -> Result<(), String> {
             lock(&self.watchers).push(sender);
             Ok(())
@@ -238,6 +344,22 @@ mod tests {
             id: id.to_owned(),
             route,
             active,
+            level: None,
+        }
+    }
+
+    fn level(volume_percent: u8, muted: bool) -> Option<AudioOutputLevel> {
+        Some(AudioOutputLevel {
+            volume_percent,
+            muted,
+        })
+    }
+
+    /// An endpoint whose node exposes a WirePlumber mixer level.
+    fn leveled(id: &str, route: AudioRoute, active: bool, volume: u8) -> RouteEndpoint {
+        RouteEndpoint {
+            level: level(volume, false),
+            ..endpoint(id, route, active)
         }
     }
 
@@ -337,5 +459,120 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn default_sink_level_is_reported_and_set_through_the_transport() {
+        let transport = Arc::new(MockTransport::new(vec![
+            leveled("51", AudioRoute::Speaker, true, 60),
+            leveled("52", AudioRoute::Headphones, false, 20),
+        ]));
+        let adapter = WirePlumberAudio::from_transport(transport.clone()).unwrap();
+        assert_eq!(adapter.audio_state().output, level(60, false));
+        let events = subscribed(&adapter);
+
+        let state = adapter.set_audio_volume(35).unwrap();
+        assert_eq!(state.output, level(35, false));
+        assert_eq!(
+            events.recv_timeout(Duration::from_secs(1)).unwrap(),
+            HardwareEvent::AudioChanged(state)
+        );
+        let state = adapter.set_audio_muted(true).unwrap();
+        assert_eq!(state.output, level(35, true));
+        assert_eq!(state.route, AudioRoute::Speaker);
+        assert_eq!(
+            *lock(&transport.writes),
+            vec!["volume 51 35", "mute 51 true"],
+            "only the default sink is written"
+        );
+
+        // The level follows the default sink when the route changes.
+        let state = adapter.set_audio_route(AudioRoute::Headphones).unwrap();
+        assert_eq!(state.output, level(20, false));
+        adapter.set_audio_volume(80).unwrap();
+        assert_eq!(lock(&transport.writes).last().unwrap(), "volume 52 80");
+    }
+
+    #[test]
+    fn level_changes_without_a_mixer_or_out_of_range_are_typed_refusals() {
+        let transport = Arc::new(MockTransport::new(vec![endpoint(
+            "51",
+            AudioRoute::Speaker,
+            true,
+        )]));
+        let adapter = WirePlumberAudio::from_transport(transport.clone()).unwrap();
+        assert_eq!(adapter.audio_state().output, None);
+        assert_eq!(
+            adapter.set_audio_volume(40),
+            Err(HardwareError::unsupported(Capability::Audio))
+        );
+        assert_eq!(
+            adapter.set_audio_muted(true),
+            Err(HardwareError::unsupported(Capability::Audio))
+        );
+        assert!(matches!(
+            adapter.set_audio_volume(101),
+            Err(HardwareError::InvalidValue {
+                capability: Capability::Audio,
+                ..
+            })
+        ));
+        assert!(lock(&transport.writes).is_empty(), "nothing was written");
+    }
+
+    #[test]
+    fn level_writes_wireplumber_did_not_apply_fail_with_the_true_state_kept() {
+        let transport = Arc::new(MockTransport::new(vec![leveled(
+            "51",
+            AudioRoute::Speaker,
+            true,
+            60,
+        )]));
+        *lock(&transport.ignore_level_writes) = true;
+        let adapter = WirePlumberAudio::from_transport(transport).unwrap();
+        assert!(matches!(
+            adapter.set_audio_volume(10),
+            Err(HardwareError::Failed { .. })
+        ));
+        assert!(matches!(
+            adapter.set_audio_muted(true),
+            Err(HardwareError::Failed { .. })
+        ));
+        assert_eq!(adapter.audio_state().output, level(60, false));
+    }
+
+    #[test]
+    fn external_level_changes_emit_audio_events() {
+        let transport = Arc::new(MockTransport::new(vec![leveled(
+            "51",
+            AudioRoute::Speaker,
+            true,
+            60,
+        )]));
+        let adapter = WirePlumberAudio::from_transport(transport.clone()).unwrap();
+        let events = subscribed(&adapter);
+        transport.replace(vec![RouteEndpoint {
+            level: level(60, true),
+            ..endpoint("51", AudioRoute::Speaker, true)
+        }]);
+        transport.signal();
+        let HardwareEvent::AudioChanged(state) =
+            events.recv_timeout(Duration::from_secs(1)).unwrap()
+        else {
+            panic!("expected audio event");
+        };
+        assert_eq!(state.output, level(60, true));
+    }
+
+    #[test]
+    fn route_change_targets_the_active_sink_of_a_route() {
+        let transport = Arc::new(MockTransport::new(vec![
+            endpoint("40", AudioRoute::Speaker, false),
+            endpoint("41", AudioRoute::Speaker, true),
+            endpoint("42", AudioRoute::Headphones, false),
+        ]));
+        let adapter = WirePlumberAudio::from_transport(transport.clone()).unwrap();
+        adapter.set_audio_route(AudioRoute::Speaker).unwrap();
+        assert_eq!(*lock(&transport.writes), vec!["41"]);
     }
 }

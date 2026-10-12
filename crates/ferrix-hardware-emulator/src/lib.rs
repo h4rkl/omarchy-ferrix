@@ -77,6 +77,12 @@ impl Emulator {
             audio: AudioState {
                 route: profile.audio.route,
                 available: ferrix_hardware_api::AudioRouteAvailability::ALL,
+                output: profile.audio.volume_percent.map(|volume_percent| {
+                    ferrix_hardware_api::AudioOutputLevel {
+                        volume_percent,
+                        muted: profile.audio.muted,
+                    }
+                }),
             },
             telephony: TelephonyState {
                 registration: profile.connectivity.modem,
@@ -407,8 +413,41 @@ impl Audio for Emulator {
         let mut inner = self.lock();
         let audio = AudioState {
             route,
-            available: inner.state.audio.available,
+            ..inner.state.audio
         };
+        Self::publish(&mut inner, HardwareEvent::AudioChanged(audio));
+        Ok(audio)
+    }
+
+    fn set_audio_volume(&self, percent: u8) -> Result<AudioState, HardwareError> {
+        if percent > 100 {
+            return Err(HardwareError::invalid(
+                Capability::Audio,
+                format!("volume {percent} is outside 0..=100"),
+            ));
+        }
+        self.set_output(|level| level.volume_percent = percent)
+    }
+
+    fn set_audio_muted(&self, muted: bool) -> Result<AudioState, HardwareError> {
+        self.set_output(|level| level.muted = muted)
+    }
+}
+
+impl Emulator {
+    /// Applies a mock output-level change, or `unsupported` when the profile
+    /// exposes no output level.
+    fn set_output(
+        &self,
+        change: impl FnOnce(&mut ferrix_hardware_api::AudioOutputLevel),
+    ) -> Result<AudioState, HardwareError> {
+        let mut inner = self.lock();
+        let mut audio = inner.state.audio;
+        let level = audio
+            .output
+            .as_mut()
+            .ok_or(HardwareError::unsupported(Capability::Audio))?;
+        change(level);
         Self::publish(&mut inner, HardwareEvent::AudioChanged(audio));
         Ok(audio)
     }
@@ -958,6 +997,43 @@ passkey = 205718
             ferrix_hardware_api::AudioRoute::Headphones
         );
         assert!(matches!(rx.try_recv(), Ok(HardwareEvent::AudioChanged(_))));
+    }
+
+    #[test]
+    fn audio_output_level_is_unsupported_unless_the_profile_names_one() {
+        let (e, rx) = emulator();
+        assert_eq!(e.audio_state().output, None);
+        assert_eq!(
+            e.set_audio_volume(40),
+            Err(HardwareError::unsupported(Capability::Audio))
+        );
+        assert_eq!(
+            e.set_audio_muted(true),
+            Err(HardwareError::unsupported(Capability::Audio))
+        );
+        assert!(rx.try_recv().is_err(), "a refusal publishes nothing");
+
+        let profile = Profile::parse(&format!("{FIXTURE}volume_percent = 60\n")).unwrap();
+        let e = Emulator::from_profile(&profile);
+        let (tx, rx) = mpsc::channel();
+        e.subscribe(tx);
+        let level = |volume_percent, muted| {
+            Some(ferrix_hardware_api::AudioOutputLevel {
+                volume_percent,
+                muted,
+            })
+        };
+        assert_eq!(e.audio_state().output, level(60, false));
+        assert_eq!(e.set_audio_volume(25).unwrap().output, level(25, false));
+        assert_eq!(e.set_audio_muted(true).unwrap().output, level(25, true));
+        assert!(matches!(
+            e.set_audio_volume(101),
+            Err(HardwareError::InvalidValue { .. })
+        ));
+        e.set_audio_route(ferrix_hardware_api::AudioRoute::Headphones)
+            .unwrap();
+        assert_eq!(e.audio_state().output, level(25, true), "route keeps level");
+        assert_eq!(rx.try_iter().count(), 3);
     }
 
     #[test]

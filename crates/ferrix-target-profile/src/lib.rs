@@ -244,6 +244,13 @@ pub struct ConnectivitySection {
 #[serde(deny_unknown_fields)]
 pub struct AudioSection {
     pub route: AudioRoute,
+    /// Mock output volume (`0..=100`). Absent means the mock exposes no
+    /// controllable output level, which is the default emulator contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_percent: Option<u8>,
+    /// Mock output mute; only meaningful with `volume_percent`.
+    #[serde(default)]
+    pub muted: bool,
 }
 
 /// Mock modem lifecycle state at boot (`[telephony] modem`).
@@ -592,6 +599,16 @@ impl Profile {
                 self.power.battery_percent
             )));
         }
+        if let Some(volume) = self.audio.volume_percent.filter(|v| *v > 100) {
+            return Err(ProfileError::Invalid(format!(
+                "audio.volume_percent must be 0..=100 (got {volume})"
+            )));
+        }
+        if self.audio.muted && self.audio.volume_percent.is_none() {
+            return Err(ProfileError::Invalid(
+                "audio.muted needs audio.volume_percent".to_owned(),
+            ));
+        }
         if let Some(telephony) = &self.telephony {
             telephony.validate()?;
         }
@@ -668,6 +685,21 @@ route = "speaker"
         assert_eq!(p.connectivity.modem, ModemRegistration::Registered);
         assert_eq!(p.connectivity.sim, SimState::Present);
         assert_eq!(p.audio.route, AudioRoute::Speaker);
+        assert_eq!(p.audio.volume_percent, None);
+        assert!(!p.audio.muted);
+    }
+
+    #[test]
+    fn audio_output_level_is_optional_and_validated() {
+        let p = Profile::parse(&format!("{FIXTURE}volume_percent = 40\nmuted = true\n")).unwrap();
+        assert_eq!(p.audio.volume_percent, Some(40));
+        assert!(p.audio.muted);
+        for bad in ["volume_percent = 101\n", "muted = true\n"] {
+            assert!(matches!(
+                Profile::parse(&format!("{FIXTURE}{bad}")),
+                Err(ProfileError::Invalid(_))
+            ));
+        }
     }
 
     #[test]

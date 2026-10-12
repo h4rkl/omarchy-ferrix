@@ -2,8 +2,12 @@
 //!
 //! `wpctl list audio sinks` is the machine-readable part of the command's
 //! interface.  Sink properties are read with `wpctl inspect` because the list
-//! output intentionally exposes only a display name.  The transport polls the
-//! same snapshot for changes; `wpctl` does not provide a subscription command.
+//! output intentionally exposes only a display name.  The default sink's
+//! mixer level comes from `wpctl get-volume`, which prints
+//! `Volume: 0.40 [MUTED]` on WirePlumber's reported scale and
+//! prints nothing on stdout for a node without volume.  The transport polls
+//! the same snapshot for changes; `wpctl` does not provide a subscription
+//! command.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -13,7 +17,7 @@ use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::Duration;
 
-use ferrix_hardware_api::{AudioRoute, Capability, HardwareError};
+use ferrix_hardware_api::{AudioOutputLevel, AudioRoute, Capability, HardwareError};
 
 use super::{RouteEndpoint, TransportEvent, WirePlumberTransport};
 
@@ -83,10 +87,16 @@ impl WpctlTransport {
             let Some(route) = classify_sink(&sink, &properties) else {
                 continue;
             };
+            let level = if sink.active {
+                parse_volume(&self.run([OsStr::new("get-volume"), OsStr::new(&sink.id)])?)?
+            } else {
+                None
+            };
             endpoints.push(RouteEndpoint {
                 id: sink.id,
                 route,
                 active: sink.active,
+                level,
             });
         }
 
@@ -106,6 +116,34 @@ impl WpctlTransport {
         self.run([OsStr::new("set-default"), OsStr::new(id)])
             .map(|_| ())
     }
+
+    fn set_volume(&self, id: &str, percent: u8) -> Result<(), String> {
+        let Some(id) = parse_node_id(id) else {
+            return Err(format!("refusing non-numeric WirePlumber sink ID {id:?}"));
+        };
+        if percent > 100 {
+            return Err(format!("refusing volume {percent}% above 100%"));
+        }
+        let volume = format!("{}.{:02}", percent / 100, percent % 100);
+        // `--limit 1.0` keeps WirePlumber from amplifying past 100%.
+        self.run([
+            OsStr::new("set-volume"),
+            OsStr::new(id),
+            OsStr::new(&volume),
+            OsStr::new("--limit"),
+            OsStr::new("1.0"),
+        ])
+        .map(|_| ())
+    }
+
+    fn set_muted(&self, id: &str, muted: bool) -> Result<(), String> {
+        let Some(id) = parse_node_id(id) else {
+            return Err(format!("refusing non-numeric WirePlumber sink ID {id:?}"));
+        };
+        let state = if muted { "1" } else { "0" };
+        self.run([OsStr::new("set-mute"), OsStr::new(id), OsStr::new(state)])
+            .map(|_| ())
+    }
 }
 
 impl WirePlumberTransport for WpctlTransport {
@@ -115,6 +153,14 @@ impl WirePlumberTransport for WpctlTransport {
 
     fn set_default(&self, id: &str) -> Result<(), String> {
         self.set_default(id)
+    }
+
+    fn set_volume(&self, id: &str, percent: u8) -> Result<(), String> {
+        self.set_volume(id, percent)
+    }
+
+    fn set_muted(&self, id: &str, muted: bool) -> Result<(), String> {
+        self.set_muted(id, muted)
     }
 
     fn watch(&self, sender: Sender<TransportEvent>) -> Result<(), String> {
@@ -235,6 +281,30 @@ fn is_default_marker(value: &str) -> bool {
         || value
             .strip_suffix('*')
             .is_some_and(|rest| parse_node_id(rest).is_some())
+}
+
+/// Parses `wpctl get-volume` output. No `Volume:` line means the node has no
+/// mixer volume; a level above 1.0 (software over-amplification) is reported
+/// as 100%.
+fn parse_volume(output: &str) -> Result<Option<AudioOutputLevel>, String> {
+    let Some(line) = output
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("Volume:"))
+    else {
+        return Ok(None);
+    };
+    let mut fields = line["Volume:".len()..].split_whitespace();
+    let volume = fields
+        .next()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(|| format!("wpctl get-volume returned an unreadable level: {line:?}"))?;
+    let muted = fields.any(|field| field == "[MUTED]");
+    Ok(Some(AudioOutputLevel {
+        volume_percent: (volume * 100.0).round().min(100.0) as u8,
+        muted,
+    }))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -525,6 +595,126 @@ mod tests {
             active: false,
         };
         assert_eq!(classify_sink(&sink, &SinkProperties::default()), None);
+    }
+
+    #[test]
+    fn parses_get_volume_levels_and_mute() {
+        assert_eq!(
+            parse_volume("Volume: 0.40\n").unwrap(),
+            Some(AudioOutputLevel {
+                volume_percent: 40,
+                muted: false
+            })
+        );
+        assert_eq!(
+            parse_volume("Volume: 0.07 [MUTED]\n").unwrap(),
+            Some(AudioOutputLevel {
+                volume_percent: 7,
+                muted: true
+            })
+        );
+        assert_eq!(
+            parse_volume("Volume: 1.50\n")
+                .unwrap()
+                .unwrap()
+                .volume_percent,
+            100,
+            "over-amplification clamps"
+        );
+        assert_eq!(parse_volume("").unwrap(), None, "node without volume");
+        assert!(parse_volume("Volume: nan\n").is_err());
+        assert!(parse_volume("Volume: -0.2\n").is_err());
+    }
+
+    /// A fake `wpctl` that records its arguments and answers the read
+    /// commands, so the exact command lines are tested without WirePlumber.
+    #[cfg(unix)]
+    fn fake_wpctl(dir: &std::path::Path) -> (WpctlTransport, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let log = dir.join("calls");
+        let script = dir.join("wpctl");
+        std::fs::write(
+            &script,
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$*" >> '{log}'
+case "$1" in
+  list) printf '51\tPixel Speaker\tAudio/Sink\t*\n52\tWired Headphones\tAudio/Sink\t\n' ;;
+  inspect) printf '  node.description = "%s"\n' "$( [ "$2" = 51 ] && echo Speaker || echo Headphones )" ;;
+  get-volume) printf 'Volume: 0.35 [MUTED]\n' ;;
+esac
+"#,
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (
+            WpctlTransport::with_config(script.into_os_string(), DEFAULT_POLL_INTERVAL),
+            log,
+        )
+    }
+
+    #[cfg(unix)]
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ferrix-wpctl-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_the_default_sink_level_only() {
+        let dir = scratch("read");
+        let (transport, log) = fake_wpctl(&dir);
+        let endpoints = transport.endpoints().unwrap();
+        assert_eq!(
+            endpoints,
+            vec![
+                RouteEndpoint {
+                    id: "51".to_owned(),
+                    route: AudioRoute::Speaker,
+                    active: true,
+                    level: Some(AudioOutputLevel {
+                        volume_percent: 35,
+                        muted: true
+                    }),
+                },
+                RouteEndpoint {
+                    id: "52".to_owned(),
+                    route: AudioRoute::Headphones,
+                    active: false,
+                    level: None,
+                },
+            ]
+        );
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(calls.matches("get-volume").count(), 1);
+        assert!(calls.contains("get-volume 51\n"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn level_writes_use_exact_bounded_wpctl_commands() {
+        let dir = scratch("write");
+        let (transport, log) = fake_wpctl(&dir);
+        transport.set_volume("51", 7).unwrap();
+        transport.set_volume("51", 100).unwrap();
+        transport.set_muted("51", true).unwrap();
+        transport.set_muted("51", false).unwrap();
+        assert!(transport.set_volume("@DEFAULT_AUDIO_SINK@", 5).is_err());
+        assert!(transport.set_muted("51;x", true).is_err());
+        assert!(transport.set_volume("51", 101).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "set-volume 51 0.07 --limit 1.0\n\
+             set-volume 51 1.00 --limit 1.0\n\
+             set-mute 51 1\n\
+             set-mute 51 0\n"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

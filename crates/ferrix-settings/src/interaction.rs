@@ -66,6 +66,10 @@ pub enum Target {
     /// The brightness rail (dragged, committed on release).
     Brightness,
     AutoRotate,
+    /// The output volume rail (dragged, committed on release).
+    Volume,
+    /// Output (playback) mute.
+    Mute,
     /// A layout row on the Keyboard page, by index.
     KbdLayout(usize),
     /// The Keyboard page's scratch field.
@@ -238,6 +242,33 @@ impl Layout {
 
     pub fn auto_rotate_rect(&self) -> Rect {
         self.row_rect(700)
+    }
+
+    /// The visible volume track (the brightness rail's geometry).
+    pub fn volume_rect(&self) -> Rect {
+        self.brightness_rect()
+    }
+
+    pub fn volume_hit_rect(&self) -> Rect {
+        self.brightness_hit_rect()
+    }
+
+    pub fn mute_rect(&self) -> Rect {
+        self.row_rect(700)
+    }
+
+    /// The read-only active output row.
+    pub fn output_route_rect(&self) -> Rect {
+        self.row_rect(870)
+    }
+
+    /// The visible track of a rail target.
+    fn rail_rect(&self, target: Target) -> Option<Rect> {
+        match target {
+            Target::Brightness => Some(self.brightness_rect()),
+            Target::Volume => Some(self.volume_rect()),
+            _ => None,
+        }
     }
 
     pub fn radio_rect(&self) -> Rect {
@@ -414,6 +445,12 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
                 return Some(Target::Brightness);
             }
             contains(l.auto_rotate_rect(), position).then_some(Target::AutoRotate)
+        }
+        Page::Sound => {
+            if contains(l.volume_hit_rect(), position) {
+                return Some(Target::Volume);
+            }
+            contains(l.mute_rect(), position).then_some(Target::Mute)
         }
         Page::Keyboard => crate::keyboard::hit(&l, position),
         Page::Network => {
@@ -597,6 +634,8 @@ pub fn activate(model: &mut Model, target: Target) {
         // The rail acts on drag and release (see `Input`), a tap included.
         Target::Brightness => model.commit_brightness(),
         Target::AutoRotate => model.toggle_auto_rotate(),
+        Target::Volume => model.commit_volume(),
+        Target::Mute => model.toggle_mute(),
         Target::KbdLayout(i) => model.select_keyboard_layout(i),
         Target::KbdTry => model.focus_keyboard_try(),
     }
@@ -625,6 +664,32 @@ pub fn key_press(model: &mut Model, key: Key) {
     }
 }
 
+/// Previews a rail target's value at horizontal position `x`.
+fn drag_rail(model: &mut Model, target: Target, rail: Rect, x: f64) {
+    let value = slider_value(rail, x);
+    match target {
+        Target::Brightness => model.drag_brightness(value),
+        Target::Volume => model.drag_volume(value),
+        _ => {}
+    }
+}
+
+fn rail_value(model: &Model, target: Target) -> Option<u8> {
+    match target {
+        Target::Brightness => model.brightness(),
+        Target::Volume => model.volume(),
+        _ => None,
+    }
+}
+
+fn commit_rail(model: &mut Model, target: Target) {
+    match target {
+        Target::Brightness => model.commit_brightness(),
+        Target::Volume => model.commit_volume(),
+        _ => {}
+    }
+}
+
 #[derive(Default)]
 pub struct Input {
     tracker: Tracker<Target>,
@@ -648,9 +713,10 @@ impl Input {
                     self.repeat.arm(key, Instant::now());
                 }
                 self.pressed = pressed;
-                if pressed == Some(Target::Brightness) {
-                    let rail = Layout::new(size).brightness_rect();
-                    model.drag_brightness(slider_value(rail, position.0));
+                if let Some(target) = pressed
+                    && let Some(rail) = Layout::new(size).rail_rect(target)
+                {
+                    drag_rail(model, target, rail, position.0);
                 }
                 true
             }
@@ -665,13 +731,15 @@ impl Input {
         model: &mut Model,
         size: (u32, u32),
     ) -> bool {
-        if self.tracker.is_tracking(id) && self.tracker.target() == Some(Target::Brightness) {
+        if self.tracker.is_tracking(id)
+            && let Some(target) = self.tracker.target()
+            && let Some(rail) = Layout::new(size).rail_rect(target)
+        {
             // Keep the contact's position current so release commits it.
             let _ = self.tracker.motion(id, position, size, None, None);
-            let before = model.brightness();
-            let rail = Layout::new(size).brightness_rect();
-            model.drag_brightness(slider_value(rail, position.0));
-            return model.brightness() != before;
+            let before = rail_value(model, target);
+            drag_rail(model, target, rail, position.0);
+            return rail_value(model, target) != before;
         }
         let at = hit_test(model, position, size);
         match self.tracker.motion(id, position, size, at, self.pressed) {
@@ -693,14 +761,16 @@ impl Input {
         model: &mut Model,
         size: (u32, u32),
     ) -> bool {
-        if self.tracker.is_tracking(id) && self.tracker.target() == Some(Target::Brightness) {
+        if self.tracker.is_tracking(id)
+            && let Some(target) = self.tracker.target()
+            && let Some(rail) = Layout::new(size).rail_rect(target)
+        {
             if let Some(p) = position.or_else(|| self.tracker.current(id)) {
-                let rail = Layout::new(size).brightness_rect();
-                model.drag_brightness(slider_value(rail, p.0));
+                drag_rail(model, target, rail, p.0);
             }
             let _ = self.tracker.up(id, size, None);
             self.pressed = None;
-            model.commit_brightness();
+            commit_rail(model, target);
             return true;
         }
         let at = position
@@ -903,6 +973,39 @@ mod tests {
         m.pending.clear();
         tap(&mut input, &mut m, center(l.auto_rotate_rect()));
         assert_eq!(m.pending, vec![Action::SetRotationLock(true)]);
+    }
+
+    #[test]
+    fn sound_page_volume_rail_and_mute_issue_typed_actions() {
+        let mut m = with_core();
+        m.show(Page::Root);
+        let l = Layout::new(SIZE);
+        let mut input = Input::default();
+        let sound = l
+            .section_rects()
+            .into_iter()
+            .find(|(_, p)| *p == Page::Sound)
+            .unwrap()
+            .0;
+        tap(&mut input, &mut m, center(sound));
+        assert_eq!(m.page, Page::Sound);
+        let rail = l.volume_rect();
+        let y = f64::from(rail.y + rail.h / 2);
+        assert!(input.down(0, (f64::from(rail.x + rail.w / 4), y), &mut m, SIZE));
+        assert_eq!(m.volume(), Some(25), "touch-down previews");
+        assert!(input.motion(0, (f64::from(rail.x + rail.w / 2), y), &mut m, SIZE));
+        assert_eq!(m.volume(), Some(50));
+        assert!(m.pending.is_empty(), "nothing sent while dragging");
+        assert!(input.up(0, None, &mut m, SIZE));
+        assert_eq!(m.pending, vec![Action::SetVolume(50)]);
+        assert_eq!(
+            m.brightness_drag, None,
+            "the volume rail leaves brightness alone"
+        );
+        m.pending.clear();
+        tap(&mut input, &mut m, center(l.mute_rect()));
+        assert_eq!(m.pending, vec![Action::SetMuted(true)]);
+        assert_eq!(hit_test(&m, center(l.output_route_rect()), SIZE), None);
     }
 
     #[test]

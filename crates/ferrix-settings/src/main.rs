@@ -79,13 +79,14 @@ fn target_from_env() -> String {
 /// the Bluetooth pairing flows.
 const PREVIEW_PAGES: &str = "root, network, bluetooth, bluetooth-absent, bluetooth-pair, \
      bluetooth-confirm, bluetooth-paired, bluetooth-failed, bluetooth-device, bluetooth-forget, \
-     mobile, mobile-no-sim, display, keyboard, radios, about";
+     mobile, mobile-no-sim, display, sound, sound-unavailable, keyboard, radios, about";
 
 fn preview_model(name: &str, target: &str) -> Option<Model> {
     use ferrix_hardware_api::{PairingFailure, PairingPhase};
     let (page, absent) = match name {
         "bluetooth-absent" => (Page::Bluetooth, true),
         "mobile-no-sim" => (Page::Mobile, true),
+        "sound-unavailable" => (Page::Sound, true),
         other if other.starts_with("bluetooth-") => (Page::Bluetooth, false),
         other => (Page::parse(other)?, false),
     };
@@ -136,10 +137,19 @@ fn preview_model(name: &str, target: &str) -> Option<Model> {
         hw.bluetooth.present = false;
         hw.bluetooth.enabled = false;
     }
+    let mut capabilities = system::preview_capabilities();
+    if absent && page == Page::Sound {
+        // An audio service without a mixer level on an unsupported target.
+        hw.audio.output = None;
+        capabilities = capabilities.with(
+            ferrix_hardware_api::Capability::Audio,
+            ferrix_hardware_api::CapabilityStatus::Unsupported,
+        );
+    }
     model.apply_core(ferrix_protocol::Feed::Snapshot {
         target: target.to_owned(),
         profile: "preview".to_owned(),
-        capabilities: system::preview_capabilities(),
+        capabilities,
         state: hw,
     });
     model.show(page);
@@ -249,5 +259,9 @@ mod tests {
         assert_eq!(absent.state_name(), "no-controller");
         let no_sim = preview_model("mobile-no-sim", "x").unwrap();
         assert_eq!(no_sim.state_name(), "no-sim");
+        let sound = preview_model("sound", "x").unwrap();
+        assert_eq!(sound.state_name(), "volume-40-unmuted");
+        let no_level = preview_model("sound-unavailable", "x").unwrap();
+        assert_eq!(no_level.state_name(), "no-output-level");
     }
 }

@@ -192,6 +192,12 @@ pub fn apply_product(
         HardwareCommand::SetAudioRoute { route } => {
             services.audio.set_audio_route(route)?;
         }
+        HardwareCommand::SetAudioVolume { percent } => {
+            services.audio.set_audio_volume(percent)?;
+        }
+        HardwareCommand::SetAudioMuted { muted } => {
+            services.audio.set_audio_muted(muted)?;
+        }
         HardwareCommand::Suspend => {
             services.lifecycle.suspend()?;
         }
@@ -330,6 +336,22 @@ mod tests {
         assert_eq!(display.orientation, Orientation::Portrait, "lock holds");
         apply_product(&s, HardwareCommand::SetRotationLock { locked: false }).unwrap();
         assert_eq!(s.snapshot().display.orientation, Orientation::Landscape);
+    }
+
+    #[test]
+    fn audio_level_commands_reach_the_capability_and_stay_unsupported_on_qemu() {
+        let s = services();
+        assert_eq!(s.snapshot().audio.output, None);
+        for command in [
+            HardwareCommand::SetAudioVolume { percent: 40 },
+            HardwareCommand::SetAudioMuted { muted: true },
+        ] {
+            assert_eq!(
+                apply_product(&s, command),
+                Err(HardwareError::unsupported(Capability::Audio))
+            );
+        }
+        assert_eq!(s.snapshot().audio.output, None);
     }
 
     #[test]
