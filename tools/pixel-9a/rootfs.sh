@@ -196,6 +196,8 @@ verify_audio_backend_rootfs() {
 	fi
 	printf '%s\n' "$installed" | grep -qx 'P:postmarketos-base-ui-audio-backend-pipewire' ||
 		die 'built rootfs did not select the PipeWire UI audio backend'
+	printf '%s\n' "$installed" | grep -qx 'P:alsa-utils' ||
+		die 'built rootfs lacks ALSA mixer/playback/capture diagnostics'
 }
 
 check_static_inputs() {

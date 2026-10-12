@@ -24,12 +24,12 @@ audio sources and generated module lists still need review where noted.
 | Loaded modules (dev route) | `initramfs-init-kleaf:371-378` loads all of Kleaf's generated `system_dlkm.modules.load` and `vendor_dlkm.modules.load`. Firmware lookup points at the rootfs while they load. `tools/pixel-9a/dev-compose.py:203-218` copies those lists unfiltered from the Kleaf archives. | Which audio modules are in those generated lists, or whether they probe. The lists are build outputs and are not checked in. |
 | Radio-first route | `modules-vendor-dlkm:1-4` and `modules-system-dlkm:1-3` select no loadable modules. | Applies only to the native radio route. The Kleaf dev route above is a different route. |
 | Firmware | Issue #55 adds one `audio-aoc` controller to `firmware-policy.toml` and one stage row, `vendor.img:/firmware/aoc.bin` → `lib/firmware/aoc.bin` (`firmware-stage-allowlist.tsv`), with an optional runtime row (`pmos/device-google-tegu/firmware-allowlist.tsv`). The physical #58 image brought AoC online. Issue #59 adds the same shape for `audio-tas25xx`: `vendor.img:/firmware/tismartpa_driver_tuning.bin` → `lib/firmware/tismartpa_driver_tuning.bin`, optional at runtime. The `display-audio-touch` controller still has `required_names = []`. `allow_unlisted_paths = false`, and the stage workflow refuses persist or `*calib*` rows. | That the factory TAS tuning parses and initialises the amplifier on this kernel. Haptics (CS40L26) firmware is not staged. No bytes are in Git. |
-| Userspace | The device package depends on `alsa-ucm-conf`, `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD:24-27`). It enables `ferrix-pipewire` and `ferrix-audio` (`APKBUILD:150`). It does not depend on `alsa-utils`. Issue #2 adds a discovery-only UCM profile (`APKBUILD:137-141`, [below](#discovery-only-ucm-profile-issue-2)). | A fresh image loading the profile, working speaker/mic routes, or audio streams. The temporary physical profile parse and graph trial are recorded below. |
+| Userspace | The device package depends on `alsa-ucm-conf`, `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD`). The target pmbootstrap config now explicitly lists `alsa-utils` for diagnostics, and the rootfs builder checks its final apk database. It enables `ferrix-pipewire` and `ferrix-audio`. Issue #2 adds a discovery-only UCM profile ([below](#discovery-only-ucm-profile-issue-2)). | A working speaker/mic route or audio stream. The freshly booted `f1c4fdf` image predates the explicit `alsa-utils` dependency and has only Dummy Output. |
 | AoC loader | `pmos/device-google-tegu/ferrix-aoc-firmware.initd` is a fail-open OpenRC one-shot, ordered before `ferrix-pipewire`, `ferrix-audio`, and `ferrix-core`. Nothing `need`s it. It writes `aoc.bin` to the AoC `firmware` control once, and only when `revision` reads `Offline` and the staged image matches its manifest row. It has bounded waits. The physical #58 inventory found the service started and AoC online. | That the sound card binds or audio works. Offline tests also cover the service failure paths (`tools/pixel-9a/tests/aoc-firmware-runtime.sh`). |
 | Services | `ferrix-pipewire.initd:6-18` runs PipeWire as `user` after `ferrix-radio-firmware`. `ferrix-audio.initd:13-49` runs WirePlumber and waits up to 10 s for `wpctl status`. `docs/status.md:517-521` records only that both are supervised and respawn. | Any ALSA node in the PipeWire graph. A running daemon is not an audio device. |
 | Android audio | Waydroid audio goes through `pipewire-pulse` (`pmos/android/packages:11-23`). | Any hardware output. With no ALSA sink, it reaches only whatever PipeWire offers. |
 | Ferrix adapter | `ferrix-backends.env:15` selects `wireplumber`. The target adapter composes `WirePlumberAudio::connect()` and falls back to `UnavailableHardware` on error (`adapter/src/lib.rs:837-841`, `292-302`). `connect` fails when no classified default sink exists (`crates/ferrix-audio-wireplumber/src/lib.rs:71`, `157-174`). | That a route works. Without an ALSA sink, the product sees `unsupported`. |
-| Product API | `ferrix-hardware-api::Audio` models output routes only: speaker, earpiece, headphones, Bluetooth (`crates/ferrix-hardware-api/src/lib.rs:833-898`). Call route and uplink mute belong to telephony (`crates/ferrix-telephony-api/src/lib.rs:825-833`). | General microphone capture, volume, or playback mute as typed hardware controls. None exists, and this record does not add them. |
+| Product API | `ferrix-hardware-api::Audio` models output routes and optional output volume/playback mute. The Pixel adapter uses WirePlumber for those controls when it exposes a default sink with a mixer. Call route and uplink mute belong to telephony. | General microphone capture or physically working output. In-call uplink mute remains open. |
 
 Conclusion: this target has **a bound AoC ALSA card and supervised audio
 services, but no proven speaker output, mic capture, or call audio.**
@@ -471,12 +471,12 @@ amplifier is identified. Call audio stays blocked on telephony.
 - How `ferrix-audio-wireplumber` behaves when a card appears after ferrix-core
   starts. `connect` runs once, at composition (`adapter/src/lib.rs:837`).
 
-## Next coding slice (justified, not done here)
+## Next physical slice
 
-Add a read-only `tools/pixel-9a/audio-inventory.sh` with a `just` recipe. It
-would run steps 1-15 over the existing guest SSH route, apply the redactions
-above, and emit an A1-A7 table. It would be stub-tested with fixtures like
-`tools/pixel-9a/tests/fixtures/radios/`, and it would never edit
-`capabilities.toml`. Add `alsa-utils` to the opt-in dev image only if A1
-passes and step 10 shows the tools are missing. No UCM, firmware, or product
-API change belongs in that slice.
+The read-only `audio-inventory.sh` and its mock tests are checked in. The
+AoC card and UCM profile were observed on the exact target, and the first
+PipeWire-provider image exposed only Dummy Output. The running image lacks
+`alsa-utils`; the next build explicitly includes it. Repeat the read-only
+inventory, then use the recorded mixer controls for a bounded route and
+stream trial. Keep `[audio]` unsupported until speaker playback and
+non-silent microphone capture are observed on this phone.

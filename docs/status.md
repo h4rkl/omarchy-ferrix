@@ -1,5 +1,23 @@
 # Status
 
+## 2026-10-12 (Pixel 9a PipeWire/UCM image boot; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The seven-image development bundle built from `f1c4fdf` (manifest SHA-256
+  `35ae3e36a96d6dd07c3dfd8479227862b4e8cb6b6f30905e7d443636f872d92b`)
+  passed transferred image hashes, exact-device recovery preflight and the
+  checked-in slot-B flash. The phone returned to the Ferrix USB shell.
+- The new rootfs installed `postmarketos-base-ui-audio-backend-pipewire` and
+  the Pixel AoC UCM files without `pulseaudio-wireplumber`. The physical audio
+  inventory still saw only PipeWire's **Dummy Output**, with no physical sink
+  or source. The AoC ALSA card is present; speaker and microphone function
+  remain unproven.
+- Pinning the PipeWire provider also removed the incidental `alsa-utils`
+  dependency. This source change lists it explicitly and checks the final apk
+  database so future images carry `amixer`, `alsaucm`, `aplay`, `arecord`, and
+  `speaker-test` for controlled route diagnosis. The running image predates
+  this change and lacks those tools. Raw device logs are ignored under
+  `out/pixel-9a/`.
+
 ## 2026-10-12 (Typed output volume/mute and Settings Sound; host tests and mock previews only)
 
 - **Contract:** `ferrix-hardware-api::AudioState` gains an optional
