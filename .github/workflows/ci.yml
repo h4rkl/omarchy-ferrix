@@ -6,6 +6,9 @@
 #                         tracked *.md, plus the docs/status.md current-state
 #                         and docs/status-log/ structure tests (stdlib Python).
 #   rust                - host toolchain checks (fmt, clippy, test) on ubuntu-latest.
+#   pixel-9a-offline    - every offline Pixel 9a test (`just pixel-9a-test-offline`
+#                         via tools/pixel-9a/test-offline.sh) with stubbed
+#                         adb/fastboot/guest. Evidence label: mock.
 #                         The hosted runner denies uid_map/setgroups and mounts in
 #                         an unprivileged user namespace, so the real-namespace
 #                         tests in crates/ferrix-runtime-native/tests/sandbox.rs
@@ -132,6 +135,24 @@ jobs:
       # `sandbox-test-skipped` records; sandbox-check is their gate.
       - name: cargo test
         run: cargo test --workspace
+
+  pixel-9a-offline:
+    name: Pixel 9a offline tests (mock)
+    runs-on: ubuntu-latest
+    # The full set takes about 25 minutes on a laptop; a2dp-active-proof alone
+    # is about 6.
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # exynos-modem-cpif-adapter.sh runs cargo natively on Linux.
+      - name: Install toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustup show
 
       # Every offline Pixel 9a test under tools/pixel-9a/tests/ (stubbed
       # adb/fastboot/guest; no device). The runner discovers the tests, so a
