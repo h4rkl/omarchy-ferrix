@@ -443,7 +443,7 @@ pf 'a symlinked pinned file' 'is not the pinned package file' \
 pf 'a pin list missing a path' 'exactly once' \
 	'grep -v /etc/init.d/sit-proxy "$fx/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256" >"$fx/p"; mv "$fx/p" "$fx/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256"'
 pf 'a pin list naming a path twice' 'exactly once' \
-	'grep /etc/init.d/sit-proxy "$fx/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256" >>"$fx/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256"'
+	'grep /etc/init.d/sit-proxy "$fx/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256" >"$fx/p"; cat "$fx/p" >>"$fx/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256"'
 pf 'a missing pin list' 'service pins are missing' 'rm "$fx/usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256"'
 pf 'a stale exynos-modem package' "not 0.1.0_git20260731-r3" 'sed -i.bak "3s/-r3/-r2/" "$fx/lib/apk/db/installed"'
 pf 'no exynos-modem package' "is 'missing'" 'printf "P:other\nV:1\n" >"$fx/lib/apk/db/installed"'
