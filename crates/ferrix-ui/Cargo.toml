@@ -15,7 +15,7 @@ fontdue = "0.9"
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 serde = { version = "1", features = ["derive"] }
 tiny-skia = "0.12"
-toml = { version = "1.1", default-features = false, features = ["parse"] }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 
 # Build-time only: compile the pinned Remix Icon SVG subset into outline data
 # (see build.rs). Neither crate is linked into any binary.
