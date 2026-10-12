@@ -15,6 +15,13 @@
 //! serves [`Reply::State`] and [`Event`]s built from
 //! `RedactedTelephonyState`/`RedactedTelephonyEvent`. Both forms share the
 //! same tags, so a subscriber folds them with the matching `apply_to`.
+//!
+//! `subscribe` is answered with [`Reply::State`]: the caller's projected
+//! snapshot, taken atomically with registration. Every later [`Event`] on the
+//! stream was applied after that snapshot and each is sent once, in apply
+//! order, so `snapshot + events` is gap-free and needs no deduplication. A
+//! separate `state` request before `subscribe` is not part of the handshake;
+//! an event between the two would be in neither.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -81,6 +88,7 @@ pub enum Request {
     /// unit variant) so `deny_unknown_fields` is enforced by serde.
     State {},
     /// Receive [`Event`]s on this stream from now on (`telephony-state`).
+    /// Answered with [`Reply::State`], the snapshot those events apply to.
     Subscribe {},
     // --- telephony-call ---
     Dial {
@@ -459,19 +467,19 @@ impl Client {
         }
     }
 
-    /// Switches this connection into a subscription. A fresh snapshot is
-    /// fetched first so the subscriber starts from a consistent state.
+    /// Switches this connection into a subscription. The reply carries the
+    /// snapshot taken atomically with registration; every following event
+    /// applies to it, none is missing and none is already in it.
     pub fn subscribe(mut self) -> Result<Subscription, String> {
-        let state = self.state()?;
-        match self.request(&Request::Subscribe {})? {
-            Reply::Ok => {}
+        let state = match self.request(&Request::Subscribe {})? {
+            Reply::State { state } => state,
             Reply::Error { error } => return Err(error.to_string()),
             other => {
                 return Err(format!(
                     "unexpected ferrix-telephonyd subscribe reply: {other:?}"
                 ));
             }
-        }
+        };
         self.reader
             .get_ref()
             .set_read_timeout(None)
@@ -485,8 +493,8 @@ impl Client {
     }
 }
 
-/// A subscribed stream: the snapshot taken at subscribe time plus pushed
-/// [`Event`]s.
+/// A subscribed stream: the snapshot taken atomically with registration plus
+/// the pushed [`Event`]s that follow it.
 pub struct Subscription {
     pub state: StateView,
     writer: UnixStream,
@@ -878,7 +886,7 @@ mod tests {
         path
     }
 
-    /// A fake daemon that answers hello/state/subscribe and then pushes
+    /// A fake daemon that answers hello and subscribe and then pushes
     /// `count` events back-to-back on the subscribed stream.
     fn fake_pushing_daemon(count: usize) -> PathBuf {
         use std::os::unix::net::UnixListener;
@@ -906,15 +914,14 @@ mod tests {
                         },
                     )
                     .unwrap(),
-                    Request::State {} => write_line(
-                        &mut writer,
-                        &Reply::State {
-                            state: StateView::Full(TelephonyState::new()),
-                        },
-                    )
-                    .unwrap(),
                     Request::Subscribe {} => {
-                        write_line(&mut writer, &Reply::Ok).unwrap();
+                        write_line(
+                            &mut writer,
+                            &Reply::State {
+                                state: StateView::Full(TelephonyState::new()),
+                            },
+                        )
+                        .unwrap();
                         for i in 0..count {
                             let event = Event::Full(TelephonyEvent::SignalChanged {
                                 signal: ferrix_telephony_api::Signal::bars(i as u8),
@@ -982,6 +989,87 @@ mod tests {
             guard.0 >= 3,
             "one wake per snapshot and per event: {}",
             guard.0
+        );
+    }
+
+    /// A fake daemon that answers hello, replies `subscribe_reply` to the
+    /// next request, and reports every request name it received.
+    fn fake_subscribe_daemon(
+        tag: &str,
+        subscribe_reply: Reply,
+    ) -> (PathBuf, Receiver<Vec<String>>) {
+        use std::os::unix::net::UnixListener;
+        let dir = std::env::temp_dir().join(format!(
+            "ferrix-telephony-protocol-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.sock");
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut writer = stream.try_clone().unwrap();
+            let mut lines = BufReader::new(stream).lines();
+            let mut names = Vec::new();
+            while let Some(Ok(line)) = lines.next() {
+                let request: Request = serde_json::from_str(&line).unwrap();
+                names.push(request.name().to_owned());
+                let reply = match request {
+                    Request::Hello { .. } => Reply::Hello {
+                        schema_version: SCHEMA_VERSION,
+                        evidence: "mock".into(),
+                        state: StateView::Full(TelephonyState::new()),
+                    },
+                    _ => subscribe_reply.clone(),
+                };
+                write_line(&mut writer, &reply).unwrap();
+                if names.len() == 2 {
+                    // Report, then hold the stream open until the client goes.
+                    tx.send(names.clone()).unwrap();
+                }
+            }
+        });
+        (path, rx)
+    }
+
+    /// The handshake is one round trip: no separate `state` request whose
+    /// reply could miss an event raised before `subscribe` registers.
+    #[test]
+    fn subscribe_takes_its_snapshot_from_the_subscribe_reply() {
+        let mut snapshot = TelephonyState::new();
+        snapshot.modem = ModemState::Ready;
+        let (path, requests) = fake_subscribe_daemon(
+            "snapshot",
+            Reply::State {
+                state: StateView::Full(snapshot.clone()),
+            },
+        );
+        let subscription = Client::connect(&path, ClientKind::Tool, Duration::from_secs(2))
+            .unwrap()
+            .subscribe()
+            .unwrap();
+        assert_eq!(subscription.state, StateView::Full(snapshot));
+        assert_eq!(
+            requests.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ["hello", "subscribe"]
+        );
+    }
+
+    /// A daemon that acknowledges with a bare `ok` provides no snapshot the
+    /// stream is anchored to; the client fails closed rather than guessing.
+    #[test]
+    fn subscribe_rejects_a_reply_without_a_snapshot() {
+        let (path, _requests) = fake_subscribe_daemon("bare-ok", Reply::Ok);
+        let err = Client::connect(&path, ClientKind::Tool, Duration::from_secs(2))
+            .unwrap()
+            .subscribe()
+            .err()
+            .unwrap();
+        assert!(
+            err.contains("unexpected ferrix-telephonyd subscribe reply"),
+            "{err}"
         );
     }
 

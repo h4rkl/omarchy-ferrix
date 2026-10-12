@@ -71,6 +71,10 @@ snapshot. Denials reply `{"kind":"unauthorized","capability":...}` and record
 for every request and before every subscribed event, so grant revocation and an
 application-service restart fail closed even on an existing connection.
 
+`subscribe` replies with the projected snapshot (`{"reply":"state",...}`),
+taken atomically with registration; the events that follow are exactly those
+applied after it, once each and in apply order (ADR-001, issue #68).
+
 ## Records (stdout, `evidence` first)
 
 `telephonyd-ready {socket, backend, capabilities}`, `telephonyd-failed`,
