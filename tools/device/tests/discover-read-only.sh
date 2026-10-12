@@ -7,6 +7,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+tab=$(printf '\t')
 discover="$root/tools/device/discover.sh"
 fails=0
 
@@ -209,7 +210,7 @@ check "identity: Fastboot manufacturer is empty without operator hint" grep -q "
 check "identity: Fastboot userspace mode is recorded" grep -q "^fastboot_userspace='no'\$" "$fastboot_identity"
 check "dynamic: Fastboot identity variables were queried" grep -q 'getvar.*hw-revision' "$calls"
 
-bad_calls=$(grep -vE '^adb\tdevices\t-l\t$|^adb\t-s\t[^[:space:]]+\tshell\tgetprop\t(ro|sys)\.[^[:space:]]+\t$|^fastboot\tdevices\t-l\t$|^fastboot\t-s\t[^[:space:]]+\tgetvar\t(product|variant|hw-revision|current-slot|slot-count|unlocked|secure|is-userspace|version-bootloader|version-baseband|serialno)\t$' "$calls" || true)
+bad_calls=$(grep -vE '^adb'"$tab"'devices'"$tab"'-l'"$tab"'$|^adb'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'shell'"$tab"'getprop'"$tab"'(ro|sys)\.[^[:space:]]+'"$tab"'$|^fastboot'"$tab"'devices'"$tab"'-l'"$tab"'$|^fastboot'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'getvar'"$tab"'(product|variant|hw-revision|current-slot|slot-count|unlocked|secure|is-userspace|version-bootloader|version-baseband|serialno)'"$tab"'$' "$calls" || true)
 check "dynamic: every stubbed device call was read-only" [ -z "$bad_calls" ]
 [ -z "$bad_calls" ] || printf '%s\n' "$bad_calls"
 

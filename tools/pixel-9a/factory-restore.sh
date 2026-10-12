@@ -351,10 +351,13 @@ read_inventory_requirements() {
   emit required_baseband "$required_baseband"
 }
 
-# One member of the outer archive must match each pattern.
+# One member of the outer archive must match each pattern. The pattern goes
+# through ENVIRON, not `awk -v`: -v applies string-escape processing, so gawk
+# turned '\.' into '.' and matched more names than the pattern says (#127).
 single_member() {
   pattern=$1
-  matches=$(printf '%s\n' "$members" | awk -v pattern="$pattern" '
+  matches=$(printf '%s\n' "$members" | MEMBER_PATTERN=$pattern awk '
+    BEGIN { pattern = ENVIRON["MEMBER_PATTERN"] }
     {
       name = $0
       sub(".*/", "", name)
