@@ -14,6 +14,13 @@ userspace with `linux-google-tegu-wwan`. `exynos-modem.initd` and
 in a default runlevel. Running the CPIF backend on the device needs a separate,
 reviewed integration change (see "Still required").
 
+**Update (issue #88):** the integration is now in code, offline-tested only;
+see [`s5300-cpif-integration.md`](s5300-cpif-integration.md). The init scripts
+map each backend to its own explicit CLI. The Kleaf composer pairs the image
+with `google-kleaf-cpif`, and the CPIF daemon starts only manually after a
+read-only preflight and a one-shot `arm`. Still no S5300 service is in a
+runlevel, and no CP boot has run.
+
 ## What changed
 
 The pinned `exynos-modem` archive (`634e8eb4`, SHA-256 `324efde8…a9445f`) is
@@ -123,6 +130,9 @@ code change.
   `exynos-modem` and `sit-proxy` explicitly, under a `google-kleaf-cpif`
   backend value, with manual start for S2 (route decision, stage 2). The
   current init scripts must keep refusing that backend until then.
+  **Update (issue #88):** done in code
+  ([`s5300-cpif-integration.md`](s5300-cpif-integration.md)); the
+  on-device package checks listed there are still required.
 - ModemManager plugin binding for the CPIF ports, or binding through the
   `sit-proxy` sockets (S3).
 - The prerequisites already listed in the route decision: E1 inventory, the

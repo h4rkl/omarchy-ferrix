@@ -343,8 +343,9 @@ def gki_rootfs_patches():
                          for line in text.splitlines()) + "\n"
 
     def modemmanager(text):
-        # The SIT ModemManager chain belongs to the radio-first WWAN kernel; on
-        # the Kleaf/cpif route ModemManager runs without it (no modem yet).
+        # Catch-up for base rootfs images whose ModemManager still `need`s the
+        # S5300 chain: that would start it (and the CP) from the default
+        # runlevel. The current package only `use`s it.
         text = re.sub(r"^\s*need ferrix-s5300-mounts exynos-modem sit-proxy\n", "", text,
                       flags=re.M)
         # Same as the package's modemmanager.initd: drop the conf.d option this
@@ -359,16 +360,33 @@ def gki_rootfs_patches():
         # OpenRC supervises ModemManager; D-Bus must not auto-start it.
         return re.sub(r"^Exec=.*$", "Exec=/bin/false", text, flags=re.M)
 
+    def backends(text):
+        # The Kleaf kernel exposes the CPIF ABI; pair the S5300 userspace with
+        # it explicitly. The services still start only manually.
+        lines = text.splitlines()
+        rows = [i for i, line in enumerate(lines)
+                if line.startswith("FERRIX_S5300_KERNEL_BACKEND=")]
+        if len(rows) != 1 or lines[rows[0]].split("=", 1)[1] not in S5300_KERNEL_BACKENDS:
+            die("rootfs /etc/ferrix/backends.env must set FERRIX_S5300_KERNEL_BACKEND "
+                "exactly once to a reviewed backend")
+        lines[rows[0]] = f"FERRIX_S5300_KERNEL_BACKEND={KLEAF_S5300_KERNEL_BACKEND}"
+        return "\n".join(lines) + "\n"
+
     return {"/usr/share/dbus-1/system-services/org.freedesktop.ModemManager1.service":
             modemmanager_dbus,
+            "/etc/ferrix/backends.env": backends,
             "/etc/init.d/udev": udev, "/etc/conf.d/seatd": seatd,
             "/etc/group": group, "/etc/inittab": inittab,
             "/etc/init.d/modemmanager": modemmanager}
 
 
-# Radio-first (linux-google-tegu WWAN/SIT) services that cannot run on the
-# Kleaf/cpif kernel; removed from the default runlevel by the Kleaf composer.
+# S5300 services that start only manually on the exact Pixel (and on
+# google-kleaf-cpif only after `rc-service exynos-modem preflight` and `arm`).
+# The package links none of them; the composer also removes any link a base
+# rootfs from an older package still carries.
 RADIO_ROUTE_SERVICES = ("ferrix-s5300-mounts", "exynos-modem", "sit-proxy")
+S5300_KERNEL_BACKENDS = ("linux-google-tegu-wwan", "google-kleaf-cpif")
+KLEAF_S5300_KERNEL_BACKEND = "google-kleaf-cpif"
 
 
 # Discovery-only ALSA UCM, at the paths the device APKBUILD installs it to.
@@ -431,14 +449,17 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
         written.append(dest)
     # The APKBUILD's runlevel list is the source of truth; a base rootfs
     # built before a service was added lacks its link.
-    for service in apkbuild_default_services(package / "APKBUILD"):
+    services = apkbuild_default_services(package / "APKBUILD")
+    if set(services) & set(RADIO_ROUTE_SERVICES):
+        die("the device package links a manual-only S5300 service into a runlevel")
+    for service in services:
         link = f"/etc/runlevels/default/{service}"
-        if service in RADIO_ROUTE_SERVICES:
-            editor.remove(link)
-            written.append(f"-{link}")
-        else:
-            editor.symlink(link, f"/etc/init.d/{service}")
-            written.append(link)
+        editor.symlink(link, f"/etc/init.d/{service}")
+        written.append(link)
+    for service in RADIO_ROUTE_SERVICES:
+        link = f"/etc/runlevels/default/{service}"
+        editor.remove(link)
+        written.append(f"-{link}")
     # Nothing starts plymouthd on this route, so `plymouth quit` only fails.
     editor.remove("/etc/runlevels/default/kill-plymouth")
     written.append("-/etc/runlevels/default/kill-plymouth")

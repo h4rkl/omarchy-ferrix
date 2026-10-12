@@ -5,15 +5,47 @@ export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_TELEPHONY_BACKEND
 
 name="Exynos S5300 modem userspace"
 description="Serves native-Linux S5300 boot, RFS, and GEMS channels"
-supervisor=supervise-daemon
 command=/usr/sbin/exynos-modem
-# The reviewed exynos-modem CLI intentionally consumes the legacy kernel
-# endpoint /dev/umts_oem1 for its GEMS/OEM channel. The source-derived
-# s5300-channels.toml catalog expands the same OEM channel family as
-# oem_ipc0..oem_ipc7; it is metadata, not a request to invent a udev alias.
-# Keep this exact upstream CLI contract until a booted Tegu proves otherwise.
-command_args="--model 5300 --uecap-dir /vendor/firmware/uecapconfig --boot-dev /dev/umts_boot0 --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/umts_oem1"
-respawn_delay=2
+# Each backend gets its own explicit CLI. No modem service is in a runlevel;
+# see s5300-cpif-integration.md.
+case "${FERRIX_S5300_KERNEL_BACKEND:-}" in
+	linux-google-tegu-wwan)
+		supervisor=supervise-daemon
+		# The reviewed exynos-modem CLI intentionally consumes the legacy kernel
+		# endpoint /dev/umts_oem1 for its GEMS/OEM channel. The source-derived
+		# s5300-channels.toml catalog expands the same OEM channel family as
+		# oem_ipc0..oem_ipc7; it is metadata, not a request to invent a udev alias.
+		# Keep this exact upstream CLI contract until a booted Tegu proves otherwise.
+		command_args="--model 5300 --uecap-dir /vendor/firmware/uecapconfig --boot-dev /dev/umts_boot0 --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/umts_oem1"
+		respawn_delay=2
+		;;
+	google-kleaf-cpif)
+		# Google Kleaf CPIF (patches 0001-0003): boot DT ch 241, RFS ch 41, and
+		# OEM/GEMS ch 130 on oem_ipc1. No supervisor respawn: the daemon handles
+		# CP recovery itself, and a daemon exit stays stopped until the next
+		# manual preflight, arm, and start.
+		command_args="--model 5300 --kernel-backend google-kleaf-cpif --uecap-dir /vendor/firmware/uecapconfig --boot-dev /dev/umts_boot0 --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/oem_ipc1"
+		command_background=yes
+		pidfile=/run/exynos-modem.pid
+		;;
+	*)
+		command_args=
+		;;
+esac
+extra_commands="preflight provision"
+extra_stopped_commands="arm"
+description_preflight="Read-only google-kleaf-cpif checks; opens no CPIF node"
+description_provision="Create the private /run/exynos-modem scratch directory only"
+description_arm="Run the preflight, then allow exactly one manual start"
+
+# The exact output of --print-config for the CPIF command_args above.
+cpif_modem_config='kernel_backend=google-kleaf-cpif
+boot_dev=/dev/umts_boot0
+rfs_dev=/dev/umts_rfs0
+oem_gems_dev=/dev/oem_ipc1
+uecap_dir=/vendor/firmware/uecapconfig
+scratch_dir=/run/exynos-modem
+crash_dump_boot=disabled'
 
 depend() {
 	need ferrix-s5300-mounts ferrix-radio-firmware
@@ -36,21 +68,11 @@ wait_for_boot_channel() {
 	return 1
 }
 
-start_pre() {
-	command -v exynos-modem >/dev/null 2>&1 || {
-		eerror "exynos-modem binary is missing"
-		return 1
-	}
-	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = "linux-google-tegu-wwan" ] || {
-		eerror "exynos-modem requires the pinned linux-google-tegu-wwan kernel backend"
-		return 1
-	}
-	# The loader's boot/status ioctls are for the community s5300_modem
-	# transport.  Google's cpif module has a different ioctl ABI; fail closed
-	# before opening any modem character device on that route.  WWAN SIT ports
-	# are intentionally *not* required here: the pinned driver creates them
-	# only after the CP reaches ONLINE, while this daemon must first boot it
-	# through the pre-ONLINE umts_boot0 channel.
+wwan_start_pre() {
+	# The loader's boot/status ioctls here are for the community s5300_modem
+	# transport.  WWAN SIT ports are intentionally *not* required here: the
+	# pinned driver creates them only after the CP reaches ONLINE, while this
+	# daemon must first boot it through the pre-ONLINE umts_boot0 channel.
 	wait_for_boot_channel || return 1
 	[ -f /usr/share/ferrix/pixel-9a/s5300-userspace-sources.toml ] || {
 		eerror "S5300 userspace source manifest is missing"
@@ -84,4 +106,63 @@ start_pre() {
 	# (s5300-userspace-sources.toml scratch_directory). The daemon walks to it
 	# without following symlinks and refuses it unless it is root-owned 0700.
 	checkpath -d -m 0700 -o root:root /run/exynos-modem
+}
+
+# The checked-in google-kleaf-cpif checks; a missing library is a refusal.
+load_cpif_checks() {
+	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = google-kleaf-cpif ] || {
+		eerror "this command is only for FERRIX_S5300_KERNEL_BACKEND=google-kleaf-cpif"
+		return 1
+	}
+	[ -f /usr/lib/ferrix/s5300-cpif.sh ] && [ ! -L /usr/lib/ferrix/s5300-cpif.sh ] || {
+		eerror "the S5300 CPIF check library is missing"
+		return 1
+	}
+	. /usr/lib/ferrix/s5300-cpif.sh
+}
+
+run_cpif_preflight() {
+	cpif_modem_preflight "$cpif_modem_config" $command_args
+}
+
+preflight() {
+	load_cpif_checks || return 1
+	ebegin "Checking the google-kleaf-cpif S5300 inputs (no CPIF node is opened)"
+	run_cpif_preflight
+	eend $?
+}
+
+provision() {
+	load_cpif_checks || return 1
+	ebegin "Provisioning the private /run/exynos-modem scratch directory"
+	cpif_check_target && cpif_provision_scratch
+	eend $?
+}
+
+arm() {
+	load_cpif_checks || return 1
+	ebegin "Arming one manual google-kleaf-cpif start"
+	run_cpif_preflight && cpif_write_arm
+	eend $?
+}
+
+start_pre() {
+	command -v exynos-modem >/dev/null 2>&1 || {
+		eerror "exynos-modem binary is missing"
+		return 1
+	}
+	case "${FERRIX_S5300_KERNEL_BACKEND:-}" in
+		linux-google-tegu-wwan)
+			wwan_start_pre
+			;;
+		google-kleaf-cpif)
+			# The token is consumed first, so a failed check still needs a new
+			# preflight and arm before another attempt.
+			load_cpif_checks && cpif_consume_arm && run_cpif_preflight
+			;;
+		*)
+			eerror "exynos-modem refuses kernel backend '${FERRIX_S5300_KERNEL_BACKEND:-}'"
+			return 1
+			;;
+	esac
 }

@@ -96,6 +96,11 @@ backends are the same. `--print-config` now also prints
 - The init scripts still refuse every backend but `linux-google-tegu-wwan`
   and do not select `google-kleaf-cpif`. No modem service is in a runlevel.
   No integration or CP boot change is part of this stage.
+  **Update (issue #88):** the CPIF integration
+  ([`s5300-cpif-integration.md`](s5300-cpif-integration.md)) adds a separate
+  `rc-service exynos-modem provision` that runs the same `checkpath` line,
+  only after checking that `/run` is a root-owned tmpfs, and the CPIF
+  preflight requires the directory to be root:root 0700.
 
 **Cleanup:** nothing deletes files. The NV sinks are a fixed set of four
 names, each truncated on reuse. Crash records are one file per supervised

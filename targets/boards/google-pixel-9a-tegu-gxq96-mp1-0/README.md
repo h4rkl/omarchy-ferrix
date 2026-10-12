@@ -1051,6 +1051,17 @@ character nodes with matching device numbers, no WWAN class device, and 30
 `rmnet*` netdevs before CP boot. The probe opened no CPIF node; runtime
 modem behavior remains untested.
 
+## S5300 CPIF service integration (issue #88)
+
+[`s5300-cpif-integration.md`](s5300-cpif-integration.md) records the
+offline-tested OpenRC/package wiring of `google-kleaf-cpif`. Each backend has
+an explicit `exynos-modem`/`sit-proxy` CLI. No S5300 service is in any
+runlevel, and ModemManager only orders after them. On CPIF, `rc-service
+exynos-modem preflight` is read-only and opens no CPIF node; `provision`
+creates only `/run/exynos-modem`; and a manual start needs a one-shot `arm`
+on tmpfs `/run`. `just pixel-9a-s5300-cpif-services-test` runs the offline
+contract. Nothing has run on the device, and no CP boot is authorised by it.
+
 ## S5300 source mount proof (issue #34)
 
 This section records source review, not physical evidence. Line numbers refer

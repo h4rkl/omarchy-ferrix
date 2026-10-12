@@ -122,8 +122,14 @@ grep -q 'need ferrix-s5300-mounts' "$package_dir/exynos-modem.initd" ||
 	fail 'exynos-modem service does not require read-only source mounts'
 grep -q 'after udev exynos-modem' "$package_dir/sit-proxy.initd" ||
 	fail 'sit-proxy service does not follow exynos-modem'
-grep -q 'need ferrix-s5300-mounts exynos-modem sit-proxy' "$pmos_dir/modemmanager-samsung-sit/modemmanager.initd" ||
-	fail 'ModemManager service does not require the S5300 stack'
+grep -q '^	use ferrix-s5300-mounts exynos-modem sit-proxy$' "$pmos_dir/modemmanager-samsung-sit/modemmanager.initd" ||
+	fail 'ModemManager service does not order after the S5300 stack'
+if grep -Eq '^[[:space:]]*need .*(ferrix-s5300-mounts|exynos-modem|sit-proxy)' "$pmos_dir/modemmanager-samsung-sit/modemmanager.initd"; then
+	fail 'ModemManager must not pull the manual-only S5300 stack into a runlevel'
+fi
+if grep -Eq 'for service in .*[[:space:]](ferrix-s5300-mounts|exynos-modem|sit-proxy)[[:space:];]' "$package_dir/APKBUILD"; then
+	fail 'device package links a manual-only S5300 service into a runlevel'
+fi
 grep -q 'after udev networkmanager ferrix-s5300-mounts exynos-modem sit-proxy' "$package_dir/ferrix-telephonyd.initd" ||
 	fail 'Ferrix telephony adapter ordering is incomplete'
 grep -q '^arch="aarch64"$' "$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/modemmanager-samsung-sit/APKBUILD" ||
@@ -158,9 +164,6 @@ if grep -q '/sys/class/wwan/wwan0' "$package_dir/exynos-modem.initd"; then
 fi
 grep -q '/etc/ferrix/backends.env' "$package_dir/sit-proxy.initd" ||
 	fail 'SIT proxy must load the target backend environment'
-grep -Eq '^[[:space:]]*need ferrix-s5300-mounts exynos-modem sit-proxy$' \
-	"$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/modemmanager-samsung-sit/modemmanager.initd" ||
-	fail 'SIT ModemManager must require the complete modem service chain'
 if grep -Eq 'for service .*upower|need .*upower|after .*upower' "$package_dir"/*.initd "$package_dir/APKBUILD"; then
 	fail 'device package treats D-Bus-activated UPower as an OpenRC service'
 fi
@@ -171,6 +174,10 @@ fi
 # lives in its own suite.
 sh "$root/tools/pixel-9a/tests/s5300-mounts-service.sh" >/dev/null ||
 	fail 'S5300 mounts service contract'
+# Both S5300 backends' service selection, the manual-only google-kleaf-cpif
+# preflight/arm/start path, and its package pins have their own suite.
+sh "$root/tools/pixel-9a/tests/s5300-cpif-services.sh" >/dev/null ||
+	fail 'S5300 CPIF service integration contract'
 
 out="$work/out"
 FERRIX_OUT_DIR="$out" "$script" preflight >/dev/null

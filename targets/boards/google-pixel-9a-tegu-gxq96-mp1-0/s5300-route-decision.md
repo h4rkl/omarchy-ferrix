@@ -172,6 +172,16 @@ nodes are fixed to `umts_boot0`, `umts_rfs0`, `oem_ipc1`, and `umts_ipc0/1`.
 These are offline-tested only. The init scripts still refuse the CPIF
 backend, so wiring it in remains separate integration work before S2.
 
+**Integration (issue #88, [`s5300-cpif-integration.md`](s5300-cpif-integration.md)):
+code only.** `exynos-modem.initd` and `sit-proxy.initd` select the explicit
+CPIF CLI under `FERRIX_S5300_KERNEL_BACKEND=google-kleaf-cpif`, which the Kleaf
+composer sets. No S5300 service is in a runlevel; ModemManager only `use`s
+them. On CPIF, `exynos-modem` starts only after a read-only `preflight` and a
+one-shot `arm` on tmpfs `/run`. These check the target, kernel, package pins,
+binary configuration, E1 surface with `OFFLINE`, nodes, openers, the
+#34-accepted mounts, NV sizes, and the scratch directory, and open no CPIF
+node. ModemManager CPIF binding (S3) is not implemented.
+
 **E1, read-only dev-boot inventory** (`just pixel-9a-s5300-cpif-inventory`
 over CDC-ACM; nothing opened; the exact `go`/`no-go`/`incomplete` rules and
 remaining unknowns are in the

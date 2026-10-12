@@ -117,6 +117,7 @@ jobs:
           sh tools/pixel-9a/tests/s5300-mount-proof.sh
           sh tools/pixel-9a/tests/s5300-nv-metadata.sh
           sh tools/pixel-9a/tests/s5300-mounts-service.sh
+          sh tools/pixel-9a/tests/s5300-cpif-services.sh
 
       # Fetches the hash-pinned exynos-modem archive and Cargo.lock crates,
       # applies the target-local patches, and runs the patched tests and CLI
