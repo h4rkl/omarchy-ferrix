@@ -61,7 +61,7 @@ proof for issue #2.
 | K6 | The kernel TAS `ALGO` protection path is not compiled in the built or stock module (#83 P1). Linux has only fault-IRQ reaction from the factory tuning (#83 P5). | #83 |
 | K7 | The only protection-related comment in the driver is `/* TODO: temporary compr offload volume set to protect speaker*/` before a volume set on compress-offload open (`alsa/aoc_alsa_compr.c:382-383`). It shows the authors wanted a driver-side volume guard on one path. It says nothing about what AoC firmware does without HAL setup. | source (weak) |
 | K8 | The AoC sysfs ABI document lists only AoC status and notification attributes. It has no audio or protection entry. `aoc_audio_state` (#83 P4) reports service online/offline only. | source |
-| K9 | A Linux precedent exists: Asahi's `speakersafetyd` is a user-space Rust daemon that models voice-coil temperature from TAS2764 V/I sense and caps gain. Its README says only Apple Silicon is supported. It depends on measured per-speaker Thiele/Small and thermal parameters. Code after v2.0.2 is GPL-2.0, while earlier versions are MIT. | external |
+| K9 | A Linux precedent exists: [Asahi's `speakersafetyd`](https://github.com/AsahiLinux/speakersafetyd) is a user-space Rust daemon that models voice-coil temperature from TAS2764 V/I sense and caps gain. Its README says only Apple Silicon is supported. It depends on measured per-speaker Thiele/Small and thermal parameters. Code after v2.0.2 is GPL-2.0, while earlier versions are MIT. | external |
 
 ## What is not known (the GO blockers)
 
