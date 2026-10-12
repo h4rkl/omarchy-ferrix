@@ -274,16 +274,14 @@ impl Service {
     pub fn subscribe(
         &self,
         identity: IdentityInfo,
-        mut sink: Box<dyn Write + Send>,
+        sink: Box<dyn Write + Send>,
     ) -> std::io::Result<()> {
-        write_json(&mut sink, &Reply::Ok)?;
-        lock(&self.subscribers).push(Subscriber {
+        self.register(Subscriber {
             identity,
             peer_pid: None,
             identity_source: None,
             sink,
-        });
-        Ok(())
+        })
     }
 
     /// Production subscription with continuous authorization. The initial
@@ -294,7 +292,7 @@ impl Service {
         peer_pid: Option<u32>,
         identity_source: Arc<dyn Identity>,
         identity: IdentityInfo,
-        mut sink: Box<dyn Write + Send>,
+        sink: Box<dyn Write + Send>,
     ) -> std::io::Result<()> {
         if !identity_source.identify(peer_pid).has(CAP_STATE) {
             return Err(std::io::Error::new(
@@ -302,13 +300,20 @@ impl Service {
                 "telephony-state grant was revoked",
             ));
         }
-        write_json(&mut sink, &Reply::Ok)?;
-        lock(&self.subscribers).push(Subscriber {
+        self.register(Subscriber {
             identity,
             peer_pid,
             identity_source: Some(identity_source),
             sink,
-        });
+        })
+    }
+
+    /// Writes the `ok` and registers under one lock: a client that has read
+    /// the ack is already registered, and no event precedes the ack.
+    fn register(&self, mut subscriber: Subscriber) -> std::io::Result<()> {
+        let mut subscribers = lock(&self.subscribers);
+        write_json(&mut subscriber.sink, &Reply::Ok)?;
+        subscribers.push(subscriber);
         Ok(())
     }
 
