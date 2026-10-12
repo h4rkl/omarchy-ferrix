@@ -23,7 +23,8 @@
 #     both name the one connected Audio Sink device;
 #   - two internal speaker-path controls read with `amixer cget` only
 #     (`TDM_0_RX Mixer EP1`, `TAS25XX ASI Switch`) and the number of open
-#     ALSA playback PCM file descriptors.
+#     ALSA playback PCM file descriptors, with whether that fd scan was
+#     complete.
 #
 # No address, device name, alias, node name, or serial is printed: they stay
 # in shell variables and only counts, classes, and yes/no matches leave the
@@ -52,7 +53,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 run_t() { if have timeout; then timeout "$@" </dev/null; else shift; "$@" </dev/null; fi; }
 count_of() { if [ -z "$1" ]; then echo 0; else printf '%s\n' "$1" | grep -c .; fi; }
 
-printf 'probe=a2dp-output-preflight\nprobe_version=1\n'
+printf 'probe=a2dp-output-preflight\nprobe_version=2\n'
 printf 'dt_model=%s\ndt_compatible=google,ZUMA PRO TEGU\n' "$model"
 printf 'kernel_release=%s\nuid=%s\n' "$(uname -r | clean)" "$(id -u | tr -cd '0-9')"
 
@@ -258,14 +259,31 @@ for control in $watched_controls; do
 	printf 'watch.%s=%s\n' "$key" "$value"
 done
 IFS=$old_ifs
+# Opener scan, the mic-capture-proof-remote.sh opener_scan contract: count
+# /proc/*/fd links whose target is named pcmC<card>D<device>p for any card and
+# device, in any directory (a node seen through another mount namespace still
+# counts). The scan is complete only if /proc has at least one fd table, ls
+# neither timed out nor failed to run, and every ls complaint is a process
+# that exited mid-scan; a permission error or any unknown line makes it
+# incomplete, and an incomplete scan never reads as zero openers.
 procs=0
-openers=0
-for fd_dir in "$proc_root"/[0-9]*/fd; do
-	[ -d "$fd_dir" ] || continue
-	procs=$((procs + 1))
-	for fd in "$fd_dir"/*; do
-		case "$(readlink "$fd" 2>/dev/null)" in */pcmC[0-9]*D[0-9]*p) openers=$((openers + 1)) ;; esac
-	done
-done
-printf 'pcm_scan_procs=%s\nplayback_pcm_openers=%s\n' "$procs" "$openers"
+for fd_dir in "$proc_root"/[0-9]*/fd; do [ -d "$fd_dir" ] && procs=$((procs + 1)); done
+scan=$(run_t 20 ls -l "$proc_root"/[0-9]*/fd/ 2>&1)
+scan_rc=$?
+set -- $(printf '%s\n' "$scan" | awk '
+	/^ls: / { if ($0 !~ /No such file or directory$/) other++; next }
+	/^l[-r][-w][-xsS]/ && / -> / {
+		t = $0; sub(/^.* -> /, "", t); sub(/ \(deleted\)$/, "", t); m = split(t, part, "/")
+		if (part[m] ~ /^pcmC[0-9]+D[0-9]+p$/) hits++
+		next
+	}
+	/^total [0-9]+$/ || /^$/ || /\/fd\/?:$/ { next }
+	{ other++ }
+	END { print hits + 0, other + 0 }')
+openers=${1:-unavailable}
+opener_scan=complete
+case "$scan_rc" in 124|126|127|137|143) opener_scan=incomplete ;; esac
+[ "${2:-1}" = 0 ] && [ "$procs" -gt 0 ] || opener_scan=incomplete
+[ "$opener_scan" = complete ] || openers=unavailable
+printf 'pcm_scan_procs=%s\npcm_opener_scan=%s\nplayback_pcm_openers=%s\n' "$procs" "$opener_scan" "$openers"
 echo probe_complete=yes

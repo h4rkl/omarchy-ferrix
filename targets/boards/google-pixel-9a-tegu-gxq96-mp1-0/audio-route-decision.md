@@ -858,7 +858,12 @@ fixture-, fake-tool- and fake-guest-tested
   - zero bluez-other, ALSA, other, or uninspectable sinks;
   - zero streams and zero filters, and an unambiguous default;
   - both watched controls `off`;
-  - zero playback PCM openers, and a non-empty fd scan.
+  - zero playback PCM openers (`pcmC*D*p`, any card and device) from a
+    complete, non-empty `/proc/*/fd` scan. The scan follows the
+    mic-capture `opener_scan` contract: a timeout, a permission error, or
+    any unknown `ls` line makes it `incomplete` and the opener count
+    `unavailable`, never zero; only a process that exited mid-scan is
+    tolerated.
 
   Anything else is `blocked` (exit 6), and `a2dp_preflight_problems` lists
   every reason. Other exits: 2 usage, 3 transport or guest failure, 4 not

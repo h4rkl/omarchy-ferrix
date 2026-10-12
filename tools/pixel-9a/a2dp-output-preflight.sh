@@ -137,7 +137,7 @@ bt_controllers bt_powered bt_paired_query bt_paired bt_paired_audio_sink bt_conn
 pipewire_socket pipewire_graph graph_sinks graph_streams graph_filters
 graph_sink_bluez_a2dp graph_sink_bluez_other graph_sink_alsa graph_sink_null graph_sink_other graph_sink_inspect_failed
 default_sink_class a2dp_sink_codec a2dp_sink_device_match a2dp_sink_default
-watch.tdm_0_rx_mixer_ep1 watch.tas25xx_asi_switch pcm_scan_procs playback_pcm_openers probe_complete'
+watch.tdm_0_rx_mixer_ep1 watch.tas25xx_asi_switch pcm_scan_procs pcm_opener_scan playback_pcm_openers probe_complete'
 
 # validate FILE: prints nothing and succeeds only for the exact key set.
 validate() {
@@ -171,7 +171,7 @@ cat "$work/guest.out" >>"$transcript"
 
 get() { sed -n "s/^$1=//p" "$2" | sed -n '1p'; }
 g() { get "$1" "$work/guest.out"; }
-[ "$(g probe)" = a2dp-output-preflight ] && [ "$(g probe_version)" = 1 ] && [ "$(g probe_complete)" = yes ] ||
+[ "$(g probe)" = a2dp-output-preflight ] && [ "$(g probe_version)" = 2 ] && [ "$(g probe_complete)" = yes ] ||
 	die 'guest did not report the reviewed preflight probe' 5
 [ "$(g dt_model)" = "$dt_model" ] && [ "$(g dt_compatible)" = "$dt_compatible" ] ||
 	die 'guest output does not carry the exact tegu identity' 4
@@ -221,9 +221,12 @@ preflight_problems() {
 	fi
 	[ "$(get watch.tdm_0_rx_mixer_ep1 "$f")" = off ] || add internal-speaker-route-not-off
 	[ "$(get watch.tas25xx_asi_switch "$f")" = off ] || add internal-amp-switch-not-off
-	n_is playback_pcm_openers 0 || add playback-pcm-open
+	# Zero openers counts only from a complete scan of a non-empty /proc.
+	[ "$(get pcm_opener_scan "$f")" = complete ] || add pcm-opener-scan-incomplete
 	v=$(get pcm_scan_procs "$f")
 	is_n "$v" && [ "$v" -gt 0 ] || add pcm-opener-scan-empty
+	v=$(get playback_pcm_openers "$f")
+	if ! is_n "$v"; then add playback-pcm-openers-unknown; elif [ "$v" -ne 0 ]; then add playback-pcm-open; fi
 	printf '%s\n' "$p"
 }
 
@@ -231,7 +234,7 @@ for key in pkg.bluez pkg.pipewire pkg.wireplumber pkg.pipewire_spa_bluez pkg.pip
 	pw_cat_target_option pw_cat_properties_option bt_controllers bt_powered bt_paired bt_paired_audio_sink \
 	bt_connected_audio_sink pipewire_graph graph_sinks graph_sink_bluez_a2dp graph_sink_alsa graph_sink_null \
 	default_sink_class a2dp_sink_codec a2dp_sink_device_match a2dp_sink_default \
-	watch.tdm_0_rx_mixer_ep1 watch.tas25xx_asi_switch playback_pcm_openers; do
+	watch.tdm_0_rx_mixer_ep1 watch.tas25xx_asi_switch pcm_opener_scan playback_pcm_openers; do
 	printf '%s=%s\n' "$key" "$(g "$key")"
 done
 problems=$(preflight_problems "$work/guest.out")

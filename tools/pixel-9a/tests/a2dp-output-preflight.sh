@@ -68,7 +68,7 @@ check "static: amixer is only cget, and only on the two watched controls" \
 check "static: rc-service is only queried with status" \
 	sh -c '[ "$(printf "%s\n" "$1" | grep "rc-service \"" | grep -vc "rc-service \"\$service\" status ")" -eq 0 ]' sh "$code"
 check "static: the probe creates, removes, and redirects into no file" \
-	sh -c '! printf "%s\n" "$1" | grep -E ">[[:space:]]*[^&[:space:]=]" | grep -v ">/dev/null" | grep . &&
+	sh -c '! printf "%s\n" "$1" | grep -E "(^|[^-])>[[:space:]]*[^&[:space:]=]" | grep -v ">/dev/null" | grep . &&
 		! printf "%s\n" "$1" | grep -nE "mkdir|rm -|touch |tee |mv |cp |ln -|sed -i"' sh "$code"
 check "static: the probe gates on the exact tegu device tree" \
 	sh -c 'grep -Fq "ZUMA PRO TEGU MP on ZUMA PRO" "$1" && grep -Fq "google,ZUMA PRO TEGU" "$1"' sh "$probe"
@@ -151,7 +151,19 @@ printf 'pw-cat %s\n' "$*" >>"$s/calls"
 [ "$*" = --help ] || { printf 'pw-cat %s\n' "$*" >>"$s/violations"; exit 1; }
 cat "$s/pw-help"
 EOF
-printf '#!/bin/sh\nshift\nexec "$@"\n' >"$fbin/timeout"
+# Fake timeout: optionally reports the /proc/*/fd scan as timed out (124).
+printf '#!/bin/sh\nshift\n[ "$1" != ls ] || [ ! -f "$FAKE_A2DP_STATE/ls-timeout" ] || exit 124\nexec "$@"\n' >"$fbin/timeout"
+# Fake ls: optionally adds a permission error, an exited-process race, or an
+# unknown line to the /proc/*/fd scan.
+real_ls=$(command -v ls)
+cat >"$fbin/ls" <<EOF
+#!/bin/sh
+s=\$FAKE_A2DP_STATE
+[ ! -f "\$s/ls-denied" ] || echo 'ls: cannot open directory /proc/77/fd/: Permission denied' >&2
+[ ! -f "\$s/ls-race" ] || echo 'ls: /proc/78/fd/: No such file or directory' >&2
+[ ! -f "\$s/ls-unknown" ] || echo 'garbled scan line'
+exec $real_ls "\$@"
+EOF
 printf '#!/bin/sh\necho 6.1.124-android14-11-ga4662a84a15f\n' >"$fbin/uname"
 printf '#!/bin/sh\necho "$(cat "$FAKE_A2DP_STATE/uid" 2>/dev/null || echo 0)"\n' >"$fbin/id"
 chmod 0755 "$fbin"/*
@@ -293,16 +305,16 @@ printf '%s\n' "$gout" >"$work/fx-candidate"
 # guest_case NAME WANT SETUP...: reset, connect, run SETUP, expect the host's
 # exact blocker list (and no tool violation).
 guest_case() {
-	name=$1 want=$2
+	case_label=$1 want=$2
 	shift 2
 	reset_guest
 	connect_headset
 	"$@"
 	guest
 	got=$(host_problems)
-	check "guest blocked ($name): $want" sh -c '[ "$1" = "$2" ] && [ ! -s "$3" ] && [ "$4" -eq 0 ]' sh "$got" "$want" "$state/violations" "$gstatus"
+	check "guest blocked ($case_label): ${want:-no blocker}" sh -c '[ "$1" = "$2" ] && [ ! -s "$3" ] && [ "$4" -eq 0 ]' sh "$got" "$want" "$state/violations" "$gstatus"
 	[ "$got" = "$want" ] || printf '     got: %s\n' "$got"
-	check "guest blocked ($name): no identifier leaves the guest" no_identifier
+	check "guest blocked ($case_label): no identifier leaves the guest" no_identifier
 }
 hfp() { inspect_bluez 46 "$addr" "$addr" headset-head-unit; }
 guest_case headset-profile bluez-a2dp-sink-count-not-one,bluez-non-a2dp-sink-present hfp
@@ -345,6 +357,31 @@ amp_gone() { rm -f "$state/ctl.TAS25XX_ASI_Switch"; }
 guest_case amp-unreadable internal-amp-switch-not-off amp_gone
 pcm_open() { ln -s /dev/snd/pcmC0D0p "$fake/proc/2/fd/9"; }
 guest_case playback-pcm-open playback-pcm-open pcm_open
+check "guest playback opener: counted from a complete scan" \
+	sh -c '[ "$1" = 1 ] && [ "$2" = complete ]' sh "$(gget playback_pcm_openers)" "$(gget pcm_opener_scan)"
+other_openers() {
+	mkdir -p "$fake/proc/3/fd"
+	ln -s /snd/pcmC1D3p "$fake/proc/3/fd/4"
+	ln -s '/dev/snd/pcmC0D2p (deleted)' "$fake/proc/3/fd/5"
+	ln -s /dev/snd/pcmC0D2c "$fake/proc/3/fd/6"
+}
+guest_case other-playback-openers playback-pcm-open other_openers
+check "guest playback openers: every card and device, another namespace, and a deleted node count" \
+	[ "$(gget playback_pcm_openers)" = 2 ]
+ls_denied() { : >"$state/ls-denied"; }
+guest_case fd-listing-denied pcm-opener-scan-incomplete,playback-pcm-openers-unknown ls_denied
+check "guest fd listing denied: incomplete, never zero openers" \
+	sh -c '[ "$1" = incomplete ] && [ "$2" = unavailable ]' sh "$(gget pcm_opener_scan)" "$(gget playback_pcm_openers)"
+ls_unknown() { : >"$state/ls-unknown"; }
+guest_case fd-listing-unknown-line pcm-opener-scan-incomplete,playback-pcm-openers-unknown ls_unknown
+ls_timeout() { : >"$state/ls-timeout"; }
+guest_case fd-listing-timeout pcm-opener-scan-incomplete,playback-pcm-openers-unknown ls_timeout
+ls_race() { : >"$state/ls-race"; }
+guest_case fd-listing-race '' ls_race
+check "guest fd listing race: a process that exited mid-scan keeps the scan complete" \
+	sh -c '[ "$1" = complete ] && [ "$2" = 0 ]' sh "$(gget pcm_opener_scan)" "$(gget playback_pcm_openers)"
+empty_proc() { rm -rf "${fake:?}/proc"/*; }
+guest_case empty-proc pcm-opener-scan-incomplete,pcm-opener-scan-empty,playback-pcm-openers-unknown empty_proc
 unpowered() { printf 'Controller 0A:0B:0C:0D:0E:0F (public)\n\tPowered: no\n' >"$state/bt-show"; }
 guest_case unpowered bt-not-powered unpowered
 paired_fails() { printf '1\n' >"$state/bt-paired-exit"; }
@@ -377,7 +414,11 @@ derive candidate underscore-mac -e 's/^a2dp_sink_codec=.*/a2dp_sink_codec=66_77_
 derive candidate hex-run -e 's/^pkg.bluez=.*/pkg.bluez=66778899AABB/'
 derive candidate missing-key -e '/^graph_sink_alsa=/d'
 derive candidate truncated -e '/^probe_complete=/d'
-derive candidate wrong-probe -e 's/^probe_version=1$/probe_version=2/'
+derive candidate wrong-probe -e 's/^probe_version=2$/probe_version=1/'
+derive candidate scan-incomplete -e 's/^pcm_opener_scan=complete$/pcm_opener_scan=incomplete/' -e 's/^playback_pcm_openers=.*/playback_pcm_openers=unavailable/'
+derive candidate scan-unknown -e 's/^pcm_opener_scan=complete$/pcm_opener_scan=partial/'
+derive candidate openers-malformed -e 's/^playback_pcm_openers=.*/playback_pcm_openers=unavailable/'
+derive candidate playback-opener -e 's/^playback_pcm_openers=.*/playback_pcm_openers=1/'
 derive candidate wrong-identity -e 's/^dt_model=.*/dt_model=ZUMA PRO COMET MP on ZUMA PRO/'
 
 out=''
@@ -428,6 +469,14 @@ for item in unexpected-key:'unexpected key bt_address' duplicate-key:'duplicate 
 	run "$fx" "$fx" 0
 	check "host refuses ($fx): exit 5, $want" sh -c '[ "$1" -eq 5 ] && printf "%s\n" "$2" | grep -Fq "($3)" &&
 		! grep -rEq "66[:_]77|99AABB" "$4"' sh "$status" "$out" "$want" "$work/run-$fx"
+done
+for item in scan-incomplete:pcm-opener-scan-incomplete,playback-pcm-openers-unknown scan-unknown:pcm-opener-scan-incomplete \
+	openers-malformed:playback-pcm-openers-unknown playback-opener:playback-pcm-open; do
+	fx=${item%%:*}
+	want=${item#*:}
+	run "$fx" "$fx" 0
+	check "host blocks ($fx): exit 6, $want" sh -c '[ "$1" -eq 6 ] && printf "%s\n" "$2" | grep -Fxq a2dp_preflight=blocked &&
+		printf "%s\n" "$2" | grep -Fxq "a2dp_preflight_problems=$3"' sh "$status" "$out" "$want"
 done
 run wrong-probe wrong-probe 0
 check "host refuses (wrong-probe): exit 5" sh -c '[ "$1" -eq 5 ]' sh "$status"
