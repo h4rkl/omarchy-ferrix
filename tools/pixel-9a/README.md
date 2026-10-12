@@ -126,6 +126,13 @@ Tests mark a stage they cannot run on this host with a line that starts with
   not cached; set `FERRIX_S5300_ADAPTER_FETCH=1` to fetch it.
 - `s5300-cpif-services.sh` skips when busybox `awk` is absent.
 
+The Python entry points import `tomllib`, so `python3` must be 3.11 or
+newer. On macOS, `/usr/bin/python3` is 3.9, and with it
+`flash-static-contract.py`, `guest-evidence-contract.py`,
+`install-static-contract.py`, `static-boot-contract.py` and
+`radio-split-workflow.sh` fail with `ModuleNotFoundError`. Put a newer
+`python3` first on `PATH`.
+
 The runner reports these tests as passed with skips and repeats the skip
 lines. Logs go to a fresh temporary directory, or to
 `FERRIX_PIXEL9A_TEST_LOG_DIR` if it is set. Some tests take several minutes.
