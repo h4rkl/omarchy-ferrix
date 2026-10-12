@@ -770,6 +770,7 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'grep -q "14a0013a28e5d5eec513c65e75d7549678ecc61e" "$aports/device/testing/modemmanager-samsung-sit/APKBUILD"' \
 		'grep -q "^build_pkgs_on_install = True$" "$config"' \
 		'grep -qx "postmarketos-base-ui-audio-backend = postmarketos-base-ui-audio-backend-pipewire" "$config"' \
+		'grep -q "^extra_packages = .*[,]alsa-utils[,]" "$config"' \
 		'mkdir -p "$build_work/chroot_rootfs_test/lib/apk/db"' \
 		'extra=$(sed -n "s/^extra_packages = //p" "$config")${FAKE_EXTRA_INSTALLED:+,$FAKE_EXTRA_INSTALLED}' \
 		'for package in $(printf "%s" "$extra" | tr , " "); do printf "P:%s\\nV:1-r0\\n\\n" "$package"; done >"$build_work/chroot_rootfs_test/lib/apk/db/installed"' \
