@@ -4,11 +4,13 @@ Target: `google-pixel-9a-tegu-gxq96-mp1-0` (`tegu` / `GXQ96` / `MP1.0`) only.
 
 This closes the `/tmp` finding from
 [`s5300-cpif-adapter.md`](s5300-cpif-adapter.md#transport-review-std_dl-rfs-tmp)
-in code. It is code and offline tests only. No phone, USB, ADB, Fastboot,
-builder, modem node, or CP was touched. Capabilities do not change. QEMU
-evidence does not apply to this board. **The runtime backing, owner, and mode
-of `/run` and `/run/exynos-modem` on the device are still unknown** and need
-the read-only proof below before S2.
+in code. The patch is offline-tested only; a separate lead-run read-only
+inspection of the still-booted `674157b` Ferrix image observed `/tmp` and
+`/run` as tmpfs, `/tmp` mode 1777, and `/` and `/run` as root-owned 0755
+directories. No modem node or CP was touched. Capabilities do not change.
+QEMU evidence does not apply to this board. **The new `/run/exynos-modem`
+directory has not yet been packaged or observed on the device** and needs
+the post-package proof below before S2.
 
 ## The problem
 
@@ -84,7 +86,8 @@ backends are the same. `--print-config` now also prints
   The daemon re-checks the directory itself and does not rely on how
   `checkpath` handles symlinks. `/run` is root-owned and not world-writable
   on OpenRC, so no unprivileged user can create `/run/exynos-modem` before
-  the service does. That is not yet observed on this device.
+  the service does. The parent `/run` was observed root-owned 0755 on the
+  current device image; the new service provisioning has not run there.
 - `s5300-userspace-sources.toml` replaces the unused `state_directory` with
   `scratch_directory = "/run/exynos-modem"` and pins the 0003 SHA-256.
 - `device-google-tegu` pkgrel 1 re-pins `exynos-modem.initd` and
@@ -97,9 +100,9 @@ backends are the same. `--print-config` now also prints
 **Cleanup:** nothing deletes files. The NV sinks are a fixed set of four
 names, each truncated on reuse. Crash records are one file per supervised
 WWAN crash (at most 64 KiB each) and are never overwritten. The directory is
-expected to be volatile on `/run`, but its backing on the device is unknown.
-If `/run` is not tmpfs there, both kinds of output persist until removed by
-hand. A removal (`rm` inside `/run/exynos-modem` as root) cannot follow a
+expected to be volatile on `/run`; the current physical image reports `/run`
+as tmpfs. Verify that the image containing this patch retains that mount.
+A removal (`rm` inside `/run/exynos-modem` as root) cannot follow a
 symlink out of a root-owned 0700 directory. No automatic cleanup was added,
 because a recursive delete would be another root path to review.
 
@@ -159,11 +162,16 @@ the device.
 
 ## Still required before S2
 
-Read-only proof on the exact device, with no modem service started and no
-CPIF node opened:
+The lead's read-only observation on the existing exact-device image found
+`/run` and `/tmp` on tmpfs, `/tmp` mode 1777, and `/` and `/run` root-owned
+0755 directories. The redacted transcript is ignored under
+`out/pixel-9a/s5300-scratch/` and the finding is recorded on
+[issue #81](https://github.com/h4rkl/omarchy-ferrix/issues/81#issuecomment-6116798033).
+After the package is deployed, read-only proof on the exact device is still
+required, with no modem service started and no CPIF node opened:
 
-- the filesystem type of `/run` (`/proc/self/mountinfo`), and the owner and
-  mode of `/` and `/run`;
+- reconfirm the filesystem type of `/run` (`/proc/self/mountinfo`) and the
+  owner and mode of `/` and `/run` on the new image;
 - after OpenRC `start_pre` provisioning (or its dry equivalent),
   `/run/exynos-modem` is a root-owned 0700 directory and not a symlink;
 - the OpenRC version on the image, and whether its `checkpath` refuses

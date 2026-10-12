@@ -140,10 +140,11 @@ Expected for GO on A:
 - The source-defined FMT payload layout and header-stripping behaviour are
   compatible enough to justify a bounded runtime test; E0 cannot prove byte
   equivalence on this device.
-- RFS NV writes and crash records go only under `/tmp`; source mounts are
-  opened read-only. Confirm the runtime `/tmp` mount before S2. (Issue #81:
-  patch 0003 moves both to the private `/run/exynos-modem`; see
-  [`s5300-scratch-dir.md`](s5300-scratch-dir.md).)
+- With issue #81's target-local patch 0003, RFS NV writes and crash records
+  go only under private `/run/exynos-modem`; source mounts are opened
+  read-only. Confirm the patched directory and `/run` backing on the
+  deployed image before S2 (see
+  [`s5300-scratch-dir.md`](s5300-scratch-dir.md)).
 
 Switch to B if CPIF boot needs undefined userspace data or sequencing.
 
