@@ -1,0 +1,74 @@
+name: Bug report
+description: Something behaves wrongly on QEMU, the mock profile or an exact physical target.
+title: "[bug] <short summary>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Say exactly where the bug was seen. A QEMU or mock result says nothing
+        about hardware, and one hardware revision says nothing about another.
+
+        **Redact unique identifiers.** Do not paste device serials, IMEI/MEID,
+        MAC addresses, Wi-Fi/Bluetooth addresses, account names, keys or
+        partition dumps. Use `<redacted>` in their place.
+  - type: dropdown
+    id: target-kind
+    attributes:
+      label: Target
+      description: Evidence label of the environment where the bug was observed.
+      options:
+        - QEMU
+        - mock
+        - physical:<target>
+        - host (nested compositor / developer machine)
+    validations:
+      required: true
+  - type: input
+    id: physical-target
+    attributes:
+      label: Physical target id
+      description: Required when Target is `physical:<target>`, e.g. `google-pixel-9a-tegu-gxq96-mp1-0`. Leave empty otherwise.
+      placeholder: google-pixel-9a-tegu-gxq96-mp1-0
+  - type: input
+    id: revision
+    attributes:
+      label: Commit or image
+      description: Git commit, branch, or image/build identifier (not a device serial).
+      placeholder: "main @ 6288c5e"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Prefer checked-in `just` recipes or scripts.
+      placeholder: |
+        1. just qemu-build
+        2. just qemu-check
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Serial log excerpts, machine-readable failure records, framebuffer/window captures, test output. Redacted.
+      render: text
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I have redacted serials, IMEI/MEID, MAC/BT addresses and other unique identifiers from this report.
+          required: true

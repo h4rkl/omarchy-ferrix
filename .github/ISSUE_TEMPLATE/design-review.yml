@@ -1,0 +1,55 @@
+name: Design review
+description: Ask the owner to decide between options for an architecture, target, UX or process question.
+title: "[design] <decision to make>"
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read `plans/baseline.md` (implementation authority) and `plans/plan.md`
+        (long-term direction) first; baseline wins conflicts. UX choices follow
+        explicit requirements, then the Omarchy Ferrix visual system, then
+        GrapheneOS conventions adapted to it.
+
+        Redact unique device identifiers; never paste serials or IMEI.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What needs deciding and why now. Link the issues, docs or evidence that raise it.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and authority
+      description: Relevant baseline/plan sections, AGENTS.md boundaries, ADRs in `docs/adr`, licences, recovery invariants.
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: Each option with its trade-offs, cost, and the evidence (labelled `QEMU`, `mock` or `physical:<target>`) behind it.
+      placeholder: |
+        ### A. ...
+        - Pros:
+        - Cons:
+        ### B. ...
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+      description: The preferred option and why. Note any intentional departure from baseline or external conventions.
+    validations:
+      required: true
+  - type: textarea
+    id: questions
+    attributes:
+      label: Open questions for the owner
+      description: The specific decisions needed from the owner, phrased so each can be answered directly.
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
