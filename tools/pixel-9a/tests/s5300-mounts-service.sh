@@ -600,4 +600,31 @@ export FAKE_BLKID_VERSION='BusyBox v1.37.0 multi-call binary.'
 stop_refuses 'a stop without util-linux blkid' 'util-linux blkid is required'
 unset FAKE_BLKID_VERSION
 
+# --- partial start (issue #92 review of the accepted, unchanged service) ------
+# A start that fails part way returns 1 but leaves the earlier mounts it made:
+# still verified read-only loops over BLKROSET partitions, while OpenRC records
+# the service as stopped. This pins the current behaviour; it is not an
+# endorsement. s5300-s2-preflight.md proposes a rollback contract for a later,
+# separately #34-reviewed change, and the S2 preflight reports this state as
+# stale mounts and loops.
+fixture
+export FAKE_TYPE_sda13=xfs
+refuses 'a persist partition of an unknown type after two mounts' "refusing unrecognised filesystem 'xfs'"
+unset FAKE_TYPE_sda13
+[ "$(grep -c '^99 1 7:' "$fx/mountinfo")" -eq 2 ] || fail 'partial start: the two earlier mounts did not remain'
+loop_bound loop0 && loop_bound loop1 && ! loop_bound loop2 || fail 'partial start: unexpected loop state'
+[ "$(count '^umount ')" -eq 0 ] && [ "$(count '^losetup -d ')" -eq 0 ] ||
+	fail 'partial start: the service now rolls back; update s5300-s2-preflight.md and the #34 review'
+[ "$(cat "$fx/sys/sda11/ro")" = 1 ] && [ "$(cat "$fx/sys/sda12/ro")" = 1 ] && [ "$(cat "$fx/sys/sda13/ro")" = 0 ] ||
+	fail 'partial start: BLKROSET is not set on exactly the two mounted partitions'
+# stop() itself, when it runs, removes exactly that partial state. OpenRC does
+# not run stop() for a service it records as stopped, so nothing checked in
+# runs it today.
+: >"$fx/log"
+run stop || { cat "$fx/err" >&2; fail 'partial start: stop() could not clean the partial state'; }
+[ "$(count '^umount -- ')" -eq 2 ] && [ "$(count '^losetup -d ')" -eq 2 ] ||
+	fail 'partial start: stop() did not remove exactly the two mounts'
+[ "$(grep -c '^99 1 7:' "$fx/mountinfo")" -eq 0 ] || fail 'partial start: stop() left a mount'
+[ "$(cat "$fx/sys/sda11/ro")" = 1 ] && [ "$(cat "$fx/sys/sda12/ro")" = 1 ] || fail 'partial start: stop() cleared BLKROSET'
+
 echo 'pixel-9a s5300 mounts service tests passed'

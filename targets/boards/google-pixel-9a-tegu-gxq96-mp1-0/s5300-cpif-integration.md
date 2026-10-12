@@ -176,6 +176,12 @@ The intended manual order for a future S2/S3 run is therefore:
 start`. That run needs its own checked-in, bounded workflow; this change does
 not perform or authorise it. Issue #92 owns that workflow and its fresh
 owner decision, including opener-scan hardening and enforced stop order.
+Its read-only first part, the S2 preflight
+([`s5300-s2-preflight.md`](s5300-s2-preflight.md),
+`just pixel-9a-s5300-s2-preflight`), reports GO/NO-GO for the facts before
+and after the manual mounts start. That document also reviews the partial-mount
+failure path of `ferrix-s5300-mounts` and lists the active-workflow and
+teardown requirements that are still open.
 
 ## Opener scan (issue #92 hardening)
 

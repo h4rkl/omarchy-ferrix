@@ -594,6 +594,19 @@ pixel-9a-s5300-cpif-adapter-test:
 pixel-9a-s5300-cpif-services-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-cpif-services.sh"
 
+# Issue #92 S2 PREFLIGHT ONLY on a booted exact Ferrix dev guest over
+# CDC-ACM: one read-only session that runs the checked-in alias-aware CPIF
+# library and reports GO/NO-GO for identity, image skew, CP OFFLINE, nodes,
+# a complete opener scan, OpenRC state and overrides, arm token, scratch, and
+# partial or stale source mounts, plus host recovery artifacts. It opens no
+# CPIF node and starts, mounts, provisions, or arms nothing. It never
+# authorises or performs a CP boot.
+pixel-9a-s5300-s2-preflight:
+    @sh "{{root}}/tools/pixel-9a/s5300-s2-preflight.sh"
+
+pixel-9a-s5300-s2-preflight-test:
+    @sh "{{root}}/tools/pixel-9a/tests/s5300-s2-preflight.sh"
+
 # Generic, vendor-agnostic read-only device front door. Discovery only uses
 # adb devices/getprop and fastboot devices/getvar; matching, proposing, and
 # pinned downloads never contact a device. Mutation lives only in target-scoped
