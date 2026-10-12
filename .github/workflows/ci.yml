@@ -1,7 +1,10 @@
 # Linux CI for the emulator-first project (see AGENTS.md and plans/baseline.md).
 #
-# Four jobs, each its own required check (none depends on another except
+# Five jobs, each its own required check (none depends on another except
 # qemu-scenario-check on qemu-check):
+#   docs                - Markdown relative-link and #anchor check over every
+#                         tracked *.md, plus the docs/status.md current-state
+#                         and docs/status-log/ structure tests (stdlib Python).
 #   rust                - host toolchain checks (fmt, clippy, test) on ubuntu-latest.
 #                         The hosted runner denies uid_map/setgroups and mounts in
 #                         an unprivileged user namespace, so the real-namespace
@@ -67,6 +70,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  docs:
+    name: Docs (links, status log, current state)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # ubuntu-latest ships Python >= 3.12; the scripts need >= 3.11 (tomllib)
+      # and only the standard library.
+      - name: Markdown links and anchors
+        run: python3 tools/dev/check-links.py
+
+      # The history half of this test needs the pre-split blob and skips in
+      # this shallow checkout; the structural checks always run.
+      - name: Status log structure
+        run: python3 tools/dev/tests/status-log.py
+
+      - name: Status current state matches the capability matrices
+        run: python3 tools/dev/tests/status-current-state.py
+
   rust:
     name: Rust (fmt, clippy, test)
     runs-on: ubuntu-latest
