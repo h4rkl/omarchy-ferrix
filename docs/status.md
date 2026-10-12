@@ -1,5 +1,41 @@
 # Status
 
+## 2026-10-12 (1-r3 image and S5300 S2 pre-mount GO, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- Rebuilt the native rootfs from reviewed source `0032a6b`
+  (attempt `20261012T062930Z`). It carries `device-google-tegu` 1-r3 and r3
+  `exynos-modem`/`modemmanager-samsung-sit`. Rootfs image and tar hashes
+  matched the manifest and `e2fsck -fn` was clean. The build log's
+  `Permission denied` lines are the unprivileged first tar/mke2fs attempt.
+  The script's `sudo -n` retry produced the final image, and its root-only
+  files are present and root-owned.
+- Composed a development bundle with the unchanged pinned Kleaf 6.1.124
+  kernel. The boot partition images are byte-identical to the 1-r2 bundle,
+  and only `userdata` changed. All artifact hashes were re-verified on the
+  Mac. The bundle was flashed to slot B plus `userdata` through
+  `just pixel-9a-dev-flash`, whose recovery invariant passed. Ferrix reached
+  OpenRC default 77 s after reboot. The installed packages are the 1-r3 set.
+- `just pixel-9a-s5300-s2-preflight` (from `463d8ec`) returned
+  `preflight_result=go`, phase `pre-mount`:
+  - `image_skew=none`, with no device, host or unknown blocker
+  - CP `OFFLINE`
+  - complete, clean opener scan over 23 CPIF class nodes
+  - S5300 services stopped, with no runlevel link, override or arm token
+  - all four source roles unmounted, unheld and not loop-backed
+  - `cp_boot_authorized=no`
+- Nothing was mounted, no CPIF node was opened, and no S5300 service or CP
+  was started. This GO does not authorise the mounts start or a CP boot. An
+  offline review (`s5300-s2-active-blockers.md`) found that the active S2
+  workflow still cannot be made fail-closed. It lists blockers for:
+  - partial-mount rollback
+  - unexercised OpenRC teardown semantics
+  - the opener scan's missing positive control
+  - per-unit and per-boot decision binding
+  - session lifetime for the 10-minute window
+- The SIM remains unrecognised by Ferrix. `[telephony]` remains
+  `unsupported`. The transcript is ignored under
+  `out/pixel-9a/s5300-s2-preflight/`.
+
 ## 2026-10-12 (S5300 S2 read-only preflight, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - New checked-in `just pixel-9a-s5300-s2-preflight`

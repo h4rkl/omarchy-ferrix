@@ -89,9 +89,21 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   checked-in 1-r3 versus installed 1-r2 source/image skew, with no device
   blocker ([S2 entry](../docs/status.md#2026-10-12-s5300-s2-read-only-preflight-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0),
   [board record](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-preflight.md)).
-  A refreshed 1-r3 image is being built; its result is not yet recorded. No
-  CPIF node has been opened and no CP boot has been attempted; the active S2
-  workflow is not implemented. A partial `ferrix-s5300-mounts` start
+  The rebuilt 1-r3 image (rootfs attempt `20261012T062930Z` from `0032a6b`,
+  same pinned Kleaf kernel) was flashed to slot B and booted. The preflight
+  then returned a **pre-mount `go`** with no image skew or blocker
+  ([1-r3 entry](../docs/status.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
+  That GO authorises nothing. No source has been mounted, no CPIF node has
+  been opened and no CP boot has been attempted. An offline review
+  ([blockers](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-active-blockers.md))
+  found the active S2 workflow cannot yet be made fail-closed. Its follow-ups
+  are [#107](https://github.com/h4rkl/omarchy-ferrix/issues/107) (opener-scan
+  positive control), [#108](https://github.com/h4rkl/omarchy-ferrix/issues/108)
+  (per-unit and per-boot decision binding),
+  [#109](https://github.com/h4rkl/omarchy-ferrix/issues/109) (OpenRC teardown
+  and disconnect-safe observation design) and
+  [#110](https://github.com/h4rkl/omarchy-ferrix/issues/110) (partial-start
+  rollback). A partial `ferrix-s5300-mounts` start
   currently requires a reboot. A SIM is physically installed but has not been
   recognised by Ferrix. [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76)
   must correct the FMT codec boundary before tegu control traffic.
@@ -198,7 +210,7 @@ physical claim.
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
 | 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25) closed: pinned stock restore and same-device Android 17 boot verified. Recheck the recovery invariant before every image write. |
-| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | Completed prerequisites: #34 source mounts, #79 NV sizes, #81 scratch, #88 staging; #55/#59 AoC/TAS binding, #80 mic pickup, #83/#90 speaker NO-GO. Open: [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92) bounded manual CP boot and teardown (1-r3 image, pre-mount GO and fresh owner decision first); [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) FMT codec for tegu SIT; [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) A2DP output without TAS; [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) speaker protection and gain contract; [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27) ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #27 end-to-end proof depends on #1 and #2. |
+| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | Completed prerequisites: #34 source mounts, #79 NV sizes, #81 scratch, #88 staging; #55/#59 AoC/TAS binding, #80 mic pickup, #83/#90 speaker NO-GO. Open: [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92) bounded manual CP boot and teardown (1-r3 pre-mount GO recorded; blocked on #107 opener-scan control, #108 decision binding, #109 teardown/observation design; optional #110 rollback; fresh owner decision per mounts start and CP boot); [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) FMT codec for tegu SIT; [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) A2DP output without TAS; [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) speaker protection and gain contract; [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27) ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #27 end-to-end proof depends on #1 and #2. |
 | 2. Power and radios | [#9](https://github.com/h4rkl/omarchy-ferrix/issues/9) power key, blanking, suspend/wake, sensors; [#24](https://github.com/h4rkl/omarchy-ferrix/issues/24) Wi-Fi hardening; [#5](https://github.com/h4rkl/omarchy-ferrix/issues/5) Bluetooth pairing; [#7](https://github.com/h4rkl/omarchy-ferrix/issues/7) hidden Wi-Fi; [#8](https://github.com/h4rkl/omarchy-ferrix/issues/8) time/RTC | [#26](https://github.com/h4rkl/omarchy-ferrix/issues/26): charge/thermal/endurance, with screen-off drain dependent on #9. |
 | 3. Camera, location and other hardware | [#3](https://github.com/h4rkl/omarchy-ferrix/issues/3) camera; #9 owns orientation/proximity/ambient sensors | [#28](https://github.com/h4rkl/omarchy-ferrix/issues/28) GNSS/location; [#29](https://github.com/h4rkl/omarchy-ferrix/issues/29) NFC/fingerprint feasibility and proof. |
 | 4. App and shell usability | [#19](https://github.com/h4rkl/omarchy-ferrix/issues/19) browser performance/video/screen fit; [#4](https://github.com/h4rkl/omarchy-ferrix/issues/4) optional GPU; [#12](https://github.com/h4rkl/omarchy-ferrix/issues/12), [#21](https://github.com/h4rkl/omarchy-ferrix/issues/21), [#22](https://github.com/h4rkl/omarchy-ferrix/issues/22), [#23](https://github.com/h4rkl/omarchy-ferrix/issues/23) shell/navigation/notifications; [#14](https://github.com/h4rkl/omarchy-ferrix/issues/14) text; [#16](https://github.com/h4rkl/omarchy-ferrix/issues/16) pmOS QEMU graphics | No duplicate browser or shell issue. Keep browser usability evidence distinct from hardware GPU support. |
@@ -250,14 +262,12 @@ recovery invariant still holds; identify one small unblocked issue; send
 Claude an issue-scoped task packet; review its PR and evidence; then
 reconcile issue state, plan, status and matrix.
 
-Next actionable step from this snapshot (#92): when the refreshed 1-r3
-image build finishes, the lead agent verifies its manifest hashes and records the
-build result, flashes it through the recovery-gated
-`just pixel-9a-dev-flash`, and reruns the read-only
-`just pixel-9a-s5300-s2-preflight`. Only a pre-mount `go`, plus a fresh
-owner decision, permits the manual source mounts; the active S2 boot and
-teardown workflow still needs its own reviewed PR before any CPIF node opens.
-In parallel and off-device, review the #91 A2DP playback workflow before any
-audible run, and continue #94, #76 and #99. The standing goal remains a fully
+Next actionable step from this snapshot: #92's physical S2 stays blocked on
+#107–#109. #110 is needed only if the owner wants recovery without a reboot.
+Delegate #107 and #108 as read-only, offline-first slices. #107 changes a
+pinned library, so it needs a new image and a repeat preflight. Draft #109's
+design for owner review before any active code exists. Before any audible
+run, review #91's revised A2DP playback workflow and merge it, then obtain a
+fresh, single-run owner decision. Continue #94 and #76 off-device. The standing goal remains a fully
 functioning postmarketOS-based Pixel 9a phone until the owner changes it or
 #32 records an evidence-backed release decision.
