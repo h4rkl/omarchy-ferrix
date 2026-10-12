@@ -232,7 +232,7 @@ awk -v nodes="$nodes" -v modules="$modules" -v files="$pinned_files" '
 	function oneof(v, list,    n, a, i) { n = split(list, a, "|"); for (i = 1; i <= n; i++) if (v == a[i]) return 1; return 0 }
 	function valid(k, v, count, fields, i) {
 		if (k == "scratch_entries") return v == "unavailable" || (v ~ /^[0-9]+$/ && length(v) <= 6)
-		if (k ~ /^(uid|slot_value_count|cp_platform_count|wwan_devices|class_node_count|class_extra_nodes|opener_holder_count|init_instances|rc_conf_mentions|confd_instances|local_d_mentions|udev_overrides|sit_socket_dir|vendor_mounts)$/ ||
+		if (k ~ /^(uid|slot_value_count|cp_platform_count|wwan_devices|class_node_count|class_extra_nodes|opener_holder_count|opener_vanished|init_instances|rc_conf_mentions|confd_instances|local_d_mentions|udev_overrides|sit_socket_dir|vendor_mounts)$/ ||
 			k ~ /^(proc|rc_daemon|runlevel|pidfile)\./ || k ~ /^part\.[a-z_]+\.(count|loops|direct_mounts|holders)$/ || k ~ /^dest\.[a-z_]+\.mounts$/)
 			return v ~ /^[0-9]+$/ && length(v) <= 6
 		if (k ~ /^file\..*\.sha256$/) return oneof(v, "missing|symlink|unreadable") || (v ~ /^[0-9a-f]+$/ && length(v) == 64)
@@ -253,6 +253,9 @@ awk -v nodes="$nodes" -v modules="$modules" -v files="$pinned_files" '
 		if (k == "env.target") return oneof(v, "exact|other|missing|duplicate")
 		if (k == "env.backend") return oneof(v, "google-kleaf-cpif|linux-google-tegu-wwan|missing|duplicate|empty|other")
 		if (k == "opener_scan") return oneof(v, "clean|held|incomplete|not-run")
+		if (k == "opener_positive_control") return oneof(v, "detected|missing")
+		if (k == "opener_format_control") return oneof(v, "matched|mismatch|missing")
+		if (k == "opener_major_foreign") return v == "unknown" || (v ~ /^[0-9]+$/ && length(v) <= 6)
 		if (k == "opener_held_nodes") {
 			if (v == "none") return 1
 			if (v == "") return 0
@@ -275,7 +278,7 @@ awk -v nodes="$nodes" -v modules="$modules" -v files="$pinned_files" '
 		return 1
 	}
 	BEGIN {
-		split("probe dt_model dt_compatible kernel_release uid hw_revision slot_source slot_value_count slot_suffix pidns env_file env.target env.backend check.target pins_file check.package pkg.device-google-tegu pkg.exynos-modem pkg.modemmanager-samsung-sit check.cli cp_platform_count cp_driver modem_state wwan_devices check.surface class_node_count class_extra_nodes opener_scan opener_holder_count opener_held_nodes opener_holder_comms proc.s5300_daemons proc.modemmanager openrc_state_dir service.ferrix-s5300-mounts service.exynos-modem service.sit-proxy service.modemmanager service.ferrix-radio-firmware rc_daemon.exynos-modem rc_daemon.sit-proxy runlevel.ferrix-s5300-mounts runlevel.exynos-modem runlevel.sit-proxy init_instances confd.ferrix-s5300-mounts confd.exynos-modem confd.sit-proxy confd.modemmanager rc_conf_mentions confd_instances local_d_mentions udev_overrides arm_token pidfile.exynos-modem pidfile.sit-proxy sit_socket_dir check.run scratch scratch_entries fw.uecapconfig fw.carrierconfig vendor_mounts check.sources probe_complete", g, " ")
+		split("probe dt_model dt_compatible kernel_release uid hw_revision slot_source slot_value_count slot_suffix pidns env_file env.target env.backend check.target pins_file check.package pkg.device-google-tegu pkg.exynos-modem pkg.modemmanager-samsung-sit check.cli cp_platform_count cp_driver modem_state wwan_devices check.surface class_node_count class_extra_nodes opener_scan opener_positive_control opener_format_control opener_major_foreign opener_vanished opener_holder_count opener_held_nodes opener_holder_comms proc.s5300_daemons proc.modemmanager openrc_state_dir service.ferrix-s5300-mounts service.exynos-modem service.sit-proxy service.modemmanager service.ferrix-radio-firmware rc_daemon.exynos-modem rc_daemon.sit-proxy runlevel.ferrix-s5300-mounts runlevel.exynos-modem runlevel.sit-proxy init_instances confd.ferrix-s5300-mounts confd.exynos-modem confd.sit-proxy confd.modemmanager rc_conf_mentions confd_instances local_d_mentions udev_overrides arm_token pidfile.exynos-modem pidfile.sit-proxy sit_socket_dir check.run scratch scratch_entries fw.uecapconfig fw.carrierconfig vendor_mounts check.sources probe_complete", g, " ")
 		for (i in g) required[g[i]] = 1
 		split(nodes, n, " "); for (i in n) { required["node." n[i]] = 1; known_node[n[i]] = 1 }
 		split(modules, m, " "); for (i in m) required["module." m[i]] = 1
@@ -408,6 +411,23 @@ case "$scan" in
 	incomplete) block opener-scan-incomplete ;;
 	*) block opener-scan-not-run ;;
 esac
+# Issue #107: the scan counts only with its own positive control detected
+# and the CPIF device numbers read back in the matcher's format; any other
+# character device under a CPIF major blocks.
+control=$(oneof opener_positive_control detected missing)
+emit opener_positive_control "$control"
+[ "$control" = detected ] || block opener-positive-control-missing
+format=$(oneof opener_format_control matched mismatch missing)
+emit opener_format_control "$format"
+[ "$format" = matched ] || block "opener-format-control-$format"
+foreign=$(get opener_major_foreign)
+emit opener_major_foreign "$foreign"
+case "$foreign" in
+	0) ;;
+	unknown) block opener-major-enumeration-incomplete ;;
+	*) block cpif-major-foreign-device ;;
+esac
+emit opener_vanished "$(num opener_vanished)"
 daemons=$(num proc.s5300_daemons)
 emit s5300_daemon_processes "$daemons"
 [ "$daemons" -eq 0 ] || block s5300-daemon-running
@@ -560,7 +580,7 @@ json_list() {
 	printf '"device_blockers":[%s],"image_skew":[%s],"host_blockers":[%s],"unknown_facts":[%s],' \
 		"$(json_list "$blockers")" "$(json_list "$skew")" "$(json_list "$host_blockers")" "$(json_list "$unknowns")"
 	printf '"deferred_until_mounts":[%s],"deferred_to_active_workflow":[%s],' "$(json_list "$deferred")" "$(json_list "$deferred_active")"
-	printf '"host_recovery_factory_archive":"%s","modem_state":"%s","opener_scan":"%s",' "$host_recovery" "$modem_state" "$scan"
+	printf '"host_recovery_factory_archive":"%s","modem_state":"%s","opener_scan":"%s","opener_positive_control":"%s",' "$host_recovery" "$modem_state" "$scan" "$control"
 	printf '"cp_nodes_opened":false,"state_changes":"none","cp_boot_authorized":false,"active_s2_workflow":"not-implemented",'
 	printf '"transcript":"%s"}\n' "${transcript##*/}"
 } >"$summary"
