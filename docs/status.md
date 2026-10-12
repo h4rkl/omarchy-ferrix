@@ -37,6 +37,33 @@
 - Offline tests pass. The physical run was read-only: no source was mounted,
   no CPIF node was opened, and no service or CP was started. It is pre-boot
   evidence only; `[telephony]` remains `unsupported`.
+
+## 2026-10-12 (A2DP active proof workflow; offline/mock only, google-pixel-9a-tegu-gxq96-mp1-0)
+
+- `tools/pixel-9a/a2dp-active-proof.sh` implements the #91 active-proof
+  gate as a separate exact-target workflow:
+  - `dry` reruns the unchanged v3 preflight in one CDC-ACM session and
+    re-derives the sink identity. It prints the decision context and a
+    per-run phrase, bound to a salted hash of the sink identity, versions and
+    kernel.
+  - `play` consumes that phrase once and revalidates in its own session. It
+    sends one generated 1.5 s tone to the bound A2DP sink only, through
+    `pw-cat` with the reviewed target and no-fallback, no-reconnect and
+    no-move properties.
+  - An event-driven `pw-mon` graph guard and polled PCM-opener and
+    speaker-control guards kill the tone on any misroute, disconnect,
+    transient object, or incomplete observation.
+  - The result separates route safety, delivery, cleanup, and owner audible
+    confirmation; audible confirmation is always `owner-pending`.
+- Evidence is `mock` only: 186 fake-tool, fake-guest, and transport checks
+  (`just pixel-9a-a2dp-active-proof-test`). It has **not** run on the phone.
+  pw-mon output shape, kill latency, and false-trip behaviour on hardware
+  are unverified. The kernel-side guards are polled, not event-driven
+  (limits in `audio-route-decision.md`, "A2DP active proof workflow").
+- A `play` run needs a fresh `dry` run on the phone and an explicit owner
+  decision for that run. Internal TAS playback remains NO-GO, and `[audio]`
+  stays `unsupported`.
+
 ## 2026-10-12 (A2DP route source review and preflight v3; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - Probe v2 ran on the exact phone with one paired, connected Audio Sink

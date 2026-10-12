@@ -518,6 +518,21 @@ pixel-9a-a2dp-output-preflight:
 pixel-9a-a2dp-output-preflight-test:
     @sh "{{root}}/tools/pixel-9a/tests/a2dp-output-preflight.sh"
 
+# Issue #91 bounded A2DP playback proof. dry reruns the v3 preflight in one
+# session, binds the observed sink to a salted hash, and prints the per-run
+# decision phrase; it plays nothing. play needs that phrase
+# (FERRIX_PIXEL9A_A2DP_PLAY_CONFIRM), consumes it once, revalidates in its
+# own session, and sends one guarded 1.5 s generated tone to the bound A2DP
+# sink only. Run play only after an explicit owner decision for that run.
+pixel-9a-a2dp-active-proof-dry:
+    @sh "{{root}}/tools/pixel-9a/a2dp-active-proof.sh" dry
+
+pixel-9a-a2dp-active-proof-play:
+    @sh "{{root}}/tools/pixel-9a/a2dp-active-proof.sh" play
+
+pixel-9a-a2dp-active-proof-test:
+    @sh "{{root}}/tools/pixel-9a/tests/a2dp-active-proof.sh"
+
 # Read-only issue #34 filesystem inventory of the four S5300 modem source
 # partitions on a booted exact Ferrix dev guest over its CDC-ACM bring-up
 # shell. Never mounts or writes, and never reports the safety gate as passed.
