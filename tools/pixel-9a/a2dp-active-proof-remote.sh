@@ -33,7 +33,10 @@
 #     pipewire-tools; line-buffered, one blank line after every event, every
 #     object carries object.serial) feeds an awk guard through a FIFO. The
 #     guard is armed once pw-mon reports its own client; that client's serial
-#     S0 splits pre-existing objects from new ones. Every object created after
+#     S0 splits pre-existing objects from new ones. A quoted value that spans
+#     lines (the args of a Module, which may hold blank and "#" lines) is
+#     consumed whole up to its closing quote; one still open at the next
+#     event header or when pw-mon ends trips the guard. Every object created after
 #     S0 is reported even if it is destroyed again, and a removal of an object
 #     never reported trips the guard, so a transient route cannot pass
 #     unobserved;
@@ -127,6 +130,7 @@ printf 'active_probe=a2dp-active-proof\nactive_probe_version=1\n'
 case "$proof_mode" in dry|play) out active_mode "$proof_mode" ;; *) out active_mode invalid; out active_complete refused; exit 6 ;; esac
 
 mon_pid=''; guard_pid=''; player_pid=''; writer_pid=''; watchdog_pid=''; pcm_pid=''; ctl_pid=''; live_pid=''; fd3=no
+guards=no
 cleanup() {
 	for pid in $player_pid $writer_pid $watchdog_pid $live_pid; do kill -KILL "$pid" 2>/dev/null; done
 	[ ! -d "$proof_dir" ] || : >"$proof_dir/stop" 2>/dev/null
@@ -139,9 +143,13 @@ cleanup() {
 	rm -rf "$proof_dir"
 }
 # refuse REASON: nothing was played; a scratch directory this run made goes
-# with the trap.
+# with the trap. Once play has started the guards, the first reason each
+# guard recorded goes with the refusal (none if it did not trip).
 refuse() {
 	out active_refusal "$1"
+	if [ "$guards" = yes ]; then
+		for g in graph pcm ctl live; do out "guard_trip_$g" "$(trip_of "$g")"; done
+	fi
 	out tone_started no
 	out active_complete refused
 	exit 6
@@ -169,7 +177,10 @@ function trip(r) {
 	if (!(r in tripped)) { tripped[r] = 1; trips = trips (trips == "" ? "" : ",") r; put("trip.graph", trips) }
 	if (pid != "") system("kill -KILL " pid " 2>/dev/null")
 }
-function reset_block() { inblk = 0; hdr = ""; id = ""; type = ""; outn = ""; inn = ""; lstate = ""; bad = ""; pchg = 0; split("", p) }
+function reset_block() { inblk = 0; inq = 0; hdr = ""; id = ""; type = ""; outn = ""; inn = ""; lstate = ""; bad = ""; pchg = 0; split("", p) }
+# odd_quotes: whether a line holds an odd number of double quotes, i.e. it
+# opens or closes a quoted value that spans lines.
+function odd_quotes(s) { return gsub(/"/, "", s) % 2 }
 # own_check: once our node and every port and link of it are removed, the
 # shell may stop the guard; until then it waits (bounded) for these events.
 function own_check(   k) {
@@ -282,6 +293,14 @@ BEGIN { phase = "observe"; reset_block(); s0 = -1; arm_q = 0 }
 	line = $0
 	if (index(line, "FERRIXCTL " tok " ") == 1) { control(substr(line, length(tok) + 12)); next }
 	if (phase == "stopped") next
+	# Inside a quoted value that spans lines (the args: "{ ... }" of a Module):
+	# every line up to the closing quote is value text, blank or not, and
+	# never ends the block or reaches p[]. A header there means the value
+	# never closed: the block is malformed.
+	if (inq) {
+		if (line == "added:" || line == "changed:" || line == "removed:") { inq = 0; bad = "quote" }
+		else { if (odd_quotes(line)) inq = 0; next }
+	}
 	if (line == "") { if (inblk) end_block(); next }
 	if (line == "added:" || line == "changed:" || line == "removed:") {
 		if (inblk) end_block()
@@ -291,6 +310,7 @@ BEGIN { phase = "observe"; reset_block(); s0 = -1; arm_q = 0 }
 		if (line ~ /^\ttype: PipeWire:Interface:Core/) { inblk = 1; hdr = "core"; next }
 		trip("graph-observation-malformed"); next
 	}
+	if (line ~ /^[ *]?\t[A-Za-z][A-Za-z0-9 _.-]*: "/ && odd_quotes(line)) { inq = 1; next }
 	if (hdr == "core") next
 	if (line ~ /^\tid: [0-9]+$/) { if (id != "") bad = "id"; id = substr(line, 6); next }
 	if (line ~ /^\ttype: PipeWire:Interface:[A-Za-z]+ \(version [0-9]+\)$/) {
@@ -314,7 +334,12 @@ BEGIN { phase = "observe"; reset_block(); s0 = -1; arm_q = 0 }
 	if (line ~ /^[ *\t]/) next
 	bad = "shape"
 }
-END { if (phase != "stopped") trip("graph-observer-ended") }
+END {
+	if (phase != "stopped") {
+		if (inq) trip("graph-observation-malformed")
+		trip("graph-observer-ended")
+	}
+}
 '
 
 # guard_trip NAME REASON: record the first reason, then kill the player if it
@@ -397,6 +422,7 @@ own_tok=$(rand_hex 8)
 own_name="ferrix-a2dp-proof-$own_tok"
 if [ "$proof_mode" = play ]; then
 	mkfifo "$proof_dir/graph.fifo" "$proof_dir/tone.fifo" 2>/dev/null || refuse fifo-create-failed
+	guards=yes
 	awk -v tok="$ctl_tok" -v dir="$proof_dir" "$guard_awk" <"$proof_dir/graph.fifo" &
 	guard_pid=$!
 	exec 3>"$proof_dir/graph.fifo"
@@ -540,7 +566,10 @@ pcm_pid=$!
 (ctl_guard) &
 ctl_pid=$!
 wait_file armed.pcm && wait_file armed.ctl || { any_trip || refuse kernel-guards-not-armed; }
-any_trip && refuse "kernel-guard-tripped-before-tone"
+# Before the review the graph guard only judges what pw-mon prints, so a
+# graph trip here is a parse, arming or monitor failure, not a kernel one.
+[ ! -e "$proof_dir/trip.graph" ] || refuse graph-guard-tripped-before-tone
+any_trip && refuse kernel-guard-tripped-before-tone
 out kernel_guards_armed yes
 printf 'FERRIXCTL %s review\n' "$ctl_tok" >&3
 wait_file review || refuse graph-review-timeout

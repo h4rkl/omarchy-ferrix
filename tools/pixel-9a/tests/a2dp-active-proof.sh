@@ -112,6 +112,104 @@ for fn in validate preflight_problems; do
 	check "library: $fn is byte-identical to the v3 host's" [ "$(fn_text "$fn" "$work/library.sh")" = "$(fn_text "$fn" "$pre_host")" ]
 done
 
+# --- layer 0b: the graph guard awk, fed recorded pw-mon text directly ----------
+# PipeWire Module objects print a quoted args value over several lines, and
+# some (protocol-native) hold blank and "#" lines inside it. Seen on
+# physical:google-pixel-9a-tegu-gxq96-mp1-0 (2026-10-12): the guard took the
+# blank line for the end of the block and tripped on normal startup output.
+sed -n "/^guard_awk='\$/,/^'\$/p" "$body" >"$work/guard-awk.sh"
+check "guard unit: the guard awk is extracted from the guest body" sh -c 'sh -n "$1" && [ "$(wc -l <"$1")" -gt 100 ]' sh "$work/guard-awk.sh"
+gdir="$work/guard-unit"
+gtok=feedfacefeedface
+# guard_run INPUT: the guard over INPUT to end of file; results in $gdir.
+guard_run() {
+	rm -rf "$gdir"
+	mkdir -p "$gdir"
+	sh -c '. "$1"; awk -v tok="$2" -v dir="$3" "$guard_awk" <"$4"' sh "$work/guard-awk.sh" "$gtok" "$gdir" "$1" 2>/dev/null
+}
+gfile() { if [ -s "$gdir/$1" ]; then sed -n '1p' "$gdir/$1"; else echo none; fi; }
+ctl() { printf 'FERRIXCTL %s %s\n' "$gtok" "$*"; }
+pw_core() { printf '\ttype: PipeWire:Interface:Core\n\tcookie: 1\n\tversion: "1.6.8"\n\tname: "pipewire-0"\n \tproperties:\n \t\tcore.daemon = "true"\n\n'; }
+# The redacted module-rt block exactly as pw-mon printed it on the device.
+pw_module_rt() {
+	printf 'added:\n\tid: 1\n\tpermissions: r--m-\n\ttype: PipeWire:Interface:Module (version 3)\n\tname: "libpipewire-module-rt"\n'
+	printf '\tfilename: "/usr/lib/pipewire-0.3/libpipewire-module-rt.so"\n\targs: "{\n            nice.level    = -11\n'
+	printf '            rt.prio       = 88\n            #rt.time.soft = -1\n        }"\n'
+	printf ' \tproperties:\n \t\tmodule.name = "libpipewire-module-rt"\n \t\tobject.id = "1"\n \t\tobject.serial = "1"\n\n'
+}
+# protocol-native shape: blank and "#" lines in args, plus lines shaped like
+# every rule the guard has (property, marked property, id, type, header-free
+# garbage); none of them may reach p[], pchg, bad, id or type.
+pw_module_native() {
+	printf 'added:\n\tid: 2\n\tpermissions: r--m-\n\ttype: PipeWire:Interface:Module (version 3)\n\tname: "libpipewire-module-protocol-native"\n'
+	printf '\tfilename: "/usr/lib/pipewire-0.3/libpipewire-module-protocol-native.so"\n\targs: "{\n\n'
+	printf '            # Deprecated legacy mode (not socket-based),\n            #access.legacy = true\n\n'
+	printf ' \t\tobject.serial = "999"\n*\t\tnode.name = "forged"\n\tid: 77\n\ttype: PipeWire:Interface:Node (version 3)\n'
+	printf 'garbage that pw-mon would never print\n        }"\n'
+	printf ' \tproperties:\n \t\tmodule.name = "libpipewire-module-protocol-native"\n \t\tobject.id = "2"\n \t\tobject.serial = "2"\n\n'
+}
+pw_registry() {
+	printf 'added:\n\tid: 33\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Client (version 3)\n \tproperties:\n \t\tobject.serial = "10"\n \t\tpipewire.sec.pid = "900"\n\n'
+	printf 'added:\n\tid: 43\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Device (version 3)\n \tproperties:\n \t\tobject.serial = "20"\n \t\tdevice.api = "bluez5"\n\n'
+	printf 'added:\n\tid: 46\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n \tstate: "suspended"\n \tproperties:\n \t\tobject.serial = "40"\n \t\tnode.name = "bluez_output.x.1"\n \t\tmedia.class = "Audio/Sink"\n\n'
+	printf 'added:\n\tid: 35\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Client (version 3)\n \tproperties:\n \t\tobject.serial = "500"\n \t\tpipewire.sec.pid = "4242"\n\n'
+}
+# guard_session ENFORCE_EVENTS: startup with both modules, arm, review, then
+# ENFORCE_EVENTS (a shell function printing events) and stop.
+guard_session() {
+	pw_core; pw_module_rt; pw_module_native; pw_registry
+	ctl monitor 4242; ctl preflight; ctl bind 46 43 own-node; ctl review
+	"$1"
+	ctl stop
+}
+no_events() { :; }
+guard_session no_events >"$work/guard-modules.txt"
+guard_run "$work/guard-modules.txt"
+check "guard unit: Module args with blank, \"#\" and \"= \" lines parse; the guard arms and reviews clean" \
+	sh -c '[ "$1" = armed ] && [ "$2" = ok ] && [ "$3" = none ] && [ "$4" = "no 0 no no none" ]' sh \
+	"$(gfile armed)" "$(gfile review)" "$(gfile trip.graph)" "$(gfile final)"
+alsa_after() { printf 'added:\n\tid: 80\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n \tstate: "suspended"\n \tproperties:\n \t\tobject.serial = "610"\n \t\tnode.name = "alsa_output.x"\n \t\tmedia.class = "Audio/Sink"\n\n'; }
+guard_session alsa_after >"$work/guard-modules-sink.txt"
+guard_run "$work/guard-modules-sink.txt"
+check "guard unit: a sink added after the modules still parses and trips new-sink-node, nothing else" \
+	sh -c '[ "$1" = ok ] && [ "$2" = new-sink-node ]' sh "$(gfile review)" "$(gfile trip.graph)"
+stream_after() {
+	printf 'added:\n\tid: 70\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Client (version 3)\n \tproperties:\n \t\tobject.serial = "600"\n \t\tpipewire.sec.pid = "5000"\n\n'
+	printf 'added:\n\tid: 71\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n \tstate: "idle"\n \tproperties:\n \t\tobject.serial = "601"\n \t\tnode.name = "own-node"\n \t\tmedia.class = "Stream/Output/Audio"\n\n'
+	printf 'added:\n\tid: 72\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Port (version 3)\n \tproperties:\n \t\tobject.serial = "602"\n \t\tnode.id = "71"\n\n'
+	printf 'added:\n\tid: 73\n\tpermissions: r-x--\n\ttype: PipeWire:Interface:Link (version 3)\n\toutput-node-id: 71\n\tinput-node-id: 46\n \tstate: "active"\n \tproperties:\n \t\tobject.serial = "603"\n\n'
+	printf 'removed:\n\tid: 73\n\nremoved:\n\tid: 72\n\nremoved:\n\tid: 71\n\nremoved:\n\tid: 70\n\n'
+}
+guard_session stream_after >"$work/guard-modules-stream.txt"
+guard_run "$work/guard-modules-stream.txt"
+check "guard unit: our stream after the modules is enforced as before (seen, linked active, removed)" \
+	sh -c '[ "$1" = none ] && [ "$2" = "yes 1 yes yes none" ]' sh "$(gfile trip.graph)" "$(gfile final)"
+# Lines inside args never mark a property change: a marked property there on
+# the bound sink is not a props change, a real one after it still is.
+args_on_sink() {
+	printf 'changed:\n\tid: 46\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n\targs: "{\n*\t\tapi.bluez5.codec = "sbc"\n*\tproperties:\n\n}"\n'
+	printf ' \tproperties:\n \t\tobject.serial = "40"\n \t\tnode.name = "bluez_output.x.1"\n \t\tmedia.class = "Audio/Sink"\n\n'
+}
+guard_session args_on_sink >"$work/guard-args-mark.txt"
+guard_run "$work/guard-args-mark.txt"
+check "guard unit: args lines never set the property-change mark" [ "$(gfile trip.graph)" = none ]
+real_mark() { args_on_sink; printf 'changed:\n\tid: 46\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n*\tproperties:\n*\t\tobject.serial = "40"\n*\t\tapi.bluez5.codec = "sbc"\n\n'; }
+guard_session real_mark >"$work/guard-real-mark.txt"
+guard_run "$work/guard-real-mark.txt"
+check "guard unit: a real marked property change after it still trips" [ "$(gfile trip.graph)" = bound-sink-props-changed ]
+open_args() { printf 'added:\n\tid: 3\n\tpermissions: r--m-\n\ttype: PipeWire:Interface:Module (version 3)\n\targs: "{\n            nice.level    = -11\n\n'; }
+{ pw_core; pw_module_rt; open_args; } >"$work/guard-open-eof.txt"
+guard_run "$work/guard-open-eof.txt"
+check "guard unit: a quote still open when pw-mon ends trips graph-observation-malformed" \
+	sh -c 'printf "%s\n" "$1" | tr , "\n" | grep -Fxq graph-observation-malformed && printf "%s\n" "$1" | tr , "\n" | grep -Fxq graph-observer-ended' sh "$(gfile trip.graph)"
+{ pw_core; open_args; pw_registry; ctl monitor 4242; ctl preflight; ctl stop; } >"$work/guard-open-header.txt"
+guard_run "$work/guard-open-header.txt"
+check "guard unit: a quote still open at the next event header trips graph-observation-malformed" \
+	sh -c 'printf "%s\n" "$1" | tr , "\n" | grep -Fxq graph-observation-malformed' sh "$(gfile trip.graph)"
+{ pw_core; printf 'added:\n\tid: 3\n\tpermissions: r--m-\n\ttype: PipeWire:Interface:Module (version 3)\n \tproperties:\n \t\tobject.serial = "3"\n\nstray line outside any block\n\n'; pw_registry; ctl monitor 4242; ctl stop; } >"$work/guard-stray.txt"
+guard_run "$work/guard-stray.txt"
+check "guard unit: a line outside any block, with no quote open, still trips" [ "$(gfile trip.graph)" = graph-observation-malformed ]
+
 # --- layer 1: fake guest ------------------------------------------------------------
 fake="$work/fake-guest"
 fbin="$fake/bin"
@@ -513,6 +611,9 @@ refusal_case() {
 }
 expect=0000000000000000000000000000000000000000000000000000000000000000
 refusal_case binding-mismatch binding-mismatch :
+check "guest refuses (binding-mismatch): every guard reason travels with the refusal, none tripped" \
+	sh -c '[ "$1" = none ] && [ "$2" = none ] && [ "$3" = none ] && [ "$4" = none ]' sh \
+	"$(gget guard_trip_graph)" "$(gget guard_trip_pcm)" "$(gget guard_trip_ctl)" "$(gget guard_trip_live)"
 reserial() { inspect_bluez 41; }
 refusal_case reconnected-sink-skew binding-mismatch reserial
 codec() { sed -i.bak 's/"ldac"/"sbc"/' "$state/wp-inspect.46"; }
@@ -532,6 +633,8 @@ speaker() { printf 'on\n' >"$state/ctl.TDM_0_RX_Mixer_EP1"; }
 refusal_case speaker-on-at-start preflight-blocked speaker
 leftover() { mkdir -p "$proofdir"; }
 refusal_case scratch-left-over proof-dir-left-over leftover
+check "guest refuses (scratch-left-over): no guard ran, so no guard reason is read from a directory it did not make" \
+	sh -c '! printf "%s\n" "$1" | grep -q "^guard_trip_"' sh "$gout"
 check "guest refuses (scratch-left-over): an existing scratch directory is not removed" [ -d "$proofdir" ]
 rm -rf "$proofdir"
 monfail() { : >"$state/mon-fail"; }
@@ -554,6 +657,14 @@ inject_transient() { printf 'printf "removed:\\n\\tid: 99\\n\\n" >>"$FAKE_A2DP_S
 refusal_case transient-before-tone graph-changed-before-tone inject_transient
 inject_pcm() { printf 'mkdir -p "$FAKE_PROC/4/fd"; ln -s /dev/snd/pcmC0D0p "$FAKE_PROC/4/fd/3"\n' >"$state/inject-before"; }
 refusal_case pcm-opened-after-preflight kernel-guard-tripped-before-tone inject_pcm
+check "guest refuses (pcm-opened-after-preflight): the transcript carries the pcm guard reason" \
+	sh -c '[ "$1" = none ] && [ "$2" = playback-pcm-opener ] && [ "$3" = none ] && [ "$4" = none ]' sh \
+	"$(gget guard_trip_graph)" "$(gget guard_trip_pcm)" "$(gget guard_trip_ctl)" "$(gget guard_trip_live)"
+inject_garbage() { printf 'printf "garbage that pw-mon would never print\\n\\n" >>"$FAKE_A2DP_STATE/mon-events"\n' >"$state/inject-before"; }
+refusal_case graph-malformed-before-tone graph-guard-tripped-before-tone inject_garbage
+check "guest refuses (graph-malformed-before-tone): named for the graph guard, which records the parse failure" \
+	sh -c '[ "$1" = graph-observation-malformed ] && [ "$2" = none ] && [ "$3" = none ]' sh \
+	"$(gget guard_trip_graph)" "$(gget guard_trip_pcm)" "$(gget guard_trip_ctl)"
 two_sinks() {
 	printf 'Device %s A\nDevice 00:11:22:33:44:55 B\n' "$addr" >"$state/bt-paired"
 	sed "s/$addr/00:11:22:33:44:55/" "$state/bt-info.$addr" >"$state/bt-info.00:11:22:33:44:55"
@@ -604,6 +715,12 @@ trip_case speaker-route-on speaker-on ctl speaker-control-not-off
 trip_case amp-switch-unreadable amp-unreadable ctl speaker-control-read-failed
 trip_case bound-sink-props-changed sink-props-changed graph bound-sink-props-changed
 
+reset_guest
+{ pw_module_rt; pw_module_native; } >>"$state/mon-initial"
+guest play "$binding"
+check "guest play (startup registry holds Modules with multi-line args): arms, reviews clean, route held" \
+	sh -c '[ "$1" -eq 0 ] && [ "$2" = ok ] && [ "$3" = none ] && [ "$4" = yes ] && [ "$5" = 0 ]' sh \
+	"$gstatus" "$(gget guard_review)" "$(gget guard_trip_graph)" "$(gget graph_own_removed)" "$(gget tone_exit)"
 reset_guest
 printf 'no-link\n' >"$state/scenario"
 guest play "$binding"
@@ -846,6 +963,23 @@ for item in volume-over-cap:sink-volume-over-cap volume-muted:sink-muted volume-
 		sh -c '[ "$1" -eq 6 ] && printf "%s\n" "$2" | grep -Fxq "active_refusal=$3" && printf "%s\n" "$2" | grep -Fxq tone_started=no' sh \
 		"$status" "$out" "${item#*:}"
 done
+for item in pcm-opened-after-preflight:kernel-guard-tripped-before-tone:pcm:playback-pcm-opener \
+	graph-malformed-before-tone:graph-guard-tripped-before-tone:graph:graph-observation-malformed; do
+	label=${item%%:*}
+	rest=${item#*:}
+	want_refusal=${rest%%:*}
+	rest=${rest#*:}
+	play_fixture "refuse-$label" "refuse-$label" 6
+	check "host play (guest refuses $label): exit 6, the guard reason is in the output, the refusal and the transcript" \
+		sh -c '[ "$1" -eq 6 ] && printf "%s\n" "$2" | grep -Fxq "active_refusal=$3" && printf "%s\n" "$2" | grep -Fxq "guard_trip_$4=$5" &&
+			printf "%s\n" "$2" | grep -Fxq "refusal_trips=$4:$5" && printf "%s\n" "$2" | grep -Fq "REFUSING pixel-9a A2DP active proof (play): guest refused before any tone ($3; guard trips $4:$5)" &&
+			grep -Fxq "guard_trip_$4=$5" "$6/play-latest.txt" && grep -Fxq guard_trip_live=none "$6/play-latest.txt"' sh \
+		"$status" "$out" "$want_refusal" "${rest%%:*}" "${rest#*:}" "$results"
+done
+derive refuse-pcm-opened-after-preflight refuse-partial-trips -e '/^guard_trip_ctl=/d'
+play_fixture refuse-partial-trips refuse-partial-trips 6
+check "host play (refusal with an incomplete set of guard reasons): malformed, route unverified, exit 7" \
+	sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$2" | grep -Fxq route_safety=unverified && printf "%s\n" "$2" | grep -Fq "incomplete set of guard reasons"' sh "$status" "$out"
 check "host play (guest refuses over-cap): the observed volume is reported" \
 	grep -Fxq sink_volume=0.80 "$outroot/run-refuse-volume-over-cap/pixel-9a/a2dp-active-proof/play-latest.txt"
 # Any failure once the play session has begun: route unverified, the
@@ -873,7 +1007,7 @@ check "host dry refuses a malformed binding: exit 5, no decision" \
 	sh -c '[ "$1" -eq 5 ] && [ ! -e "$2/decision-pending" ]' sh "$status" "$results"
 run dry-wrong-board dry-wrong-board 0 dry
 check "host dry refuses a block from another board: exit 4" sh -c '[ "$1" -eq 4 ]' sh "$status"
-derive refuse-alsa-sink-at-start dry-refused -e 's/^active_mode=play$/active_mode=dry/'
+derive refuse-alsa-sink-at-start dry-refused -e 's/^active_mode=play$/active_mode=dry/' -e '/^guard_trip_/d'
 run dry-blocked dry-refused 6 dry
 check "host dry on a blocked preflight: exit 6, problems listed, no decision" \
 	sh -c '[ "$1" -eq 6 ] && printf "%s\n" "$2" | grep -Fxq preflight_problems=internal-alsa-sink-present && [ ! -e "$3/decision-pending" ]' sh "$status" "$out" "$results"
