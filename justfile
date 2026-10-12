@@ -537,6 +537,15 @@ pixel-9a-s5300-mount-proof-test:
 pixel-9a-s5300-mounts-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-mounts-service.sh"
 
+# Offline proof of the target-local google-kleaf-cpif patches to the pinned
+# exynos-modem source (issue #1). Static pins always run. With the pinned
+# archive cached under out/, or FERRIX_S5300_ADAPTER_FETCH=1, it also applies
+# the patches the way abuild does, runs the patched tests, and checks the CLI
+# through --print-config and refusals only (Linux, or Docker on other hosts).
+# Never opens a modem node and enables no service. Not physical evidence.
+pixel-9a-s5300-cpif-adapter-test:
+    @sh "{{root}}/tools/pixel-9a/tests/exynos-modem-cpif-adapter.sh"
+
 # Generic, vendor-agnostic read-only device front door. Discovery only uses
 # adb devices/getprop and fastboot devices/getvar; matching, proposing, and
 # pinned downloads never contact a device. Mutation lives only in target-scoped

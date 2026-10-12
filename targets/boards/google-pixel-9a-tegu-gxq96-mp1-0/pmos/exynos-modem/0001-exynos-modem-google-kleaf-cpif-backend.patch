@@ -1,0 +1,1232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Omarchy Ferrix <maintainers@omarchy.invalid>
+Date: Mon, 12 Oct 2026 15:18:15 +1300
+Subject: [PATCH] exynos-modem: add an explicit google-kleaf-cpif kernel
+ backend
+
+Google's Kleaf CPIF module (radio/samsung/s5300 a8976934) exposes the
+same /dev/umts_boot0 boot node as the radio-first s5300_modem driver, but
+three operations differ:
+
+- IOCTL_POWER_RESET is _IOW('o', 0x21, struct boot_mode) and takes a
+  pointer, not the integer _IO('o', 0x21). Map Cold -> NORMAL, Dump ->
+  DUMP and Warm -> SILENT by kernel action.
+- IOCTL_GET_SRINFO is _IO('o', 0x45) with the record inline after a u32
+  size. Implement that layout and keep the crash-reason dump-boot
+  disabled on CPIF, because its start_dump_boot effects are unreviewed.
+- ipc_read() returns 0 after a 100 ms empty wait. Gate OEM reads on
+  poll(POLLIN), treat a 0-byte read as no data, and end the session only
+  on POLLHUP/POLLERR, so the handle (and the kernel rx queue) is kept.
+
+The backend is selected only by --kernel-backend google-kleaf-cpif. On it
+the channel nodes are fixed to umts_boot0, umts_rfs0 and oem_ipc1, and any
+other path is refused before a node is opened. --print-config prints the
+resolved configuration without opening anything. The default
+linux-google-tegu-wwan backend keeps the upstream behaviour.
+---
+ crates/exynos-modem/src/backend.rs     | 189 +++++++++++++++++
+ crates/exynos-modem/src/boot.rs        |   8 +-
+ crates/exynos-modem/src/boot/common.rs | 201 +++++++++++++++++-
+ crates/exynos-modem/src/boot/s5300.rs  |  41 ++--
+ crates/exynos-modem/src/main.rs        | 212 ++++++++++++++++--
+ crates/exynos-modem/src/oem.rs         | 283 ++++++++++++++++++++++++-
+ 6 files changed, 896 insertions(+), 38 deletions(-)
+ create mode 100644 crates/exynos-modem/src/backend.rs
+
+diff --git a/crates/exynos-modem/src/backend.rs b/crates/exynos-modem/src/backend.rs
+new file mode 100644
+index 0000000..dc9d26b
+--- /dev/null
++++ b/crates/exynos-modem/src/backend.rs
+@@ -0,0 +1,189 @@
++//! Kernel transport backend (Omarchy Ferrix target-local patch).
++//!
++//! The daemon speaks to one of two kernel drivers that both expose a
++//! /dev/umts_boot0 boot node but differ in ioctl encodings, node names and
++//! read semantics:
++//!
++//!   * `linux-google-tegu-wwan` -- the radio-first `s5300_modem` WWAN driver
++//!     this daemon was written against.  The default; its behaviour is
++//!     unchanged by this patch.
++//!   * `google-kleaf-cpif` -- Google's Kleaf CPIF module
++//!     (kernel/google-modules/radio/samsung/s5300 a8976934).  Selected only by
++//!     an explicit `--kernel-backend google-kleaf-cpif`; it is never inferred.
++//!
++//! On the CPIF backend the node set is fixed by the tegu device tree
++//! (zuma-cp-s5300-sit.dtsi): boot = umts_boot0 (ch 241), RFS = umts_rfs0
++//! (ch 41), GEMS = oem_ipc1 (ch 130, the channel the radio-first driver names
++//! umts_oem1).  Any other path is refused before a node is opened, so a
++//! mistyped or other-backend path fails closed instead of reaching a node
++//! with a different protocol.
++
++use std::path::Path;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum KernelBackend {
++    LinuxGoogleTeguWwan,
++    GoogleKleafCpif,
++}
++
++/// The per-channel device a path is configured for.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Channel {
++    Boot,
++    Rfs,
++    OemGems,
++}
++
++impl Channel {
++    pub fn option(self) -> &'static str {
++        match self {
++            Channel::Boot => "--boot-dev",
++            Channel::Rfs => "--rfs-dev",
++            Channel::OemGems => "--oem-gems-dev",
++        }
++    }
++}
++
++impl KernelBackend {
++    pub const DEFAULT: KernelBackend = KernelBackend::LinuxGoogleTeguWwan;
++
++    /// Backends accepted by --kernel-backend, for help/error text.
++    pub const SUPPORTED: &'static str = "linux-google-tegu-wwan, google-kleaf-cpif";
++
++    /// Exact, case-sensitive match: the value is a configuration contract
++    /// shared with the init scripts, not free text.
++    pub fn parse(s: &str) -> Option<KernelBackend> {
++        match s {
++            "linux-google-tegu-wwan" => Some(KernelBackend::LinuxGoogleTeguWwan),
++            "google-kleaf-cpif" => Some(KernelBackend::GoogleKleafCpif),
++            _ => None,
++        }
++    }
++
++    pub fn name(self) -> &'static str {
++        match self {
++            KernelBackend::LinuxGoogleTeguWwan => "linux-google-tegu-wwan",
++            KernelBackend::GoogleKleafCpif => "google-kleaf-cpif",
++        }
++    }
++
++    pub fn default_dev(self, ch: Channel) -> &'static str {
++        match (self, ch) {
++            (_, Channel::Boot) => "/dev/umts_boot0",
++            (_, Channel::Rfs) => "/dev/umts_rfs0",
++            (KernelBackend::LinuxGoogleTeguWwan, Channel::OemGems) => "/dev/umts_oem1",
++            (KernelBackend::GoogleKleafCpif, Channel::OemGems) => "/dev/oem_ipc1",
++        }
++    }
++
++    /// Refuse a path the backend does not define for this channel.  The WWAN
++    /// backend keeps the upstream free-form paths (e.g. /dev/wwan0rfs0); the
++    /// CPIF backend accepts only its device-tree node.
++    pub fn check_dev(self, ch: Channel, path: &Path) -> Result<(), String> {
++        match self {
++            KernelBackend::LinuxGoogleTeguWwan => Ok(()),
++            KernelBackend::GoogleKleafCpif => {
++                // Byte-exact: Path equality would ignore a trailing '/'.
++                let want = self.default_dev(ch);
++                if path.as_os_str() == want {
++                    Ok(())
++                } else {
++                    Err(format!(
++                        "{} {} is not the {} node (expected {} or none)",
++                        ch.option(),
++                        path.display(),
++                        self.name(),
++                        want
++                    ))
++                }
++            }
++        }
++    }
++
++    /// Whether the crash-reason dump-boot (reset(dump) + PBL + START(dump) +
++    /// GET_SRINFO) may run.  On CPIF, START_CP_BOOTLOADER(DUMP) enters the
++    /// kernel's start_dump_boot path, whose link/PCIe effects have not been
++    /// reviewed against CP3A; the dump-boot is disabled there and the kernel
++    /// log is the only crash-cause source (a documented diagnostic limit).
++    pub fn crash_dump_boot(self) -> bool {
++        match self {
++            KernelBackend::LinuxGoogleTeguWwan => true,
++            KernelBackend::GoogleKleafCpif => false,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn parses_only_exact_backend_names() {
++        assert_eq!(
++            KernelBackend::parse("linux-google-tegu-wwan"),
++            Some(KernelBackend::LinuxGoogleTeguWwan)
++        );
++        assert_eq!(
++            KernelBackend::parse("google-kleaf-cpif"),
++            Some(KernelBackend::GoogleKleafCpif)
++        );
++        for bad in [
++            "",
++            "cpif",
++            "Google-Kleaf-CPIF",
++            "google-kleaf-cpif ",
++            "wwan",
++        ] {
++            assert_eq!(KernelBackend::parse(bad), None, "{bad:?}");
++        }
++        assert_eq!(KernelBackend::DEFAULT, KernelBackend::LinuxGoogleTeguWwan);
++    }
++
++    #[test]
++    fn default_nodes_per_backend() {
++        let w = KernelBackend::LinuxGoogleTeguWwan;
++        let c = KernelBackend::GoogleKleafCpif;
++        assert_eq!(w.default_dev(Channel::Boot), "/dev/umts_boot0");
++        assert_eq!(w.default_dev(Channel::Rfs), "/dev/umts_rfs0");
++        assert_eq!(w.default_dev(Channel::OemGems), "/dev/umts_oem1");
++        assert_eq!(c.default_dev(Channel::Boot), "/dev/umts_boot0");
++        assert_eq!(c.default_dev(Channel::Rfs), "/dev/umts_rfs0");
++        assert_eq!(c.default_dev(Channel::OemGems), "/dev/oem_ipc1");
++    }
++
++    #[test]
++    fn cpif_refuses_other_backend_and_unknown_nodes() {
++        let c = KernelBackend::GoogleKleafCpif;
++        for (ch, bad) in [
++            (Channel::OemGems, "/dev/umts_oem1"),
++            (Channel::OemGems, "/dev/oem_ipc0"),
++            (Channel::OemGems, "/dev/oem_ipc1/"),
++            (Channel::Rfs, "/dev/wwan0rfs0"),
++            (Channel::Rfs, "/dev/umts_ipc0"),
++            (Channel::Boot, "/dev/umts_boot1"),
++            (Channel::Boot, "umts_boot0"),
++        ] {
++            assert!(c.check_dev(ch, Path::new(bad)).is_err(), "{bad}");
++        }
++        for ch in [Channel::Boot, Channel::Rfs, Channel::OemGems] {
++            assert!(c.check_dev(ch, Path::new(c.default_dev(ch))).is_ok());
++        }
++    }
++
++    #[test]
++    fn wwan_keeps_upstream_free_form_paths() {
++        let w = KernelBackend::LinuxGoogleTeguWwan;
++        assert!(w
++            .check_dev(Channel::Rfs, Path::new("/dev/wwan0rfs0"))
++            .is_ok());
++        assert!(w
++            .check_dev(Channel::OemGems, Path::new("/dev/umts_oem1"))
++            .is_ok());
++    }
++
++    #[test]
++    fn dump_boot_only_on_wwan() {
++        assert!(KernelBackend::LinuxGoogleTeguWwan.crash_dump_boot());
++        assert!(!KernelBackend::GoogleKleafCpif.crash_dump_boot());
++    }
++}
+diff --git a/crates/exynos-modem/src/boot.rs b/crates/exynos-modem/src/boot.rs
+index 3447982..2a983b6 100644
+--- a/crates/exynos-modem/src/boot.rs
++++ b/crates/exynos-modem/src/boot.rs
+@@ -11,6 +11,8 @@ mod s5300;
+ 
+ use std::path::Path;
+ 
++use crate::backend::KernelBackend;
++
+ /// The CP model whose boot protocol to speak.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub enum Model {
+@@ -32,9 +34,9 @@ impl Model {
+ 
+ /// Boot the CP once for the selected model, then hold the boot fd open (closing
+ /// it can reset the CP).  A boot failure is logged; the other channels keep
+-/// running.
+-pub fn run(model: Model, dev: &Path) {
++/// running.  `backend` selects the kernel ioctl ABI (see backend.rs).
++pub fn run(model: Model, backend: KernelBackend, dev: &Path) {
+     match model {
+-        Model::S5300 => s5300::run(dev),
++        Model::S5300 => s5300::run(backend, dev),
+     }
+ }
+diff --git a/crates/exynos-modem/src/boot/common.rs b/crates/exynos-modem/src/boot/common.rs
+index bc67e27..19ced8c 100644
+--- a/crates/exynos-modem/src/boot/common.rs
++++ b/crates/exynos-modem/src/boot/common.rs
+@@ -17,6 +17,8 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
+ use std::os::unix::io::RawFd;
+ use std::path::Path;
+ 
++use crate::backend::KernelBackend;
++
+ // ioctl encoding (asm-generic): dir[31:30] size[29:16] type[15:8] nr[7:0].
+ const fn io(t: u32, nr: u32) -> u32 {
+     (t << 8) | nr
+@@ -40,6 +42,26 @@ const IOCTL_LOAD_CP_IMAGE: u32 = iow(MAGIC, 0x40, 28); // sizeof(cp_image), pack
+ const IOCTL_GET_SRINFO: u32 = iowr(MAGIC, 0x45, 16); // sizeof(s5300_srinfo)
+ const IOCTL_HANDOVER_BLOCK_INFO: u32 = io(MAGIC, 0x57);
+ 
++// Google Kleaf CPIF (radio/samsung/s5300 a8976934, modem_prj.h) -- only the two
++// commands whose encoding or argument differs from the WWAN driver above; every
++// other boot ioctl is numerically identical on both (s5300-cpif-e0.md).
++// IOCTL_POWER_RESET takes a pointer to struct boot_mode { enum cp_boot_mode },
++// handled in bootdump_ioctl (bootdump_io_device.c).
++const CPIF_IOCTL_POWER_RESET: u32 = iow(MAGIC, 0x21, 4); // sizeof(struct boot_mode)
++                                                         // IOCTL_GET_SRINFO is _IO and takes struct shmem_srinfo { u32 size; char buf[]; }
++                                                         // with the record copied inline after `size` (shmem_ioctl, link_device.c).
++const CPIF_IOCTL_GET_SRINFO: u32 = io(MAGIC, 0x45);
++// enum cp_boot_mode indices accepted by IOCTL_POWER_RESET.
++const CPIF_BOOT_MODE_NORMAL: u32 = 0; // mc->ops.power_reset: full power off/on
++const CPIF_BOOT_MODE_DUMP: u32 = 1; // power_reset_dump(mc, 0): wreset, DUMP_NOTI high
++const CPIF_BOOT_MODE_SILENT: u32 = 3; // power_reset_dump(mc, 1): wreset, DUMP_NOTI low
++
++/// struct boot_mode: a single C enum (int-sized).
++#[repr(C)]
++struct CpifBootMode {
++    idx: u32,
++}
++
+ pub(crate) const MSS: usize = 0xc000; // std_dl payload/frame (cbd's 0xC000, hw-confirmed)
+ const ACK_WAIT_MS: i32 = 16000; // total wait for a std_dl ack
+ pub(crate) const TOC_BYTES: usize = 0x400; // 32 records x 32 bytes
+@@ -145,11 +167,51 @@ pub(crate) enum ResetMode {
+     Cold = 2,
+ }
+ 
+-/// CP reset primitive (kernel IOCTL_CP_RESET, cbd's POWER_RESET).
+-pub(crate) fn cp_reset(fd: RawFd, mode: ResetMode) -> io::Result<()> {
+-    let r = ioctl_int(fd, IOCTL_CP_RESET, mode as libc::c_ulong);
++/// How the reset mode travels in the ioctl argument slot.
++#[derive(Clone, Copy, PartialEq, Eq, Debug)]
++pub(crate) enum ResetArg {
++    /// WWAN `_IO`: the mode itself is the integer argument.
++    Int(libc::c_ulong),
++    /// CPIF `_IOW`: a pointer to struct boot_mode carrying this index.
++    BootModePtr(u32),
++}
++
++/// The (request, argument) a reset sends on `backend`.  CPIF has no "warm"
++/// or "cold" names; map by kernel action: Cold -> NORMAL (full power off/on),
++/// Dump -> DUMP (wreset, DUMP_NOTI high), Warm -> SILENT (wreset, DUMP_NOTI
++/// low).
++pub(crate) fn reset_request(backend: KernelBackend, mode: ResetMode) -> (u32, ResetArg) {
++    match backend {
++        KernelBackend::LinuxGoogleTeguWwan => {
++            (IOCTL_CP_RESET, ResetArg::Int(mode as libc::c_ulong))
++        }
++        KernelBackend::GoogleKleafCpif => {
++            let idx = match mode {
++                ResetMode::Cold => CPIF_BOOT_MODE_NORMAL,
++                ResetMode::Dump => CPIF_BOOT_MODE_DUMP,
++                ResetMode::Warm => CPIF_BOOT_MODE_SILENT,
++            };
++            (CPIF_IOCTL_POWER_RESET, ResetArg::BootModePtr(idx))
++        }
++    }
++}
++
++/// CP reset primitive (kernel IOCTL_CP_RESET / IOCTL_POWER_RESET, cbd's
++/// POWER_RESET).
++pub(crate) fn cp_reset(fd: RawFd, backend: KernelBackend, mode: ResetMode) -> io::Result<()> {
++    let (req, arg) = reset_request(backend, mode);
++    let r = match arg {
++        ResetArg::Int(v) => ioctl_int(fd, req, v),
++        ResetArg::BootModePtr(idx) => {
++            let mut bm = CpifBootMode { idx };
++            ioctl_ptr(fd, req, &mut bm as *mut CpifBootMode as *mut libc::c_void)
++        }
++    };
+     if r < 0 {
+-        return Err(err(format!("IOCTL_CP_RESET({:?}) FAILED ret {}", mode, r)));
++        return Err(err(format!(
++            "CP reset {:?} ({:#x}) FAILED ret {}",
++            mode, req, r
++        )));
+     }
+     Ok(())
+ }
+@@ -164,7 +226,19 @@ struct SrinfoReq {
+ 
+ /// Copy the raw srinfo region (the CP's crash record) into `out`; returns the
+ /// number of bytes the kernel copied (capped at the 3 MB region size).
+-pub(crate) fn get_srinfo(fd: RawFd, out: &mut [u8]) -> io::Result<usize> {
++pub(crate) fn get_srinfo(fd: RawFd, backend: KernelBackend, out: &mut [u8]) -> io::Result<usize> {
++    if backend == KernelBackend::GoogleKleafCpif {
++        let mut req = cpif_srinfo_request(out.len())?;
++        let r = ioctl_ptr(
++            fd,
++            CPIF_IOCTL_GET_SRINFO,
++            req.as_mut_ptr() as *mut libc::c_void,
++        );
++        if r < 0 {
++            return Err(err(format!("IOCTL_GET_SRINFO FAILED ret {}", r)));
++        }
++        return cpif_srinfo_take(&req, out);
++    }
+     let mut req = SrinfoReq {
+         buf: out.as_mut_ptr() as u64,
+         len: out.len() as u32,
+@@ -177,6 +251,30 @@ pub(crate) fn get_srinfo(fd: RawFd, out: &mut [u8]) -> io::Result<usize> {
+     Ok(req.len as usize)
+ }
+ 
++/// CPIF struct shmem_srinfo for a `cap`-byte read: the u32 capacity, then
++/// `cap` bytes the kernel fills inline.
++fn cpif_srinfo_request(cap: usize) -> io::Result<Vec<u8>> {
++    let size = u32::try_from(cap).map_err(|_| err("srinfo buffer too large"))?;
++    let mut req = vec![0u8; 4 + cap];
++    req[..4].copy_from_slice(&size.to_ne_bytes());
++    Ok(req)
++}
++
++/// Read back the length the kernel wrote (min(region, cap)) and copy that
++/// many inline bytes into `out`; a length above the capacity is refused.
++fn cpif_srinfo_take(req: &[u8], out: &mut [u8]) -> io::Result<usize> {
++    if req.len() < 4 {
++        return Err(err("srinfo reply shorter than its header"));
++    }
++    let n = u32::from_ne_bytes([req[0], req[1], req[2], req[3]]) as usize;
++    let cap = (req.len() - 4).min(out.len());
++    if n > cap {
++        return Err(err(format!("srinfo length {} exceeds buffer {}", n, cap)));
++    }
++    out[..n].copy_from_slice(&req[4..4 + n]);
++    Ok(n)
++}
++
+ /// poll(POLLIN, ms): >0 revents, 0 timeout, <0 error.
+ fn poll_in(fd: RawFd, ms: i32) -> i32 {
+     let mut pfd = libc::pollfd {
+@@ -403,6 +501,99 @@ pub(crate) fn read_dt_u32_be(path: &str) -> Option<u32> {
+ mod tests {
+     use super::*;
+ 
++    // Numeric values the Google CPIF handlers compare against, independently
++    // spelled out (and also found in the factory CP3A cpif.ko disassembly).
++    #[test]
++    fn cpif_ioctl_encodings_match_modem_prj_h() {
++        assert_eq!(CPIF_IOCTL_POWER_RESET, 0x4004_6f21);
++        assert_eq!(CPIF_IOCTL_GET_SRINFO, 0x0000_6f45);
++        assert_eq!(std::mem::size_of::<CpifBootMode>(), 4);
++        assert_eq!((CPIF_IOCTL_POWER_RESET >> 16) & 0x3fff, 4); // _IOC_SIZE
++        assert_eq!(CPIF_IOCTL_POWER_RESET >> 30, 1); // _IOC_WRITE
++                                                     // The ioctls the backends share are unchanged.
++        assert_eq!(IOCTL_POWER_ON, 0x6f19);
++        assert_eq!(IOCTL_START_CP_BOOTLOADER, 0x4004_6f22);
++        assert_eq!(IOCTL_COMPLETE_NORMAL_BOOTUP, 0x6f23);
++        assert_eq!(IOCTL_GET_CP_STATUS, 0x6f27);
++        assert_eq!(IOCTL_LOAD_CP_IMAGE, 0x401c_6f40);
++        assert_eq!(IOCTL_HANDOVER_BLOCK_INFO, 0x6f57);
++        assert_eq!(std::mem::size_of::<CpImage>(), 28);
++    }
++
++    #[test]
++    fn wwan_reset_is_unchanged() {
++        use KernelBackend::LinuxGoogleTeguWwan as W;
++        assert_eq!(IOCTL_CP_RESET, 0x6f21);
++        assert_eq!(
++            reset_request(W, ResetMode::Warm),
++            (0x6f21, ResetArg::Int(0))
++        );
++        assert_eq!(
++            reset_request(W, ResetMode::Dump),
++            (0x6f21, ResetArg::Int(1))
++        );
++        assert_eq!(
++            reset_request(W, ResetMode::Cold),
++            (0x6f21, ResetArg::Int(2))
++        );
++        assert_eq!(IOCTL_GET_SRINFO, 0xc010_6f45);
++        assert_eq!(std::mem::size_of::<SrinfoReq>(), 16);
++    }
++
++    #[test]
++    fn cpif_reset_maps_modes_to_boot_mode_pointer() {
++        use KernelBackend::GoogleKleafCpif as C;
++        // enum cp_boot_mode: NORMAL 0, DUMP 1, RE_INIT 2, SILENT 3.
++        assert_eq!(
++            reset_request(C, ResetMode::Cold),
++            (0x4004_6f21, ResetArg::BootModePtr(0))
++        );
++        assert_eq!(
++            reset_request(C, ResetMode::Dump),
++            (0x4004_6f21, ResetArg::BootModePtr(1))
++        );
++        assert_eq!(
++            reset_request(C, ResetMode::Warm),
++            (0x4004_6f21, ResetArg::BootModePtr(3))
++        );
++        // Never the WWAN integer form, which CPIF's shmem_ioctl rejects (-EINVAL).
++        for m in [ResetMode::Warm, ResetMode::Dump, ResetMode::Cold] {
++            assert_ne!(reset_request(C, m).0, IOCTL_CP_RESET);
++        }
++    }
++
++    /// Model of CPIF shmem_ioctl(IOCTL_GET_SRINFO) over a user buffer.
++    fn cpif_kernel_get_srinfo(region: &[u8], user: &mut [u8]) {
++        let count = u32::from_ne_bytes([user[0], user[1], user[2], user[3]]) as usize;
++        let size = region.len().min(count);
++        user[..4].copy_from_slice(&(size as u32).to_ne_bytes());
++        user[4..4 + size].copy_from_slice(&region[..size]);
++    }
++
++    #[test]
++    fn cpif_srinfo_is_inline_after_size() {
++        let region: Vec<u8> = (0..100u8).collect();
++        // Capacity smaller than the region: the kernel truncates to it.
++        let mut req = cpif_srinfo_request(40).unwrap();
++        assert_eq!(req.len(), 44);
++        assert_eq!(&req[..4], &40u32.to_ne_bytes());
++        cpif_kernel_get_srinfo(&region, &mut req);
++        let mut out = [0u8; 40];
++        assert_eq!(cpif_srinfo_take(&req, &mut out).unwrap(), 40);
++        assert_eq!(&out[..], &region[..40]);
++        // Capacity larger than the region: only the region comes back.
++        let mut req = cpif_srinfo_request(256).unwrap();
++        cpif_kernel_get_srinfo(&region, &mut req);
++        let mut out = [0u8; 256];
++        assert_eq!(cpif_srinfo_take(&req, &mut out).unwrap(), 100);
++        assert_eq!(&out[..100], &region[..]);
++        // A reported length above the buffer is refused, not trusted.
++        let mut bad = cpif_srinfo_request(8).unwrap();
++        bad[..4].copy_from_slice(&9u32.to_ne_bytes());
++        assert!(cpif_srinfo_take(&bad, &mut [0u8; 8]).is_err());
++        assert!(cpif_srinfo_take(&[0u8; 3], &mut [0u8; 8]).is_err());
++    }
++
+     #[test]
+     fn parses_info_version() {
+         // "info" magic, u32 len at 0x10, version string at 0x14.
+diff --git a/crates/exynos-modem/src/boot/s5300.rs b/crates/exynos-modem/src/boot/s5300.rs
+index 2086f1e..9e041d9 100644
+--- a/crates/exynos-modem/src/boot/s5300.rs
++++ b/crates/exynos-modem/src/boot/s5300.rs
+@@ -18,6 +18,7 @@ use std::path::Path;
+ use std::time::Duration;
+ 
+ use super::common::*;
++use crate::backend::KernelBackend;
+ 
+ const HANDOVER_SIZE: usize = 161; // sizeof(t_handover_block_info)
+ 
+@@ -239,9 +240,9 @@ fn json_field<'a>(json: &'a [u8], name: &str) -> Option<&'a str> {
+ /// persist the full JSON -- crash cause, call stack, blackbox, dumppc -- to
+ /// /tmp/modem_crash_<unix ts>.json for offline analysis (e.g. call-stack
+ /// addresses vs modem.bin).
+-fn save_crash_record(fd: RawFd) -> io::Result<()> {
++fn save_crash_record(fd: RawFd, backend: KernelBackend) -> io::Result<()> {
+     let mut buf = vec![0u8; 64 * 1024];
+-    let n = get_srinfo(fd, &mut buf)?;
++    let n = get_srinfo(fd, backend, &mut buf)?;
+     let json = srinfo_json(&buf[..n])?;
+ 
+     match json_field(json, "crash cause") {
+@@ -265,16 +266,21 @@ fn save_crash_record(fd: RawFd) -> io::Result<()> {
+ /// POWER_ON or section download, since those would clobber the crash record
+ /// before it is decoded.  The ~1 s settle matches cbd's wait between
+ /// CP_BOOTLOADER_END and GET_SRINFO.
+-fn dump_crash_reason(fd: RawFd, pbl: &[u8], load: u32) -> io::Result<()> {
++fn dump_crash_reason(fd: RawFd, backend: KernelBackend, pbl: &[u8], load: u32) -> io::Result<()> {
+     eprintln!("boot: dump-boot to decode the crash reason");
+-    cp_reset(fd, ResetMode::Dump)?;
++    cp_reset(fd, backend, ResetMode::Dump)?;
+     load_cp_image(fd, pbl, load)?;
+     start_bootloader(fd, CP_BOOT_MODE_DUMP)?;
+     std::thread::sleep(Duration::from_millis(1000));
+-    save_crash_record(fd)
++    save_crash_record(fd, backend)
+ }
+ 
+-fn boot(dev_path: &Path, reset: Option<ResetMode>, dump_reason: bool) -> io::Result<File> {
++fn boot(
++    dev_path: &Path,
++    backend: KernelBackend,
++    reset: Option<ResetMode>,
++    dump_reason: bool,
++) -> io::Result<File> {
+     // Build the handover first so a missing device input (imei/cpsha/plat id)
+     // fails fast, before touching the 100 MB image.
+     let ho = build_handover()?;
+@@ -308,8 +314,15 @@ fn boot(dev_path: &Path, reset: Option<ResetMode>, dump_reason: bool) -> io::Res
+         // crash exactly once): dump-boot the CP so its ROM minidump agent
+         // decodes the crash record into srinfo and the kernel logs the reason.
+         // Best-effort -- on failure we still recover below.
+-        if dump_reason {
+-            if let Err(e) = dump_crash_reason(fd, &pbl, boot.load) {
++        if dump_reason && !backend.crash_dump_boot() {
++            // Diagnostic limit (backend.rs): no srinfo crash record on this
++            // backend; the kernel log is the only crash-cause source.
++            eprintln!(
++                "boot: crash-reason dump-boot disabled on {}; see the kernel log",
++                backend.name()
++            );
++        } else if dump_reason {
++            if let Err(e) = dump_crash_reason(fd, backend, &pbl, boot.load) {
+                 eprintln!("boot: crash-reason dump-boot failed: {} (recovering anyway)", e);
+             }
+         }
+@@ -317,7 +330,7 @@ fn boot(dev_path: &Path, reset: Option<ResetMode>, dump_reason: bool) -> io::Res
+         // (the crashed CP never re-enters its ROM download server).  Reset it
+         // first, as cbd does before every POWER_RESET-path boot.
+         eprintln!("boot: {:?}-resetting the CP before re-boot", mode);
+-        cp_reset(fd, mode)?;
++        cp_reset(fd, backend, mode)?;
+     }
+ 
+     stage_handover(fd, &ho);
+@@ -367,7 +380,7 @@ fn boot(dev_path: &Path, reset: Option<ResetMode>, dump_reason: bool) -> io::Res
+ /// the kernel surfaces the crash reason from srinfo, then a plain reset) and
+ /// re-boot.  This is cbd's crash-reload loop; on mainline the GEMS root cause is
+ /// answered by the oem channel, so recovery fires only on genuine faults.
+-pub fn run(dev: &Path) {
++pub fn run(backend: KernelBackend, dev: &Path) {
+     // Reset policy (downstream modem_ctrl_s5100.c parity): None only for the
+     // cold boot right after the RC probe's own reset; Warm after a supervised
+     // crash (power_reset_dump_cp); Cold everywhere else -- a daemon restart
+@@ -401,9 +414,13 @@ pub fn run(dev: &Path) {
+         Err(e) => eprintln!("boot: startup status probe failed: {}", e),
+     }
+ 
+-    eprintln!("boot: booting s5300 CP on {}", dev.display());
++    eprintln!(
++        "boot: booting s5300 CP on {} ({} ioctl ABI)",
++        dev.display(),
++        backend.name()
++    );
+     loop {
+-        match boot(dev, reset, crashed) {
++        match boot(dev, backend, reset, crashed) {
+             Ok(held) => {
+                 crashed = supervise(&held);
+                 eprintln!("boot: CP down, re-booting");
+diff --git a/crates/exynos-modem/src/main.rs b/crates/exynos-modem/src/main.rs
+index d20cd79..e0216b0 100644
+--- a/crates/exynos-modem/src/main.rs
++++ b/crates/exynos-modem/src/main.rs
+@@ -18,13 +18,15 @@
+ //! draining when the CP reaches ONLINE (a request lost to a late-opened node
+ //! stalls the CP).
+ //!
+-//! Usage: exynos-modem [-v] [--model MODEL] [--boot-dev PATH|none]
+-//!                     [--rfs-dev PATH|none] [--oem-gems-dev PATH|none]
+-//!                     [--uecap-dir PATH]
++//! Usage: exynos-modem [-v] [--model MODEL] [--kernel-backend NAME]
++//!                     [--boot-dev PATH|none] [--rfs-dev PATH|none]
++//!                     [--oem-gems-dev PATH|none] [--uecap-dir PATH]
++//!                     [--print-config]
+ //!   With no arguments it runs all three on their default nodes.  `none`
+ //!   disables that channel (e.g. --boot-dev none if the kernel driver boots the
+ //!   CP itself, keeping only the rfs+oem handlers).
+ 
++mod backend;
+ mod boot;
+ mod oem;
+ mod pb;
+@@ -34,9 +36,8 @@ use std::ffi::OsString;
+ use std::path::PathBuf;
+ use std::thread;
+ 
+-const DEFAULT_BOOT_DEV: &str = "/dev/umts_boot0";
+-const DEFAULT_RFS_DEV: &str = "/dev/umts_rfs0";
+-const DEFAULT_OEM_DEV: &str = "/dev/umts_oem1";
++use backend::{Channel, KernelBackend};
++
+ const DEFAULT_UECAP_DIR: &str = "/vendor/firmware/uecapconfig";
+ 
+ /// A per-channel device selection: the built-in default, an explicit path, or
+@@ -69,6 +70,8 @@ fn parse_dev(v: OsString) -> Dev {
+ 
+ struct Config {
+     model: boot::Model,
++    backend: Option<KernelBackend>,
++    print_config: bool,
+     boot: Dev,
+     rfs: Dev,
+     oem: Dev,
+@@ -84,20 +87,30 @@ CP and serves rfs + oem on their default nodes.
+ 
+   -v, --verbose          log decoded requests/replies on every channel
+       --model MODEL       CP model to boot          (default 5300; supported: 5300)
++      --kernel-backend NAME
++                          kernel transport ABI      (default linux-google-tegu-wwan;
++                          supported: linux-google-tegu-wwan, google-kleaf-cpif)
+       --boot-dev PATH     boot device node          (default /dev/umts_boot0)
+       --rfs-dev PATH      RFS file channel node     (default /dev/umts_rfs0)
+-      --oem-gems-dev PATH oem/GEMS node             (default /dev/umts_oem1)
++      --oem-gems-dev PATH oem/GEMS node             (default /dev/umts_oem1;
++                          /dev/oem_ipc1 with google-kleaf-cpif)
+       --uecap-dir PATH    UE-cap config directory   (default /vendor/firmware/uecapconfig)
++      --print-config      print the resolved configuration and exit without
++                          opening any device node
+   -h, --help              show this help
+ 
+ Pass `none` to a --*-dev option to disable that channel, e.g. `--boot-dev none`
+-to let the kernel driver boot the CP itself and keep only rfs + oem.";
++to let the kernel driver boot the CP itself and keep only rfs + oem.
++google-kleaf-cpif accepts only its device-tree nodes (umts_boot0, umts_rfs0,
++oem_ipc1) and never runs the crash-reason dump-boot.";
+ 
+ fn parse_args() -> Config {
+     use lexopt::prelude::*;
+ 
+     let mut cfg = Config {
+         model: boot::Model::S5300,
++        backend: None,
++        print_config: false,
+         boot: Dev::Default,
+         rfs: Dev::Default,
+         oem: Dev::Default,
+@@ -140,6 +153,31 @@ fn parse_args() -> Config {
+                 },
+                 Err(e) => Err(e),
+             },
++            Long("kernel-backend") => match parser.value() {
++                Ok(v) => match (cfg.backend, KernelBackend::parse(&v.to_string_lossy())) {
++                    (Some(_), _) => {
++                        eprintln!("exynos-modem: --kernel-backend given more than once");
++                        std::process::exit(2);
++                    }
++                    (None, Some(b)) => {
++                        cfg.backend = Some(b);
++                        Ok(())
++                    }
++                    (None, None) => {
++                        eprintln!(
++                            "exynos-modem: unsupported --kernel-backend {:?} (supported: {})",
++                            v,
++                            KernelBackend::SUPPORTED
++                        );
++                        std::process::exit(2);
++                    }
++                },
++                Err(e) => Err(e),
++            },
++            Long("print-config") => {
++                cfg.print_config = true;
++                Ok(())
++            }
+             Long("boot-dev") => parser.value().map(|v| cfg.boot = parse_dev(v)),
+             Long("rfs-dev") => parser.value().map(|v| cfg.rfs = parse_dev(v)),
+             Long("oem-gems-dev") => parser.value().map(|v| cfg.oem = parse_dev(v)),
+@@ -154,24 +192,86 @@ fn parse_args() -> Config {
+     cfg
+ }
+ 
++/// The device each channel serves, after backend defaults and checks.
++#[derive(Debug, PartialEq, Eq)]
++struct Channels {
++    boot: Option<PathBuf>,
++    rfs: Option<PathBuf>,
++    oem: Option<PathBuf>,
++}
++
++/// Resolve every channel against the backend's defaults and refuse any path
++/// the backend does not define.  Pure: nothing is opened.
++fn resolve_channels(
++    backend: KernelBackend,
++    boot: Dev,
++    rfs: Dev,
++    oem: Dev,
++) -> Result<Channels, String> {
++    let one = |dev: Dev, ch: Channel| -> Result<Option<PathBuf>, String> {
++        let path = dev.resolve(backend.default_dev(ch));
++        if let Some(p) = &path {
++            backend.check_dev(ch, p)?;
++        }
++        Ok(path)
++    };
++    Ok(Channels {
++        boot: one(boot, Channel::Boot)?,
++        rfs: one(rfs, Channel::Rfs)?,
++        oem: one(oem, Channel::OemGems)?,
++    })
++}
++
++fn show(dev: &Option<PathBuf>) -> String {
++    dev.as_ref()
++        .map_or_else(|| "none".to_string(), |p| p.display().to_string())
++}
++
+ fn main() {
+     let cfg = parse_args();
+     let verbose = cfg.verbose;
+     let uecap_dir = cfg.uecap_dir;
+     let model = cfg.model;
++    let backend = cfg.backend.unwrap_or(KernelBackend::DEFAULT);
++    let channels = match resolve_channels(backend, cfg.boot, cfg.rfs, cfg.oem) {
++        Ok(c) => c,
++        Err(e) => {
++            eprintln!("exynos-modem: {}", e);
++            std::process::exit(2);
++        }
++    };
++
++    if cfg.print_config {
++        println!("kernel_backend={}", backend.name());
++        println!("boot_dev={}", show(&channels.boot));
++        println!("rfs_dev={}", show(&channels.rfs));
++        println!("oem_gems_dev={}", show(&channels.oem));
++        println!("uecap_dir={}", uecap_dir.display());
++        println!(
++            "crash_dump_boot={}",
++            if backend.crash_dump_boot() {
++                "enabled"
++            } else {
++                "disabled"
++            }
++        );
++        return;
++    }
+ 
+     let mut handles = Vec::new();
+ 
+     // Readers first: they open + block on read before boot drives the CP online,
+     // so no early request is lost.
+-    if let Some(dev) = cfg.oem.resolve(DEFAULT_OEM_DEV) {
+-        handles.push(thread::spawn(move || oem::run(&dev, uecap_dir, verbose)));
++    if let Some(dev) = channels.oem {
++        handles.push(thread::spawn(move || {
++            oem::run(&dev, uecap_dir, verbose, backend)
++        }));
+     }
+-    if let Some(dev) = cfg.rfs.resolve(DEFAULT_RFS_DEV) {
++    if let Some(dev) = channels.rfs {
+         handles.push(thread::spawn(move || rfs::run(&dev, verbose)));
+     }
+-    if let Some(dev) = cfg.boot.resolve(DEFAULT_BOOT_DEV) {
+-        handles.push(thread::spawn(move || boot::run(model, &dev)));
++    if let Some(dev) = channels.boot {
++        handles.push(thread::spawn(move || boot::run(model, backend, &dev)));
+     }
+ 
+     if handles.is_empty() {
+@@ -182,3 +282,89 @@ fn main() {
+         let _ = h.join();
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn p(s: &str) -> Option<PathBuf> {
++        Some(PathBuf::from(s))
++    }
++
++    #[test]
++    fn wwan_defaults_are_the_upstream_nodes() {
++        let c = resolve_channels(
++            KernelBackend::LinuxGoogleTeguWwan,
++            Dev::Default,
++            Dev::Default,
++            Dev::Default,
++        )
++        .unwrap();
++        assert_eq!(
++            c,
++            Channels {
++                boot: p("/dev/umts_boot0"),
++                rfs: p("/dev/umts_rfs0"),
++                oem: p("/dev/umts_oem1"),
++            }
++        );
++    }
++
++    #[test]
++    fn cpif_defaults_select_oem_ipc1() {
++        let c = resolve_channels(
++            KernelBackend::GoogleKleafCpif,
++            Dev::Default,
++            Dev::Default,
++            Dev::Default,
++        )
++        .unwrap();
++        assert_eq!(
++            c,
++            Channels {
++                boot: p("/dev/umts_boot0"),
++                rfs: p("/dev/umts_rfs0"),
++                oem: p("/dev/oem_ipc1"),
++            }
++        );
++    }
++
++    #[test]
++    fn cpif_accepts_explicit_nodes_and_none() {
++        let c = resolve_channels(
++            KernelBackend::GoogleKleafCpif,
++            Dev::Off,
++            parse_dev("/dev/umts_rfs0".into()),
++            parse_dev("/dev/oem_ipc1".into()),
++        )
++        .unwrap();
++        assert_eq!(c.boot, None);
++        assert_eq!(c.rfs, p("/dev/umts_rfs0"));
++        assert_eq!(c.oem, p("/dev/oem_ipc1"));
++    }
++
++    #[test]
++    fn cpif_refuses_the_legacy_oem_node() {
++        let e = resolve_channels(
++            KernelBackend::GoogleKleafCpif,
++            Dev::Default,
++            Dev::Default,
++            parse_dev("/dev/umts_oem1".into()),
++        )
++        .unwrap_err();
++        assert!(e.contains("--oem-gems-dev /dev/umts_oem1"), "{e}");
++    }
++
++    #[test]
++    fn wwan_keeps_explicit_paths() {
++        let c = resolve_channels(
++            KernelBackend::LinuxGoogleTeguWwan,
++            Dev::Default,
++            parse_dev("/dev/wwan0rfs0".into()),
++            Dev::Off,
++        )
++        .unwrap();
++        assert_eq!(c.rfs, p("/dev/wwan0rfs0"));
++        assert_eq!(c.oem, None);
++    }
++}
+diff --git a/crates/exynos-modem/src/oem.rs b/crates/exynos-modem/src/oem.rs
+index 2c3efd0..c43d1b1 100644
+--- a/crates/exynos-modem/src/oem.rs
++++ b/crates/exynos-modem/src/oem.rs
+@@ -5,13 +5,16 @@
+ //! log.  The uecap fetch is the one that matters: unanswered, the CP's internal
+ //! LTE-RRC message queue overflows and the modem asserts (PAL_QUEUE_FULL).
+ 
+-use std::fs::{self, OpenOptions};
++use std::fs::{self, File, OpenOptions};
+ use std::io::{self, Read, Write};
++use std::os::unix::io::AsRawFd;
+ use std::path::{Path, PathBuf};
+ use std::time::Duration;
+ 
+ use prost::Message;
+ 
++use crate::backend::KernelBackend;
++
+ use crate::pb::modem_svc_message::Payload;
+ use crate::pb::{
+     property_message, uecap_file_message, userspace_log_message, FileDirectory, ModemSvcMessage,
+@@ -28,7 +31,7 @@ const MAX_MSG: usize = 256 * (2048 - 12);
+ /// Serve the oem/GEMS channel forever, reopening on error.  The device node
+ /// exists from s5300 probe but only carries traffic once the CP is ONLINE; a
+ /// read/write error (e.g. a CP crash+reboot cycle) just reopens and resumes.
+-pub fn run(dev: &Path, uecap_dir: PathBuf, verbose: bool) {
++pub fn run(dev: &Path, uecap_dir: PathBuf, verbose: bool, backend: KernelBackend) {
+     let oem = Oem::new(uecap_dir.clone(), verbose);
+     eprintln!(
+         "oem: serving {} on {}{}",
+@@ -37,7 +40,7 @@ pub fn run(dev: &Path, uecap_dir: PathBuf, verbose: bool) {
+         if verbose { " (verbose)" } else { "" }
+     );
+     loop {
+-        match serve(dev, &oem) {
++        match serve(dev, &oem, backend) {
+             Ok(()) => eprintln!("oem: {} closed, reopening", dev.display()),
+             Err(e) => eprintln!("oem: {}: {}, retrying", dev.display(), e),
+         }
+@@ -45,8 +48,16 @@ pub fn run(dev: &Path, uecap_dir: PathBuf, verbose: bool) {
+     }
+ }
+ 
+-fn serve(dev: &Path, oem: &Oem) -> io::Result<()> {
+-    let mut f = OpenOptions::new().read(true).write(true).open(dev)?;
++fn serve(dev: &Path, oem: &Oem, backend: KernelBackend) -> io::Result<()> {
++    let f = OpenOptions::new().read(true).write(true).open(dev)?;
++    match backend {
++        KernelBackend::LinuxGoogleTeguWwan => serve_blocking(f, oem),
++        KernelBackend::GoogleKleafCpif => serve_polled(&mut PolledFile(f), oem),
++    }
++}
++
++/// The WWAN driver's read blocks until a frame arrives, so 0 is a real EOF.
++fn serve_blocking(mut f: File, oem: &Oem) -> io::Result<()> {
+     let mut buf = vec![0u8; MAX_MSG];
+     loop {
+         let n = match f.read(&mut buf) {
+@@ -61,6 +72,102 @@ fn serve(dev: &Path, oem: &Oem) -> io::Result<()> {
+     }
+ }
+ 
++/// Google CPIF ipc_read() waits only 100 ms on an empty queue and then returns
++/// 0 (ipc_io_device.c); that is "no data yet", not EOF.  Closing on it would
++/// purge the rx queue (ipc_release) and drop every GEMS frame that arrives
++/// while the node is closed (rx_demux), which the CP answers with
++/// PAL_QUEUE_FULL.  So on CPIF the handle is kept for the life of the link:
++/// each read is gated on poll(POLLIN) with a bounded timeout, a 0-byte read
++/// goes back to poll, and only POLLHUP/POLLERR (CPIF reports POLLHUP on the
++/// IPC_FMT node in its crash states) ends the session for a reopen.
++const CPIF_POLL_MS: i32 = 1000;
++
++/// What one bounded wait on the channel reported.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum Ready {
++    Readable,
++    Idle,
++    Hangup,
++}
++
++/// A channel whose reads must be gated on readiness (the CPIF OEM node).
++trait PolledChannel: Read + Write {
++    fn wait_readable(&mut self, timeout_ms: i32) -> io::Result<Ready>;
++}
++
++struct PolledFile(File);
++
++impl Read for PolledFile {
++    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++        self.0.read(buf)
++    }
++}
++
++impl Write for PolledFile {
++    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++        self.0.write(buf)
++    }
++    fn flush(&mut self) -> io::Result<()> {
++        self.0.flush()
++    }
++}
++
++impl PolledChannel for PolledFile {
++    fn wait_readable(&mut self, timeout_ms: i32) -> io::Result<Ready> {
++        let mut pfd = libc::pollfd {
++            fd: self.0.as_raw_fd(),
++            events: libc::POLLIN,
++            revents: 0,
++        };
++        let r = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
++        if r < 0 {
++            let e = io::Error::last_os_error();
++            if e.kind() == io::ErrorKind::Interrupted {
++                return Ok(Ready::Idle);
++            }
++            return Err(e);
++        }
++        Ok(classify_revents(r, pfd.revents))
++    }
++}
++
++/// Map a poll() result to Ready; queued data is drained before a hangup.
++fn classify_revents(r: i32, revents: libc::c_short) -> Ready {
++    if r == 0 {
++        Ready::Idle
++    } else if revents & libc::POLLIN != 0 {
++        Ready::Readable
++    } else if revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
++        Ready::Hangup
++    } else {
++        Ready::Idle
++    }
++}
++
++/// Serve one CPIF session on an open channel; returns Ok on hangup.  Never
++/// spins: every iteration blocks in poll (up to CPIF_POLL_MS) unless the
++/// kernel reported queued data, and an empty read additionally costs the
++/// kernel's own 100 ms wait.
++fn serve_polled<C: PolledChannel>(ch: &mut C, oem: &Oem) -> io::Result<()> {
++    let mut buf = vec![0u8; MAX_MSG];
++    loop {
++        match ch.wait_readable(CPIF_POLL_MS)? {
++            Ready::Idle => continue,
++            Ready::Hangup => return Ok(()),
++            Ready::Readable => {}
++        }
++        let n = match ch.read(&mut buf) {
++            Ok(0) => continue,
++            Ok(n) => n,
++            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
++            Err(e) => return Err(e),
++        };
++        for out in oem.handle(&buf[..n]) {
++            write_frame(ch, &out)?;
++        }
++    }
++}
++
+ /// Write one message as exactly one frame.  The kernel wraps the whole buffer in
+ /// one FMT frame and returns the full count or an error -- never a short write --
+ /// so this is a single write() per message; loop only for EINTR.
+@@ -352,6 +459,172 @@ mod tests {
+         b'D', b'E', b'.', b'b', b'i', b'n', b'a', b'r', b'y', b'p', b'b',
+     ];
+ 
++    fn property_write_request(token: u32) -> Vec<u8> {
++        ModemSvcMessage {
++            r#type: ModemSvcMessageType::Request as i32,
++            message_id: 7,
++            token: Some(token),
++            result: None,
++            payload: Some(Payload::PropertyMessage(PropertyMessage {
++                property: Some(property_message::Property::WriteRequest(
++                    PropertyWriteRequest {
++                        property: "persist.vendor.modem.experiment.volte_mif_off".into(),
++                        value: "1".into(),
++                    },
++                )),
++            })),
++        }
++        .encode_to_vec()
++    }
++
++    /// One scripted poll result; the readable variants also fix what the
++    /// following read() returns.
++    enum Step {
++        Idle,
++        Hangup,
++        Empty,
++        Interrupted,
++        Frame(Vec<u8>),
++    }
++
++    /// A CPIF OEM node model: a read is only legal right after poll reported
++    /// POLLIN (as with ipc_read, which otherwise waits 100 ms and returns 0).
++    struct FakeCpif {
++        steps: std::collections::VecDeque<Step>,
++        armed: Option<Step>,
++        polls: usize,
++        reads: usize,
++        written: Vec<Vec<u8>>,
++        fail_writes: bool,
++    }
++
++    impl FakeCpif {
++        fn new(steps: Vec<Step>) -> FakeCpif {
++            FakeCpif {
++                steps: steps.into(),
++                armed: None,
++                polls: 0,
++                reads: 0,
++                written: Vec::new(),
++                fail_writes: false,
++            }
++        }
++    }
++
++    impl PolledChannel for FakeCpif {
++        fn wait_readable(&mut self, timeout_ms: i32) -> io::Result<Ready> {
++            assert!(timeout_ms > 0, "poll must be bounded and blocking");
++            assert!(self.armed.is_none(), "polled again without reading");
++            self.polls += 1;
++            match self.steps.pop_front().expect("serve ran past the script") {
++                Step::Idle => Ok(Ready::Idle),
++                Step::Hangup => Ok(Ready::Hangup),
++                step => {
++                    self.armed = Some(step);
++                    Ok(Ready::Readable)
++                }
++            }
++        }
++    }
++
++    impl Read for FakeCpif {
++        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++            self.reads += 1;
++            match self.armed.take().expect("read() without POLLIN") {
++                Step::Empty => Ok(0),
++                Step::Interrupted => Err(io::ErrorKind::Interrupted.into()),
++                Step::Frame(f) => {
++                    buf[..f.len()].copy_from_slice(&f);
++                    Ok(f.len())
++                }
++                Step::Idle | Step::Hangup => unreachable!(),
++            }
++        }
++    }
++
++    impl Write for FakeCpif {
++        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
++            if self.fail_writes {
++                return Err(io::Error::from_raw_os_error(libc::EAGAIN));
++            }
++            self.written.push(buf.to_vec());
++            Ok(buf.len())
++        }
++        fn flush(&mut self) -> io::Result<()> {
++            Ok(())
++        }
++    }
++
++    #[test]
++    fn cpif_empty_read_is_not_eof() {
++        let oem = Oem::new(PathBuf::from("/nonexistent"), false);
++        let mut ch = FakeCpif::new(vec![
++            Step::Idle,
++            Step::Empty,
++            Step::Idle,
++            Step::Empty,
++            Step::Interrupted,
++            Step::Frame(property_write_request(4)),
++            Step::Empty,
++            Step::Hangup,
++        ]);
++        // One session on one handle: the empty reads neither end it nor
++        // reopen the node, and the request after them is still answered.
++        serve_polled(&mut ch, &oem).unwrap();
++        assert_eq!(ch.polls, 8);
++        assert_eq!(ch.reads, 5); // only after POLLIN, never on Idle/Hangup
++        assert_eq!(ch.written.len(), 1);
++        assert_eq!(
++            ch.written[0],
++            vec![
++                0x08, 0x02, 0x15, 0x07, 0x00, 0x00, 0x00, 0x1d, 0x04, 0x00, 0x00, 0x00, 0x20, 0x00,
++                0x3a, 0x02, 0x22, 0x00,
++            ]
++        );
++    }
++
++    #[test]
++    fn cpif_session_ends_only_on_hangup_or_error() {
++        let oem = Oem::new(PathBuf::from("/nonexistent"), false);
++        let mut ch = FakeCpif::new(vec![Step::Hangup]);
++        serve_polled(&mut ch, &oem).unwrap();
++        assert_eq!(ch.reads, 0);
++        // A rejected write (e.g. -EAGAIN before INIT_END) ends the session
++        // with an error so run() reopens; it is not swallowed.
++        let mut ch = FakeCpif::new(vec![Step::Frame(property_write_request(9))]);
++        ch.fail_writes = true;
++        assert!(serve_polled(&mut ch, &oem).is_err());
++    }
++
++    #[test]
++    fn poll_revents_classification() {
++        assert_eq!(classify_revents(0, 0), Ready::Idle);
++        assert_eq!(classify_revents(1, libc::POLLIN), Ready::Readable);
++        assert_eq!(
++            classify_revents(1, libc::POLLIN | libc::POLLRDNORM),
++            Ready::Readable
++        );
++        assert_eq!(
++            classify_revents(1, libc::POLLIN | libc::POLLHUP),
++            Ready::Readable
++        );
++        assert_eq!(classify_revents(1, libc::POLLHUP), Ready::Hangup);
++        assert_eq!(classify_revents(1, libc::POLLERR), Ready::Hangup);
++        assert_eq!(classify_revents(1, libc::POLLNVAL), Ready::Hangup);
++    }
++
++    #[test]
++    fn wwan_zero_read_is_still_eof() {
++        // The WWAN driver's blocking read returns 0 only at EOF; the upstream
++        // close-and-reopen behaviour is kept for that backend.
++        let path = std::env::temp_dir().join(format!("exynos_modem_eof_{}", std::process::id()));
++        fs::write(&path, b"").unwrap();
++        let f = File::open(&path).unwrap();
++        let oem = Oem::new(PathBuf::from("/nonexistent"), false);
++        assert!(serve_blocking(f, &oem).is_ok());
++        let _ = fs::remove_file(&path);
++    }
++
+     #[test]
+     fn decode_real_uecap_request() {
+         use uecap_file_message::UecapFileOperation;

@@ -1,0 +1,258 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Omarchy Ferrix <maintainers@omarchy.invalid>
+Date: Mon, 12 Oct 2026 15:20:17 +1300
+Subject: [PATCH] sit-proxy: select the google-kleaf-cpif SIT nodes explicitly
+
+Google CPIF delivers FMT/SIT control on /dev/umts_ipc0 and
+/dev/umts_ipc1 (SIT channels 0xF5/0xF6) instead of the radio-first
+driver's /dev/wwan0sit0/1. Add --kernel-backend google-kleaf-cpif, which
+defaults to those two nodes and refuses any other or repeated path before
+opening it, plus --print-config, which prints the resolved configuration
+without opening a node or socket. The default linux-google-tegu-wwan
+backend is unchanged.
+
+The read path needs no adapter: device reads are already gated on
+POLLIN, POLLHUP ends the session, and the length-based SIT framing
+accepts CPIF's reassembled messages.
+---
+ crates/sit-proxy/src/main.rs | 167 +++++++++++++++++++++++++++++++++--
+ 1 file changed, 162 insertions(+), 5 deletions(-)
+
+diff --git a/crates/sit-proxy/src/main.rs b/crates/sit-proxy/src/main.rs
+index 69e85ee..29e1157 100644
+--- a/crates/sit-proxy/src/main.rs
++++ b/crates/sit-proxy/src/main.rs
+@@ -28,7 +28,16 @@
+ //! single forced exception, the CP-global indication filter, documented in
+ //! `mux.rs`.
+ //!
+-//! Usage: sit-proxy [-v] [--dev PATH]... [--socket-dir DIR] [--trace PATH]
++//! Usage: sit-proxy [-v] [--kernel-backend NAME] [--dev PATH]...
++//!                  [--socket-dir DIR] [--trace PATH] [--print-config]
++//!
++//! Kernel backends (Omarchy Ferrix target-local patch): the default
++//! `linux-google-tegu-wwan` serves the radio-first driver's `/dev/wwan0sit0/1`.
++//! `google-kleaf-cpif`, chosen only explicitly, serves Google CPIF's FMT/SIT
++//! nodes `/dev/umts_ipc0` and `/dev/umts_ipc1` (SIT channels 0xF5/0xF6 in the
++//! tegu device tree) and refuses any other path before opening it.  Both
++//! kernels strip the 12-byte SIT link header; CPIF reassembles multi-frame
++//! messages, which the length-based framing below already accepts.
+ 
+ mod log;
+ mod mux;
+@@ -39,6 +48,7 @@ use std::process::exit;
+ use std::thread;
+ 
+ const DEFAULT_DEVS: [&str; 2] = ["/dev/wwan0sit0", "/dev/wwan0sit1"];
++const CPIF_DEVS: [&str; 2] = ["/dev/umts_ipc0", "/dev/umts_ipc1"];
+ const DEFAULT_SOCKET_DIR: &str = "/run/sit-proxy";
+ 
+ const USAGE: &str = "\
+@@ -48,8 +58,13 @@ Usage: sit-proxy [OPTIONS]
+ 
+ Options:
+   -v, --verbose        Log every connect, drop and resync
++      --kernel-backend NAME
++                       Kernel transport: linux-google-tegu-wwan (default) or
++                       google-kleaf-cpif
+       --dev PATH       SIT device node; repeat for more than one.
+-                       Default: /dev/wwan0sit0 /dev/wwan0sit1
++                       Default: /dev/wwan0sit0 /dev/wwan0sit1, or
++                       /dev/umts_ipc0 /dev/umts_ipc1 with google-kleaf-cpif
++                       (which accepts only those two nodes)
+       --socket-dir DIR Directory for the per-port sockets, named by index.
+                        Default: /run/sit-proxy  (so /run/sit-proxy/0, .../1)
+       --trace PATH     Append every frame to a JSONL trace, one file per port:
+@@ -59,10 +74,66 @@ Options:
+                        `cargo run -p samsung-sit --example corpus-smoke` reads it.
+                        NOTE: a trace contains subscriber data (IMSI, ICCID,
+                        numbers, message bodies). Treat it accordingly.
++      --print-config   Print the resolved configuration and exit without
++                       opening any device node or socket
+   -h, --help           Show this help
+ ";
+ 
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum KernelBackend {
++    LinuxGoogleTeguWwan,
++    GoogleKleafCpif,
++}
++
++impl KernelBackend {
++    fn parse(s: &str) -> Option<KernelBackend> {
++        match s {
++            "linux-google-tegu-wwan" => Some(KernelBackend::LinuxGoogleTeguWwan),
++            "google-kleaf-cpif" => Some(KernelBackend::GoogleKleafCpif),
++            _ => None,
++        }
++    }
++
++    fn name(self) -> &'static str {
++        match self {
++            KernelBackend::LinuxGoogleTeguWwan => "linux-google-tegu-wwan",
++            KernelBackend::GoogleKleafCpif => "google-kleaf-cpif",
++        }
++    }
++}
++
++/// Apply the backend's default nodes and, on CPIF, refuse anything but its
++/// two distinct FMT/SIT nodes.  Pure: nothing is opened.
++fn resolve_devs(backend: KernelBackend, devs: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
++    let defaults: &[&str] = match backend {
++        KernelBackend::LinuxGoogleTeguWwan => &DEFAULT_DEVS,
++        KernelBackend::GoogleKleafCpif => &CPIF_DEVS,
++    };
++    if devs.is_empty() {
++        return Ok(defaults.iter().map(PathBuf::from).collect());
++    }
++    if backend == KernelBackend::GoogleKleafCpif {
++        for (i, dev) in devs.iter().enumerate() {
++            // Byte-exact: Path equality would ignore a trailing '/'.
++            if !CPIF_DEVS.iter().any(|d| dev.as_os_str() == *d) {
++                return Err(format!(
++                    "--dev {} is not a {} SIT node (expected {})",
++                    dev.display(),
++                    backend.name(),
++                    CPIF_DEVS.join(" or ")
++                ));
++            }
++            if devs[..i].iter().any(|d| d.as_os_str() == dev.as_os_str()) {
++                return Err(format!("--dev {} given more than once", dev.display()));
++            }
++        }
++    }
++    Ok(devs)
++}
++
+ struct Args {
++    backend: KernelBackend,
++    print_config: bool,
+     devs: Vec<PathBuf>,
+     socket_dir: PathBuf,
+     trace: Option<PathBuf>,
+@@ -76,11 +147,26 @@ fn parse_args() -> Result<Args, lexopt::Error> {
+     let mut socket_dir = PathBuf::from(DEFAULT_SOCKET_DIR);
+     let mut trace = None;
+     let mut verbose = false;
++    let mut backend = None;
++    let mut print_config = false;
+ 
+     let mut parser = lexopt::Parser::from_env();
+     while let Some(arg) = parser.next()? {
+         match arg {
+             Short('v') | Long("verbose") => verbose = true,
++            Long("kernel-backend") => {
++                if backend.is_some() {
++                    return Err("--kernel-backend given more than once".into());
++                }
++                let v = parser.value()?;
++                backend = Some(KernelBackend::parse(&v.to_string_lossy()).ok_or_else(|| {
++                    format!(
++                        "unsupported --kernel-backend {v:?} \
++                         (supported: linux-google-tegu-wwan, google-kleaf-cpif)"
++                    )
++                })?);
++            }
++            Long("print-config") => print_config = true,
+             Long("dev") => devs.push(PathBuf::from(parser.value()?)),
+             Long("socket-dir") => socket_dir = PathBuf::from(parser.value()?),
+             Long("trace") => trace = Some(PathBuf::from(parser.value()?)),
+@@ -92,10 +178,11 @@ fn parse_args() -> Result<Args, lexopt::Error> {
+         }
+     }
+ 
+-    if devs.is_empty() {
+-        devs = DEFAULT_DEVS.iter().map(PathBuf::from).collect();
+-    }
++    let backend = backend.unwrap_or(KernelBackend::LinuxGoogleTeguWwan);
++    let devs = resolve_devs(backend, devs)?;
+     Ok(Args {
++        backend,
++        print_config,
+         devs,
+         socket_dir,
+         trace,
+@@ -123,6 +210,15 @@ fn main() {
+         }
+     };
+ 
++    if args.print_config {
++        println!("kernel_backend={}", args.backend.name());
++        for (index, dev) in args.devs.iter().enumerate() {
++            println!("dev.{index}={}", dev.display());
++        }
++        println!("socket_dir={}", args.socket_dir.display());
++        return;
++    }
++
+     let mut handles = Vec::new();
+     for (index, dev) in args.devs.iter().enumerate() {
+         let cfg = port::Config {
+@@ -151,6 +247,67 @@ fn main() {
+ mod tests {
+     use super::*;
+ 
++    fn paths(p: &[&str]) -> Vec<PathBuf> {
++        p.iter().map(PathBuf::from).collect()
++    }
++
++    #[test]
++    fn backend_names_are_exact() {
++        assert_eq!(
++            KernelBackend::parse("google-kleaf-cpif"),
++            Some(KernelBackend::GoogleKleafCpif)
++        );
++        assert_eq!(
++            KernelBackend::parse("linux-google-tegu-wwan"),
++            Some(KernelBackend::LinuxGoogleTeguWwan)
++        );
++        assert_eq!(KernelBackend::parse("cpif"), None);
++        assert_eq!(KernelBackend::parse("Google-Kleaf-CPIF"), None);
++    }
++
++    #[test]
++    fn default_devs_per_backend() {
++        assert_eq!(
++            resolve_devs(KernelBackend::LinuxGoogleTeguWwan, Vec::new()).unwrap(),
++            paths(&["/dev/wwan0sit0", "/dev/wwan0sit1"])
++        );
++        assert_eq!(
++            resolve_devs(KernelBackend::GoogleKleafCpif, Vec::new()).unwrap(),
++            paths(&["/dev/umts_ipc0", "/dev/umts_ipc1"])
++        );
++    }
++
++    #[test]
++    fn cpif_accepts_only_its_distinct_sit_nodes() {
++        let c = KernelBackend::GoogleKleafCpif;
++        assert_eq!(
++            resolve_devs(c, paths(&["/dev/umts_ipc1"])).unwrap(),
++            paths(&["/dev/umts_ipc1"])
++        );
++        for bad in [
++            &["/dev/wwan0sit0"][..],
++            &["/dev/umts_ipc2"],
++            &["/dev/umts_ipc0/"],
++            &["/dev/umts_rfs0"],
++            &["/dev/oem_ipc1"],
++            &["/dev/umts_ipc0", "/dev/umts_ipc0"],
++        ] {
++            assert!(resolve_devs(c, paths(bad)).is_err(), "{bad:?}");
++        }
++    }
++
++    #[test]
++    fn wwan_keeps_explicit_devs() {
++        assert_eq!(
++            resolve_devs(
++                KernelBackend::LinuxGoogleTeguWwan,
++                paths(&["/dev/anything"])
++            )
++            .unwrap(),
++            paths(&["/dev/anything"])
++        );
++    }
++
+     #[test]
+     fn trace_paths_are_per_port() {
+         assert_eq!(

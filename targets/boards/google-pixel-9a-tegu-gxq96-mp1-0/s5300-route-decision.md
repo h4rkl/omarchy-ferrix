@@ -159,6 +159,16 @@ OEM and FMT paths also need CLI arguments (`/dev/oem_ipc1`,
 unpublished source `fd5221767c57`. NV file sizes are also unknown. The next
 step is E1, plus read-only NV presence and size checks once S0 allows it.
 
+**Adapter (2026-10-12, [`s5300-cpif-adapter.md`](s5300-cpif-adapter.md)):
+code only.** Two hash-pinned patches in `pmos/exynos-modem/` add an explicit
+`--kernel-backend google-kleaf-cpif` to `exynos-modem` and `sit-proxy`. On
+that backend, reset uses `IOCTL_POWER_RESET` with a `boot_mode` pointer, and
+srinfo uses the inline layout. The crash-reason dump-boot is disabled (a
+diagnostic limit), OEM reads are poll-gated with 0 meaning no data, and the
+nodes are fixed to `umts_boot0`, `umts_rfs0`, `oem_ipc1`, and `umts_ipc0/1`.
+These are offline-tested only. The init scripts still refuse the CPIF
+backend, so wiring it in remains separate integration work before S2.
+
 **E1, read-only dev-boot inventory** (`just pixel-9a-s5300-cpif-inventory`
 over CDC-ACM; nothing opened; the exact `go`/`no-go`/`incomplete` rules and
 remaining unknowns are in the

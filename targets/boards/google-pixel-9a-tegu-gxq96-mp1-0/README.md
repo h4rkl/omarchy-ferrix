@@ -429,6 +429,10 @@ workflow alone.
 - S5300 cellular route decision for issue #1 (Kleaf CPIF bridge vs radio-first
   WWAN/SIT; staged gates, not runtime evidence):
   [`s5300-route-decision.md`](s5300-route-decision.md)
+- S5300 Kleaf CPIF userspace adapter for issue #1 (hash-pinned `exynos-modem`
+  patches behind an explicit `--kernel-backend google-kleaf-cpif`; offline
+  tested, not selected by any init script, not runtime evidence):
+  [`s5300-cpif-adapter.md`](s5300-cpif-adapter.md)
 
 The target-local postmarketOS `device-google-tegu` package and the typed
 Ferrix adapter composition are now checked in under `pmos/device-google-tegu/`
@@ -437,9 +441,11 @@ evidence: the capability matrix remains conservatively `unsupported` until
 this exact MP1.0 device produces subsystem evidence. In particular, the
 S5300 CPIF modem is not a standard ModemManager transport. The target package
 carries immutable native-Linux `exynos-modem`/`sit-proxy` and SIT ModemManager
-recipes behind the public ModemManager D-Bus boundary; their ABI requires the
-separately pinned radio-first `s5300_modem` WWAN kernel backend, not Google's
-stock `cpif` character-device surface. The native Linux radio-first kernel and
+recipes behind the public ModemManager D-Bus boundary. Their integrated init
+scripts require the separately pinned radio-first `s5300_modem` WWAN kernel
+backend, not Google's stock `cpif` character-device surface. The packaged
+binaries also carry an explicit Kleaf CPIF backend that nothing selects yet
+([`s5300-cpif-adapter.md`](s5300-cpif-adapter.md)). The native Linux radio-first kernel and
 target-local userspace packages have now been built on the authorized x86_64
 builder, but the route remains unbooted and has not been observed to create a
 modem on this device. The Rust
