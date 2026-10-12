@@ -106,6 +106,7 @@ See also [`docs/pixel-9a-bt-wpa3-research.md`](../../../docs/pixel-9a-bt-wpa3-re
 | [`s5300-route-decision.md`](s5300-route-decision.md) | Route and design: route decision, CPIF userspace adapter, daemon scratch directory, CPIF service integration | live |
 | [`s5300-s2-preflight.md`](s5300-s2-preflight.md) | S2 read-only preflight, exact-device S2 results and teardown findings, decision binding, active-workflow blockers | live |
 | [`s5300-s2-active-design.md`](s5300-s2-active-design.md) | #109 OpenRC teardown and disconnect-safe observation design (standalone owner-review document) | live |
+| [`s5300-s2-teardown.md`](s5300-s2-teardown.md) | #117 loop-detach cause from the pinned GKI source and #116 post-stop CP state options (DRAFT recommendation; offline, nothing implemented) | live |
 | [`s5300-source-evidence.md`](s5300-source-evidence.md) | CPIF source boundary and E0 device-free ABI comparison | reference |
 | [`s5300-cpif-adapter.md`](s5300-cpif-adapter.md), [`s5300-scratch-dir.md`](s5300-scratch-dir.md), [`s5300-cpif-integration.md`](s5300-cpif-integration.md) | Stubs; moved into `s5300-route-decision.md` | moved |
 | [`s5300-cpif-e0.md`](s5300-cpif-e0.md) | Stub; moved into `s5300-source-evidence.md` | moved |
