@@ -21,6 +21,13 @@ sha256 = "324efde8cdef9c3e108cc92d9248556cdc8c0234e77a8a66218b49b978a9445f"
 sha512 = "fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952c9f60d476ccc0da635160ba5ee6aaca39c9920ab061e1272b2b3bcaa89ff4357c"
 license = "GPL-2.0-or-later"
 packages = ["exynos-modem", "sit-proxy", "samsung-sit-ffi"]
+# Target-local patches applied by the exynos-modem recipe, in order. They add
+# the explicit google-kleaf-cpif backend (../../s5300-cpif-adapter.md); the
+# recipe repeats the SHA-512 values.
+patches = [
+  { file = "0001-exynos-modem-google-kleaf-cpif-backend.patch", sha256 = "2cfc977af1a7b29faca0455b1e83108770574d10b9984d7101f7e27339ad5404" },
+  { file = "0002-sit-proxy-google-kleaf-cpif-nodes.patch", sha256 = "1ced496605ec0ec0f726f9310148af03cc14a17958228f301eeffe1a584547ca" },
+]
 
 [[source]]
 name = "modemmanager-samsung-sit"

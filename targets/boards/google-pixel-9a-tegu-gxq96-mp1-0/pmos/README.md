@@ -166,7 +166,11 @@ Browser tile through the unchanged `ferrix-runtime-android` adapter.
 The device package carries a target-local, source-pinned radio stack:
 
 - `exynos-modem` and `sit-proxy` are built from the immutable
-  `634e8eb404c3fcf959dce6a0b0d97b33ba0fc346` archive (GPL-2.0-or-later).
+  `634e8eb404c3fcf959dce6a0b0d97b33ba0fc346` archive (GPL-2.0-or-later),
+  plus two hash-pinned target-local patches in `exynos-modem/`. These add an
+  explicit `--kernel-backend google-kleaf-cpif`; the default stays
+  `linux-google-tegu-wwan`, and no init script selects CPIF
+  (`../s5300-cpif-adapter.md`, `just pixel-9a-s5300-cpif-adapter-test`).
 - `modemmanager-samsung-sit` is built from the immutable
   `14a0013a28e5d5eec513c65e75d7549678ecc61e` archive (GPL-2.0-or-later and
   LGPL-2.1-or-later), with the upstream `COPYING`/`COPYING.LIB` installation

@@ -116,6 +116,15 @@ jobs:
           sh tools/pixel-9a/tests/s5300-mount-proof.sh
           sh tools/pixel-9a/tests/s5300-mounts-service.sh
 
+      # Fetches the hash-pinned exynos-modem archive and Cargo.lock crates,
+      # applies the target-local patches, and runs the patched tests and CLI
+      # contract natively. No device or modem node is involved.
+      - name: Pixel S5300 CPIF adapter patches (offline contract)
+        env:
+          FERRIX_S5300_ADAPTER_FETCH: "1"
+          FERRIX_S5300_ADAPTER_FULL: "1"
+        run: sh tools/pixel-9a/tests/exynos-modem-cpif-adapter.sh
+
       - name: Pixel AoC firmware loader (mock)
         run: sh tools/pixel-9a/tests/aoc-firmware-runtime.sh
 
