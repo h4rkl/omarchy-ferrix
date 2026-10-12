@@ -5,8 +5,8 @@
 #
 # Nothing here opens a CPIF character device. Opening /dev/umts_boot0 or
 # /dev/umts_ipc* runs the link's init_comm hook, so /dev paths are touched only
-# by shell file tests (-e -L -c), stat(2), and readlink(2) of /proc/<pid>/fd
-# links. No per-unit file content is read: the modem image, NV files, and
+# by shell file tests (-e -L -c) and stat(2), and open files only by stat(2)
+# through the /proc/<pid>/task/<tid>/fd links. No per-unit file content is read: the modem image, NV files, and
 # cpsha are checked by stat(2) metadata only. The only programs run are
 # sha256sum on installed package files, the util-linux probes that the
 # accepted ferrix-s5300-mounts verify path itself runs, and the two patched
@@ -213,18 +213,100 @@ cpif_check_node() {
 	}
 }
 
-# cpif_check_unheld NAME...: no process has /dev/NAME open. Reads only the
-# /proc/<pid>/fd link targets.
-cpif_check_unheld() {
-	for fd in "$cpif_proc"/[0-9]*/fd/*; do
-		target=$(readlink "$fd" 2>/dev/null) || continue
-		for node; do
-			[ "$target" = "/dev/$node" ] || continue
-			pid=${fd#"$cpif_proc"/}
-			eerror "/dev/$node is already open (pid ${pid%%/*})"
-			return 1
-		done
+# The initial PID namespace's fixed inode (PROC_PID_INIT_INO). Only there
+# does /proc list every task on the system.
+cpif_init_pidns='pid:[4026531836]'
+
+# cpif_holders NAME...: print "PID NAME" for each task with an open file that
+# is the character device sysfs names NAME (cpif_check_node has matched it to
+# /dev/NAME). Matching is by device number from stat(2) through each
+# /proc/<pid>/task/<tid>/fd magic link, so any path, alias, deleted node, or
+# mount namespace that reaches the same device counts, and every thread's fd
+# table is read. stat(2) never opens the file. Returns 2 if the scan could be
+# incomplete: this shell is outside the initial PID namespace, a live task's
+# fd directory cannot be listed, or a live fd cannot be stat'ed. A task or fd that is gone when it is
+# re-checked has exited or closed (process churn) and is skipped. The scan is
+# a snapshot: an open after a task was read is not seen, and SCM_RIGHTS fds in
+# flight or kernel-internal references are not visible at all
+# (s5300-cp-boot.md).
+cpif_holders() {
+	[ "$(readlink "$cpif_proc/self/ns/pid" 2>/dev/null)" = "$cpif_init_pidns" ] || {
+		eerror "the opener scan must run in the initial PID namespace" >&2
+		return 2
+	}
+	[ "$#" -gt 0 ] || {
+		eerror "no CPIF device was named for the opener scan" >&2
+		return 2
+	}
+	wanted=
+	for node; do
+		rdev=$(cat "$cpif_sys/class/$cpif_class/$node/dev" 2>/dev/null) || rdev=
+		case "$rdev" in
+			[0-9]*:[0-9]*) ;;
+			*) eerror "cannot read the device number of $node" >&2; return 2 ;;
+		esac
+		case "${rdev%:*}${rdev#*:}" in *[!0-9]*) eerror "cannot read the device number of $node" >&2; return 2 ;; esac
+		wanted="$wanted $(printf '%x:%x' "${rdev%:*}" "${rdev#*:}")=$node"
 	done
+	# The scan ends with a "complete" line, so a subshell that failed part way
+	# can never read as an empty, clean scan.
+	scan=$(
+		for task in "$cpif_proc"/[0-9]*/task/[0-9]*; do
+			[ -d "$task" ] || continue
+			set -- "$task"/fd/[0-9]*
+			if [ "$#" -eq 1 ] && [ ! -e "$1" ] && [ ! -L "$1" ]; then
+				# No open fd, or a directory that cannot be listed.
+				ls -A "$task/fd" >/dev/null 2>&1 || [ ! -d "$task" ] || echo "unreadable ${task#"$cpif_proc"/}"
+				continue
+			fi
+			stat -L -c '%n|%t:%T|%F' -- "$@" 2>/dev/null && continue
+			for fd; do
+				[ -L "$fd" ] || continue
+				stat -L -c %F -- "$fd" >/dev/null 2>&1 || [ ! -L "$fd" ] || echo "unreadable ${fd#"$cpif_proc"/}"
+			done
+		done
+		echo complete
+	)
+	scan_status=0
+	printf '%s\n' "$scan" | awk -v wanted="$wanted" -v proc="$cpif_proc/" '
+		BEGIN { n = split(wanted, w, " "); for (i = 1; i <= n; i++) { eq = index(w[i], "="); node[substr(w[i], 1, eq - 1)] = substr(w[i], eq + 1) } }
+		$0 == "complete" { done = 1; next }
+		$1 == "unreadable" { bad = 1; next }
+		{
+			split($0, f, "|")
+			if (f[3] != "character special file" || !(f[2] in node)) next
+			path = substr(f[1], length(proc) + 1)
+			pid = substr(path, 1, index(path, "/") - 1)
+			key = pid " " node[f[2]]
+			if (!(key in seen)) { seen[key] = 1; print key }
+		}
+		END { exit (bad || !done) ? 2 : 0 }' || scan_status=2
+	[ "$scan_status" -eq 0 ] || {
+		eerror "the CPIF opener scan could not read every open file; refusing" >&2
+		return 2
+	}
+}
+
+# Every entry of the cpif sysfs class, so that the modem preflight also sees
+# a holder of a CPIF device outside the twelve E1 names.
+cpif_class_nodes() {
+	for entry in "$cpif_sys/class/$cpif_class"/*; do
+		[ -e "$entry/dev" ] || continue
+		name=${entry##*/}
+		case "$name" in *[!A-Za-z0-9_.-]*) continue ;; esac
+		printf '%s\n' "$name"
+	done
+}
+
+# cpif_check_unheld NAME...: no task holds any of the named CPIF devices, by
+# the cpif_holders scan above. An incomplete scan is a refusal.
+cpif_check_unheld() {
+	holders=$(cpif_holders "$@") || return 1
+	[ -z "$holders" ] || {
+		set -- $holders
+		eerror "/dev/$2 is already open (pid $1)"
+		return 1
+	}
 }
 
 # Directory $1 is not a symlink, is owned by root, and is not group- or
@@ -358,7 +440,7 @@ cpif_modem_preflight() {
 	for node in $cpif_nodes; do
 		cpif_check_node "$node" || return 1
 	done
-	cpif_check_unheld $cpif_nodes || return 1
+	cpif_check_unheld $(cpif_class_nodes) || return 1
 	cpif_check_sources || return 1
 	cpif_check_scratch
 }
