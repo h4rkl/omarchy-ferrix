@@ -1,0 +1,25 @@
+#!/bin/sh
+# NetworkManager dispatcher hook (#8), installed as
+# /etc/NetworkManager/dispatcher.d/60-ferrix-chrony-onoffline. The QEMU route
+# installs a byte-identical copy (targets/qemu-aarch64/pmos/nm-dispatcher/).
+#
+# chronyd (postmarketos-base-ui) uses `pool pool.ntp.org iburst`. Started
+# offline, the pool name does not resolve and chronyd retries on a backoff
+# that reaches 448 s on Alpine, so the first sync could land minutes after
+# Wi-Fi connects. `chronyc onoffline` re-resolves unresolved sources at once
+# and marks each source online or offline by whether a route to it exists.
+# The 60- prefix orders it after postmarketOS's 50-dns-filter.sh.
+#
+# Talks to chronyd only over its root Unix socket (pmOS sets `cmdport 0`),
+# and does nothing when chronyd is not running. Always exits 0.
+
+case "${2:-}" in
+	up|down|connectivity-change|dhcp4-change|dhcp6-change) ;;
+	*) exit 0 ;;
+esac
+
+socket=/run/chrony/chronyd.sock
+[ -S "$socket" ] || exit 0
+command -v chronyc >/dev/null 2>&1 || exit 0
+chronyc -h "$socket" onoffline >/dev/null 2>&1
+exit 0

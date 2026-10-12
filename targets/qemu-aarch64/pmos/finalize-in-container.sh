@@ -93,6 +93,13 @@ if [ -d /product/licenses ]; then
     install -Dm644 "$notice" "$mnt/usr/share/licenses/ferrix/$rel"
   done
 fi
+# Target-neutral NTP hook (#8), byte-identical to the Pixel 9a device
+# package's copy: chronyd from postmarketos-base-ui re-resolves its pool as
+# soon as NetworkManager reports a change. QEMU's RTC is host-synced.
+if [ -d "$mnt/etc/NetworkManager" ]; then
+  install -Dm755 "$project/nm-dispatcher/60-ferrix-chrony-onoffline" \
+    "$mnt/etc/NetworkManager/dispatcher.d/60-ferrix-chrony-onoffline"
+fi
 contacts_fixtures_sha=""
 if [ -f /product/contacts/mock-contacts.json ]; then
   install -Dm644 /product/contacts/mock-contacts.json "$mnt/usr/share/ferrix/contacts/mock-contacts.json"

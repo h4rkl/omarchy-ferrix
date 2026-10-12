@@ -2,7 +2,7 @@
 pkgname=device-google-tegu
 pkgdesc="Google Pixel 9a native Linux device package"
 pkgver=1
-pkgrel=5
+pkgrel=6
 maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 url="https://postmarketos.org"
 license="MIT"
@@ -60,6 +60,7 @@ source="
 	ferrix-openrc.sh
 	ferrix-s5300-cpif.sh
 	networkmanager-ferrix.conf
+	chrony-onoffline.nm-dispatcher
 	modprobe-zram-gs.conf
 	ferrix-core.initd
 	ferrix-networkd.initd
@@ -114,6 +115,10 @@ package() {
 		"$pkgdir"/usr/lib/ferrix/s5300-cpif.sh
 	install -Dm644 "$srcdir"/networkmanager-ferrix.conf \
 		"$pkgdir"/etc/NetworkManager/conf.d/90-ferrix.conf
+	# chronyd comes from postmarketos-base-ui; this hook only tells it when
+	# the network changes (#8).
+	install -Dm755 "$srcdir"/chrony-onoffline.nm-dispatcher \
+		"$pkgdir"/etc/NetworkManager/dispatcher.d/60-ferrix-chrony-onoffline
 	install -Dm644 "$srcdir"/modprobe-zram-gs.conf \
 		"$pkgdir"/etc/modprobe.d/ferrix-zram-gs.conf
 	install -Dm755 "$srcdir"/ferrix-core.initd \
@@ -186,6 +191,7 @@ ff556df5c73c47c4d9e4d567a99bfc0941e58ab62e365498cd07e23c6244fa52ca3a6ef54bb8a9e0
 4699a59c1a710061c0fd97f326a113461e1f5dcdaa4e8479e8d4765105232dd9712e27510d1e0b9215f486504264b6f3f5d1aa24501a917e09715fdb840fa4de  ferrix-openrc.sh
 60e02b7d0be4961fa936ea3225f1575de227f2486faa606788af532dfc9e1d234bbe7b0f6efc8757d63c3b694455be2b02831d7e7973ce362be9105f6eb6c3ac  ferrix-s5300-cpif.sh
 e7b3709d984b5a4bf0dda54ea67232ca46d1b7858576722b04f26e3cb687e743cf63344f94a24f0c3eb3783f9dee8c4c7e51029384b18a04d099dc3eb93d1ed2  networkmanager-ferrix.conf
+6eaa9d326ae517fd681b0f72642116d487c20133a25df49f5f559187142f680079bd2519a3dfd7e3bc9f7ce9dfa07beb8ea34865c834edfa8b14ca870ca68241  chrony-onoffline.nm-dispatcher
 621fcc0692bcc71967609dbf952b08550821214184d43a9e1cbb211f4ea11db681ceef700b5abdf099914b4b03c7b79e3074b2b42534332e40746f40026503ef  modprobe-zram-gs.conf
 10917331b59aed69ef56df7b8cb829736fec632cec1056dcf79f4df01059a8d49e0c0df143278e24f11635aa16569f6893d0b616a088bad27e2a38647bb293d5  ferrix-core.initd
 399be7eb464c4e9f6dc7450e887d00e9af790e5874843b0b134d831ffa4178dfa6e6032748edb295668ccb5ce0fd4f530948a5de8e6482f55bf6023969ca1fcc  ferrix-networkd.initd
