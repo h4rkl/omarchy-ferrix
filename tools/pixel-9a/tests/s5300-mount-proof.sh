@@ -61,8 +61,8 @@ check "static: the proof mounts only under /run, never at the service destinatio
 	sh -c 'grep -Fxq "proof_root=/run/ferrix-s5300-mount-proof" "$1" && grep -Fq "destination=\$proof_root/\$proof_role" "$1"' sh "$probe"
 check "static: guest and host pin the same Kleaf kernel" \
 	sh -c '[ "$(sed -n "s/^pinned_kernel=//p" "$1")" = "$(sed -n "s/^pinned_kernel=//p" "$2")" ]' sh "$probe" "$proof"
-check "static: the checked-in service does not yet mount through a read-only loop" \
-	sh -c '! grep -Eq "^[^#]*losetup (--read-only|-r)" "$1"' sh "$initd"
+check "static: the guest reads the installed service hash before the mount-mode boundary" \
+	sh -c 'printf "%s\n" "$1" | grep -Fq "sha256sum /etc/init.d/ferrix-s5300-mounts"' sh "$preflight_part"
 check "static: the host never writes a passed gate" sh -c '! grep -nE "gate=passed|safety_gate passed|=passed" "$1"' sh "$proof"
 probe_status=0
 { printf 'proof_mode=preflight\nproof_role=\nproof_dev=\nproof_devname=\nproof_fstype=\n'; cat "$probe"; } | sh >/dev/null 2>&1 || probe_status=$?
@@ -76,6 +76,8 @@ acm_guest_init "$root" "$work" "$probe"
 unset FERRIX_PIXEL9A_ACM_TIMEOUT FERRIX_PIXEL9A_S5300_MOUNT_PROOF_CONFIRM FERRIX_PIXEL9A_S5300_PER_UNIT_DECISION 2>/dev/null || true
 
 zero='1 0 8 0 0 0 0 0 0 4 4 0 0 0 0 0 0'
+sha256() { (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -c1-64; }
+initd_sha256=$(sha256 "$initd")
 loopzero='2 0 16 0 0 0 0 0 0 1 1 0 0 0 0 0 0'
 part() {
 	printf 'part.%s.label=%s\npart.%s.link_state=block\npart.%s.link_device=%s\n' "$1" "$2" "$1" "$1" "$3"
@@ -85,7 +87,8 @@ part() {
 }
 common() {
 	printf 'probe=s5300-mount-proof\nmode=%s\ndt_model=ZUMA PRO TEGU MP on ZUMA PRO\ndt_compatible=google,ZUMA PRO TEGU\n' "$1"
-	printf 'kernel_release=6.1.124-android14-11-ga4662a84a15f\nuid=0\nblkid_impl=util-linux\nblockdev_impl=other\n'
+	printf 'kernel_release=6.1.124-android14-11-ga4662a84a15f\nuid=0\nservice_sha256=%s\n' "$initd_sha256"
+	printf 'blkid_impl=util-linux\nblockdev_impl=other\n'
 	printf 'losetup_impl=util-linux\nloop_free=loop3\n'
 	printf 'kernel_fs.ext4=yes\nkernel_fs.f2fs=yes\n'
 	printf 'runlevel.ferrix-s5300-mounts=absent\nrunlevel.exynos-modem=absent\n'
@@ -117,6 +120,9 @@ derive preflight pre-unknown-key -e '/^probe_complete=/i\
 serial=ABC123'
 derive preflight pre-no-loop -e 's/^loop_free=loop3$/loop_free=none/'
 derive preflight pre-busybox-losetup -e 's/^losetup_impl=util-linux$/losetup_impl=other/'
+derive preflight pre-service-differs -e "s/^service_sha256=.*/service_sha256=$(printf '%064d' 0)/"
+derive preflight pre-service-missing -e 's/^service_sha256=.*/service_sha256=missing/'
+derive preflight pre-service-malformed -e 's/^service_sha256=.*/service_sha256=0123/'
 derive preflight pre-wrong-label -e 's/^part\.modem_img\.label=modem_b$/part.modem_img.label=modem_a/'
 
 # mount ROLE LABEL DEVNAME DEV FSTYPE: a clean mount-session transcript.
@@ -190,6 +196,8 @@ derive mount-efs mount-umount -e 's/^umount_exit=0$/umount_exit=32/' -e 's/^stil
 	printf 'stat.mounted=not-run\nstat.settled=not-run\nloop_stat.mounted=not-run\nloop_stat.settled=not-run\nloop_stat.after=%s\n' "$loopzero"
 	printf 'umount_exit=not-run\nstill_mounted=no\ndetach_exit=not-run\nstill_bound=no\nstat.after=%s\nbdev_ro.after=0\nprobe_complete=yes\n' "$zero"
 } >"$work/fx/mount-setro"
+derive mount-efs mount-efs-differs -e "s/^service_sha256=.*/service_sha256=$(printf '%064d' 0)/"
+derive mount-efs mount-service-changed -e "s/^service_sha256=.*/service_sha256=$(printf '%064d' 1)/"
 derive mount-efs mount-unknown-key -e '/^probe_complete=/i\
 imei=123456789012345'
 
@@ -240,13 +248,23 @@ check "preflight: transcript keeps hashes and raw output" \
 run preflight-arg preflight '' 0 preflight
 check "preflight: explicit argument is the same read-only run" sh -c '[ "$1" -eq 0 ] && [ "$2" -eq 1 ]' sh "$status" "$runs"
 EVIDENCE=physical run preflight-physical preflight '' 0
-check "preflight: clean physical run is blocked while the service mounts without a read-only loop" \
-	sh -c 'printf "%s\n" "$1" | grep -Fxq issue34_safety_gate=blocked && printf "%s\n" "$1" | grep -Fxq service_mount_path=unprotected &&
-		printf "%s\n" "$1" | grep -Fxq issue34_gate_blocker=service-mounts-without-read-only-loop' sh "$out"
+check "preflight: clean physical run with the checked-in protected service needs owner review, never passes" \
+	sh -c 'printf "%s\n" "$1" | grep -Fxq issue34_safety_gate=owner-review-required && printf "%s\n" "$1" | grep -Fxq service_mount_path=read-only-loop &&
+		printf "%s\n" "$1" | grep -Fxq service_installed=matches-checkout && ! printf "%s\n" "$1" | grep -q "^issue34_gate_blocker="' sh "$out"
 check "preflight: physical transcript names the exact target" \
 	grep -Fxq 'evidence=physical:google-pixel-9a-tegu-gxq96-mp1-0' "$results/preflight-latest.txt"
 EVIDENCE=physical run pre-kernel pre-kernel '' 0
 check "preflight: another kernel blocks" sh -c 'printf "%s\n" "$1" | grep -Fxq kernel_pinned=no && printf "%s\n" "$1" | grep -Fxq issue34_safety_gate=blocked' sh "$out"
+EVIDENCE=physical run pre-service-differs pre-service-differs '' 0
+check "preflight: an installed service other than the checked-in one blocks the gate" \
+	sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq service_installed=differs-from-checkout &&
+		printf "%s\n" "$2" | grep -Fxq issue34_gate_blocker=installed-service-not-the-checked-in-service &&
+		printf "%s\n" "$2" | grep -Fxq issue34_safety_gate=blocked' sh "$status" "$out"
+EVIDENCE=physical run pre-service-missing pre-service-missing '' 0
+check "preflight: a guest without the service blocks the gate" \
+	sh -c 'printf "%s\n" "$1" | grep -Fxq service_installed=missing && printf "%s\n" "$1" | grep -Fxq issue34_safety_gate=blocked' sh "$out"
+run pre-service-malformed pre-service-malformed '' 0
+check "malformed: a service hash that is not sha256 is refused" [ "$status" -eq 5 ]
 run pre-runlevel pre-runlevel '' 0
 check "preflight: service in a runlevel blocks" has 'preflight_problems=ferrix-s5300-mounts-in-runlevel'
 run pre-efs-ext4 pre-efs-ext4 '' 0
@@ -309,8 +327,11 @@ check "mount efs: mock never evaluates the gate" has 'issue34_safety_gate=not-ev
 check "mount efs: mountinfo source stays redacted" \
 	sh -c 'grep -Fq "redacted-source" "$1" && ! grep -Fq "/dev/sda21" "$1"' sh "$results/mount-efs-latest.txt"
 EVIDENCE=physical run mount-efs-physical preflight mount-efs 0 mount efs
-check "mount efs physical: a clean run stays blocked on the unprotected service" \
-	sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq mount_observation=no-write-observed && printf "%s\n" "$2" | grep -Fxq issue34_safety_gate=blocked' sh "$status" "$out"
+check "mount efs physical: a clean run with the protected service needs owner review, never passes" \
+	sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq mount_observation=no-write-observed && printf "%s\n" "$2" | grep -Fxq issue34_safety_gate=owner-review-required' sh "$status" "$out"
+EVIDENCE=physical run mount-efs-differs pre-service-differs mount-efs-differs 0 mount efs
+check "mount efs physical: a clean run on a guest with another service stays blocked" \
+	sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq issue34_safety_gate=blocked' sh "$status" "$out"
 
 unset FERRIX_PIXEL9A_S5300_PER_UNIT_DECISION
 FERRIX_PIXEL9A_S5300_MOUNT_PROOF_CONFIRM='mount modem_img read-only on google-pixel-9a-tegu-gxq96-mp1-0'
@@ -367,6 +388,10 @@ check "BLKROSET failure: no loop, never mounted, anomaly" \
 run mount-refused preflight mount-refused 6 mount efs
 check "guest refusal: exit 6 before any state change" \
 	sh -c '[ "$1" -eq 6 ] && printf "%s\n" "$2" | grep -Fxq state_changed=no && printf "%s\n" "$2" | grep -Fq "(partition-already-mounted)"' sh "$status" "$out"
+EVIDENCE=physical run mount-service-changed preflight mount-service-changed 0 mount efs
+check "installed service changed between sessions: anomaly, exit 8, gate blocked" \
+	sh -c '[ "$1" -eq 8 ] && printf "%s\n" "$2" | grep -Fxq anomalies=installed-service-changed-between-sessions &&
+		printf "%s\n" "$2" | grep -Fxq issue34_safety_gate=blocked' sh "$status" "$out"
 run mount-unknown-key preflight mount-unknown-key 0 mount efs
 check "malformed: unknown mount field refused, value not echoed" \
 	sh -c '[ "$1" -eq 5 ] && ! printf "%s\n" "$2" | grep -Fq 123456789012345' sh "$status" "$out"
@@ -378,18 +403,42 @@ check "preflight refusal: unpinned kernel never gets a mount session" sh -c '[ "
 run mount-other-role pre-iostats mount-efs 0 mount efs
 check "preflight: a problem on another role does not block this one" sh -c '[ "$1" -eq 0 ] && [ "$2" -eq 2 ]' sh "$status" "$runs"
 
-# A copy of the workflow next to a service that does mount through a
-# read-only loop: the gate then rises to owner review, never to passed.
+# Copies of the workflow next to services that do not meet the read-only-loop
+# contract: the previous direct partition mount, a service whose APKBUILD
+# checksum is stale, and one whose package lacks losetup. The guest is told it
+# runs the copy, so only the static contract can block the gate.
 alt="$work/alt"
-alt_initd="$alt/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu/ferrix-s5300-mounts.initd"
-mkdir -p "$alt/tools/pixel-9a" "${alt_initd%/*}"
+alt_pkg="$alt/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu"
+alt_initd="$alt_pkg/ferrix-s5300-mounts.initd"
+mkdir -p "$alt/tools/pixel-9a" "$alt_pkg"
 cp "$proof" "$probe" "$root/tools/pixel-9a/acm-probe.py" "$alt/tools/pixel-9a/"
-{ cat "$initd"; printf '\tblockdev --setro "$device"\n\tlosetup --read-only -- "$loop" "$device"\n'; } >"$alt_initd"
 proof_orig=$proof
 proof="$alt/tools/pixel-9a/s5300-mount-proof.sh"
-EVIDENCE=physical run mount-efs-protected preflight mount-efs 0 mount efs
-check "protected service: a clean physical run needs owner review, never passes" \
-	sh -c 'printf "%s\n" "$1" | grep -Fxq service_mount_path=read-only-loop && printf "%s\n" "$1" | grep -Fxq issue34_safety_gate=owner-review-required' sh "$out"
+alt_case() {
+	# NAME: run a clean physical preflight against the current alt copy.
+	derive preflight "pre-$1" -e "s/^service_sha256=.*/service_sha256=$(sha256 "$alt_initd")/"
+	EVIDENCE=physical run "$1" "pre-$1" '' 0
+}
+pkg="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/device-google-tegu"
+sed 's#-- "$dev_root/$attached" "$destination"#-- "$device" "$destination"#' "$initd" >"$alt_initd"
+awk -v sum="$( (shasum -a 512 "$alt_initd" 2>/dev/null || sha512sum "$alt_initd") | cut -c1-128)" \
+	'$2 == "ferrix-s5300-mounts.initd" { $1 = sum; print; next } { print }' "$pkg/APKBUILD" >"$alt_pkg/APKBUILD"
+alt_case alt-direct
+check "unprotected service: a direct partition mount blocks a clean physical run" \
+	sh -c 'printf "%s\n" "$1" | grep -Fxq service_mount_path=unprotected && printf "%s\n" "$1" | grep -Fxq service_installed=matches-checkout &&
+		printf "%s\n" "$1" | grep -Fxq issue34_gate_blocker=service-mounts-without-read-only-loop &&
+		printf "%s\n" "$1" | grep -Fxq issue34_safety_gate=blocked' sh "$out"
+{ cat "$initd"; printf '# changed\n'; } >"$alt_initd"
+cp "$pkg/APKBUILD" "$alt_pkg/APKBUILD"
+alt_case alt-stale
+check "unprotected service: a stale APKBUILD checksum blocks" has 'issue34_gate_blocker=service-mounts-without-read-only-loop'
+cp "$initd" "$alt_initd"
+grep -vE '^[[:space:]]*losetup[[:space:]]*$' "$pkg/APKBUILD" >"$alt_pkg/APKBUILD"
+alt_case alt-no-losetup
+check "unprotected service: a package without util-linux losetup blocks" has 'issue34_gate_blocker=service-mounts-without-read-only-loop'
+cp "$pkg/APKBUILD" "$alt_pkg/APKBUILD"
+alt_case alt-same
+check "control: the alt copy of the checked-in service meets the contract" has 'service_mount_path=read-only-loop'
 EVIDENCE=physical run mount-loopwrite-protected preflight mount-loopwrite 0 mount efs
 check "protected service: a rejected write attempt still blocks" has 'issue34_safety_gate=blocked'
 proof=$proof_orig

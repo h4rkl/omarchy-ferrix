@@ -112,6 +112,7 @@ jobs:
           sh tools/pixel-9a/tests/audio-inventory-workflow.sh
           sh tools/pixel-9a/tests/s5300-source-inventory.sh
           sh tools/pixel-9a/tests/s5300-mount-proof.sh
+          sh tools/pixel-9a/tests/s5300-mounts-service.sh
 
       - name: Pixel AoC firmware loader (mock)
         run: sh tools/pixel-9a/tests/aoc-firmware-runtime.sh

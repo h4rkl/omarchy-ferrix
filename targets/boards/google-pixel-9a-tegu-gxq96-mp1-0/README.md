@@ -948,7 +948,11 @@ exact inputs to the mount service.
 For each source, the host reports the raw type and resolution. Resolution is
 unique, missing, duplicate, device mismatch, or slot unresolved. Type is ext4,
 f2fs, no signature, ambivalent, unsupported, or unknown. The host also checks
-existing mounts against the service's `verify_mount` contract. The redacted
+existing mounts against the service's `verify_mount` contract. A direct
+partition mount violates that contract (`direct-partition-mount`), because
+the service mounts only a read-only loop. A loop mount at the destination is
+reported as `loop-backing-not-inventoried`, because this probe does not read
+loop sysfs. The redacted
 transcript, labelled `physical:google-pixel-9a-tegu-gxq96-mp1-0` (or `mock`
 under `FERRIX_PIXEL9A_S5300_INVENTORY_EVIDENCE=mock`), is written to ignored
 `out/pixel-9a/s5300-source-inventory/`. A clean physical run reports
@@ -1049,6 +1053,7 @@ preflight. It checks:
 
 - the exact device tree and the pinned kernel release;
 - that `ferrix-s5300-mounts` and `exynos-modem` are in no runlevel;
+- the SHA-256 of the installed `/etc/init.d/ferrix-s5300-mounts`;
 - that nothing is mounted under `/mnt/vendor`;
 - that util-linux `losetup` and an unbound loop device with `ro` 0 exist;
 - for each role: unique partition resolution, the util-linux `blkid -p`
@@ -1098,20 +1103,79 @@ these stops the run:
 
 The partition's `ro` flag stays set until the next boot.
 
-`ferrix-s5300-mounts` does not yet mount through a read-only loop. The
-workflow statically checks the checked-in service. Until the service applies
-`BLKROSET` and mounts only from a loop it attached with `--read-only` and
-verified as above, every physical result reports `issue34_safety_gate=blocked`
-with `issue34_gate_blocker=service-mounts-without-read-only-loop`. A proof run
-covers only the path that the service itself uses. After the service changes,
-the best result is `mount_observation=no-write-observed` with
-`issue34_safety_gate=owner-review-required`; no run reports a passed gate.
-Changing the service also changes its `verify_mount` (the mount source
-becomes the loop), the device package's depends (util-linux `losetup`), and
-the APKBUILD checksum; that is a separate reviewed change. Transcripts go to
+`ferrix-s5300-mounts` now mounts each source through the same read-only
+loop, so a proof run covers the path the service itself uses. For each
+source, after the slot, label, and `blkid -p` checks, the service:
+
+1. refuses if the partition is already mounted directly anywhere, if
+   `losetup` is not util-linux, or if no unbound loop whose `ro` reads 0
+   exists. Nothing has changed state at this point;
+2. applies `blockdev --setro` to the partition and requires its sysfs `ro`
+   to read 1;
+3. re-checks the chosen loop and runs `losetup --read-only` onto it. If
+   another process took the loop first, losetup fails and that binding is
+   left alone;
+4. runs `verify_loop`. This requires the loop to be bound and read `ro=1`,
+   with major 7, the partition node as its backing file, offset and
+   sizelimit 0, the partition's size, the partition still `ro=1`, and the
+   probed type from `blkid -p` on the loop. If any check fails, the service
+   detaches the loop it attached;
+5. mounts only the loop, with `ro,noload` (ext4) or `ro,norecovery` (f2fs)
+   and `nosuid,nodev,noexec`;
+6. runs `verify_mount`. The mountinfo line must name that loop's
+   `major:minor` and node, with root `/`, the probed type, `ro` on the mount
+   and the superblock, and the recovery flag. `verify_loop` must still pass,
+   and the partition must not be mounted directly. An unconfirmed mount is
+   unmounted (never forced), and its loop is detached only after the
+   unmount succeeds.
+
+An existing mount at a destination is accepted only if it passes the same
+`verify_mount`, so a direct partition mount left by an older service is
+refused. `stop` unmounts each destination without forcing. It detaches the
+loop only once nothing mounts it. It never clears the partitions' `ro` flag.
+The device package now also depends on util-linux `blockdev` and `losetup`.
+
+Known limits of the service change:
+
+- Detaching does not clear a loop's `ro=1`, so every start and stop cycle
+  uses up four loops whose `ro` reads 0 until the next reboot. With the GKI
+  default of 16 loop devices, roughly four cycles leave none, and `start`
+  then refuses. A start that fails partway leaves the sources it already
+  mounted in place, still verified. OpenRC then keeps the modem services
+  stopped.
+- The barrier scope is unchanged. It does not cover the whole-disk node,
+  passthrough, or another opener of the partition.
+- The util-linux version in the guest is not pinned. The service checks
+  that `losetup` is util-linux, but cannot observe the backing open mode.
+- Nothing here has run on Linux or on the device. The service is covered
+  only by the offline stub harness, `just pixel-9a-s5300-mounts-test`
+  (`tools/pixel-9a/tests/s5300-mounts-service.sh`). That harness models the
+  sysfs state that it expects the kernel to show.
+
+The service stays out of every runlevel on the dev image
+(`tools/pixel-9a/dev-compose.py` `RADIO_ROUTE_SERVICES`), and no CP boot is
+attempted.
+
+The workflow's gate now follows the actual service contract. On the host it
+statically checks that the checked-in service has exactly one mount call and
+that this call mounts the attached loop. It also checks for
+`blockdev --setro` and `losetup --read-only`, that both new and existing
+mounts go through `verify_loop`, that the package depends on `blkid`,
+`blockdev`, and `losetup`, and that the APKBUILD `sha512` matches the file.
+The guest preflight reports the SHA-256 of its installed
+`/etc/init.d/ferrix-s5300-mounts`, and the host compares it with the
+checked-in file. If the static check fails, the result is
+`issue34_gate_blocker=service-mounts-without-read-only-loop`. If the guest
+has no service or a different one, it is
+`installed-service-not-the-checked-in-service`. Either one keeps the gate
+`blocked`. With both checks met, the best result is
+`mount_observation=no-write-observed` with
+`issue34_safety_gate=owner-review-required`. No run reports a passed gate,
+and the static check does not prove the service correct. Transcripts go to
 ignored `out/pixel-9a/s5300-mount-proof/`. The workflow is offline
 fixture-tested only (`just pixel-9a-s5300-mount-proof-test`); no mount has
-been run.
+been run. The physical preflight and the owner-reviewed mount runs are
+still required before the issue #34 gate can be reviewed.
 
 ## Audio route
 

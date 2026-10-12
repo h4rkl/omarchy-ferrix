@@ -11,7 +11,8 @@
 #
 # preflight never mounts, never changes block-device state, and never reads
 # partition contents: util-linux `blkid -p` reads only the superblock TYPE,
-# and the rest comes from sysfs, /proc and the kernel log.
+# and the rest comes from sysfs, /proc, the kernel log, and a SHA-256 of the
+# installed /etc/init.d/ferrix-s5300-mounts.
 #
 # mount (only after the host's typed confirmation) repeats the preflight for
 # one role and refuses unless the partition is the one the preflight bound.
@@ -53,6 +54,17 @@ uid=$(id -u)
 printf 'probe=s5300-mount-proof\nmode=%s\n' "$proof_mode"
 printf 'dt_model=%s\ndt_compatible=google,ZUMA PRO TEGU\n' "$model"
 printf 'kernel_release=%s\nuid=%s\n' "$kernel_release" "$uid"
+
+# The installed mount service, so the host can tell whether the guest runs
+# the checked-in service the proof stands for. Reading it changes nothing.
+service_sha256=missing
+if [ -f /etc/init.d/ferrix-s5300-mounts ]; then
+	service_sha256=$(sha256sum /etc/init.d/ferrix-s5300-mounts 2>/dev/null | cut -c1-64)
+	case "$service_sha256" in
+		*[!0-9a-f]*|'') service_sha256=unavailable ;;
+	esac
+fi
+printf 'service_sha256=%s\n' "$service_sha256"
 
 if ! command -v blkid >/dev/null 2>&1; then
 	blkid_impl=missing

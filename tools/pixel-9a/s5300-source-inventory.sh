@@ -162,7 +162,11 @@ emit mountinfo_readable "$mountinfo_readable"
 
 # Prints "status|recovery-flag-observed" for every mountinfo line that the
 # probe recorded for $1. A line is accepted only with the properties
-# ferrix-s5300-mounts.initd verify_mount() requires.
+# ferrix-s5300-mounts.initd verify_mount() requires. The service mounts only
+# a read-only loop over the partition, so a direct mount of the partition
+# violates the contract. A loop mount at the destination is reported as
+# `loop-backing-not-inventoried`: this probe does not read loop sysfs, so it
+# cannot confirm the loop's read-only flag, backing device, or geometry.
 mount_eval() {
 	awk -v key="part.$1.mount=" -v dest="$mount_root/$1" -v dev="$2" -v fstype="$3" '
 		function has(list, option) { return index("," list ",", "," option ",") > 0 }
@@ -173,7 +177,9 @@ mount_eval() {
 			sep = 0
 			for (i = 7; i <= nf; i++) if (f[i] == "-") { sep = i; break }
 			if (!sep || sep + 3 > nf || f[3] !~ /^[0-9]+:[0-9]+$/) { malformed = 1; next }
-			if (dev == "" || f[3] != dev) { add("foreign-mount-at-destination"); next }
+			if (f[3] ~ /^7:[0-9]+$/ && f[5] == dest) loop = 1
+			else if (dev == "" || f[3] != dev) { add("foreign-mount-at-destination"); next }
+			else add("direct-partition-mount")
 			if (f[5] != dest) add("mounted-outside-destination")
 			if (f[4] != "/") add("not-whole-filesystem")
 			if (fstype != "ext4" && fstype != "f2fs") add("superblock-type-unknown")
@@ -189,6 +195,7 @@ mount_eval() {
 			if (!count) status = "not-mounted"
 			else if (malformed) status = "malformed-mountinfo"
 			else if (reasons != "") status = "contract-violated:" reasons
+			else if (loop) status = "loop-backing-not-inventoried"
 			else status = "contract-met"
 			print status "|" (flag == "" ? "unknown" : flag)
 		}

@@ -40,9 +40,10 @@ set -eu
 # excluded by the preflight checks, not by the kernel. Unchanged partition
 # counters are consistent with no write, not proof of absence.
 #
-# No result ever passes the issue #34 gate. While ferrix-s5300-mounts does not
-# itself mount through a verified read-only loop, the gate stays `blocked`;
-# after that the best outcome is `owner-review-required`.
+# No result ever passes the issue #34 gate. The gate stays `blocked` unless the
+# checked-in ferrix-s5300-mounts meets the read-only-loop contract and the
+# guest's installed copy is byte-identical to it; then the best outcome is
+# `owner-review-required`.
 #
 # Exit status: 0 completed (mount: no anomaly), 2 usage or missing gate,
 # 3 transport or guest failure, 4 not the exact tegu board, 5 malformed probe
@@ -66,6 +67,7 @@ dt_model='ZUMA PRO TEGU MP on ZUMA PRO'
 dt_compatible='google,ZUMA PRO TEGU'
 pinned_kernel=6.1.124-android14-11-ga4662a84a15f
 service_initd="$root/targets/boards/$target_id/pmos/device-google-tegu/ferrix-s5300-mounts.initd"
+service_apkbuild="$root/targets/boards/$target_id/pmos/device-google-tegu/APKBUILD"
 per_unit_decision=owner-approved-issue34-per-unit-ro-mount
 max_output=65536
 acm_timeout=${FERRIX_PIXEL9A_ACM_TIMEOUT:-90}
@@ -174,7 +176,7 @@ session() {
 validate() {
 	awk -v mode="$2" -v roles="${3:-$roles}" '
 		BEGIN {
-			split("probe mode dt_model dt_compatible kernel_release uid blkid_impl blockdev_impl losetup_impl loop_free kernel_fs.ext4 kernel_fs.f2fs runlevel.ferrix-s5300-mounts runlevel.exynos-modem mountinfo_readable vendor_mounts proof_mounts kmsg_usable slot_source slot_value_count slot_suffix probe_complete", g, " ")
+			split("probe mode dt_model dt_compatible kernel_release uid service_sha256 blkid_impl blockdev_impl losetup_impl loop_free kernel_fs.ext4 kernel_fs.f2fs runlevel.ferrix-s5300-mounts runlevel.exynos-modem mountinfo_readable vendor_mounts proof_mounts kmsg_usable slot_source slot_value_count slot_suffix probe_complete", g, " ")
 			for (i in g) required[g[i]] = 1
 			split(roles, r, " ")
 			split("label link_state link_device partname_count partname_devices dev parent bdev_ro iostats holders stat blkid_exit blkid_type mounts", f, " ")
@@ -215,14 +217,40 @@ expected_type() {
 }
 
 # The issue #34 gate covers the production service only if the service mounts
-# through the same protected path. This is a static check of the checked-in
-# service; it can only block the gate, never pass it.
+# through the same protected path as this proof, and only if the guest runs
+# that exact service. The first part is a static check of the checked-in
+# service against the contract that tools/pixel-9a/tests/s5300-mounts-service.sh
+# exercises: its only mount call mounts the attached loop, it sets BLKROSET
+# and attaches with `losetup --read-only`, both a new and an existing mount
+# go through verify_loop, and the package ships exactly this file with the
+# util-linux tools it needs. The second part compares the guest's installed
+# /etc/init.d/ferrix-s5300-mounts with the checked-in file. Both can only
+# block the gate, never pass it.
+service_contract() {
+	[ -f "$service_initd" ] && [ -f "$service_apkbuild" ] || return 1
+	code=$(grep -v '^[[:space:]]*#' "$service_initd")
+	[ "$(printf '%s\n' "$code" | grep -cE '(^|[;&|{(]|then|do)[[:space:]]*mount[[:space:]]')" -eq 1 ] || return 1
+	printf '%s\n' "$code" | grep -Fq 'mount -t "$fstype" -o "ro,$(recovery_option "$fstype"),nosuid,nodev,noexec" -- "$dev_root/$attached" "$destination"' || return 1
+	printf '%s\n' "$code" | grep -Eq '^[[:space:]]*blockdev --setro "\$device"' || return 1
+	printf '%s\n' "$code" | grep -Fq 'losetup --read-only -- "$dev_root/$attached" "$device"' || return 1
+	printf '%s\n' "$code" | grep -Fq 'verify_loop "$attached" "$device" "$fstype"' || return 1
+	printf '%s\n' "$code" | grep -Fq 'verify_loop "$loop_name" "$device" "$fstype"' || return 1
+	! printf '%s\n' "$code" | grep -Eq 'setrw|[l]osetup -[a-z]*f|--find' || return 1
+	for package in blkid blockdev losetup; do
+		grep -Eq "^[[:space:]]*$package[[:space:]]*\$" "$service_apkbuild" || return 1
+	done
+	sha512=$( (shasum -a 512 "$service_initd" 2>/dev/null || sha512sum "$service_initd") | cut -c1-128)
+	[ "$(awk '$2 == "ferrix-s5300-mounts.initd" { print $1 }' "$service_apkbuild")" = "$sha512" ]
+}
 service_path=unprotected
-[ -f "$service_initd" ] && grep -Eq '^[^#]*blockdev --setro' "$service_initd" &&
-	grep -Eq '^[^#]*losetup (--read-only|-r)' "$service_initd" && service_path=read-only-loop
+service_contract && service_path=read-only-loop
+service_sha256=missing
+[ ! -f "$service_initd" ] || service_sha256=$(sha256 "$service_initd")
+service_installed=unknown
+gate_blockers=''
 gate_for() {
 	if [ "$evidence" = mock ]; then printf 'not-evaluated-mock\n'
-	elif [ -n "$1" ] || [ "$service_path" != read-only-loop ]; then printf 'blocked\n'
+	elif [ -n "$1" ] || [ -n "$gate_blockers" ]; then printf 'blocked\n'
 	else printf 'owner-review-required\n'
 	fi
 }
@@ -330,8 +358,21 @@ for each in $roles; do
 	fi
 done
 emit preflight_problems "${problems:-none}"
+guest_service=$(get "$pre" service_sha256)
+case "$guest_service" in
+	missing|unavailable) service_installed=$guest_service ;;
+	"$service_sha256") service_installed=matches-checkout ;;
+	*)
+		printf '%s\n' "$guest_service" | grep -Eqx '[0-9a-f]{64}' || die 'probe reported a malformed service hash' 5
+		service_installed=differs-from-checkout
+		;;
+esac
 emit service_mount_path "$service_path"
-[ "$service_path" = read-only-loop ] || emit issue34_gate_blocker service-mounts-without-read-only-loop
+emit service_installed "$service_installed"
+[ "$service_path" = read-only-loop ] || gate_blockers=service-mounts-without-read-only-loop
+[ "$service_installed" = matches-checkout ] ||
+	gate_blockers="$gate_blockers${gate_blockers:+,}installed-service-not-the-checked-in-service"
+[ -z "$gate_blockers" ] || emit issue34_gate_blocker "$gate_blockers"
 
 if [ "$mode" = preflight ]; then
 	gate=$(gate_for "$problems")
@@ -394,6 +435,9 @@ loop_name=$(get "$m" loop_name)
 loop_dev=$(get "$m" loop_dev)
 case "$loop_name" in loop[0-9]|loop[0-9][0-9]|loop[0-9][0-9][0-9]) ;; *) die 'mount probe reported a malformed loop device name' 5 ;; esac
 emit state_changed "$(get "$m" state_changed)"
+# The gate stands for the service the preflight hashed; a change between the
+# two sessions is a stop.
+[ "$(get "$m" service_sha256)" = "$guest_service" ] || anomaly installed-service-changed-between-sessions
 emit setro_exit "$(get "$m" setro_exit)"
 emit bdev_ro_before_mount "$(get "$m" bdev_ro.before)"
 emit loop_name "$loop_name"

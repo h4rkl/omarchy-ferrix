@@ -178,9 +178,12 @@ observation is captured; later stages never imply earlier ones.
    `losetup --read-only` fails every write before it reaches the partition
    ([README](README.md#s5300-source-mount-proof-issue-34)). The gate
    therefore also needs `ferrix-s5300-mounts` itself to set `BLKROSET` and
-   mount only from a verified read-only loop. It also needs an observed
-   `just pixel-9a-s5300-mount-proof` run reviewed by the owner. Until the
-   service does this, the workflow reports the gate `blocked`.
+   mount only from a verified read-only loop. The checked-in service now
+   does this (offline stub-tested only). The gate also needs the guest to
+   run that exact service, and an observed
+   `just pixel-9a-s5300-mount-proof` preflight and per-role mount runs
+   reviewed by the owner. Until then the workflow reports the gate `blocked`
+   or, at best, `owner-review-required`; no result passes it.
 1. **E1 inventory** (above).
 2. **CP boot.** Start manually, not from the default runlevel, so a
    CP-crash panic cannot boot-loop:

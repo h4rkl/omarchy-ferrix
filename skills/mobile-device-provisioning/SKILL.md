@@ -969,7 +969,9 @@ mismatch. Transcripts: `out/pixel-9a/radios/<command>-<stamp>.txt`.
 6. The guest's `ferrix-s5300-mounts` service reads exactly one
    `androidboot.slot_suffix` (`_a` or `_b`) and maps it to the matching
    `modem_a` or `modem_b` partition. It mounts that modem image plus `efs`,
-   `persist`, and `modem_userdata` read-only, and refuses a missing, duplicate,
+   `persist`, and `modem_userdata` read-only, each only through a verified
+   read-only loop over a `BLKROSET` partition (never the partition itself;
+   offline stub-tested only, physical proof pending), and refuses a missing, duplicate,
    unknown, foreign, or writable source; it never guesses `_a` for slot B.
    `exynos-modem` consequently consumes only the current-slot `modem.bin` and
    exact read-only calibration inputs. This pairing is a runtime safety gate,

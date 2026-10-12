@@ -496,13 +496,21 @@ pixel-9a-s5300-source-inventory-test:
 # the partition's block device read-only, attaches it to a verified read-only
 # loop, mounts only the loop once with the service options under /run, and
 # compares counters, mountinfo, and kernel log. A run never reports the issue
-# #34 safety gate as passed; it stays blocked while ferrix-s5300-mounts does
-# not mount through the same read-only loop.
+# #34 safety gate as passed; it stays blocked unless the checked-in
+# ferrix-s5300-mounts meets the same read-only-loop contract and the guest's
+# installed copy is that exact file.
 pixel-9a-s5300-mount-proof *args:
     @sh "{{root}}/tools/pixel-9a/s5300-mount-proof.sh" {{args}}
 
 pixel-9a-s5300-mount-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/s5300-mount-proof.sh"
+
+# Offline contract of the exact Pixel ferrix-s5300-mounts service: every source
+# is mounted only through a verified read-only loop over a BLKROSET partition,
+# with every refusal and cleanup path exercised against stubs. Not physical
+# evidence.
+pixel-9a-s5300-mounts-test:
+    @sh "{{root}}/tools/pixel-9a/tests/s5300-mounts-service.sh"
 
 # Generic, vendor-agnostic read-only device front door. Discovery only uses
 # adb devices/getprop and fastboot devices/getvar; matching, proposing, and
