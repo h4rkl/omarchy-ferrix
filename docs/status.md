@@ -33,6 +33,44 @@
   rootfs and does not run apk scripts. It does not create `/mnt/vendor`, so
   only a rootfs rebuilt with 1-r5 carries the directory.
 
+## 2026-10-12 (A2DP active proof play; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The session that operates the phone ran `play` four times on the exact
+  phone with the 1-r3 dev image. Transcripts stay in ignored
+  `out/pixel-9a/a2dp-active-proof/`.
+- 08:42:39 and 09:55:45 UTC: both refused before any tone
+  (`kernel-guard-tripped-before-tone`). The PCM and control guards read
+  clean. Read-only replays of live `pw-mon -N -a -p` output through
+  `guard_awk`, on the device's busybox awk with no audio, showed the cause:
+  the graph guard tripped `graph-observation-malformed` on normal startup
+  output. PipeWire Module objects print a quoted `args:` value over several
+  lines, and protocol-native's holds blank lines, which the guard took as
+  the end of the block.
+- Fixed in `6c231b9`. The guard consumes a quoted value that spans lines
+  up to its closing quote. It still trips if the quote is open at the next
+  event header or when pw-mon ends. A graph trip before the review now
+  refuses as `graph-guard-tripped-before-tone`, and every pre-tone refusal
+  carries the four `guard_trip_*` reasons. A live capture replayed through
+  the fixed guard on the device's busybox awk gave no trip (final
+  `no 0 no no none`).
+- 10:21:57 and 10:22:36 UTC, workflow at `6c231b9`: both
+  `route-held-tone-delivered`. Every `guard_trip_*` was `none`;
+  `route_safety=held`, `tone_delivery=linked-active`, two own links, and
+  our node seen removed. The final observation showed zero streams, both
+  speaker controls `off`, and a complete opener scan with zero playback
+  PCM openers, so cleanup was `clean`. The sink was LDAC at volume 0.30.
+  The owner confirmed by ear that the tone was audible ("i hear it").
+- Offline: `just pixel-9a-a2dp-active-proof-test` now runs 256 checks on
+  macOS, plus three mawk-only checks where the host awk is mawk (not run
+  here).
+  New checks replay the device's Module block shape through `guard_awk` and
+  cover pre-tone refusals that carry guard reasons.
+- Limits: one headset, one codec (LDAC), one boot; the owner's ear is the
+  only audibility evidence. This shows one guarded tone to one bound A2DP
+  sink, not general audio output. The internal speaker and earpiece stay
+  NO-GO, and `[audio]` stays `unsupported`; the capability matrix is
+  unchanged.
+
 ## 2026-10-12 (S5300 S2 active CP boot, issue #92; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The owner approved the source mounts and one CP boot for this run. The
@@ -218,44 +256,6 @@
 - Offline tests pass. The physical run was read-only: no source was mounted,
   no CPIF node was opened, and no service or CP was started. It is pre-boot
   evidence only; `[telephony]` remains `unsupported`.
-
-## 2026-10-12 (A2DP active proof play; physical:google-pixel-9a-tegu-gxq96-mp1-0)
-
-- The session that operates the phone ran `play` four times on the exact
-  phone with the 1-r3 dev image. Transcripts stay in ignored
-  `out/pixel-9a/a2dp-active-proof/`.
-- 08:42:39 and 09:55:45 UTC: both refused before any tone
-  (`kernel-guard-tripped-before-tone`). The PCM and control guards read
-  clean. Read-only replays of live `pw-mon -N -a -p` output through
-  `guard_awk`, on the device's busybox awk with no audio, showed the cause:
-  the graph guard tripped `graph-observation-malformed` on normal startup
-  output. PipeWire Module objects print a quoted `args:` value over several
-  lines, and protocol-native's holds blank lines, which the guard took as
-  the end of the block.
-- Fixed in `6c231b9`. The guard consumes a quoted value that spans lines
-  up to its closing quote. It still trips if the quote is open at the next
-  event header or when pw-mon ends. A graph trip before the review now
-  refuses as `graph-guard-tripped-before-tone`, and every pre-tone refusal
-  carries the four `guard_trip_*` reasons. A live capture replayed through
-  the fixed guard on the device's busybox awk gave no trip (final
-  `no 0 no no none`).
-- 10:21:57 and 10:22:36 UTC, workflow at `6c231b9`: both
-  `route-held-tone-delivered`. Every `guard_trip_*` was `none`;
-  `route_safety=held`, `tone_delivery=linked-active`, two own links, and
-  our node seen removed. The final observation showed zero streams, both
-  speaker controls `off`, and a complete opener scan with zero playback
-  PCM openers, so cleanup was `clean`. The sink was LDAC at volume 0.30.
-  The owner confirmed by ear that the tone was audible ("i hear it").
-- Offline: `just pixel-9a-a2dp-active-proof-test` now runs 256 checks on
-  macOS, plus three mawk-only checks where the host awk is mawk (not run
-  here).
-  New checks replay the device's Module block shape through `guard_awk` and
-  cover pre-tone refusals that carry guard reasons.
-- Limits: one headset, one codec (LDAC), one boot; the owner's ear is the
-  only audibility evidence. This shows one guarded tone to one bound A2DP
-  sink, not general audio output. The internal speaker and earpiece stay
-  NO-GO, and `[audio]` stays `unsupported`; the capability matrix is
-  unchanged.
 
 ## 2026-10-12 (A2DP active proof dry runs; physical:google-pixel-9a-tegu-gxq96-mp1-0, dry only)
 
