@@ -1,5 +1,37 @@
 # Status
 
+## 2026-10-12 (Pixel 9a controlled-tone microphone acoustic proof workflow, issue #80; offline only)
+
+- **Change:** `just pixel-9a-mic-acoustic-proof`
+  (`tools/pixel-9a/mic-capture-proof.sh acoustic`, tone generator
+  `tools/pixel-9a/mic-acoustic-tone.py`) adds an `acoustic` mode to the
+  issue #2 microphone workflow. It keeps that workflow's preflight, binding,
+  guest re-checks, single `EP1 TX Mixer INTERNAL_MIC_TX` write, bounded 2 s
+  `hw:0,8` capture, route restore, deletion, and post-state checks. It needs
+  its own typed phrase. While the capture session runs, the host plays a
+  deterministic gated 1180 Hz tone (−20 dBFS, 200 ms on / 200 ms off) on
+  its own speaker at the existing device and volume. The guest folds Goertzel
+  amplitudes at the tone and at control bins 1060/1280 Hz over the gate and
+  returns only folded per-channel means and cycle counts. The host classifies
+  each channel against the same recording's tone-off baseline and the
+  control bins: `acoustic-tone-detected`, `inconclusive-*`, or
+  `capture-failed-*`. The tone WAV and guest recording are deleted. Nothing
+  plays on the phone, and no speaker, TAS, amplifier, volume, or host audio
+  setting is written.
+- Offline evidence: `just pixel-9a-mic-acoustic-proof-test` (also in CI)
+  runs host fixtures over the real transport with a fake host player. It also
+  runs the exact guest probe in acoustic mode against a fake procfs and
+  mixer, and end to end on synthetic PCM built from the generated tone. These
+  cover positive, absent, varying electrical-style noise, contaminated
+  baseline, broadband, inconsistent, saturated, interrupted-stimulus,
+  capture-failure, cleanup, refusal, transport-failure, and privacy cases. The
+  issue #2 suite still passes unchanged.
+- **Limits:** not run on the phone. The physical setup (built-in host
+  speaker, modest volume, distance, quiet room) cannot be verified from code
+  and is documented in `audio-route-decision.md`. A single positive would not
+  exclude gate-locked electrical coupling over the shared USB host, and it
+  would not calibrate sensitivity. `[audio]` stays `unsupported`.
+
 ## 2026-10-12 (S5300 CPIF userspace adapter; offline only)
 
 - PR #82 adds hash-pinned, target-local patches to the pinned GPL

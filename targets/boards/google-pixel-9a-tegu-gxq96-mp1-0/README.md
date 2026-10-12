@@ -1371,6 +1371,27 @@ channel 1 was digital silence. This does not establish acoustic pickup. The
 temporary recording was deleted and the mic route restored. No speaker test
 exists.
 
+### Controlled-tone acoustic proof (issue #80)
+
+`just pixel-9a-mic-acoustic-proof` runs `mic-capture-proof.sh acoustic`. It
+uses the same preflight, binding, guest checks, single mic-route write,
+bounded 2 s `hw:0,8` capture, cleanup, and `restore`. It has its own typed
+phrase (`FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM`, printed by a ready preflight).
+During the capture session the host plays a generated, gated 1180 Hz
+reference tone on its own speaker: −20 dBFS, 200 ms on / 200 ms off,
+`afplay`, `pw-play`, or `paplay`, at the existing device and volume. The
+WAV lives under ignored `out/` only while it plays. Before deleting the
+recording, the guest folds Goertzel amplitudes at the tone and at 1060/1280
+Hz control bins over the gate. The host classifies each channel against the
+tone-off baseline and the control bins: `acoustic-tone-detected` (exit 0),
+`inconclusive-*` (8), or `capture-failed-*` (9). The phone never plays
+anything, and no host volume or device is changed. The physical setup
+(built-in speaker, modest volume, about 20 cm, quiet room) cannot be checked
+from code and is documented with the thresholds and limits in
+[`audio-route-decision.md`](audio-route-decision.md#controlled-tone-acoustic-proof-workflow-issue-80).
+Offline tests: `just pixel-9a-mic-acoustic-proof-test`. It has not run on
+the phone; a run needs a separate owner decision.
+
 ## CDC-ACM guest probe transport (issue #52)
 
 The Ferrix dev rootfs is built with `--no-sshd`, so the read-only inventory

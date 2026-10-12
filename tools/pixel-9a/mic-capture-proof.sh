@@ -7,6 +7,8 @@ set -eu
 #
 #   mic-capture-proof.sh [preflight]   read-only; the default
 #   mic-capture-proof.sh capture       one gated 2 s capture from hw:0,8
+#   mic-capture-proof.sh acoustic      one gated 2 s capture while the host
+#                                      plays its gated reference tone (#80)
 #   mic-capture-proof.sh restore       gated recovery of the one mixer control
 #
 # preflight checks the exact device tree, the pinned Kleaf kernel, root,
@@ -35,6 +37,27 @@ set -eu
 # speaker route, amplifier, TAS, or volume control is written and nothing is
 # played. Only aggregate statistics are returned or kept.
 #
+# acoustic (issue #80) needs its own per-run typed confirmation
+#   FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM='play the gated 1180 Hz host tone and record 2s from hw:0,8 with EP1 TX Mixer INTERNAL_MIC_TX binding <12 hex> on google-pixel-9a-tegu-gxq96-mp1-0'
+# and the physical setup in audio-route-decision.md (host built-in speaker,
+# modest volume set by the operator, fixed distance, quiet room). It refuses
+# exactly as capture does, then writes the deterministic reference tone from
+# mic-acoustic-tone.py (1180 Hz, -20 dBFS peak, 200 ms on / 200 ms off) to
+# ignored out/, starts the host player (afplay, pw-play, or paplay, at the
+# default device and existing volume; nothing selects a device or changes a
+# volume), checks it is still playing after a 1 s lead-in, and only then
+# sends one capture session in mode acoustic. The guest does everything
+# capture does, and before deleting the file it also folds per-window
+# Goertzel amplitudes at 1180 Hz and at control bins 1060/1280 Hz over the
+# gate period. The host stops the player, deletes the tone file, and
+# classifies each channel from those aggregates: the tone-off windows of the
+# same recording are the baseline and the control bins are the spectral
+# control. acoustic-tone-detected needs a gated (>= 10 dB on/off), narrowband
+# (>= 10 dB over the control bins), cycle-consistent tone whose control bins
+# are not gated with it, and a player that was still playing when the
+# session returned. Anything else is inconclusive or a capture failure;
+# never a pass. Nothing is played on the phone.
+#
 # If the capture session's transport fails, its own cleanup output is lost;
 # the workflow then opens one read-only preflight session to observe the
 # control and the proof directory and reports them. restore needs
@@ -52,7 +75,10 @@ set -eu
 # missing/mismatched confirmation, 3 transport or guest failure, 4 not the
 # exact tegu board, 5 malformed probe output, 6 refused before any state
 # change, 7 cleanup not verified (route not restored or file not removed),
-# 8 capture completed and cleaned up but no non-silent PCM was measured.
+# 8 capture completed and cleaned up but no non-silent PCM was measured
+# (acoustic: completed and cleaned up but inconclusive), 9 acoustic only:
+# cleaned up, but the capture itself failed (no usable PCM to analyse).
+# acoustic exits 0 only for acoustic-tone-detected.
 #
 # FERRIX_SHELL selects the host CDC-ACM node (default
 # /dev/cu.usbmodemferrix_tegu3); it is never printed or retained. Set
@@ -72,20 +98,34 @@ mic_control='EP1 TX Mixer INTERNAL_MIC_TX'
 pcm_expected_id='EP1 capture (*)'
 expected_bytes=384000
 restore_phrase="restore $mic_control off on $target_id"
+tone_tool="$root/tools/pixel-9a/mic-acoustic-tone.py"
+tone_hz=1180
+control_hz='1060 1280'
+tone_window_frames=2400
+tone_period_windows=8
+tone_level_dbfs=-20
+# Pre-registered acoustic decision thresholds (see audio-route-decision.md).
+tone_min_lsb=0.5
+tone_gate_db=10
+tone_over_control_db=10
+control_gate_db=6
+baseline_tone_db=10
+tone_min_cycles=4
 max_output=65536
 acm_timeout=${FERRIX_PIXEL9A_ACM_TIMEOUT:-120}
 
 usage() {
-	printf 'usage: tools/pixel-9a/mic-capture-proof.sh [preflight | capture | restore]\n' >&2
+	printf 'usage: tools/pixel-9a/mic-capture-proof.sh [preflight | capture | acoustic | restore]\n' >&2
 	printf 'environment: FERRIX_SHELL (CDC-ACM node) FERRIX_PIXEL9A_ACM_TIMEOUT (seconds, 5-600, default 120)\n' >&2
 	printf '             FERRIX_PIXEL9A_MIC_CAPTURE_EVIDENCE (physical|mock) FERRIX_OUT_DIR\n' >&2
 	printf '             capture: FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM  restore: FERRIX_PIXEL9A_MIC_RESTORE_CONFIRM\n' >&2
+	printf '             acoustic: FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM (FERRIX_PIXEL9A_ACM_TIMEOUT at most 120)\n' >&2
 	exit 2
 }
 
 case "$#:${1:-}" in
 	0:|1:preflight) mode=preflight ;;
-	1:capture|1:restore) mode=$1 ;;
+	1:capture|1:acoustic|1:restore) mode=$1 ;;
 	*) usage ;;
 esac
 case "${FERRIX_PIXEL9A_MIC_CAPTURE_EVIDENCE:-physical}" in
@@ -95,6 +135,8 @@ case "${FERRIX_PIXEL9A_MIC_CAPTURE_EVIDENCE:-physical}" in
 esac
 case "$acm_timeout" in ''|*[!0-9]*) usage ;; esac
 [ "$acm_timeout" -ge 5 ] && [ "$acm_timeout" -le 600 ] || usage
+# The reference tone must outlast the whole capture session.
+[ "$mode" != acoustic ] || [ "$acm_timeout" -le 120 ] || usage
 
 transcript=''
 die() {
@@ -113,6 +155,10 @@ case "$mode" in
 		[ -n "${FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM:-}" ] ||
 			die 'set FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM to the exact phrase printed by a preflight run' 2
 		;;
+	acoustic)
+		[ -n "${FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM:-}" ] ||
+			die 'set FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM to the exact acoustic phrase printed by a preflight run' 2
+		;;
 	restore)
 		[ "${FERRIX_PIXEL9A_MIC_RESTORE_CONFIRM:-}" = "$restore_phrase" ] ||
 			die "set FERRIX_PIXEL9A_MIC_RESTORE_CONFIRM='$restore_phrase' to restore the route once" 2
@@ -124,6 +170,14 @@ for tool in python3 awk sed; do
 done
 [ -f "$probe" ] && [ ! -L "$probe" ] || die 'guest probe script is missing or linked'
 [ -f "$transport" ] && [ ! -L "$transport" ] || die 'CDC-ACM transport is missing or linked'
+player=''
+if [ "$mode" = acoustic ]; then
+	[ -f "$tone_tool" ] && [ ! -L "$tone_tool" ] || die 'reference tone generator is missing or linked'
+	for tool in afplay pw-play paplay; do
+		command -v "$tool" >/dev/null 2>&1 && { player=$tool; break; }
+	done
+	[ -n "$player" ] || die 'no host tone player (afplay, pw-play, or paplay); install one explicitly'
+fi
 
 sha256() { (shasum -a 256 "$1" 2>/dev/null || sha256sum "$1") | cut -c1-64; }
 
@@ -131,7 +185,28 @@ mkdir -p "$out"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 transcript="$out/$mode-$stamp-$$.txt"
 work=$(mktemp -d "${TMPDIR:-/tmp}/pixel-9a-mic-capture-proof.XXXXXX")
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+# acoustic: the reference tone lives under ignored out/ only while it plays.
+stimulus_dir="$out/stimulus-$stamp-$$"
+player_pid=''
+# stop_player: stop the host tone if it still plays; sets player_alive.
+stop_player() {
+	player_alive=no
+	[ -n "$player_pid" ] || return 0
+	if kill -0 "$player_pid" 2>/dev/null; then
+		player_alive=yes
+		kill "$player_pid" 2>/dev/null || :
+	fi
+	wait "$player_pid" 2>/dev/null || :
+	player_pid=''
+}
+host_cleanup() {
+	stop_player
+	rm -rf "$stimulus_dir" "$work"
+}
+trap host_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 {
 	printf '# Pixel 9a internal-microphone capture proof (%s), %s UTC\n' "$mode" "$stamp"
 	printf '# evidence: %s\n' "$evidence"
@@ -184,10 +259,16 @@ validate() {
 				split("restore_write mic_value_after proof_dir_removed", r, " ")
 				for (i in r) optional[r[i]] = 1
 			}
-			if (mode == "capture") {
+			if (mode == "capture" || mode == "acoustic") {
 				split("enable_exit mic_value_enabled record_exit record_error restore_exit mic_value_after mixer_restored pcm_bytes pcm_container samples frames leading_zero_frames windows window_ac_rms_min window_ac_rms_max measure_exit pcm_bytes_expected raw_removed speaker_route_value_after amp_switch_value_after pcm_state_after pcm_openers_after pcm_opener_scan_after arecord_list_subdevices_after cleanup_restore_exit cleanup_mixer_restored cleanup_raw_removed", m, " ")
 				for (i in m) optional[m[i]] = 1
 				split("samples min max mean ac_rms zero clipped", s, " ")
+				for (i in s) { optional["ch0." s[i]] = 1; optional["ch1." s[i]] = 1 }
+			}
+			if (mode == "acoustic") {
+				split("tone_hz tone_control_hz tone_window_frames tone_period_windows tone_exit tone_windows", t, " ")
+				for (i in t) optional[t[i]] = 1
+				split("tone_phase tone_on tone_off control_on control_off rms_on rms_off tone_cycles_usable tone_cycles_gated", s, " ")
 				for (i in s) { optional["ch0." s[i]] = 1; optional["ch1." s[i]] = 1 }
 			}
 		}
@@ -298,6 +379,7 @@ report_preflight "$pre"
 problems=$(preflight_problems "$pre")
 binding=$(get "$pre" binding)
 capture_phrase="record 2s from hw:0,8 with $mic_control binding $(printf '%s' "$binding" | cut -c1-12) on $target_id"
+acoustic_phrase="play the gated $tone_hz Hz host tone and $capture_phrase"
 
 if [ "$mode" = preflight ]; then
 	emit preflight_problems "${problems:-none}"
@@ -308,6 +390,8 @@ if [ "$mode" = preflight ]; then
 	if [ -z "$problems" ]; then
 		printf 'Preflight changed nothing. After reviewing pcm_id/pcm_name above, one capture is:\n'
 		printf "  FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM='%s' tools/pixel-9a/mic-capture-proof.sh capture\n" "$capture_phrase"
+		printf 'One controlled-tone acoustic capture (separate owner approval; set up the host speaker as audio-route-decision.md says) is:\n'
+		printf "  FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM='%s' tools/pixel-9a/mic-capture-proof.sh acoustic\n" "$acoustic_phrase"
 	else
 		printf 'Preflight changed nothing and is blocked; capture will refuse.\n'
 	fi
@@ -349,8 +433,13 @@ fi
 # --- gated capture ---------------------------------------------------------------
 
 [ -z "$problems" ] || die "preflight refused the capture ($problems)" 6
-[ "${FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM}" = "$capture_phrase" ] ||
-	die "confirmation does not match this preflight; expected FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM='$capture_phrase'" 2
+if [ "$mode" = acoustic ]; then
+	[ "${FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM}" = "$acoustic_phrase" ] ||
+		die "confirmation does not match this preflight; expected FERRIX_PIXEL9A_MIC_ACOUSTIC_CONFIRM='$acoustic_phrase'" 2
+else
+	[ "${FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM}" = "$capture_phrase" ] ||
+		die "confirmation does not match this preflight; expected FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM='$capture_phrase'" 2
+fi
 printf 'About to capture once on %s (%s):\n' "$target_id" "$evidence"
 printf '  kernel %s; card driver %s; PCM hw:0,8 %s [%s], stream %s, procfs %s\n' "$(get "$pre" kernel_release)" \
 	"$(get "$pre" card_driver)" "$(get "$pre" pcm_id)" "$(get "$pre" pcm_name)" "$(get "$pre" pcm_stream)" "$(get "$pre" pcm_procfs)"
@@ -359,8 +448,37 @@ printf '  write only %s (numid %s) off -> on -> off; speaker route and TAS switc
 printf '  arecord -t raw -f S16_LE -r 48000 -c 2 -d 2 into /run/ferrix-mic-capture-proof, measured, then deleted\n'
 emit binding "$binding"
 
-session capture capture "$binding"
+if [ "$mode" = acoustic ]; then
+	stimulus_seconds=$((acm_timeout + 15))
+	printf '  host plays %s Hz at %s dBFS peak, 200 ms on / 200 ms off, for at most %s s through %s at the current volume\n' \
+		"$tone_hz" "$tone_level_dbfs" "$stimulus_seconds" "$player"
+	mkdir -m 0700 "$stimulus_dir" || die 'cannot create the host stimulus directory' 6
+	python3 "$tone_tool" --out "$stimulus_dir/tone.wav" --seconds "$stimulus_seconds" ||
+		die 'reference tone generation failed' 6
+	emit stimulus_player "$player"
+	emit stimulus_tone_hz "$tone_hz"
+	emit stimulus_level_dbfs "$tone_level_dbfs"
+	emit stimulus_seconds "$stimulus_seconds"
+	emit stimulus_sha256 "$(sha256 "$stimulus_dir/tone.wav")"
+	"$player" "$stimulus_dir/tone.wav" </dev/null >/dev/null 2>&1 &
+	player_pid=$!
+	sleep 1
+	kill -0 "$player_pid" 2>/dev/null || {
+		stop_player
+		rm -rf "$stimulus_dir"
+		die "host tone player $player did not keep playing; nothing was changed on the guest" 6
+	}
+	emit stimulus_started yes
+fi
+
+session capture "$mode" "$binding"
 c="$work/capture.out"
+if [ "$mode" = acoustic ]; then
+	stop_player
+	rm -rf "$stimulus_dir"
+	emit stimulus_alive_at_session_end "$player_alive"
+	emit stimulus_removed "$([ ! -e "$stimulus_dir" ] && echo yes || echo no)"
+fi
 if [ "$session_transport" = failed ]; then
 	# The capture session's own cleanup output is lost. Observe the state
 	# read-only and report it; never retry the capture.
@@ -381,7 +499,7 @@ if [ "$session_transport" = failed ]; then
 	die "capture transport failed and the post-failure check could not run; the route state is unknown; run preflight, then restore if needed" 7
 fi
 case "$session_status" in 0|6|7) ;; *) die "guest capture probe failed (exit $session_status)" 3 ;; esac
-check_common "$c" capture
+check_common "$c" "$mode"
 { printf '## raw capture-session output\n'; cat "$c"; } >>"$transcript"
 if [ "$session_status" -eq 6 ]; then
 	emit state_changed "$(get "$c" state_changed)"
@@ -414,6 +532,7 @@ esac
 [ "$(get "$c" pcm_opener_scan_after)" = complete ] && [ "$(get "$c" pcm_openers_after)" = 0 ] &&
 	[ "$(get "$c" arecord_list_subdevices_after)" = 1/1 ] || anomaly pcm8-opener-after
 [ "$(get "$c" pcm_bytes_expected)" = "$expected_bytes" ] || die 'probe reported another expected byte count' 5
+[ "$mode" != acoustic ] || [ ! -e "$stimulus_dir" ] || anomaly host-stimulus-not-removed
 
 # --- classification of the PCM bytes ---------------------------------------------
 bytes=$(get "$c" pcm_bytes)
@@ -452,11 +571,107 @@ else
 	emit max_channel_ac_rms_dbfs "$peak_dbfs"
 fi
 emit mic_capture_result "$result"
+if [ "$mode" = capture ]; then
+	emit anomalies "${anomalies:-none}"
+	emit acoustic_pickup unproven-without-controlled-stimulus
+	emit capability_status 'unsupported (capabilities.toml not edited)'
+	cp "$transcript" "$out/capture-latest.txt"
+	printf 'transcript=%s\n' "$transcript"
+	[ -z "$anomalies" ] && [ "$session_status" -eq 0 ] || exit 7
+	case "$result" in non-silent-low-level|non-silent-signal) exit 0 ;; esac
+	exit 8
+fi
+
+# --- acoustic classification (issue #80) -------------------------------------------
+# The guest must have analysed the exact reviewed stimulus layout.
+[ "$(get "$c" tone_hz)" = "$tone_hz" ] && [ "$(get "$c" tone_control_hz)" = "$(printf '%s' "$control_hz" | tr ' ' ',')" ] &&
+	[ "$(get "$c" tone_window_frames)" = "$tone_window_frames" ] && [ "$(get "$c" tone_period_windows)" = "$tone_period_windows" ] ||
+	die 'probe analysed another stimulus layout' 5
+for key in tone_exit tone_windows; do emit "$key" "$(get "$c" "$key")"; done
+for ch in ch0 ch1; do
+	for stat in tone_phase tone_on tone_off control_on control_off rms_on rms_off tone_cycles_usable tone_cycles_gated; do
+		emit "$ch.$stat" "$(get "$c" "$ch.$stat")"
+	done
+done
+case "$result" in
+	capture-failed-*) acoustic_result=$result ;;
+	no-pcm-data|short-capture-*|digital-silence|constant-level) acoustic_result="capture-failed-$result" ;;
+	*)
+		if [ "$(get "$c" tone_exit)" != 0 ] || [ "$(get "$c" tone_windows)" != 40 ]; then
+			acoustic_result=capture-failed-tone-analysis
+		else
+			acoustic_result=''
+		fi
+		;;
+esac
+if [ -z "$acoustic_result" ]; then
+	# classify_channel CH: tone-detected, broadband-modulation,
+	# inconsistent-gating (a gated narrowband tone in too few cycles),
+	# contaminated-baseline, tone-not-detected, saturated, or digital-zero,
+	# with the four ratios in dB. Amplitudes are floored at 0.001 LSB.
+	classify_channel() {
+		awk -v n="$(get "$c" "$1.samples")" -v z="$(get "$c" "$1.zero")" -v k="$(get "$c" "$1.clipped")" \
+			-v on="$(get "$c" "$1.tone_on")" -v off="$(get "$c" "$1.tone_off")" \
+			-v con="$(get "$c" "$1.control_on")" -v coff="$(get "$c" "$1.control_off")" \
+			-v u="$(get "$c" "$1.tone_cycles_usable")" -v g="$(get "$c" "$1.tone_cycles_gated")" \
+			-v minlsb="$tone_min_lsb" -v gate="$tone_gate_db" -v over="$tone_over_control_db" \
+			-v cgate="$control_gate_db" -v base="$baseline_tone_db" -v mincy="$tone_min_cycles" '
+			function db(a, b) { a += 0; b += 0; if (a < 0.001) a = 0.001; if (b < 0.001) b = 0.001; return 20 * log(a / b) / log(10) }
+			BEGIN {
+				snr = db(on, off); toc = db(on, con); cg = db(con, coff); bl = db(off, coff)
+				if (n + 0 == 0 || z + 0 == n + 0) cls = "digital-zero"
+				else if (k / n > 0.01) cls = "saturated"
+				else if (on + 0 >= minlsb && snr >= gate && toc >= over && cg < cgate && u + 0 >= mincy && g + 0 >= u - 1) cls = "tone-detected"
+				else if (snr >= gate - 4 && cg >= cgate) cls = "broadband-modulation"
+				else if (on + 0 >= minlsb && snr >= gate && toc >= over) cls = "inconsistent-gating"
+				else if (bl >= base) cls = "contaminated-baseline"
+				else cls = "tone-not-detected"
+				printf "%s %.1f %.1f %.1f %.1f\n", cls, snr, toc, cg, bl
+			}'
+	}
+	classes=''
+	for ch in ch0 ch1; do
+		set -- $(classify_channel "$ch")
+		emit "$ch.acoustic" "$1"
+		emit "$ch.tone_gate_db" "$2"
+		emit "$ch.tone_over_control_db" "$3"
+		emit "$ch.control_gate_db" "$4"
+		emit "$ch.baseline_tone_over_control_db" "$5"
+		classes="$classes $1"
+	done
+	case "$classes" in
+		*' tone-detected'*)
+			if [ "$player_alive" = yes ]; then acoustic_result=acoustic-tone-detected
+			else acoustic_result=inconclusive-stimulus-interrupted; fi
+			;;
+		' digital-zero digital-zero') acoustic_result=capture-failed-digital-silence ;;
+		*' saturated'*) acoustic_result=inconclusive-saturated ;;
+		*' broadband-modulation'*) acoustic_result=inconclusive-broadband-modulation ;;
+		*' inconsistent-gating'*) acoustic_result=inconclusive-inconsistent-gating ;;
+		*' contaminated-baseline'*) acoustic_result=inconclusive-contaminated-baseline ;;
+		*)
+			if [ "$player_alive" = yes ]; then acoustic_result=inconclusive-tone-not-detected
+			else acoustic_result=inconclusive-stimulus-interrupted; fi
+			;;
+	esac
+fi
+case "$acoustic_result" in
+	acoustic-tone-detected) acoustic_class=positive ;;
+	inconclusive-*) acoustic_class=inconclusive ;;
+	*) acoustic_class=failure ;;
+esac
+[ -z "$anomalies" ] && [ "$session_status" -eq 0 ] || acoustic_class=failure
+emit acoustic_result "$acoustic_result"
+emit acoustic_class "$acoustic_class"
 emit anomalies "${anomalies:-none}"
-emit acoustic_pickup unproven-without-controlled-stimulus
+if [ "$acoustic_class" = positive ]; then
+	emit acoustic_pickup stimulus-locked-tone-under-documented-setup
+else
+	emit acoustic_pickup unproven
+fi
 emit capability_status 'unsupported (capabilities.toml not edited)'
-cp "$transcript" "$out/capture-latest.txt"
+cp "$transcript" "$out/acoustic-latest.txt"
 printf 'transcript=%s\n' "$transcript"
 [ -z "$anomalies" ] && [ "$session_status" -eq 0 ] || exit 7
-case "$result" in non-silent-low-level|non-silent-signal) exit 0 ;; esac
-exit 8
+case "$acoustic_class" in positive) exit 0 ;; inconclusive) exit 8 ;; esac
+exit 9
