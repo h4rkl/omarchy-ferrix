@@ -264,6 +264,11 @@ change; **not implemented**):
 
 ## Remaining requirements for the active S2 workflow (later PR, not implemented)
 
+An offline review found that the current contracts are not yet sufficient
+for a fail-closed active command; see
+[`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md).
+
+
 - A rebuilt image from a reviewed commit with `device-google-tegu` 1-r3,
   flashed through the recovery-gated `just pixel-9a-dev-flash` by the lead,
   then a pre-mount `go` from this preflight on the exact device.
