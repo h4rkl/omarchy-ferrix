@@ -1185,8 +1185,11 @@ The three per-unit proofs had explicit owner approval. Each set the source
 read-only, used a verified read-only whole-partition loop, mounted with the
 checked-in recovery-suppressed options, read a directory-entry count, then
 unmounted and detached without a reported write anomaly or leftover mount.
-The owner review of the final issue #34 safety gate is pending. The loop
-barrier does not cover a separate opener, whole-disk I/O, or UFS passthrough;
+The owner explicitly accepted the issue #34 source-mount safety gate on
+2026-10-12 after reviewing these four results. The workflow still reports
+`owner-review-required` by design; the acceptance is a separately recorded
+human decision, not a tool-generated pass. The loop barrier does not cover
+a separate opener, whole-disk I/O, or UFS passthrough;
 the observed stable counters alone cannot establish that none occurred.
 
 ## Audio route

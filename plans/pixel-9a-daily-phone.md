@@ -76,7 +76,8 @@ the project must not silently call that a fully functioning Pixel 9a.
   The new image still exposes only Dummy Output with no usable ALSA source.
   Speaker playback remains blocked on TAS protection/calibration evidence.
   Keep audio unsupported.
-- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) remains open.
+- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) source-mount gate
+  is accepted by the owner for a future manual CP boot.
   [PR #69](https://github.com/h4rkl/omarchy-ferrix/pull/69) merged a
   read-only loop barrier for S5300 source mounts with offline proof tests.
   The replacement rootfs was built, hash-checked, flashed through the
@@ -84,16 +85,16 @@ the project must not silently call that a fully functioning Pixel 9a.
   matched the checked-in bytes. The read-only preflight and one proof of
   each source partition, including three per-unit roles approved by the
   owner, completed through verified read-only loops with no reported write
-  anomaly. The workflow still reports `owner-review-required`; the owner
-  must review the results before #34 closes or CP boot begins. Separately,
-  [PR #75](https://github.com/h4rkl/omarchy-ferrix/pull/75) records a
-  conditional CPIF E0 ABI decision: route A remains viable only after
-  target-local reset, SRINFO and OEM loop adaptations. E1 read-only device
-  inventory, source-mount gate acceptance and NV size checks remain
-  prerequisites to a manual CP boot trial. The source review also found that
-  the Rust seven-byte FMT codec is described as a tegu SIT envelope without
-  source support; [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76)
-  tracks correction before that codec is used for tegu control traffic.
+  anomaly. The workflow still reports `owner-review-required` because it
+  cannot decide the policy gate automatically; the owner explicitly accepted
+  the proof results on 2026-10-12. [PR #75](https://github.com/h4rkl/omarchy-ferrix/pull/75)
+  records a conditional CPIF E0 ABI decision: route A remains viable only
+  after target-local reset, SRINFO and OEM loop adaptations. E1 device
+  inventory, adapter review and read-only NV checks remain prerequisites to
+  a manual CP boot. The source review also found that the Rust seven-byte FMT
+  codec is described as a tegu SIT envelope without source support;
+  [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) tracks correction
+  before that codec is used for tegu control traffic.
 - The telephony subscribe race [#66](https://github.com/h4rkl/omarchy-ferrix/issues/66)
   was closed by [PR #67](https://github.com/h4rkl/omarchy-ferrix/pull/67).
   The separate snapshot/event gap [#68](https://github.com/h4rkl/omarchy-ferrix/issues/68)
