@@ -72,9 +72,13 @@ the project must not silently call that a fully functioning Pixel 9a.
   delivered the gated mic proof. Its revised physical preflight passed, and
   one owner-approved capture returned 384000 PCM bytes with a very low
   channel-0 signal and digital silence on channel 1. This proves varying
-  PCM data, not acoustic pickup; a controlled-sound test is still needed.
+  PCM data, not acoustic pickup. [#80](https://github.com/h4rkl/omarchy-ferrix/issues/80)
+  adds an offline-tested controlled-tone microphone workflow, but a new
+  active run needs its own owner decision and physical setup.
   The new image still exposes only Dummy Output with no usable ALSA source.
-  Speaker playback remains blocked on TAS protection/calibration evidence.
+  Speaker playback remains blocked on TAS protection/calibration evidence;
+  [#83](https://github.com/h4rkl/omarchy-ferrix/issues/83) owns the
+  read-only safety review before a bounded output trial.
   Keep audio unsupported.
 - [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) source-mount gate
   is accepted by the owner for a future manual CP boot.
@@ -115,8 +119,8 @@ the project must not silently call that a fully functioning Pixel 9a.
   with Rust, native sandbox and headless QEMU checks passing. These are
   protocol fixes; they do not prove a working carrier, SIM, call or SMS on
   the Pixel.
-- Next dependency order: finish the S5300 physical source-mount gate;
-  establish a safe, audible output and measured mic path; bring up the
+- Next dependency order: finish the S5300 NV metadata and scratch-output
+  gates; establish a safe, audible output and measured mic path; bring up the
   modem and carrier data; then complete SMS, calls with two-way audio, power
   and suspend reliability, camera/location, update/recovery, and sustained
   daily-use testing. Continue parallel host-only slices when physical work
@@ -314,7 +318,7 @@ is closed after the independent networkd CI test race fix.
 | --- | --- | --- |
 | 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25): pinned stock restore, truthful failure handling, and same-device Android 17 boot verified on 2026-10-12; physical evidence is in PR #47. Recheck the recovery invariant before every new device load. |
 | 0a. Physical inventory transport | #2 and #34 read-only inventories | [#52](https://github.com/h4rkl/omarchy-ferrix/issues/52) / PR #54: CDC-ACM transport merged and both inventories ran on the booted exact device. Carry their findings into #34 and #55; neither inventory promotes a capability. |
-| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): accepted recovery-safe modem calibration mounts. [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55): load pinned AoC firmware and re-inventory ALSA. [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79): verify S5300 NV input sizes through the accepted read-only mount barrier. [#81](https://github.com/h4rkl/omarchy-ferrix/issues/81): harden NV scratch output before CP boot. [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76): correct the Rust FMT codec boundary before using it for tegu SIT. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
+| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): accepted recovery-safe modem calibration mounts. [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55): load pinned AoC firmware and re-inventory ALSA. [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79): verify S5300 NV input sizes through the accepted read-only mount barrier. [#81](https://github.com/h4rkl/omarchy-ferrix/issues/81): harden NV scratch output before CP boot. [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76): correct the Rust FMT codec boundary before using it for tegu SIT. [#80](https://github.com/h4rkl/omarchy-ferrix/issues/80): controlled acoustic mic proof. [#83](https://github.com/h4rkl/omarchy-ferrix/issues/83): speaker protection review before playback. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
 | 2. Power and radios | [#9](https://github.com/h4rkl/omarchy-ferrix/issues/9) power key, blanking, suspend/wake, sensors; [#24](https://github.com/h4rkl/omarchy-ferrix/issues/24) Wi-Fi hardening; [#5](https://github.com/h4rkl/omarchy-ferrix/issues/5) Bluetooth pairing; [#7](https://github.com/h4rkl/omarchy-ferrix/issues/7) hidden Wi-Fi; [#8](https://github.com/h4rkl/omarchy-ferrix/issues/8) time/RTC | [#26](https://github.com/h4rkl/omarchy-ferrix/issues/26): charge/thermal/endurance, with screen-off drain dependent on #9. |
 | 3. Camera, location and other hardware | [#3](https://github.com/h4rkl/omarchy-ferrix/issues/3) camera; #9 owns orientation/proximity/ambient sensors | [#28](https://github.com/h4rkl/omarchy-ferrix/issues/28) GNSS/location; [#29](https://github.com/h4rkl/omarchy-ferrix/issues/29) NFC/fingerprint feasibility and proof. |
 | 4. App and shell usability | [#19](https://github.com/h4rkl/omarchy-ferrix/issues/19) browser performance/video/screen fit; [#4](https://github.com/h4rkl/omarchy-ferrix/issues/4) optional GPU; [#12](https://github.com/h4rkl/omarchy-ferrix/issues/12), [#21](https://github.com/h4rkl/omarchy-ferrix/issues/21), [#22](https://github.com/h4rkl/omarchy-ferrix/issues/22), [#23](https://github.com/h4rkl/omarchy-ferrix/issues/23) shell/navigation/notifications; [#14](https://github.com/h4rkl/omarchy-ferrix/issues/14) text; [#16](https://github.com/h4rkl/omarchy-ferrix/issues/16) pmOS QEMU graphics | No duplicate browser or shell issue. Keep browser usability evidence distinct from hardware GPU support. |
