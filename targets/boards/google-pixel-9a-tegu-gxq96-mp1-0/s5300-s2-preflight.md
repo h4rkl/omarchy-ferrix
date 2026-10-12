@@ -141,7 +141,44 @@ only the later S2 workflow can observe it.
 until reboot after any earlier mount in this boot. It only tightens the
 barrier, but it shows that this boot is not fresh.
 
-### Exact-device result on the currently installed image
+### Exact-device result on the rebuilt 1-r3 image (2026-10-12)
+
+On 2026-10-12 the lead rebuilt the native rootfs from reviewed source `0032a6b`
+(attempt `20261012T062930Z`, `device-google-tegu` 1-r3, `exynos-modem` and
+`modemmanager-samsung-sit` r3). The rootfs image and tar hashes matched the
+manifest and `e2fsck -fn` was clean. The root-only files that the
+unprivileged first tar/mke2fs attempt logged as `Permission denied` are
+present with root ownership in the final image, from the script's `sudo -n`
+retry. The installed `s5300-cpif.sh` equals the checked-in
+`06dc8032…8347`. The development bundle was composed with the unchanged
+pinned Kleaf kernel (6.1.124, kernel manifest `281f5e35…0671`). Every boot
+partition image is byte-identical to the 1-r2 bundle; only `userdata`
+changed (`7a248f5a…1152`). All seven artifact hashes were re-verified after
+transfer. The bundle was flashed to slot B plus `userdata` through
+`just pixel-9a-dev-flash`, which checked the recovery invariant (pinned
+factory archive verified; stock bootloader and baseband on the device).
+Ferrix reached OpenRC default 77 s after reboot.
+
+The read-only preflight from `463d8ec` then returned
+`preflight_result=go` in phase `pre-mount`, with `image_skew=none`,
+`device_blockers=none`, `host_blockers=none` and `unknown_facts=none`.
+Bootconfig reported `MP1.0` and slot B. All seven pinned files matched both
+the checked-in and on-device pins. CP was `OFFLINE` with no WWAN device.
+All twelve E1 nodes passed, and the opener scan was complete and clean
+across 23 CPIF class nodes. The three S5300 services were stopped with no
+runlevel link, override or arm token. The scratch directory was absent,
+because no S5300 service has run since boot. All four source roles were
+unique, unmounted, unheld and not loop-backed, and
+`partition_ro_flag_since_boot=no`. Source and NV checks stay deferred until
+a mounts start. The run reported `cp_boot_authorized=no`.
+
+This GO is a pre-mount fact only. It does not authorise the mounts start or
+a CP boot. The owner has not given a decision for either, and
+[`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md) still blocks
+an active S2 workflow. The transcript and summary are ignored under
+`out/pixel-9a/s5300-s2-preflight/` (`20261012T073650Z`).
+
+### Earlier exact-device result on the 1-r2 image
 
 The installed bundle was built from `1b70e3a` (`device-google-tegu` 1-r2).
 Between that commit and this branch, the only pinned file that changed is
@@ -164,7 +201,7 @@ required before the preflight can return `go`.
    image check, and host recovery check passes, and the source checks are
    listed in `deferred_until_mounts`. The only step this unlocks is a
    separately approved manual `rc-service ferrix-s5300-mounts start`. That
-   step is outside this workflow, and Codex runs it.
+   step is outside this workflow, and the lead agent runs it.
 2. **post-mount** (mounts service started): run the preflight again. `go`
    now also needs all four single read-only loop mounts and a passing
    `cpif_check_sources`. That is the input to the S2 owner decision. It is
@@ -268,10 +305,11 @@ An offline review found that the current contracts are not yet sufficient
 for a fail-closed active command; see
 [`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md).
 
-
-- A rebuilt image from a reviewed commit with `device-google-tegu` 1-r3,
-  flashed through the recovery-gated `just pixel-9a-dev-flash` by the lead,
-  then a pre-mount `go` from this preflight on the exact device.
+- Done 2026-10-12: a rebuilt image from a reviewed commit with
+  `device-google-tegu` 1-r3, flashed through the recovery-gated
+  `just pixel-9a-dev-flash` by the lead, then a pre-mount `go` from this
+  preflight on the exact device (see the result above). Re-run the
+  preflight after any reflash or reboot.
 - A fresh, recorded owner decision for one S2 run, a per-run typed phrase
   naming the exact target, and refusal of an ambiguous or second device.
 - The sequence, with each step bounded and logged: preflight (pre-mount) →
