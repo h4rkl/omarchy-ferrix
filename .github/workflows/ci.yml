@@ -114,6 +114,7 @@ jobs:
           sh tools/pixel-9a/tests/s5300-source-inventory.sh
           sh tools/pixel-9a/tests/s5300-cpif-inventory.sh
           sh tools/pixel-9a/tests/s5300-mount-proof.sh
+          sh tools/pixel-9a/tests/s5300-nv-metadata.sh
           sh tools/pixel-9a/tests/s5300-mounts-service.sh
 
       # Fetches the hash-pinned exynos-modem archive and Cargo.lock crates,

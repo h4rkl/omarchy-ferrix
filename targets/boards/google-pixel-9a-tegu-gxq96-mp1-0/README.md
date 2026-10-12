@@ -1270,6 +1270,98 @@ human decision, not a tool-generated pass. The loop barrier does not cover
 a separate opener, whole-disk I/O, or UFS passthrough;
 the observed stable counters alone cannot establish that none occurred.
 
+## S5300 NV metadata preflight (issue #79)
+
+E0 ([`s5300-cpif-e0.md`](s5300-cpif-e0.md), row T1) found that the external
+boot path streams `nv_normal.bin` and `nv_protected.bin` from the root of the
+per-unit `efs` partition, and that the CP3A TOC sizes both sections at
+`0x80000` bytes. Before any manual CP boot trial,
+`just pixel-9a-s5300-nv-metadata` (`tools/pixel-9a/s5300-nv-metadata.sh`)
+reports whether those two files exist, are regular files, and are at least
+that size. It reports nothing else. It runs on an already booted exact dev
+guest over the CDC-ACM bring-up shell. It is a separate workflow from CP boot
+and never starts `ferrix-s5300-mounts`, `exynos-modem`, or anything that opens
+a modem node.
+
+Before the port is opened, both modes refuse unless three files match the
+SHA-256 pinned in the host script:
+
+- the guest body `s5300-nv-metadata-remote.sh`;
+- the issue #34 probe `s5300-mount-proof-remote.sh`, whose barrier the guest
+  body copies;
+- the checked-in `ferrix-s5300-mounts.initd`, which is the service accepted
+  for the #34 gate. The APKBUILD `sha512` must also match it.
+
+Changing any of these needs a new review and a new pin.
+
+With no argument, the run is a read-only preflight of `efs` only. It checks
+the #34 global state: the exact device tree, the pinned kernel, the service
+and `exynos-modem` out of every runlevel, util-linux `blkid`/`losetup`,
+`blockdev`, and an unbound loop whose `ro` reads 0. It adds three checks:
+`stat -c` and `timeout` are usable, the installed service is the accepted
+file, and nothing is mounted under `/mnt/vendor`,
+`/run/ferrix-s5300-nv-metadata`, or the #34 proof root. For `efs` it checks
+unique partition resolution, f2fs from `blkid -p`, holders, existing mounts,
+iostats, and counters.
+
+`just pixel-9a-s5300-nv-metadata mount` is gated per run by
+`FERRIX_PIXEL9A_S5300_NV_METADATA_CONFIRM='stat efs NV metadata through one
+read-only loop mount on google-pixel-9a-tegu-gxq96-mp1-0'` plus the recorded
+per-unit decision,
+`FERRIX_PIXEL9A_S5300_PER_UNIT_DECISION=owner-approved-issue34-per-unit-ro-mount`.
+The #34 mount phrase is not accepted. The run then:
+
+1. Runs a fresh preflight, which must report no problem, and prints the bound
+   partition.
+2. Opens a second session, which refuses before any state change unless
+   `efs` is the same unique, unmounted, unheld f2fs partition and the
+   installed service still has the accepted hash.
+3. Applies the #34 contract unchanged. The offline test fails if any of these
+   blocks differs from the #34 probe: partition resolution, loop selection,
+   `BLKROSET`, `losetup --read-only`, loop verification, the single mount of
+   the loop with `ro,norecovery,nosuid,nodev,noexec`, cleanup, and teardown
+   exit.
+4. While mounted, and only if mountinfo shows the destination as this
+   session's loop mount, looks up only the two allowlisted names. For each it
+   reports `regular`, `absent`, `symlink`, `directory`, or `other`. For a
+   regular file it adds the size from `stat -c %s`, which uses `lstat`. The
+   symlink test comes first, so a link is never followed. Nothing on the
+   filesystem is opened, read, hashed, walked, or listed.
+5. Unmounts, detaches, and reports a post-check: the service hash and no
+   mount left under either proof root or `/mnt/vendor`.
+
+The host applies the #34 barrier, counter, mountinfo, and kernel-log checks,
+then classifies the NV files last. Exit 7 (teardown not clean) and exit 8 (an
+anomaly or a dirty post-check) take precedence over exit 9 (a file that is
+absent, not regular, has no size, or is under `0x80000`), and all three
+results are always reported. Exit 0 needs both files to meet the minimum with
+a clean observation. Mock runs carry `evidence=mock`. Transcripts are mode
+0600 under ignored `out/pixel-9a/s5300-nv-metadata/`. Raw guest output is
+kept only after every key and value passes the allowlist, so no other file
+name, UUID, label, link target, or content is retained.
+
+Limits:
+
+- A size of at least `0x80000` does not show that the CP firmware accepts
+  the file. The CP boot remains a separate manual S2 trial.
+- The barrier scope is the same as #34. It covers I/O through the loop only.
+  Each run uses up one loop whose `ro` reads 0 until reboot, and the `efs`
+  partition stays `ro` until reboot.
+- `persist` `modem/cpsha` and the device-tree identity values that feed the
+  handover block are deferred. Checking `cpsha` would add a second per-unit
+  partition, `persist`, to the mount scope, which needs its own reviewed
+  action and gate. The device-tree values are per-unit identity data whose
+  exact property names are not yet pinned from checked-in sources. Neither is
+  read here.
+- The guest's `stat` and `timeout` implementations are not pinned. Busybox
+  and coreutils both `lstat` for `stat -c %s` without `-L`.
+- Covered offline by `just pixel-9a-s5300-nv-metadata-test`
+  (`tools/pixel-9a/tests/s5300-nv-metadata.sh`). The test runs the real guest
+  body against stubbed sysfs, loop, mount, and stat, and runs the host through
+  the real CDC-ACM transport against a fake guest. This is not physical
+  evidence. Physical results belong in issue #1, this README, and
+  `docs/status.md` only after a reviewed exact-device run.
+
 ## Audio route
 
 Audio stays `unsupported`. [`audio-route-decision.md`](audio-route-decision.md)
