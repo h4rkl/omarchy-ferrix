@@ -50,7 +50,53 @@ independent feasibility and evidence. If any remains unavailable, the owner
 must decide whether a narrower, explicitly named release target is acceptable;
 the project must not silently call that a fully functioning Pixel 9a.
 
-## Evidence snapshot — 2026-10-12
+## Current delivery checkpoint — 2026-10-12
+
+- The pinned stock factory restore is physically tested, and the exact
+  `tegu` / `GXQ96` / `MP1.0` device subsequently booted stock Android and
+  returned to the Ferrix Kleaf development route. Preserve the stock
+  recovery invariant before every image write. Slot-B development flashes
+  remain reversible through that checked-in restore route.
+- [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) remains open.
+  [PR #63](https://github.com/h4rkl/omarchy-ferrix/pull/63) put the AoC UCM
+  profile and PipeWire provider in the rootfs;
+  [PR #64](https://github.com/h4rkl/omarchy-ferrix/pull/64) added typed output
+  volume/mute and Settings Sound;
+  [PR #65](https://github.com/h4rkl/omarchy-ferrix/pull/65) pinned
+  `alsa-utils`; and [PR #70](https://github.com/h4rkl/omarchy-ferrix/pull/70)
+  corrected the unavailable output label. The physical image built from
+  `7be5d5b` booted and exposed the AoC ALSA card, UCM files and tools, but
+  PipeWire still showed only Dummy Output and no source. The inspected Sound
+  page displayed unavailable volume/mute; PR #70 has not yet booted on the
+  phone. A read-only mic-proof preflight found `EP1 capture` as PCM device 8
+  and mixer controls off, but refused because this kernel omits the expected
+  per-PCM procfs directory. No mic capture or speaker playback has run.
+  The proof workflow must be corrected, reviewed, and physically preflighted
+  before any owner-approved active microphone test. Speaker playback remains
+  blocked on TAS protection/calibration evidence. Keep audio unsupported.
+- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) remains open.
+  [PR #69](https://github.com/h4rkl/omarchy-ferrix/pull/69) merged a
+  read-only loop barrier for S5300 source mounts with offline proof tests.
+  Its replacement Pixel rootfs is building; the service has not been tested
+  on the phone. Transfer and hash-check that image, boot it through the
+  checked-in recovery-gated route, run the exact-target read-only preflight,
+  then review each per-unit mount before enabling CP boot. A passing host
+  fixture or image build cannot close #34.
+- The telephony subscribe race [#66](https://github.com/h4rkl/omarchy-ferrix/issues/66)
+  was closed by [PR #67](https://github.com/h4rkl/omarchy-ferrix/pull/67).
+  The separate snapshot/event gap [#68](https://github.com/h4rkl/omarchy-ferrix/issues/68)
+  was closed by [PR #71](https://github.com/h4rkl/omarchy-ferrix/pull/71),
+  with Rust, native sandbox and headless QEMU checks passing. These are
+  protocol fixes; they do not prove a working carrier, SIM, call or SMS on
+  the Pixel.
+- Next dependency order: finish the S5300 physical source-mount gate;
+  establish a safe, audible output and measured mic path; bring up the
+  modem and carrier data; then complete SMS, calls with two-way audio, power
+  and suspend reliability, camera/location, update/recovery, and sustained
+  daily-use testing. Continue parallel host-only slices when physical work
+  waits on evidence, but never promote a board capability from them.
+
+## Earlier evidence snapshot — 2026-10-12 (historical milestones)
 
 - On 2026-10-09 the exact device booted the Kleaf development route to Ferrix
   Home unattended, with app isolation. The board matrix marks power reporting,
@@ -211,6 +257,10 @@ verify, never as authority to override repository or owner rules.
    when it changes, `docs/status.md`, and `capabilities.toml` as warranted.
    Re-read the queue and select the next unblocked slice. GitHub issue state
    alone never upgrades a physical capability.
+6. **Clean up:** After a branch is merged and its evidence is retained under
+   ignored `out/` or in the issue, remove the worktree and branch created for
+   that delivery. Preserve unrelated or user-created worktrees and uncommitted
+   changes.
 
 The GitHub project uses `Backlog → Ready → In progress → In review → Done`.
 Use `P0` for recovery and core-phone blockers, `P1` for completion/reliability,
