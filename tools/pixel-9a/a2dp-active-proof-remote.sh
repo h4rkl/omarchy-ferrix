@@ -19,8 +19,12 @@
 #      query verbs only): exactly one paired, connected Audio Sink and exactly
 #      one bluez A2DP sink whose node name and api.bluez5.address both name it,
 #      with a non-zero object.serial; and hash it, salted by the host's secret
-#      per-decision salt, with the kernel, package versions and WirePlumber
-#      tree result. Only that salted hash leaves the guest.
+#      per-decision salt, with the device-tree serial, the kernel, package
+#      versions and WirePlumber tree result. Only that salted hash leaves the
+#      guest;
+#   4. read the bound sink's volume once (`wpctl get-volume`, never a write)
+#      and refuse a muted sink, a volume above volume_cap (0.50 on wpctl's
+#      cubic scale), or any output it cannot parse.
 #
 # dry stops there and changes nothing else. play additionally requires the
 # hash to equal proof_expect, and before the tone:
@@ -38,6 +42,7 @@
 #   - starts two pollers, each armed only after one clean pass: open ALSA
 #     playback PCMs (/proc/*/fd, the v3 opener-scan contract) and the two
 #     speaker-path controls (amixer cget only);
+#   - reads the sink volume again (step 4), immediately before the tone;
 #   - starts pw-cat blocked on opening its stdin FIFO, so its pid is known to
 #     every guard before it can connect, and waits for the graph guard to
 #     confirm enforcement for that pid.
@@ -58,7 +63,7 @@
 #           is not the bound sink or whose output is not our node, any device
 #           or other object added, any change to an object other than
 #           clients, our objects, the bound sink, its ports and its device,
-#           removal of the bound sink or device (disconnect) or of any other
+#           a "*"-marked property change of the bound sink, removal of the bound sink or device (disconnect) or of any other
 #           pre-existing object, an object never observed, or a line pw-mon
 #           would not print;
 #   pcm     any open playback PCM, or an incomplete scan;
@@ -70,8 +75,13 @@
 # awk handles each line as it arrives: an awk that waited to fill an input
 # buffer would never acknowledge, and the run would refuse.
 #
-# Afterwards it stops the guards, runs the v3 preflight body again (final
-# observation) and removes the scratch directory. Nothing here pairs,
+# Afterwards it keeps the graph guard enforcing until the guard has seen our
+# node and its ports and links removed (or a guard tripped), for at most
+# removal_wait tenths of a second, and reports whether it saw that
+# (graph_own_removed); the host treats the route as verified only then. It
+# then stops the guards, runs the v3 preflight body again (final
+# observation) and removes the scratch directory. A sink volume change during
+# the tone is not visible to the guard (pw-mon -a hides the Props param). Nothing here pairs,
 # connects, trusts, scans, selects a profile or default, writes a volume or
 # mixer control, records audio, loads modules, starts or stops a service, or
 # plays any file. No address, name, node name or serial is printed; the
@@ -90,6 +100,15 @@ tone_bytes=72000
 tone_cycles=1125
 play_wall=4
 arm_wait=50
+# removal_wait: tenths of a second the shell waits, after pw-cat exits, for
+# the graph guard to see our node and its ports and links removed. Without
+# that observation the route is not verified, however long the guard lagged.
+removal_wait=50
+# volume_cap: the highest bound-sink volume play accepts, in hundredths on
+# the scale `wpctl get-volume` prints. wpctl sets the mixer API to its cubic
+# scale (wpctl.c:2268), so 0.50 there is 0.125 linear, about -18 dB, on top of
+# the tone's -20 dBFS peak. The volume is only read, never written.
+volume_cap=50
 # One cycle of 750 Hz at 48 kHz: 128 + round(13 sin(2 pi i / 64)), as octal.
 tone_cycle='\200\201\203\204\205\206\207\210\211\212\213\213\214\214\215\215\215\215\215\214\214\213\213\212\211\210\207\206\205\204\203\201\200\177\175\174\173\172\171\170\167\166\165\165\164\164\163\163\163\163\163\164\164\165\165\166\167\170\171\172\173\174\175\177'
 
@@ -150,12 +169,19 @@ function trip(r) {
 	if (!(r in tripped)) { tripped[r] = 1; trips = trips (trips == "" ? "" : ",") r; put("trip.graph", trips) }
 	if (pid != "") system("kill -KILL " pid " 2>/dev/null")
 }
-function reset_block() { inblk = 0; hdr = ""; id = ""; type = ""; outn = ""; inn = ""; lstate = ""; bad = ""; split("", p) }
+function reset_block() { inblk = 0; hdr = ""; id = ""; type = ""; outn = ""; inn = ""; lstate = ""; bad = ""; pchg = 0; split("", p) }
+# own_check: once our node and every port and link of it are removed, the
+# shell may stop the guard; until then it waits (bounded) for these events.
+function own_check(   k) {
+	if (!own_gone || own_removed) return
+	for (k in ownobj) return
+	own_removed = 1; put("own-removed", "yes")
+}
 function arm_check() {
 	if (!armed && monpid != "" && (monpid in client_serial)) { armed = 1; s0 = client_serial[monpid]; put("armed", "armed") }
 }
 function cls(c) { return (c ~ /Sink/) ? "sink" : "other" }
-function evaluate(h, i, t, s, n, c, pn, o, in_, st,   k) {
+function evaluate(h, i, t, s, n, c, pn, o, in_, st, pc,   k) {
 	if (h == "added") {
 		if (s + 0 <= s0 + 0) return
 		if (t == "Client") return
@@ -182,6 +208,11 @@ function evaluate(h, i, t, s, n, c, pn, o, in_, st,   k) {
 		trip(t == "Device" ? "device-added" : "graph-object-added"); return
 	}
 	if (h == "changed") {
+		# A "*"-marked property block is a property change (pw-mon marks
+		# PW_NODE_CHANGE_MASK_PROPS); on the bound sink that could be a codec,
+		# profile or routing change, so it trips. Volume and mute are Props
+		# params, hidden by -a, and are not distinguishable from a state change.
+		if (i == sink && pc) { trip("bound-sink-props-changed"); return }
 		if (t == "Client" || i == sink || i == dev || (i in ownobj) || i == own_id) {
 			if (t == "Link" && st == "active" && (i in ownobj)) active = 1
 			return
@@ -194,7 +225,9 @@ function evaluate(h, i, t, s, n, c, pn, o, in_, st,   k) {
 	if (t == "") { trip("unobserved-object-removed"); return }
 	if (i == sink) { trip("bound-sink-removed"); return }
 	if (i == dev) { trip("bound-device-removed"); return }
-	if (t == "Client" || (i in ownobj) || i == own_id || (i in pend_link) || (i in pend_port)) return
+	if (own_id != "" && i == own_id) { own_gone = 1; own_check(); return }
+	if (i in ownobj) { delete ownobj[i]; own_check(); return }
+	if (t == "Client" || (i in pend_link) || (i in pend_port)) return
 	trip("graph-object-removed")
 }
 function end_block(   s, n, c, pn, t, k) {
@@ -216,9 +249,9 @@ function end_block(   s, n, c, pn, t, k) {
 	if (type == "Port" && p["node.id"] != "") portnode[id] = p["node.id"]
 	if (phase == "observe") {
 		qn++; qh[qn] = hdr; qi[qn] = id; qt[qn] = type; qs[qn] = s; qnm[qn] = p["node.name"]; qc[qn] = p["media.class"]
-		qp[qn] = p["node.id"]; qo[qn] = outn; qin[qn] = inn; qst[qn] = lstate
+		qp[qn] = p["node.id"]; qo[qn] = outn; qin[qn] = inn; qst[qn] = lstate; qpc[qn] = pchg
 	} else if (phase == "enforce") {
-		evaluate(hdr, id, type, s, p["node.name"], p["media.class"], p["node.id"], outn, inn, lstate)
+		evaluate(hdr, id, type, s, p["node.name"], p["media.class"], p["node.id"], outn, inn, lstate, pchg)
 	}
 	reset_block()
 }
@@ -232,7 +265,7 @@ function control(rest,   f, k) {
 		phase = "enforce"
 		# Events before the in-session preflight started are part of what it
 		# observed; only later ones are changes.
-		for (k = arm_q + 1; k <= qn; k++) evaluate(qh[k], qi[k], qt[k], qs[k], qnm[k], qc[k], qp[k], qo[k], qin[k], qst[k])
+		for (k = arm_q + 1; k <= qn; k++) evaluate(qh[k], qi[k], qt[k], qs[k], qnm[k], qc[k], qp[k], qo[k], qin[k], qst[k], qpc[k])
 		put("review", trips == "" ? "ok" : trips)
 	}
 	else if (f[1] == "play") { pid = f[2]; if (trips != "") trip("tripped-before-tone"); put("enforcing", pid) }
@@ -240,7 +273,7 @@ function control(rest,   f, k) {
 		for (k in pend_link) { trip("unresolved-link"); break }
 		for (k in pend_port) { trip("unresolved-port"); break }
 		phase = "stopped"
-		put("final", (own_id != "" ? "yes" : "no") " " (own_links + 0) " " (active ? "yes" : "no") " " (trips == "" ? "none" : trips))
+		put("final", (own_id != "" ? "yes" : "no") " " (own_links + 0) " " (active ? "yes" : "no") " " (own_removed ? "yes" : "no") " " (trips == "" ? "none" : trips))
 	}
 	else trip("graph-control-malformed")
 }
@@ -267,7 +300,9 @@ BEGIN { phase = "observe"; reset_block(); s0 = -1; arm_q = 0 }
 	if (line ~ /^\toutput-node-id: [0-9]+$/) { outn = substr(line, 18); next }
 	if (line ~ /^\tinput-node-id: [0-9]+$/) { inn = substr(line, 17); next }
 	if (line ~ /^[ *]\tstate: "[a-z]+"/) { lstate = substr(line, 11); sub(/".*/, "", lstate); next }
+	if (line == "*\tproperties:") { pchg = 1; next }
 	if (line ~ /^[ *]\t\t[^ \t=]+ = /) {
+		if (substr(line, 1, 1) == "*") pchg = 1
 		k = substr(line, 4); sub(/ = .*/, "", k)
 		if (k == "object.serial" || k == "node.name" || k == "media.class" || k == "node.id" || k == "pipewire.sec.pid") {
 			v = line; sub(/^[ *]\t\t[^ \t=]+ = "/, "", v); sub(/"$/, "", v)
@@ -426,6 +461,9 @@ for sid in $sink_ids; do
 	[ -n "$props" ] || refuse identity-sink-inspect-failed
 	case "$(prop media.class):$(prop device.api):$(prop node.name):$(prop api.bluez5.profile)" in
 		Audio/Sink:bluez5:bluez_output.*:a2dp-sink*) ;;
+		# Not a bluez A2DP sink (the null sink, say): not a candidate. The
+		# in-session preflight already refused any ALSA or other unexpected
+		# sink, so skipping here cannot hide one.
 		*) continue ;;
 	esac
 	found=$((found + 1))
@@ -443,8 +481,11 @@ done
 case "$id_serial" in ''|0|*[!0-9]*) refuse identity-sink-serial-invalid ;; esac
 case "$id_dev" in ''|*[!0-9]*) refuse identity-sink-device-invalid ;; esac
 pre_get() { get "$1" "$proof_dir/pre.out"; }
+# The device-tree serial (empty if the node is absent) only enters the salted
+# hash, so the binding names this phone without ever printing its serial.
+dt_serial=$(tr -d '\000' <"$dt_root/serial-number" 2>/dev/null)
 binding=$({
-	printf 'ferrix-a2dp-active-proof-binding-v1\nsalt=%s\ntarget=google-pixel-9a-tegu-gxq96-mp1-0\n' "$proof_salt"
+	printf 'ferrix-a2dp-active-proof-binding-v2\nsalt=%s\ntarget=google-pixel-9a-tegu-gxq96-mp1-0\ndt_serial=%s\n' "$proof_salt" "$dt_serial"
 	for key in kernel_release pkg.bluez pkg.pipewire pkg.wireplumber pkg.pipewire_spa_bluez pkg.pipewire_tools \
 		wireplumber_data_tree a2dp_sink_codec; do
 		printf '%s=%s\n' "$key" "$(pre_get "$key")"
@@ -457,7 +498,31 @@ out identity ok
 out sink_profile_class "$(printf '%s' "$id_profile" | clean)"
 out sink_codec "$(printf '%s' "$id_codec" | clean)"
 
+# volume_gate: one read-only `wpctl get-volume` of the bound sink. Refuses a
+# muted sink, a volume above volume_cap, and any output but the one line
+# wpctl.c prints ("Volume: %.2f", optionally " [MUTED]"). Nothing is written.
+volume_gate() {
+	vol_text=$(wp get-volume "$id_sink" 2>/dev/null) || { out sink_volume unreadable; refuse sink-volume-unreadable; }
+	case "$vol_text" in
+		*'
+'*) vol_mute=bad ;;
+		'Volume: '[0-9].[0-9][0-9]) vol_mute=no ;;
+		'Volume: '[0-9].[0-9][0-9]' [MUTED]') vol_mute=yes ;;
+		*) vol_mute=bad ;;
+	esac
+	[ "$vol_mute" != bad ] || { out sink_volume unreadable; refuse sink-volume-unreadable; }
+	vol=$(printf '%s\n' "$vol_text" | cut -c9-12)
+	vol_whole=${vol%%.*}
+	vol_frac=${vol#*.}
+	vol_h=$((vol_whole * 100 + 1$vol_frac - 100))
+	out sink_volume "$vol"
+	out sink_mute "$vol_mute"
+	[ "$vol_mute" = no ] || refuse sink-muted
+	[ "$vol_h" -le "$volume_cap" ] || refuse sink-volume-over-cap
+}
+
 if [ "$proof_mode" = dry ]; then
+	volume_gate
 	out binding "$binding"
 	out tone_started no
 	cleanup
@@ -482,6 +547,9 @@ wait_file review || refuse graph-review-timeout
 review=$(sed -n '1p' "$proof_dir/review" | tr -cd 'a-z0-9,-')
 out guard_review "$review"
 [ "$review" = ok ] || refuse graph-changed-before-tone
+# Read the volume again immediately before the tone; the graph guard does not
+# see a volume change (see guard_awk), so this read is the volume gate.
+volume_gate
 
 # pw-cat blocks opening its stdin FIFO until the writer starts, so the guards
 # know its pid before it can connect to PipeWire.
@@ -522,8 +590,16 @@ kill -KILL "$writer_pid" "$watchdog_pid" 2>/dev/null
 wait "$writer_pid" 2>/dev/null
 wait "$watchdog_pid" 2>/dev/null
 writer_pid=''; watchdog_pid=''
-# Removal events for our stream arrive after pw-cat exits; keep enforcing.
-sleep 0.5
+# Removal events for our stream arrive after pw-cat exits; keep enforcing
+# until the guard has seen our node, ports and links go (or a guard tripped),
+# for at most removal_wait tenths of a second. No fixed sleep: a lagging
+# pw-mon must not turn a missed removal into a pass.
+n=0
+while [ ! -s "$proof_dir/own-removed" ] && ! any_trip; do
+	n=$((n + 1))
+	[ "$n" -le "$removal_wait" ] || break
+	sleep 0.1
+done
 : >"$proof_dir/stop"
 printf 'FERRIXCTL %s stop\n' "$ctl_tok" >&3
 wait_file final || :
@@ -538,10 +614,11 @@ wait "$guard_pid" 2>/dev/null; guard_pid=''
 set -- $final
 out tone_exit "$tone_exit"
 out tone_watchdog "$([ -e "$proof_dir/watchdog.fired" ] && echo fired || echo idle)"
-out graph_final "$([ "$#" -eq 4 ] && echo complete || echo missing)"
+out graph_final "$([ "$#" -eq 5 ] && echo complete || echo missing)"
 out graph_own_node "${1:-unknown}"
 out graph_own_links "${2:-unknown}"
 out graph_link_active "${3:-unknown}"
+out graph_own_removed "${4:-unknown}"
 out guard_trip_graph "$(trip_of graph)"
 out guard_trip_pcm "$(trip_of pcm)"
 out guard_trip_ctl "$(trip_of ctl)"

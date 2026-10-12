@@ -50,8 +50,12 @@ check "static: amixer is only cget on the two watched controls" \
 	sh -c '! printf "%s\n" "$1" | grep -E "amixer.*(cset|sset|set |-s |events)" &&
 		[ "$(printf "%s\n" "$1" | grep -c "amixer -c")" -eq 1 ] && printf "%s\n" "$1" | grep -Fq "amixer -c \"\$card\" cget" &&
 		grep -Fxq "watched_controls='"'"'TDM_0_RX Mixer EP1|TAS25XX ASI Switch'"'"'" "$2"' sh "$code" "$body"
-check "static: wpctl is only status and inspect" \
-	[ "$(printf '%s\n' "$code" | grep -oE '(wp|wpctl) (status|inspect|set-[a-z]+|settings|clear-default|load|edit)' | sort -u | tr '\n' '|')" = 'wp inspect|wp status|' ]
+check "static: wpctl is only status, inspect and get-volume (never a volume, mute or default write)" \
+	sh -c '[ "$(printf "%s\n" "$1" | grep -oE "(wp|wpctl) (status|inspect|get-[a-z]+|set-[a-z]+|settings|clear-default|load|edit)" | sort -u | tr "\n" "|")" = "wp get-volume|wp inspect|wp status|" ] &&
+		! printf "%s\n" "$1" | grep -Eq "set-volume|set-mute|set-default|set-profile|set-route"' sh "$code"
+check "static: the volume cap is one named constant, 0.50 on the wpctl scale, the same on host and guest" \
+	sh -c 'grep -Fxq volume_cap=50 "$1" && grep -Fxq volume_cap=50 "$2" && [ "$(grep -c "^volume_cap=" "$1")" -eq 1 ]' sh "$body" "$host"
+check "static: no fixed sleep stands in for the stream removal" sh -c '! grep -Eq "^sleep 0\.[0-9]+$" "$1" && grep -Fq "own-removed" "$1"' sh "$body"
 check "static: bluetoothctl is only devices Paired and info" \
 	[ "$(printf '%s\n' "$code" | grep -oE 'bluetoothctl [a-z]+( [A-Z][a-z]+)?' | sort -u | tr '\n' '|')" = 'bluetoothctl devices Paired|bluetoothctl info|' ]
 pw_lines=$(printf '%s\n' "$code" | grep -E 'pw-cat( |$)' | grep -vE 'for tool in')
@@ -73,7 +77,7 @@ want_cycle=$(awk 'BEGIN { pi = atan2(0, -1); s = ""; for (i = 0; i < 64; i++) { 
 check "static: the cycle table is one 750 Hz cycle at 48 kHz, peak 13/128" grep -Fxq "tone_cycle='$want_cycle'" "$body"
 # Identity values reach only the guard FIFO (>&3) and the binding hash input.
 leaks=$(printf '%s\n' "$code" | grep -E '(out|printf)[^#]*[$](id_addr|id_name|id_serial|id_dev|id_sink|own_tok|own_name|ctl_tok|proof_salt|address)' |
-	grep -vE '>&3$|binding-v1|address=%s' || true)
+	grep -vE '>&3$|binding-v2|address=%s' || true)
 check "static: the guest never prints the address, node name, serial, device id, salt or tokens" [ -z "$leaks" ]
 [ -z "$leaks" ] || printf '%s\n' "$leaks"
 check "static: the guest body gates on the exact tegu device tree" \
@@ -89,9 +93,13 @@ check "static: the v3 preflight still has no playback mode" \
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/pixel-9a-a2dp-active-proof-test.XXXXXX")
 rundir=$(mktemp -d /tmp/a2dp-ap.XXXXXX)
+# The host keeps its decision salt only inside the repository's ignored out/,
+# so every host run here writes below this directory.
+mkdir -p "$root/out"
+outroot=$(mktemp -d "$root/out/a2dp-active-proof-test.XXXXXX")
 . "$root/tools/pixel-9a/tests/acm-fake-guest.sh"
 sock_pid=''
-trap 'acm_guest_stop; [ -z "$sock_pid" ] || { kill "$sock_pid" 2>/dev/null; wait "$sock_pid" 2>/dev/null; } || :; rm -rf "$work" "$rundir"' EXIT
+trap 'acm_guest_stop; [ -z "$sock_pid" ] || { kill "$sock_pid" 2>/dev/null; wait "$sock_pid" 2>/dev/null; } || :; rm -rf "$work" "$rundir" "$outroot"' EXIT
 unset FERRIX_PIXEL9A_ACM_TIMEOUT FERRIX_PIXEL9A_A2DP_EVIDENCE FERRIX_PIXEL9A_A2DP_PLAY_CONFIRM 2>/dev/null || true
 
 # The host's library extraction is the code both sides judge the preflight by.
@@ -111,6 +119,7 @@ state="$fake/state"
 mkdir -p "$fbin" "$state" "$fake/dt" "$fake/proc" "$fake/spa" "$fake/etc"
 printf 'ZUMA PRO TEGU MP on ZUMA PRO\000' >"$fake/dt/model"
 printf 'google,ZUMA PRO TEGU\000google,ZUMA PRO\000' >"$fake/dt/compatible"
+printf 'FAKEDTSERIAL01\000' >"$fake/dt/serial-number"
 proofdir="$work/run-proof"
 sed -e "s#^dt_root=/proc/device-tree\$#dt_root=$fake/dt#" -e "s#^proc_root=/proc\$#proc_root=$fake/proc#" \
 	-e "s#^runtime_dir=/run/user/1000\$#runtime_dir=$rundir#" -e "s#^apk_db=/lib/apk/db/installed\$#apk_db=$fake/installed#" \
@@ -166,6 +175,9 @@ trap 'registry-client remove $$' EXIT
 case "$*" in
 	status) if [ -f "$s/played" ] && [ -f "$s/wp-status-after" ]; then cat "$s/wp-status-after"; else cat "$s/wp-status"; fi ;;
 	'inspect '[0-9]*) f="$s/wp-inspect.$2"; [ -f "$f" ] || exit 1; cat "$f" ;;
+	'get-volume '[0-9]*)
+		printf '%s\n' "$2" >>"$s/volume-reads"
+		if [ -f "$s/wp-volume" ]; then cat "$s/wp-volume"; else echo 'Volume: 0.40'; fi ;;
 	*) printf 'wpctl %s\n' "$*" >>"$s/violations"; exit 1 ;;
 esac
 EOF
@@ -200,6 +212,8 @@ sed "s/@MONPID@/$$/" "$s/mon-initial"
 n=0
 while :; do
 	total=$(wc -l <"$s/mon-events" | tr -d ' ')
+	# A stalled monitor: alive, but it forwards nothing more.
+	if [ -f "$s/mon-stall" ]; then sleep 0.02; continue; fi
 	if [ "$total" -gt "$n" ]; then sed -n "$((n + 1)),${total}p" "$s/mon-events"; n=$total; fi
 	[ ! -f "$s/mon-exit-now" ] || exit 0
 	sleep 0.02
@@ -208,7 +222,8 @@ EOF
 # Fake pw-cat: --help, or one playback. It checks the reviewed argv, measures
 # the tone (byte count and range only; nothing is kept), adds its client,
 # node, port and link to the registry, runs an optional scenario mid-tone,
-# then "plays" for 1.5 s and removes its objects.
+# then "plays" for 1.5 s. Like the PipeWire server, a reaper removes its
+# objects once the process is gone, however it ended (exit or SIGKILL).
 cat >"$fbin/pw-cat" <<'EOF'
 #!/bin/sh
 s=$FAKE_A2DP_STATE
@@ -227,6 +242,12 @@ scenario=$(cat "$s/scenario" 2>/dev/null || echo good)
 [ "$scenario" != no-link ] || { sleep 0.3; exit 1; }
 printf 'added:\n\tid: 70\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Client (version 3)\n \tproperties:\n \t\tobject.serial = "600"\n \t\tpipewire.sec.pid = "%s"\n\nadded:\n\tid: 71\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n \tinput ports: 0/0\n \toutput ports: 1/1\n \tstate: "idle"\n \tproperties:\n \t\tobject.serial = "601"\n \t\tnode.name = "%s"\n \t\tmedia.class = "Stream/Output/Audio"\n\nadded:\n\tid: 72\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Port (version 3)\n\tdirection: "output"\n \tproperties:\n \t\tobject.serial = "602"\n \t\tnode.id = "71"\n\n' \
 	"$$" "$name" >>"$s/mon-events"
+me=$$
+(
+	while kill -0 "$me" 2>/dev/null; do sleep 0.05; done
+	[ "$scenario" != late-removal ] || sleep 1.5
+	[ "$scenario" = stream-left ] || printf 'removed:\n\tid: 73\n\nremoved:\n\tid: 72\n\nremoved:\n\tid: 71\n\nremoved:\n\tid: 70\n\n' >>"$s/mon-events"
+) </dev/null >/dev/null 2>&1 &
 in_node=46
 [ "$scenario" != link-elsewhere ] || in_node=30
 printf 'added:\n\tid: 73\n\tpermissions: r-x--\n\ttype: PipeWire:Interface:Link (version 3)\n\toutput-node-id: 71\n\toutput-port-id: 72\n\tinput-node-id: %s\n\tinput-port-id: 47\n \tstate: "init"\n \tformat:\n\t\tnone\n \tproperties:\n \t\tobject.serial = "603"\n\nchanged:\n\tid: 73\n\tpermissions: r-x--\n\ttype: PipeWire:Interface:Link (version 3)\n\toutput-node-id: 71\n\toutput-port-id: 72\n\tinput-node-id: %s\n\tinput-port-id: 47\n*\tstate: "active"\n*\tformat:\n\t\t  Audio:U8\n \tproperties:\n \t\tobject.serial = "603"\n\nchanged:\n\tid: 46\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n \tinput ports: 2/65\n \toutput ports: 0/0\n*\tstate: "running"\n \tproperties:\n \t\tobject.serial = "40"\n \t\tnode.name = "bluez_output.66_77_88_99_AA_BB.1"\n \t\tmedia.class = "Audio/Sink"\n\n' \
@@ -247,11 +268,12 @@ case "$scenario" in
 	speaker-on) printf 'on\n' >"$s/ctl.TDM_0_RX_Mixer_EP1" ;;
 	amp-unreadable) rm -f "$s/ctl.TAS25XX_ASI_Switch" ;;
 	stream-left) : >"$s/stream-left" ;;
+	sink-props-changed) printf 'changed:\n\tid: 46\n\tpermissions: rwxm-\n\ttype: PipeWire:Interface:Node (version 3)\n*\tproperties:\n*\t\tobject.serial = "40"\n*\t\tnode.name = "bluez_output.66_77_88_99_AA_BB.1"\n*\t\tmedia.class = "Audio/Sink"\n*\t\tapi.bluez5.codec = "sbc"\n\n' >>"$s/mon-events" ;;
 esac
 if [ "$scenario" = watchdog ]; then sleep 6; fi
 sleep 1.2
 : >"$s/played"
-[ "$scenario" = stream-left ] || printf 'removed:\n\tid: 73\n\nremoved:\n\tid: 72\n\nremoved:\n\tid: 71\n\nremoved:\n\tid: 70\n\n' >>"$s/mon-events"
+[ "$scenario" != mon-stall ] || : >"$s/mon-stall"
 : >"$s/pw-cat-finished"
 EOF
 printf '#!/bin/sh\nshift\n[ "$1" != ls ] || [ ! -f "$FAKE_A2DP_STATE/ls-timeout" ] || exit 124\nexec "$@"\n' >"$fbin/timeout"
@@ -401,7 +423,7 @@ guest() {
 gget() { printf '%s\n' "$gout" | sed -n "s/^$1=//p" | sed -n "${2:-1}p"; }
 no_violation() { [ ! -s "$state/violations" ]; }
 no_identifier() {
-	! printf '%s\n' "$gout" | grep -Eiq "66[:_]77|0A[:_]0B|Synthetic|bluez_output|bluez_input|bluez_capture|loopback-|SYNSERIAL|auto_null|ferrix-a2dp-proof-|$salt|$fake|serial=40|=40\$"
+	! printf '%s\n' "$gout" | grep -Eiq "66[:_]77|0A[:_]0B|FAKEDTSERIAL|Synthetic|bluez_output|bluez_input|bluez_capture|loopback-|SYNSERIAL|auto_null|ferrix-a2dp-proof-|$salt|$fake|serial=40|=40\$"
 }
 played() { [ -f "$state/pw-cat-finished" ]; }
 pw_cat_ran() { grep -q '^pw-cat --playback' "$state/calls" 2>/dev/null; }
@@ -426,6 +448,22 @@ salt=ffffffffffffffffffffffffffffffff
 guest dry
 check "guest dry: another decision salt gives an unrelated binding" [ "$(gget binding)" != "$binding" ]
 salt=0123456789abcdef0123456789abcdef
+printf 'FAKEDTSERIAL02\000' >"$fake/dt/serial-number"
+guest dry
+check "guest dry: another phone (device-tree serial) gives another binding" [ "$(gget binding)" != "$binding" ]
+printf 'FAKEDTSERIAL01\000' >"$fake/dt/serial-number"
+check "guest dry: the bound sink volume is read once, reported, and under the cap" \
+	sh -c '[ "$1" = 0.40 ] && [ "$2" = no ] && [ "$(grep -c . "$3")" -ge 1 ]' sh "$(sed -n 's/^sink_volume=//p' "$work/fx-dry")" \
+	"$(sed -n 's/^sink_mute=//p' "$work/fx-dry")" "$state/volume-reads"
+reset_guest
+printf 'Volume: 0.50\n' >"$state/wp-volume"
+guest dry
+check "guest dry: a volume exactly at the cap is accepted" sh -c '[ "$1" -eq 0 ] && [ "$2" = 0.50 ]' sh "$gstatus" "$(gget sink_volume)"
+reset_guest
+printf 'Volume: 0.51\n' >"$state/wp-volume"
+guest dry
+check "guest dry: a volume over the cap refuses before any decision" \
+	sh -c '[ "$1" -eq 6 ] && [ "$2" = sink-volume-over-cap ] && [ "$3" = 0.51 ] && [ -z "$4" ]' sh "$gstatus" "$(gget active_refusal)" "$(gget sink_volume)" "$(gget binding)"
 
 reset_guest
 guest play "$binding"
@@ -434,8 +472,12 @@ check "guest play: every gate held before the tone" \
 	sh -c '[ "$1" = yes ] && [ "$2" = yes ] && [ "$3" = yes ] && [ "$4" = ok ]' sh \
 	"$(gget binding_match)" "$(gget guard_armed)" "$(gget kernel_guards_armed)" "$(gget guard_review)"
 check "guest play: pw-cat played to the end, linked only to the bound sink, link active" \
-	sh -c '[ "$1" = 0 ] && [ "$2" = idle ] && [ "$3" = complete ] && [ "$4" = yes ] && [ "$5" = 1 ] && [ "$6" = yes ]' sh \
-	"$(gget tone_exit)" "$(gget tone_watchdog)" "$(gget graph_final)" "$(gget graph_own_node)" "$(gget graph_own_links)" "$(gget graph_link_active)"
+	sh -c '[ "$1" = 0 ] && [ "$2" = idle ] && [ "$3" = complete ] && [ "$4" = yes ] && [ "$5" = 1 ] && [ "$6" = yes ] && [ "$7" = yes ]' sh \
+	"$(gget tone_exit)" "$(gget tone_watchdog)" "$(gget graph_final)" "$(gget graph_own_node)" "$(gget graph_own_links)" "$(gget graph_link_active)" \
+	"$(gget graph_own_removed)"
+check "guest play: the volume was read in the play session, after the review and before pw-cat" \
+	sh -c '[ "$1" = 0.40 ] && [ "$2" = no ] && grep -n "" "$3" | awk -F: "/^[0-9]+:wpctl get-volume/ { v = \$1 } /^[0-9]+:pw-cat --playback/ { p = \$1 } END { exit !(v && p && v < p) }"' sh \
+	"$(gget sink_volume)" "$(gget sink_mute)" "$state/calls"
 check "guest play: no guard tripped" \
 	sh -c '[ "$1" = none ] && [ "$2" = none ] && [ "$3" = none ] && [ "$4" = none ]' sh \
 	"$(gget guard_trip_graph)" "$(gget guard_trip_pcm)" "$(gget guard_trip_ctl)" "$(gget guard_trip_live)"
@@ -517,6 +559,18 @@ two_sinks() {
 	sed "s/$addr/00:11:22:33:44:55/" "$state/bt-info.$addr" >"$state/bt-info.00:11:22:33:44:55"
 }
 refusal_case second-headset preflight-blocked two_sinks
+loud() { printf 'Volume: 0.80\n' >"$state/wp-volume"; }
+refusal_case volume-over-cap sink-volume-over-cap loud
+muted() { printf 'Volume: 0.30 [MUTED]\n' >"$state/wp-volume"; }
+refusal_case volume-muted sink-muted muted
+vol_percent() { printf 'Volume: 40%%\n' >"$state/wp-volume"; }
+refusal_case volume-unparseable sink-volume-unreadable vol_percent
+vol_two() { printf 'Volume: 0.10\nVolume: 0.90\n' >"$state/wp-volume"; }
+refusal_case volume-two-lines sink-volume-unreadable vol_two
+vol_none() { : >"$state/wp-volume"; }
+refusal_case volume-unsupported sink-volume-unreadable vol_none
+vol_big() { printf 'Volume: 10.00\n' >"$state/wp-volume"; }
+refusal_case volume-out-of-range sink-volume-unreadable vol_big
 
 # trip_case NAME SCENARIO GUARD WANT: a tone that a guard must stop.
 trip_case() {
@@ -548,14 +602,29 @@ trip_case monitor-exits monitor-dies live guard-exited
 trip_case playback-pcm-opened pcm-open pcm playback-pcm-opener
 trip_case speaker-route-on speaker-on ctl speaker-control-not-off
 trip_case amp-switch-unreadable amp-unreadable ctl speaker-control-read-failed
+trip_case bound-sink-props-changed sink-props-changed graph bound-sink-props-changed
 
 reset_guest
 printf 'no-link\n' >"$state/scenario"
 guest play "$binding"
-check "guest play (target never linked): route held, no tone delivered" \
-	sh -c '[ "$1" -eq 0 ] && [ "$2" = 1 ] && [ "$3" = no ] && [ "$4" = 0 ] && [ "$5" = none ]' sh \
-	"$gstatus" "$(gget tone_exit)" "$(gget graph_own_node)" "$(gget graph_own_links)" "$(gget guard_trip_graph)"
+check "guest play (target never linked): no trip, but no own node seen added or removed" \
+	sh -c '[ "$1" -eq 0 ] && [ "$2" = 1 ] && [ "$3" = no ] && [ "$4" = 0 ] && [ "$5" = none ] && [ "$6" = no ]' sh \
+	"$gstatus" "$(gget tone_exit)" "$(gget graph_own_node)" "$(gget graph_own_links)" "$(gget guard_trip_graph)" "$(gget graph_own_removed)"
 printf '%s\n' "$gout" >"$work/fx-play-no-link"
+reset_guest
+printf 'late-removal\n' >"$state/scenario"
+guest play "$binding"
+check "guest play (removal events 1.5 s late): the bounded wait still sees the stream removed" \
+	sh -c '[ "$1" -eq 0 ] && [ "$2" = 0 ] && [ "$3" = yes ] && [ "$4" = yes ] && [ "$5" = none ]' sh \
+	"$gstatus" "$(gget tone_exit)" "$(gget graph_own_node)" "$(gget graph_own_removed)" "$(gget guard_trip_graph)"
+printf '%s\n' "$gout" >"$work/fx-play-late-removal"
+reset_guest
+printf 'mon-stall\n' >"$state/scenario"
+guest play "$binding"
+check "guest play (pw-mon stalls before the removal): no trip, but the removal is reported unseen" \
+	sh -c '[ "$1" -eq 0 ] && [ "$2" = 0 ] && [ "$3" = yes ] && [ "$4" = no ] && [ "$5" = none ] && [ "$6" = complete ]' sh \
+	"$gstatus" "$(gget tone_exit)" "$(gget graph_own_node)" "$(gget graph_own_removed)" "$(gget guard_trip_graph)" "$(gget graph_final)"
+printf '%s\n' "$gout" >"$work/fx-play-mon-stall"
 reset_guest
 printf 'watchdog\n' >"$state/scenario"
 guest play "$binding"
@@ -589,6 +658,10 @@ first() { awk -v k="$3" -v v="$4" '!done && index($0, k "=") == 1 { print v; don
 first play-good pre-blocked graph_sink_alsa graph_sink_alsa=1
 first play-good pre-malformed graph_sinks 'graph_sinks=2\ngraph_sinks=2'
 derive play-good skipped-review -e 's/^guard_review=ok$/guard_review=foreign-node/'
+derive play-good loud-claimed -e 's/^sink_volume=.*/sink_volume=0.90/'
+derive play-good muted-claimed -e 's/^sink_mute=.*/sink_mute=yes/'
+derive play-good no-removal -e 's/^graph_own_removed=yes$/graph_own_removed=no/'
+derive dry dry-loud -e 's/^sink_volume=.*/sink_volume=0.75/'
 derive dry dry-bad-binding -e 's/^binding=.*/binding=abc/'
 first dry dry-wrong-board dt_model 'dt_model=ZUMA PRO COMET MP on ZUMA PRO'
 
@@ -597,14 +670,15 @@ status=0
 # run CASE FIXTURE EXIT MODE [CONFIRM]
 run() {
 	case_name=$1 fx=$2 st=$3 mode=$4
-	case_dir="$work/run-$case_name"
+	case_dir="$outroot/run-$case_name"
 	mkdir -p "$case_dir"
 	acm_guest_start
 	acm_guest_ctl header_lines 3
 	acm_guest_ctl fixture "$work/fx/$fx"
 	acm_guest_ctl exit "$st"
 	status=0
-	out=$(FERRIX_OUT_DIR="$case_dir" FERRIX_PIXEL9A_A2DP_EVIDENCE=mock FERRIX_PIXEL9A_A2DP_PLAY_CONFIRM="${5:-}" sh "$host" "$mode" 2>&1) || status=$?
+	out=$(FERRIX_OUT_DIR="${out_override:-$case_dir}" FERRIX_PIXEL9A_A2DP_EVIDENCE="${run_evidence:-mock}" FERRIX_PIXEL9A_A2DP_PLAY_CONFIRM="${5:-}" \
+		sh "$host" "$mode" 2>&1) || status=$?
 	runs=$(acm_guest_runs)
 	acm_guest_stop
 	results="$case_dir/pixel-9a/a2dp-active-proof"
@@ -633,12 +707,15 @@ check "host dry: the decision file is private and holds the salt; no transcript 
 	sh -c '[ "$(ls -l "$1/decision-pending" | cut -c1-10)" = "-rw-------" ] && grep -Fxq "salt=$2" "$1/decision-pending" &&
 		! printf "%s\n" "$3" | grep -Fq "$2" && ! grep -rFq "$2" "$1"/dry-*' sh "$results" "$salt_used" "$out"
 check "host dry: privacy of output and transcripts" private "$results"
+check "host dry: the decision records its mock origin; the summary carries the volume" \
+	sh -c 'grep -Fxq evidence=mock "$1/decision-pending" && printf "%s\n" "$2" | grep -Fxq sink_volume=0.40 &&
+		printf "%s\n" "$2" | grep -Fq "sink volume 0.40 (read only; play refuses muted or above 0.50)"' sh "$results" "$out"
 check "host dry: prints the decision context" \
 	sh -c 'printf "%s\n" "$1" | grep -Fq "Decision context (dry run; nothing was played" && printf "%s\n" "$1" | grep -Fq "node.dont-move" &&
 		printf "%s\n" "$1" | grep -Fq "Internal speaker and earpiece stay NO-GO"' sh "$out"
 
 # Lifecycle: play consumes the decision exactly once.
-play_dir="$work/run-play-good"
+play_dir="$outroot/run-play-good"
 mkdir -p "$play_dir/pixel-9a"
 cp -R "$results" "$play_dir/pixel-9a/"
 run play-good play-good 0 play "$phrase"
@@ -646,6 +723,8 @@ check "host play: route held, tone delivered, cleanup clean, audibility owner-pe
 	sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq route_safety=held && printf "%s\n" "$2" | grep -Fxq tone_delivery=linked-active &&
 		printf "%s\n" "$2" | grep -Fxq cleanup=clean && printf "%s\n" "$2" | grep -Fxq audible_confirmation=owner-pending &&
 		printf "%s\n" "$2" | grep -Fxq result=route-held-tone-delivered && printf "%s\n" "$2" | grep -Fxq audio_capability=unsupported' sh "$status" "$out"
+check "host play: the observed sink volume is in the redacted summary" \
+	sh -c 'printf "%s\n" "$1" | grep -Fxq sink_volume=0.40 && printf "%s\n" "$1" | grep -Fxq sink_mute=no && grep -Fxq sink_volume=0.40 "$2"/play-latest.txt' sh "$out" "$results"
 check "host play: the session carried the decision's salt and binding" \
 	sh -c 'grep -Fxq proof_mode=play "$1" && grep -Fxq "proof_salt=$2" "$1" && grep -Fxq "proof_expect=$3" "$1" && cmp -s "$4" "$5"' sh \
 	"$ACM_GUEST_CTL/header.1" "$salt_used" "$binding" "$ACM_GUEST_CTL/body.1" "$work/expected-body.sh"
@@ -683,6 +762,29 @@ mv "$results/decision-pending" "$results/real-decision"
 ln -s real-decision "$results/decision-pending"
 run linked play-good 0 play "$phrase"
 check "host play with a linked decision: refused, exit 2" sh -c '[ "$1" -eq 2 ] && [ "$2" -eq 0 ]' sh "$status" "$runs"
+fresh_decision mock-origin
+run_evidence=physical
+run mock-origin play-good 0 play "$phrase"
+run_evidence=''
+check "host physical play with a mock-origin decision: refused, exit 2, no session, not consumed" \
+	sh -c '[ "$1" -eq 2 ] && [ "$2" -eq 0 ] && [ -f "$3/decision-pending" ] && printf "%s\n" "$4" | grep -Fq "came from a mock run"' sh \
+	"$status" "$runs" "$results" "$out"
+fresh_decision no-origin
+sed -i.bak '/^evidence=/d' "$results/decision-pending"
+run no-origin play-good 0 play "$phrase"
+check "host play with a decision that records no origin: refused, exit 2, no session" sh -c '[ "$1" -eq 2 ] && [ "$2" -eq 0 ]' sh "$status" "$runs"
+mkdir -p "$work/outside"
+out_override="$work/outside"
+run outside dry 0 dry
+out_override=''
+check "host refuses a FERRIX_OUT_DIR outside the repository out/: exit 2, no session, nothing written" \
+	sh -c '[ "$1" -eq 2 ] && [ "$2" -eq 0 ] && [ -z "$(ls -A "$3")" ]' sh "$status" "$runs" "$work/outside"
+ln -s "$work/outside" "$outroot/linked-out"
+out_override="$outroot/linked-out"
+run linked-out dry 0 dry
+out_override=''
+check "host refuses an out/ path that links outside the repository: exit 2, no session, nothing written" \
+	sh -c '[ "$1" -eq 2 ] && [ "$2" -eq 0 ] && [ -z "$(ls -A "$3")" ]' sh "$status" "$runs" "$work/outside"
 fresh_decision redo
 run redo dry 0 dry
 check "host dry again: replaces the pending decision (the earlier phrase no longer works)" [ "$(phrase_of "$out")" != "$phrase" ]
@@ -707,8 +809,19 @@ play_fixture speaker-cleanup trip-speaker-route-on 0
 check "host play (speaker route on afterwards): cleanup anomaly reported" \
 	sh -c 'printf "%s\n" "$1" | grep -Fxq cleanup=anomaly && printf "%s\n" "$1" | grep -Fq speaker-route-not-off' sh "$out"
 play_fixture no-link play-no-link 0
-check "host play (never linked): route held, not delivered, exit 8" \
-	sh -c '[ "$1" -eq 8 ] && printf "%s\n" "$2" | grep -Fxq route_safety=held && printf "%s\n" "$2" | grep -Fxq tone_delivery=not-delivered' sh "$status" "$out"
+check "host play (never linked): the guard never saw our node, so route unverified, not delivered, exit 7" \
+	sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$2" | grep -Fxq route_safety=unverified && printf "%s\n" "$2" | grep -Fxq tone_delivery=not-delivered &&
+		printf "%s\n" "$2" | grep -Fxq graph_own_node=no' sh "$status" "$out"
+play_fixture mon-stall play-mon-stall 0
+check "host play (pw-mon stalled, removal unseen): route unverified, exit 7, never held" \
+	sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$2" | grep -Fxq route_safety=unverified && ! printf "%s\n" "$2" | grep -Fxq route_safety=held &&
+		printf "%s\n" "$2" | grep -Fxq graph_own_removed=no && printf "%s\n" "$2" | grep -Fxq result=route-not-verified' sh "$status" "$out"
+play_fixture no-removal no-removal 0
+check "host play (removal not reported, otherwise good): route unverified, exit 7" \
+	sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$2" | grep -Fxq route_safety=unverified' sh "$status" "$out"
+play_fixture late-removal play-late-removal 0
+check "host play (late removal, seen within the bound): route held, delivered, exit 0" \
+	sh -c '[ "$1" -eq 0 ] && printf "%s\n" "$2" | grep -Fxq route_safety=held' sh "$status" "$out"
 play_fixture watchdog play-watchdog 0
 check "host play (watchdog): not delivered, exit 8" sh -c '[ "$1" -eq 8 ] && printf "%s\n" "$2" | grep -Fxq tone_watchdog=fired' sh "$status" "$out"
 play_fixture stream-left play-stream-left 0
@@ -726,14 +839,35 @@ for item in binding-mismatch:binding-mismatch sink-added-after-preflight:graph-c
 		sh -c '[ "$1" -eq 6 ] && printf "%s\n" "$2" | grep -Fxq "active_refusal=$3" && printf "%s\n" "$2" | grep -Fxq tone_started=no && [ ! -e "$4/decision-pending" ]' sh \
 		"$status" "$out" "${item#*:}" "$results"
 done
-play_fixture refusal-exit-mismatch refuse-binding-mismatch 0
-check "host play (refusal reported with exit 0): malformed, exit 5" sh -c '[ "$1" -eq 5 ]' sh "$status"
-for item in leak-address:5 leak-hex:5 unexpected-key:5 duplicate-key:5 truncated:5 pre-blocked:5 pre-malformed:5 skipped-review:5; do
-	fx=${item%%:*}
-	play_fixture "bad-$fx" "$fx" 0
-	check "host play refuses ($fx): exit ${item#*:}, no identifier retained" \
-		sh -c '[ "$1" -eq "$2" ] && ! grep -rEq "66[:_]77|66778899AABB" "$3"' sh "$status" "${item#*:}" "$work/run-bad-$fx"
+for item in volume-over-cap:sink-volume-over-cap volume-muted:sink-muted volume-unparseable:sink-volume-unreadable; do
+	label=${item%%:*}
+	play_fixture "refuse-$label" "refuse-$label" 6
+	check "host play (guest refuses $label): exit 6, nothing played, reason reported" \
+		sh -c '[ "$1" -eq 6 ] && printf "%s\n" "$2" | grep -Fxq "active_refusal=$3" && printf "%s\n" "$2" | grep -Fxq tone_started=no' sh \
+		"$status" "$out" "${item#*:}"
 done
+check "host play (guest refuses over-cap): the observed volume is reported" \
+	grep -Fxq sink_volume=0.80 "$outroot/run-refuse-volume-over-cap/pixel-9a/a2dp-active-proof/play-latest.txt"
+# Any failure once the play session has begun: route unverified, the
+# read-only observation runs (a second session), exit 7.
+play_fixture refusal-exit-mismatch refuse-binding-mismatch 0
+check "host play (refusal reported with exit 0): route unverified, observed, exit 7" \
+	sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$2" | grep -Fxq route_safety=unverified && [ "$3" -eq 2 ]' sh "$status" "$out" "$runs"
+for fx in leak-address leak-hex unexpected-key duplicate-key truncated pre-blocked pre-malformed skipped-review loud-claimed muted-claimed; do
+	play_fixture "bad-$fx" "$fx" 0
+	check "host play rejects ($fx): route unverified, observed, exit 7, no identifier retained" \
+		sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$4" | grep -Fxq route_safety=unverified && [ "$5" -eq 2 ] &&
+			grep -Fxq route_safety=unverified "$3"/pixel-9a/a2dp-active-proof/play-*-*.txt && ! grep -rEq "66[:_]77|66778899AABB" "$3"' sh \
+		"$status" "" "$outroot/run-bad-$fx" "$out" "$runs"
+done
+run dry-loud dry-loud 0 dry
+check "host dry rejects a reported volume over the cap: exit 5, no decision" \
+	sh -c '[ "$1" -eq 5 ] && [ ! -e "$2/decision-pending" ]' sh "$status" "$results"
+derive dry dry-leak -e "s/^sink_codec=.*/sink_codec=$addr/"
+run dry-leak dry-leak 0 dry
+check "host dry keeps its codes: identifier-bearing output exits 5, one session, no decision" \
+	sh -c '[ "$1" -eq 5 ] && [ "$2" -eq 1 ] && [ ! -e "$3/decision-pending" ] && ! printf "%s\n" "$4" | grep -Fq route_safety' sh \
+	"$status" "$runs" "$results" "$out"
 run dry-bad-binding dry-bad-binding 0 dry
 check "host dry refuses a malformed binding: exit 5, no decision" \
 	sh -c '[ "$1" -eq 5 ] && [ ! -e "$2/decision-pending" ]' sh "$status" "$results"
@@ -751,15 +885,15 @@ check "host play (guest failure): route unverified, exit 7" \
 	sh -c '[ "$1" -eq 7 ] && printf "%s\n" "$2" | grep -Fxq route_safety=unverified' sh "$status" "$out"
 run usage dry 0 bogus
 check "host usage: unknown mode, exit 2, no session" sh -c '[ "$1" -eq 2 ] && [ "$2" -eq 0 ]' sh "$status" "$runs"
-mkdir -p "$work/run-unreachable"
+mkdir -p "$outroot/run-unreachable"
 acm_guest_start --silent
 status=0
-out=$(FERRIX_OUT_DIR="$work/run-unreachable" FERRIX_PIXEL9A_ACM_TIMEOUT=30 FERRIX_PIXEL9A_A2DP_EVIDENCE=mock sh "$host" dry 2>&1) || status=$?
+out=$(FERRIX_OUT_DIR="$outroot/run-unreachable" FERRIX_PIXEL9A_ACM_TIMEOUT=30 FERRIX_PIXEL9A_A2DP_EVIDENCE=mock sh "$host" dry 2>&1) || status=$?
 silent_port=$FERRIX_SHELL
 acm_guest_stop
 check "host unreachable: exit 3, sanitised, port never retained" \
 	sh -c '[ "$1" -eq 3 ] && printf "%s\n" "$2" | grep -Fq "transport failed (no-shell-response)" && ! printf "%s\n" "$2" | grep -Fq "$3" && ! grep -rFq "$3" "$4"' sh \
-	"$status" "$out" "$silent_port" "$work/run-unreachable"
+	"$status" "$out" "$silent_port" "$outroot/run-unreachable"
 
 # --- layer 3: end to end through the transport -----------------------------------
 alt="$work/alt"
@@ -772,7 +906,7 @@ cp "$fbin"/* "$work/acm-guest/bin/"
 ACM_GUEST_PROBE="$work/expected-alt-body.sh"
 export ACM_GUEST_PROBE
 e2e() {
-	case_dir="$work/run-e2e"
+	case_dir="$alt/out/run-e2e"
 	mkdir -p "$case_dir"
 	acm_guest_start
 	acm_guest_ctl header_lines 3
