@@ -27,6 +27,17 @@ set -eu
 # It opens no CPIF node, writes nothing, starts, stops, mounts, provisions
 # or arms nothing (s5300-s2-preflight.md).
 #
+# Identity (issue #108): the host prepends one line, s2_salt=<64 hex>, to the
+# session. The salt is a host secret in the ignored, 0700/0600
+# out/pixel-9a/s5300-s2-binding/salt, created on first use and never
+# printed. The guest hashes one per-unit identity value and the boot ID with
+# it and prints only 16-hex prefixes (unit_identity, boot_identity); the raw
+# values never cross the transport. On a `go` with both identities
+# available it writes a single-use, 10-minute, HMAC-sealed decision-binding
+# record (binding-<stamp>.rec) that s5300-s2-binding.sh checks and consumes.
+# An unavailable identity never changes preflight_result; it only refuses
+# the binding (decision_binding=...-unavailable).
+#
 # Result: preflight_result=go|no-go|incomplete and preflight_phase=
 # pre-mount|post-mount. `go` only means that no read-only fact blocks the
 # next manual step: in pre-mount, the owner-approved manual start of the
@@ -54,6 +65,7 @@ library="$pkg/ferrix-s5300-cpif.sh"
 pins="$pkg/s5300-cpif-services.sha256"
 mounts_initd="$pkg/ferrix-s5300-mounts.initd"
 transport="$root/tools/pixel-9a/acm-probe.py"
+binding_lib="$root/tools/pixel-9a/s5300-s2-binding-lib.sh"
 out="${FERRIX_OUT_DIR:-$root/out}/pixel-9a/s5300-s2-preflight"
 target_manifest="$board/manifest.toml"
 recovery_pins=${FERRIX_PIXEL9A_PINS:-"$board/recovery.pins"}
@@ -98,7 +110,7 @@ die() {
 for tool in python3 awk sed; do
 	command -v "$tool" >/dev/null 2>&1 || die "missing host tool '$tool'; install it explicitly"
 done
-for file in "$probe" "$library" "$pins" "$mounts_initd" "$transport" "$target_manifest" "$pkg/APKBUILD" \
+for file in "$probe" "$library" "$pins" "$mounts_initd" "$transport" "$binding_lib" "$target_manifest" "$pkg/APKBUILD" \
 	"$board/pmos/modemmanager-samsung-sit/APKBUILD"; do
 	[ -f "$file" ] && [ ! -L "$file" ] || die "reviewed input ${file#"$root"/} is missing or linked" 6
 done
@@ -134,6 +146,14 @@ case "$expected_device_pkg:$expected_mm_pkg:$expected_modem_pkg" in
 	*) die 'cannot read the expected package releases from the checked-in recipes' 6 ;;
 esac
 
+# The binding salt, created on first use; a salt or directory with another
+# owner or mode is refused, never repaired.
+# shellcheck source=tools/pixel-9a/s5300-s2-binding-lib.sh
+. "$binding_lib"
+s2b_init "$root"
+s2b_salt_load yes || die "binding salt refused ($s2b_reason)" 6
+salt_id=$(s2b_salt_id)
+
 mkdir -p "$out"
 umask 077
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -143,12 +163,17 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/pixel-9a-s5300-s2.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 composed="$work/probe.sh"
 cat "$library" "$probe" >"$composed"
+# The session is one salt line followed by exactly the reviewed composition.
+# It lives only in the private work directory, which is removed on exit.
+session="$work/session.sh"
+{ printf 's2_salt=%s\n' "$s2b_salt"; cat "$composed"; } >"$session"
 {
 	printf '# Pixel 9a S5300 S2 preflight (issue #92, read-only), %s UTC\n' "$stamp"
 	printf '# evidence: %s\n' "$evidence"
 	printf '# No serials, port names, labels, device names, pids, kernel log, or per-unit bytes are collected. Never commit this file.\n'
 	printf 'target_id=%s\nevidence=%s\nsource=cdc-acm-read-only\ncp_nodes_opened=no\nstate_changes=none\n' "$target_id" "$evidence"
 	printf 'library_sha256=%s\nprobe_body_sha256=%s\ncomposed_probe_sha256=%s\n' "$library_sha256" "$(sha256 "$probe")" "$(sha256 "$composed")"
+	printf 'session_header=binding-salt\nbinding_salt_id=%s\n' "$salt_id"
 } >"$transcript"
 
 emit() {
@@ -209,7 +234,7 @@ fi
 # --- the only guest session ---------------------------------------------------
 
 session_status=0
-python3 "$transport" --probe "$composed" --timeout "$acm_timeout" --max-bytes "$max_output" --stderr discard \
+python3 "$transport" --probe "$session" --timeout "$acm_timeout" --max-bytes "$max_output" --stderr discard \
 	>"$work/probe.out" 2>"$work/transport.log" || session_status=$?
 case "$session_status" in
 	0) ;;
@@ -275,10 +300,14 @@ awk -v nodes="$nodes" -v modules="$modules" -v files="$pinned_files" '
 		if (k == "openrc_state_dir") return oneof(v, "present|missing")
 		if (k == "arm_token") return oneof(v, "absent|present|symlink")
 		if (k == "scratch") return oneof(v, "absent|ok|symlink|not-directory|wrong-owner-mode")
+		if (k == "unit_id_source") return oneof(v, "bootconfig-serialno|cmdline-serialno|dt-serial-number|chipid-unique-id|none")
+		if (k == "unit_id_state") return oneof(v, "ok|absent|ambiguous|malformed|no-salt|no-hasher")
+		if (k == "boot_id_state") return oneof(v, "ok|absent|malformed|no-salt|no-hasher")
+		if (k == "unit_id_hash" || k == "boot_id_hash") return v == "unavailable" || (v ~ /^[0-9a-f]+$/ && length(v) == 16)
 		return 1
 	}
 	BEGIN {
-		split("probe dt_model dt_compatible kernel_release uid hw_revision slot_source slot_value_count slot_suffix pidns env_file env.target env.backend check.target pins_file check.package pkg.device-google-tegu pkg.exynos-modem pkg.modemmanager-samsung-sit check.cli cp_platform_count cp_driver modem_state wwan_devices check.surface class_node_count class_extra_nodes opener_scan opener_positive_control opener_format_control opener_major_foreign opener_vanished opener_holder_count opener_held_nodes opener_holder_comms proc.s5300_daemons proc.modemmanager openrc_state_dir service.ferrix-s5300-mounts service.exynos-modem service.sit-proxy service.modemmanager service.ferrix-radio-firmware rc_daemon.exynos-modem rc_daemon.sit-proxy runlevel.ferrix-s5300-mounts runlevel.exynos-modem runlevel.sit-proxy init_instances confd.ferrix-s5300-mounts confd.exynos-modem confd.sit-proxy confd.modemmanager rc_conf_mentions confd_instances local_d_mentions udev_overrides arm_token pidfile.exynos-modem pidfile.sit-proxy sit_socket_dir check.run scratch scratch_entries fw.uecapconfig fw.carrierconfig vendor_mounts check.sources probe_complete", g, " ")
+		split("probe dt_model dt_compatible kernel_release uid hw_revision slot_source slot_value_count slot_suffix unit_id_source unit_id_state unit_id_hash boot_id_state boot_id_hash pidns env_file env.target env.backend check.target pins_file check.package pkg.device-google-tegu pkg.exynos-modem pkg.modemmanager-samsung-sit check.cli cp_platform_count cp_driver modem_state wwan_devices check.surface class_node_count class_extra_nodes opener_scan opener_positive_control opener_format_control opener_major_foreign opener_vanished opener_holder_count opener_held_nodes opener_holder_comms proc.s5300_daemons proc.modemmanager openrc_state_dir service.ferrix-s5300-mounts service.exynos-modem service.sit-proxy service.modemmanager service.ferrix-radio-firmware rc_daemon.exynos-modem rc_daemon.sit-proxy runlevel.ferrix-s5300-mounts runlevel.exynos-modem runlevel.sit-proxy init_instances confd.ferrix-s5300-mounts confd.exynos-modem confd.sit-proxy confd.modemmanager rc_conf_mentions confd_instances local_d_mentions udev_overrides arm_token pidfile.exynos-modem pidfile.sit-proxy sit_socket_dir check.run scratch scratch_entries fw.uecapconfig fw.carrierconfig vendor_mounts check.sources probe_complete", g, " ")
 		for (i in g) required[g[i]] = 1
 		split(nodes, n, " "); for (i in n) { required["node." n[i]] = 1; known_node[n[i]] = 1 }
 		split(modules, m, " "); for (i in m) required["module." m[i]] = 1
@@ -333,6 +362,27 @@ slot=$(oneof slot_suffix _a _b other none)
 emit slot_suffix "$slot"
 emit slot_source "$(oneof slot_source bootconfig cmdline none)"
 case "$slot:$(num slot_value_count)" in _a:1|_b:1) ;; *) block slot-not-exactly-one ;; esac
+
+# Redacted identity (issue #108). The guest never sends a raw value; a
+# hash appears exactly when its state is ok. An unavailable identity is
+# reported, never a blocker or an unknown: it refuses only the binding.
+unit_state=$(get unit_id_state)
+unit_hash=$(get unit_id_hash)
+unit_source=$(get unit_id_source)
+# ok <=> a hash; absent <=> no source.
+identity_consistent() { # STATE HASH [SOURCE]
+	if [ "$1" = ok ]; then [ "$2" != unavailable ]; else [ "$2" = unavailable ]; fi || return 1
+	[ "$#" -eq 2 ] || [ "$1:$3" = absent:none ] || { [ "$1" != absent ] && [ "$3" != none ]; }
+}
+identity_consistent "$unit_state" "$unit_hash" "$unit_source" || die 'probe output has inconsistent identity fields' 5
+boot_state=$(get boot_id_state)
+boot_hash=$(get boot_id_hash)
+identity_consistent "$boot_state" "$boot_hash" || die 'probe output has inconsistent identity fields' 5
+emit unit_identity "$unit_hash"
+emit unit_identity_source "$unit_source"
+emit unit_identity_state "$unit_state"
+emit boot_identity "$boot_hash"
+emit boot_identity_state "$boot_state"
 pidns=$(oneof pidns initial other unreadable)
 emit pidns "$pidns"
 [ "$pidns" = initial ] || block not-initial-pid-namespace
@@ -563,6 +613,21 @@ emit deferred_to_active_workflow "$deferred_active"
 emit preflight_result "$result"
 if [ "$evidence" = mock ]; then gate=not-evidence-mock; else gate=$result; fi
 emit preflight_gate "$gate"
+# Decision binding: only a `go` with both identities yields a record.
+record_id=''
+record=''
+case "$result:$unit_state:$boot_state" in
+	go:ok:ok)
+		binding=written
+		record_id=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+		record="$out/binding-$stamp-$$.rec"
+		;;
+	go:ok:*) binding=boot-identity-unavailable ;;
+	go:*) binding=unit-identity-unavailable ;;
+	*) binding="refused-$result" ;;
+esac
+emit decision_binding "$binding"
+emit decision_binding_id "${record_id:-none}"
 emit cp_boot_authorized no
 emit active_s2_workflow not-implemented
 emit capability_change none
@@ -570,6 +635,28 @@ emit capability_change none
 	printf '## raw probe output\n'
 	cat "$raw"
 } >>"$transcript"
+if [ -n "$record" ]; then
+	s2b_host_pins "$root"
+	created=$(date +%s)
+	{
+		printf 'record=ferrix-s5300-s2-decision-binding\nrecord_version=1\nrecord_id=%s\ntarget_id=%s\n' "$record_id" "$target_id"
+		printf 'evidence=%s\npreflight_result=%s\npreflight_gate=%s\npreflight_phase=%s\n' "$evidence" "$result" "$gate" "$phase"
+		printf 'unit_identity=%s\nunit_identity_source=%s\nboot_identity=%s\nbinding_salt_id=%s\n' "$unit_hash" "$unit_source" "$boot_hash" "$salt_id"
+		printf 'kernel_release=%s\nslot_suffix=%s\n' "$kernel" "$slot"
+		printf 'library_sha256=%s\nprobe_body_sha256=%s\ncomposed_probe_sha256=%s\n' "$s2b_pin_library" "$s2b_pin_body" "$s2b_pin_composed"
+		printf 'package_pins_sha256=%s\nmounts_service_sha256=%s\n' "$s2b_pin_pins" "$s2b_pin_mounts"
+		printf 'pkg.device-google-tegu=%s\npkg.exynos-modem=%s\npkg.modemmanager-samsung-sit=%s\n' "$s2b_pin_device" "$s2b_pin_modem" "$s2b_pin_mm"
+		printf 'factory_archive_sha256=%s\nhost_recovery_factory_archive=%s\n' "$s2b_pin_factory" "$host_recovery"
+		printf 'preflight_transcript=%s\npreflight_transcript_sha256=%s\n' "${transcript##*/}" "$(s2b_transcript_sha "$transcript")"
+		printf 'created_epoch=%s\nexpires_epoch=%s\nsingle_use=consume-by-rename\ncp_boot_authorized=no\n' "$created" "$((created + s2b_lifetime))"
+	} >"$work/record.body"
+	mac=$(s2b_mac "$work/record.body")
+	s2b_hex "$mac" 64 || die 'cannot seal the decision-binding record' 3
+	{ cat "$work/record.body"; printf 'record_mac=%s\n' "$mac"; } >"$work/record"
+	cp "$work/record" "$record"
+	{ printf '%s\n' "$s2b_transcript_marker"; cat "$record"; } >>"$transcript"
+	printf 'decision_binding_record=%s\n' "$record"
+fi
 
 json_list() {
 	printf '%s' "$1" | awk -F, '{ for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? "," : ""), $i }'
@@ -581,6 +668,8 @@ json_list() {
 		"$(json_list "$blockers")" "$(json_list "$skew")" "$(json_list "$host_blockers")" "$(json_list "$unknowns")"
 	printf '"deferred_until_mounts":[%s],"deferred_to_active_workflow":[%s],' "$(json_list "$deferred")" "$(json_list "$deferred_active")"
 	printf '"host_recovery_factory_archive":"%s","modem_state":"%s","opener_scan":"%s","opener_positive_control":"%s",' "$host_recovery" "$modem_state" "$scan" "$control"
+	printf '"unit_identity":"%s","unit_identity_source":"%s","boot_identity":"%s","binding_salt_id":"%s",' "$unit_hash" "$unit_source" "$boot_hash" "$salt_id"
+	printf '"decision_binding":"%s","decision_binding_id":"%s","decision_binding_record":"%s",' "$binding" "${record_id:-none}" "${record:+${record##*/}}"
 	printf '"cp_nodes_opened":false,"state_changes":"none","cp_boot_authorized":false,"active_s2_workflow":"not-implemented",'
 	printf '"transcript":"%s"}\n' "${transcript##*/}"
 } >"$summary"

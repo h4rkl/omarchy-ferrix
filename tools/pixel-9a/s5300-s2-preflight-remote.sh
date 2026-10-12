@@ -19,9 +19,12 @@
 # util-linux `blkid -p` superblock types and checks per-unit inputs by
 # stat(2) metadata only.
 #
-# It reads no kernel log, serial, IMEI, SIM, partition contents, file names
-# under /mnt/vendor, or process arguments. Everything printed is an enum,
-# count, version, package-file SHA-256, or a sanitised kernel/process name.
+# It reads no kernel log, IMEI, SIM, partition contents, file names under
+# /mnt/vendor, or process arguments. It reads one per-unit identity value and
+# the boot ID only to hash them with the host's session salt (issue #108);
+# neither raw value is printed. Everything printed is an enum, count,
+# version, package-file SHA-256, salted 16-hex identity prefix, or a
+# sanitised kernel/process name.
 
 [ "${cpif_target:-}" = google-pixel-9a-tegu-gxq96-mp1-0 ] || exit 5
 
@@ -89,6 +92,79 @@ if [ "$s2_slot_count" -eq 1 ]; then
 	case "$s2_slots" in _a|_b) s2_slot=$s2_slots ;; *) s2_slot=other ;; esac
 fi
 printf 'slot_source=%s\nslot_value_count=%s\nslot_suffix=%s\n' "$s2_slot_source" "$s2_slot_count" "$s2_slot"
+
+# --- redacted unit and boot identity (issue #108) -------------------------------
+#
+# The host prepends exactly one session line, s2_salt=<64 hex>, before the
+# library. A raw identity value never leaves this shell: it is read into a
+# variable, fed to sha256sum on stdin by the printf builtin (never as an
+# argument), and only the 16-hex salted prefix is printed. The candidates
+# are tried in a fixed order and the first one present wins; a present but
+# repeated or malformed value stops the search (fail closed, no fallback).
+# Which candidate exists on tegu is unconfirmed until a physical run
+# (s5300-s2-preflight.md).
+s2_salted=no
+case "${s2_salt:-}" in
+	''|*[!0-9a-f]*) ;;
+	*) [ "${#s2_salt}" -ne 64 ] || s2_salted=yes ;;
+esac
+s2_hasher=no
+case "$(command -v sha256sum 2>/dev/null)" in '') ;; *) s2_hasher=yes ;; esac
+s2_digest() {
+	printf 'ferrix-s5300-s2-%s-v1\n%s\n%s\n' "$1" "$s2_salt" "$2" | sha256sum 2>/dev/null | cut -c1-16 | tr -cd 0-9a-f
+}
+s2_unit_source=none
+s2_unit_state=absent
+s2_unit_value=
+s2_unit_try() {
+	[ "$s2_unit_state" = absent ] || return 0
+	case "$(printf '%s\n' "$2" | s2_lines)" in
+		0) return 0 ;;
+		1) s2_unit_source=$1
+			s2_unit_state=malformed
+			case "$2" in *[!A-Za-z0-9._:-]*) return 0 ;; esac
+			[ "${#2}" -ge 4 ] && [ "${#2}" -le 64 ] || return 0
+			s2_unit_state=ok
+			s2_unit_value=$2
+			;;
+		*) s2_unit_source=$1; s2_unit_state=ambiguous ;;
+	esac
+}
+s2_unit_try bootconfig-serialno "$(s2_bootvalue serialno)"
+s2_unit_try cmdline-serialno "$(awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^androidboot\.serialno=/) { v = $i; sub(/^androidboot\.serialno=/, "", v); print v } }' \
+	"$cpif_proc/cmdline" 2>/dev/null)"
+s2_unit_try dt-serial-number "$(tr '\000' '\n' <"$cpif_proc/device-tree/serial-number" 2>/dev/null | awk 'NF')"
+s2_unit_try chipid-unique-id "$(head -c 128 "$cpif_sys/devices/system/chip-id/unique_id" 2>/dev/null | awk 'NF')"
+s2_unit_hash=unavailable
+if [ "$s2_unit_state" = ok ]; then
+	if [ "$s2_salted" != yes ]; then s2_unit_state=no-salt
+	elif [ "$s2_hasher" != yes ]; then s2_unit_state=no-hasher
+	else
+		s2_unit_hash=$(s2_digest unit "$s2_unit_source:$s2_unit_value")
+		[ "${#s2_unit_hash}" -eq 16 ] || { s2_unit_hash=unavailable; s2_unit_state=no-hasher; }
+	fi
+fi
+s2_boot_value=$(head -c 64 "$cpif_proc/sys/kernel/random/boot_id" 2>/dev/null | tr -d '\n')
+s2_boot_hash=unavailable
+if [ -z "$s2_boot_value" ]; then s2_boot_state=absent
+else
+	s2_boot_state=malformed
+	case "$s2_boot_value" in
+		*[!0-9a-f-]*) ;;
+		*) [ "${#s2_boot_value}" -ne 36 ] || s2_boot_state=ok ;;
+	esac
+fi
+if [ "$s2_boot_state" = ok ]; then
+	if [ "$s2_salted" != yes ]; then s2_boot_state=no-salt
+	elif [ "$s2_hasher" != yes ]; then s2_boot_state=no-hasher
+	else
+		s2_boot_hash=$(s2_digest boot "$s2_boot_value")
+		[ "${#s2_boot_hash}" -eq 16 ] || { s2_boot_hash=unavailable; s2_boot_state=no-hasher; }
+	fi
+fi
+unset s2_salt s2_unit_value s2_boot_value
+printf 'unit_id_source=%s\nunit_id_state=%s\nunit_id_hash=%s\n' "$s2_unit_source" "$s2_unit_state" "$s2_unit_hash"
+printf 'boot_id_state=%s\nboot_id_hash=%s\n' "$s2_boot_state" "$s2_boot_hash"
 
 case "$(readlink "$cpif_proc/self/ns/pid" 2>/dev/null)" in
 	"$cpif_init_pidns") printf 'pidns=initial\n' ;;
