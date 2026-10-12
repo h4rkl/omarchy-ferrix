@@ -84,8 +84,11 @@ the project must not silently call that a fully functioning Pixel 9a.
   A separate Bluetooth A2DP output proof can advance #2 without driving TAS.
   [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) tracks that path;
   the exact phone has the BlueZ and PipeWire components but no paired sink.
-  [#90](https://github.com/h4rkl/omarchy-ferrix/issues/90) tracks the missing
-  Linux AoC protection path and evidence before any internal-speaker trial.
+  [#90](https://github.com/h4rkl/omarchy-ferrix/issues/90) reviewed the pinned
+  public AoC source and found no Linux protection-active signal or documented
+  default without Android HAL setup. Its decision remains **NO-GO**.
+  [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) tracks the missing
+  protection and gain contract before an internal-speaker trial can be designed.
   Keep audio unsupported.
 - [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) source-mount gate
   is accepted by the owner for a future manual CP boot.

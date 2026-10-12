@@ -1,5 +1,21 @@
 # Status
 
+## 2026-10-12 (AoC speaker protection on Linux, issue #90; source review only)
+
+- An offline review of the pinned public `aoc` `ac69293d…`, `aoc-ipc`
+  `1fe9b9cf…` and `amplifiers` `33976d76…` sources is recorded in
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/aoc-speaker-protection-research.md`.
+  The AoC IPC header names an `ASP_ID_PROT` module and an unused
+  `GET_MODULES` query. No Linux code sends that query, its reply semantics
+  are undocumented, and user space cannot reach the audio control IPC. No
+  Linux signal shows that protection is active. AoC behaviour without the
+  Android HAL setup and the speaker-chain gain remain unknown. The decision
+  stays **NO-GO** for any internal speaker or earpiece trial. Rejected
+  routes: trusting the AoC defaults, and reimplementing the HAL from strings.
+  Conditional routes: a read-only target kernel query, a vendor statement, and
+  Linux-side protection that needs a `plans/` decision. No device, builder,
+  playback, or control write was involved; `[audio]` remains `unsupported`.
+
 ## 2026-10-12 (S5300 CPIF service staging, issue #88; offline only)
 
 - The exact Pixel 9a package now selects the reviewed Google Kleaf CPIF CLI
