@@ -789,6 +789,147 @@ Issue #90 reviewed the pinned AoC IPC and ALSA sources for a Linux protection
 route and a read-only protection-active signal. It found neither and stays
 **NO-GO**; see [`aoc-speaker-protection-research.md`](aoc-speaker-protection-research.md).
 
+## Bluetooth A2DP output preflight (issue #91)
+
+`just pixel-9a-a2dp-output-preflight`
+(`tools/pixel-9a/a2dp-output-preflight.sh`, guest body
+`a2dp-output-preflight-remote.sh`) is a **read-only** preflight for the
+[safe alternative](#safe-alternative) above: playback proof through a
+Bluetooth A2DP sink, never the internal TAS2572 speakers or earpiece. It is
+fixture-, fake-tool- and fake-guest-tested
+(`just pixel-9a-a2dp-output-preflight-test`). **It has not run on the phone.**
+**No playback mode exists.** The
+[active-proof gate](#a2dp-active-proof-gate) below lists what is missing.
+
+- **Transport and identity.** One CDC-ACM session sends the exact probe body.
+  The guest's first action is the exact tegu device-tree gate (exit 4). The
+  host also requires the pinned Kleaf kernel and uid 0.
+- **What the guest reads.**
+  - Tool presence for `bluetoothctl`, `wpctl`, `amixer`, `timeout`, and
+    `pw-cat`. It runs `pw-cat --help` to see whether `--target` and
+    `--properties` are listed.
+  - Installed `bluez`, `pipewire`, `wireplumber`, `pipewire-spa-bluez`, and
+    `pipewire-tools` versions, from `/lib/apk/db/installed` (file read
+    only), and whether the SPA bluez5 plugin file exists.
+  - OpenRC `status` of `bluetooth`, `ferrix-bluetooth-uart`,
+    `ferrix-pipewire`, and `ferrix-audio`.
+  - BlueZ, through `bluetoothctl list`, `show`, `devices Paired`, and
+    `info <address>`. It counts controllers, reads `Powered`, and counts
+    paired devices, paired devices with the Audio Sink UUID `0000110b-…`,
+    and devices that are paired, connected, and have that UUID.
+  - The uid-1000 PipeWire session, through `wpctl status` and
+    `wpctl inspect <id>` of each Audio sink. A sink is **bluez-a2dp** only
+    if all of these hold: `media.class` is `Audio/Sink`, `device.api` is
+    `bluez5`, `node.name` starts with `bluez_output.`, and
+    `api.bluez5.profile` starts with `a2dp-sink`. Other classes are
+    bluez-other (for example HFP/HSP), ALSA (`device.api=alsa` or
+    `alsa_output.*`), null (`auto_null` or `support.null-audio-sink`),
+    other, and inspect-failed. It also counts Audio streams and filters,
+    and records the default sink's class and the A2DP sink's codec.
+  - Whether the A2DP sink's node-name address and `api.bluez5.address`
+    agree, and name the one connected Audio Sink device.
+  - `amixer cget` of `TDM_0_RX Mixer EP1` and `TAS25XX ASI Switch`. These
+    are the same reads as the mic preflight. The AoC control get is DSP IPC
+    ([P4](#findings)), not a cache read. It also counts open ALSA playback
+    PCM fds (`/proc/*/fd` → `pcmC*D*p`).
+- **What it never does.** It never plays or records audio. It never pairs,
+  connects, trusts, powers, scans, selects a card profile or default sink,
+  sets a volume, writes any mixer control, loads modules, or starts or stops
+  a service. The tests enforce the allowed verbs both from the source and at
+  runtime: each fake tool records any other verb as a violation.
+- **Privacy.** Bluetooth addresses, device names and aliases, node names, and
+  serials stay in guest shell variables. Only counts, classes, versions, and
+  yes/no matches are printed. The host accepts only the exact reviewed key
+  set. Each key must appear once. Values must stay in `[A-Za-z0-9 .,+/-]`,
+  so a value with `:` or `_` (the two address spellings) is refused, and so
+  is a run of 12 hex digits. Transcripts go to ignored
+  `out/pixel-9a/a2dp-output-preflight/`. Set
+  `FERRIX_PIXEL9A_A2DP_EVIDENCE=mock` for stubbed runs.
+- **Result.** `candidate-observed` (exit 0) means every check below held:
+  - root and the pinned kernel;
+  - all five tools, and both `pw-cat` options;
+  - the four packages and the plugin file;
+  - the four services started;
+  - exactly one controller, and it is powered;
+  - a complete paired query, at least one paired Audio Sink device, and
+    exactly one connected one;
+  - a reachable graph with exactly one bluez-a2dp sink that names that
+    device;
+  - zero bluez-other, ALSA, other, or uninspectable sinks;
+  - zero streams and zero filters, and an unambiguous default;
+  - both watched controls `off`;
+  - zero playback PCM openers, and a non-empty fd scan.
+
+  Anything else is `blocked` (exit 6), and `a2dp_preflight_problems` lists
+  every reason. Other exits: 2 usage, 3 transport or guest failure, 4 not
+  the exact board, 5 malformed output. Every run also prints
+  `active_proof=not-implemented`, `active_gate=closed`, and
+  `audio_capability=unsupported`. `capabilities.toml` is never edited.
+- **Expected result on the current image.** The read-only inventory for #91
+  found BlueZ, `ferrix-pipewire`, and `ferrix-audio` started, with
+  `pipewire-spa-bluez` installed. It also found no paired sink and no
+  `bluez_output` node. On that state the preflight is expected to report
+  `blocked` with `no-paired-audio-sink`,
+  `connected-audio-sink-count-not-one`, and
+  `bluez-a2dp-sink-count-not-one`. This is the fake-guest model of that
+  state. It is not a physical run. The image may also lack `pw-cat`:
+  `pmbootstrap.cfg` does not list `pipewire-tools`, and whether a
+  dependency pulls it in is not checked here. The preflight would report
+  that as `pw-cat-missing`.
+
+### A2DP active-proof gate
+
+A bounded A2DP stimulus/restore mode is **not** implemented. The issue
+allows one only when a fail-closed explicit sink route can be guaranteed.
+That cannot be shown offline:
+
+1. **Explicit-target semantics are unverified on the target versions.**
+   `pw-cat --target` sets the stream's target. Whether WirePlumber falls
+   back to the default or another sink depends on the WirePlumber version
+   and its policy properties. Those properties include `node.dont-fallback`,
+   `node.dont-reconnect`, `node.autoconnect`, and the target-object
+   handling. It also matters whether the target is given as a serial or a
+   name. The on-image versions have not been recorded. Neither source nor
+   behaviour was reviewed for them. Guessing them would not be fail-closed.
+2. **The A2DP sink shape is unobserved.** No paired device has been seen on
+   this image. The node-name format, the `api.bluez5.profile` value, and
+   the address property are standard PipeWire spellings. They are not yet
+   physical observations. The classifier is fail-closed on them: a
+   different shape reads `bluez-other` or `inspect-failed`, which blocks.
+3. **Stimulus tool presence is unknown.** See `pw-cat-missing` above.
+
+What a later slice needs, in order:
+
+- **A physical preflight run.** It needs an owner-paired, connected,
+  A2DP-profile headset or speaker. Pairing goes through Ferrix Settings,
+  and pairing keys stay on the device. No other Bluetooth audio device may
+  be connected, and Android/Waydroid must not be playing. The run must
+  report `candidate-observed`, and the transcript records the exact package
+  versions.
+- **An offline source review** of pinned PipeWire and WirePlumber at those
+  versions. It must name the exact `pw-cat` invocation and stream properties
+  that leave a stream unlinked when its target is missing.
+- **A design that holds even if that review is wrong.** Under the
+  preflight's condition there is no ALSA sink in the graph. The worst
+  PipeWire misroute is then the null sink or the same headset, never the
+  internal speaker. The active mode should rely on that invariant, and not
+  only on the target property. It must:
+  - repeat the full preflight in the same session;
+  - bind a typed per-run phrase to a hash of the observed sink identity,
+    versions, and kernel, which never leaves the guest in clear;
+  - abort and stop the stream if a playback PCM fd opens, if an ALSA sink
+    appears, or if the stream links anywhere but the bound sink;
+  - play one short generated tone, at most 2 s and well below full scale,
+    with no volume write (sink volume is read only, and the run refuses
+    above a pre-registered bound);
+  - finish with a final preflight showing no stream, no PCM opener, and
+    both watched controls still `off`.
+- **A fresh owner decision for each run.** The owner confirms audibility by
+  ear, because the headset output cannot be measured from the phone.
+
+The internal speaker and earpiece stay NO-GO under #83/#90. This workflow
+does not change that, and it never falls back to them.
+
 ## Unknowns
 
 - Whether the pinned `aoc` tree builds an ALSA/ASoC machine driver for tegu,
@@ -829,5 +970,9 @@ pickup. The controlled-tone `acoustic` mode
 and offline-tested; one run of it needs a separate owner decision. Its
 per-channel result also bears on the channel split. Recheck the
 PipeWire graph on the new image. Speaker playback stays blocked by the
-protection review above. Keep `[audio]` unsupported until both an audible
+protection review above. For output, the read-only
+[A2DP preflight](#bluetooth-a2dp-output-preflight-issue-91) (#91) is
+offline-tested. A physical run needs an owner-paired A2DP device, and no
+playback mode exists until its
+[active-proof gate](#a2dp-active-proof-gate) is closed. Keep `[audio]` unsupported until both an audible
 output route and actual acoustic microphone response are observed.

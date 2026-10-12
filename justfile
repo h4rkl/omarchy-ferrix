@@ -507,6 +507,17 @@ pixel-9a-mic-acoustic-proof:
 pixel-9a-mic-acoustic-proof-test:
     @sh "{{root}}/tools/pixel-9a/tests/mic-acoustic-proof.sh"
 
+# Issue #91 read-only Bluetooth A2DP output preflight on a booted exact
+# Ferrix dev guest over its CDC-ACM bring-up shell. Reports BlueZ, PipeWire
+# graph, package, service, and internal speaker-path state as counts and
+# classes only. Never plays, pairs, connects, selects a sink or profile,
+# writes a mixer or volume, or starts services; no playback mode exists.
+pixel-9a-a2dp-output-preflight:
+    @sh "{{root}}/tools/pixel-9a/a2dp-output-preflight.sh" preflight
+
+pixel-9a-a2dp-output-preflight-test:
+    @sh "{{root}}/tools/pixel-9a/tests/a2dp-output-preflight.sh"
+
 # Read-only issue #34 filesystem inventory of the four S5300 modem source
 # partitions on a booted exact Ferrix dev guest over its CDC-ACM bring-up
 # shell. Never mounts or writes, and never reports the safety gate as passed.
