@@ -1074,9 +1074,12 @@ build_rootfs() {
 	chmod 0700 "$pmb_work"
 	[ -f "$pmb_work/version" ] || printf '%s\n' "$pmbootstrap_work_version" >"$pmb_work/version"
 	printf '%s\n' 'running pmbootstrap rootfs install with external-kernel initramfs boundary'
-	FERRIX_PMB_EXTERNAL_KERNEL=1 PMB_CHANNELS_CFG="$channels_cfg" python3 \
+	# The password travels in the environment, never argv: a generated value
+	# may begin with "-", which argparse rejects as a separate argument, and
+	# pmbootstrap would log a --password=<value> argument in plain text.
+	FERRIX_PMB_EXTERNAL_KERNEL=1 FERRIX_PMB_ROOTFS_PASSWORD="$rootfs_password" PMB_CHANNELS_CFG="$channels_cfg" python3 \
 		"$root/tools/pixel-9a/pmbootstrap-rootfs.py" --details-to-stdout --config "$config" -y install \
-		--password "$rootfs_password" --no-image --no-fde --no-sshd --no-firewall --no-recommends
+		--no-image --no-fde --no-sshd --no-firewall --no-recommends
 	# pmbootstrap leaves bind mounts for /dev, /proc, and /sys in the chroot
 	# after install. Detach its generated mounts before staging or archiving so
 	# the guest image contains only the rootfs tree, never live host pseudo-FS.
