@@ -1,5 +1,26 @@
 # Status
 
+## 2026-10-12 (controlled-tone microphone pickup; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- After the owner's separate one-run approval and documented Mac-speaker setup,
+  the checked-in workflow reran its read-only preflight on the exact booted
+  phone and pinned 6.1.124 kernel. AoC PCM 8 `EP1 capture` had one free
+  subdevice, a complete opener scan found zero openers, and the microphone,
+  speaker route, and TAS switch were off. `preflight_problems=none`.
+- One 2 s capture while the Mac speaker played the gated 1180 Hz tone returned
+  `acoustic-tone-detected` with no anomalies. Channel 0 had four usable gated
+  cycles, a 20.8 dB on/off tone gate, and a 26.0 dB tone-over-control margin;
+  channel 1 was digital zero. The workflow verified 384000 expected PCM bytes,
+  restored the mic route off, found no PCM opener, kept the phone speaker and
+  TAS controls off, and deleted the guest recording and host tone. The ignored
+  aggregate transcript is under `out/pixel-9a/mic-capture-proof/`; no waveform
+  or unit identifier is committed. This is one controlled acoustic pickup
+  proof for the internal mic path, not calibrated sensitivity or call audio.
+  A single positive cannot fully exclude gate-locked USB electrical coupling.
+  `[audio]` remains `unsupported` while output and routing remain unproven.
+- The owner reports a SIM is physically present. This audio run did not access
+  it; CP boot, SIM recognition, network registration, data, SMS, and calls
+  remain unproven.
 ## 2026-10-12 (AoC speaker protection on Linux, issue #90; source review only)
 
 - An offline review of the pinned public `aoc` `ac69293d…`, `aoc-ipc`
