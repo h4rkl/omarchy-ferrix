@@ -720,7 +720,8 @@ Evidence labels:
 - **source**: pinned revisions in `kernel-sources.toml`.
 - **inference**: reasoning from the evidence, not proof.
 
-Nothing extracted is in Git. Copies stay in temporary scratch outside Git.
+Nothing extracted is in Git. Temporary copies were kept outside Git during
+review.
 
 ### Findings
 
