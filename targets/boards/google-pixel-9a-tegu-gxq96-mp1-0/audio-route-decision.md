@@ -720,16 +720,16 @@ Evidence labels:
 - **source**: pinned revisions in `kernel-sources.toml`.
 - **inference**: reasoning from the evidence, not proof.
 
-Nothing extracted is in Git. Copies stay in ignored scratch only.
+Nothing extracted is in Git. Copies stay in temporary scratch outside Git.
 
 ### Findings
 
 | # | Finding | Evidence |
 | --- | --- | --- |
-| P1 | The kernel TAS algorithm and calibration path is **not compiled**, either in Ferrix or in stock Android. The built `snd-soc-tas25xx.ko` (SHA-256 `6a2c8935…`, vermagic `6.1.124-android14-11-ga4662a84a15f`) defines 306 symbols. None of them is a function from `tas25xx/algo/**` (all 12 `algo/src` and `algo/platform/exynos` files were checked), and the module has no `smartamp_calib`/`/persist/audio` string. Google's stock module (`vendor_dlkm.img:/lib/modules/snd-soc-tas25xx.ko`, SHA-256 `e5df7fc1…`, `6.1.162`, `scmversion=gd06ffe62b5ed`) has the same symbol set, apart from `__UNIQUE_ID` suffixes. | built + stock |
+| P1 | The optional kernel `TAS25XX_ALGO` protection and calibration subtree is **not compiled** in the inspected Ferrix or stock modules. The built `snd-soc-tas25xx.ko` (SHA-256 `6a2c8935dccfdf6d6eb2f406606c62fc3ed0454dae407a58670084aa3d3f726d`, vermagic `6.1.124-android14-11-ga4662a84a15f`) defines 306 symbols. None is a function from `tas25xx/algo/**` (all 12 `algo/src` and `algo/platform/exynos` files were checked), and the module has no `smartamp_calib`/`/persist/audio` string. The base driver does retain `tas25xx_prep_dev_for_calib`; that symbol alone is not the optional protection path. Google's stock module (`vendor_dlkm.img:/lib/modules/snd-soc-tas25xx.ko`, SHA-256 `e5df7fc1fe56e75dff2b93520699876fdc6cb12d6a54834685171c7619f0808a`, `6.1.162`, `scmversion=gd06ffe62b5ed`) has the same symbol set, apart from `__UNIQUE_ID` suffixes. | built + stock |
 | P2 | How the effective config is set. `amplifiers/tas25xx/BUILD.bazel` is a Kleaf `kernel_module`, and the module `Makefile` passes `KBUILD_OPTIONS` `CONFIG_SND_SOC_TAS25XX=m`, `CONFIG_TAS25XX_MISC=m` and `CONFIG_TAS25XX_IRQ_BD=m`. The `TAS25XX_ALGO`/`TISA_KBIN_INTF` lines are commented out. The tegu `tegu_defconfig` and `Kconfig.ext.tegu` source no amplifier Kconfig. The built `Image` IKCONFIG (`CONFIG_IKCONFIG_PROC=y`) is the GKI base config and carries no vendor `TAS25XX` symbol, so the module binary (P1) is the effective-config proof. Two symbols confirm the enabled options: `tas25xx_register_misc` (MISC) and `irq_bd_show` (IRQ_BD). | source + built |
-| P3 | On Android, closed-loop speaker protection belongs to the **closed userspace HAL plus AoC firmware**, not the kernel. The stock `vendor.img:/bin/hw/android.hardware.audio.service-aidl.aoc` contains a `Tas25xxCodec` module whose strings name `InitSpeakerProtection`, `LoadCalibrationDataToAoC`, `TurnOnSpeakerProtection`/`TurnOffSpeakerProtection`, `GetExcursions`, `GetTemperatures`, `/mnt/vendor/persist/audio/speaker.cal`, `/vendor/firmware/ti_sp_tuning.bin` (4912 bytes), `using default calibration data`, `speaker protection is not assigned`, thermal/battery throttles (`PlaybackThermalThrottleByTemperature`, `Tas25xxThrottle`) and `TAS25XX PLAYBACK_VOLUME_*` writes. It talks to AoC through `/dev/acd-*` tuning channels. That the HAL configures AoC-resident protection is an **inference from strings**. The protocol, the algorithm, and its behaviour without that configuration are **unknown firmware/HAL internals**. | stock (strings) + inference |
-| P4 | The pinned `aoc` Linux driver (`ac69293d…`, `alsa/aoc_alsa_ctl.c`) has **no** speaker-protection, calibration, excursion, or temperature control. The `aoc-interface-zuma.h` IPC header lists `ASP_ID_PROT` and `ASP_ID_SPKRCOM` processing IDs, but no Linux code references them. The nearest control is `AoC Speaker Mixer ASP Mode` (block 16, component 2). Its meaning is opaque. The PM's ignored inventory read it as `ASP_ON`, which shows that speaker-chain processing is active with whatever default firmware tuning applies. That tuning's gain/EQ/DRC is unknown, so the level reaching the amplifier is not bounded by the PCM level. `aoc_audio_state` reports only service online/offline. AoC control `get` callbacks send `CMD_AUDIO_OUTPUT_GET_*` IPC rather than reading a cache. | source + inference |
+| P3 | Stock Android HAL strings suggest that its **closed userspace HAL configures protection in AoC**, while P1 rules out the kernel TAS algorithm path in the inspected module. The stock `vendor.img:/bin/hw/android.hardware.audio.service-aidl.aoc` contains a `Tas25xxCodec` module whose strings name `InitSpeakerProtection`, `LoadCalibrationDataToAoC`, `TurnOnSpeakerProtection`/`TurnOffSpeakerProtection`, `GetExcursions`, `GetTemperatures`, `/mnt/vendor/persist/audio/speaker.cal`, `/vendor/firmware/ti_sp_tuning.bin` (4912 bytes), `using default calibration data`, `speaker protection is not assigned`, thermal/battery throttles (`PlaybackThermalThrottleByTemperature`, `Tas25xxThrottle`) and `TAS25XX PLAYBACK_VOLUME_*` writes. It talks to AoC through `/dev/acd-*` tuning channels. The HAL's actual setup sequence, the protection algorithm, and behaviour without configuration are **unknown firmware/HAL internals**. | stock (strings) + inference |
+| P4 | The pinned `aoc` Linux driver (`ac69293d…`, `alsa/aoc_alsa_ctl.c`) has **no** speaker-protection, calibration, excursion, or temperature control. The `aoc-interface-zuma.h` IPC header lists `ASP_ID_PROT` and `ASP_ID_SPKRCOM` processing IDs, but no Linux code references them. The nearest control is `AoC Speaker Mixer ASP Mode` (block 16, component 2). Its meaning is opaque. The PM's ignored inventory read it as `ASP_ON`; this enum does not establish whether protection is active or how the speaker chain is tuned. Its gain/EQ/DRC is unknown, so the level reaching the amplifier cannot be bounded from PCM level alone. `aoc_audio_state` reports only service online/offline. AoC control `get` callbacks send `CMD_AUDIO_OUTPUT_GET_*` IPC rather than reading a cache. | source + inference |
 | P5 | What Linux does have is only the in-amplifier fault handling from the factory tuning. The `INTRP` block defines named fault IRQs (wired: `ti,irq-gpio` and `ti,irq-gpio2` in `zumapro-tegu-audio-common-tas2572.dtsi`, which `zumapro-tegu-mp.dts` includes through `zumapro-tegu-common.dtsi`). `tas25xx_irq_work_func` (`src/tas25xx-logic.c`) counts each IRQ and resets or shuts the channel down per action. The configured limiter and brownout settings come from opaque `PROFP`/`KCNTR` register bytes. That is fault reaction, not thermal or excursion protection. | source |
 | P6 | TAS mixer values do not show the state of the amplifier. `tas25xx_get`/`tas25xx_enum_get` (`src/tas25xx-regbin-parser.c`) return the cached `curr_val` (the tuning default or the last put). They do not read registers. The observed `LIMITER SWITCH 0`, `BOP ENABLE 0`, `IVSENSE_STATUS_* 1` and `PLAYBACK_VOLUME 110` are the driver's cached intent only. | source |
 
@@ -744,7 +744,7 @@ Source review found these read-only observables:
 
 None of them reports whether AoC speaker protection is running, calibrated,
 or limiting. So a preflight could not turn this result into GO. The candidates
-also carry hazards. `cmd/calib` is world-writable `0664`, and a
+also carry hazards. `cmd/calib` is group-writable (`0664`), and a
 `cal_init_blk` write runs the calibration register sequence. The TAS misc
 device and regmap debugfs reach registers. AoC gets are DSP IPC. The IRQ
 counters only help as before-and-after fault evidence around a trial, which
@@ -772,7 +772,8 @@ internal TAS2572 speakers: a Bluetooth A2DP sink through the existing
 `pipewire-spa-bluez` stack. The earpiece (top channel) uses the same TAS/AoC
 chain and is equally blocked.
 
-Any later internal-speaker trial needs all of the following:
+Only after the missing GO evidence is resolved, any internal-speaker trial
+also needs all of the following:
 
 - a separate concrete owner decision;
 - a fresh exact-device preflight;
@@ -781,8 +782,7 @@ Any later internal-speaker trial needs all of the following:
 - restoration of `TDM_0_RX Mixer EP1`, `TAS25XX ASI Switch`, and
   `CODEC PROFILE`.
 
-That trial would accept the residual unknowns above. It would not resolve
-them.
+The owner decision does not substitute for the protection and gain evidence.
 
 ## Unknowns
 

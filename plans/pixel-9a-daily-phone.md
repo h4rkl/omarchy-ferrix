@@ -73,12 +73,15 @@ the project must not silently call that a fully functioning Pixel 9a.
   one owner-approved capture returned 384000 PCM bytes with a very low
   channel-0 signal and digital silence on channel 1. This proves varying
   PCM data, not acoustic pickup. [#80](https://github.com/h4rkl/omarchy-ferrix/issues/80)
-  adds an offline-tested controlled-tone microphone workflow, but a new
-  active run needs its own owner decision and physical setup.
+  adds an offline-tested controlled-tone microphone workflow. Its exact-device
+  read-only preflight passed; a new active run needs its own owner decision
+  and physical setup.
   The new image still exposes only Dummy Output with no usable ALSA source.
-  Speaker playback remains blocked on TAS protection/calibration evidence;
-  [#83](https://github.com/h4rkl/omarchy-ferrix/issues/83) owns the
-  read-only safety review before a bounded output trial.
+  [#83](https://github.com/h4rkl/omarchy-ferrix/issues/83) reviewed the
+  pinned source and effective TAS modules and decided **NO-GO** for internal
+  speaker or earpiece playback: the kernel protection path is absent, while
+  AoC protection without Android HAL setup and output gain remain unknown.
+  A separate Bluetooth A2DP output proof can advance #2 without driving TAS.
   Keep audio unsupported.
 - [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) source-mount gate
   is accepted by the owner for a future manual CP boot.
