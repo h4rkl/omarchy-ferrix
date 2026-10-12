@@ -5,6 +5,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+tab=$(printf '\t')
 script="$root/tools/pixel-9a/unlock-bootloader.sh"
 fails=0
 
@@ -165,7 +166,7 @@ chmod 0755 "$work/bin/adb" "$work/bin/fastboot"
 export PATH="$work/bin:$PATH" STUB_CALLS="$calls" STUB_STATE="$work/state" STUB_SERIAL="$serial"
 
 mutations() {
-  grep -E '^adb\t-s\t[^[:space:]]+\treboot\t|^fastboot\t-s\t[^[:space:]]+\tflashing\tunlock\t' "$calls" || true
+  grep -E '^adb'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'reboot'"$tab"'|^fastboot'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'flashing'"$tab"'unlock'"$tab"'' "$calls" || true
 }
 
 run_case() {
@@ -199,7 +200,7 @@ CONFIRM PIXEL 9A BOOTLOADER UNLOCK (WIPES ALL USER DATA)
 EOF
 run_case approved --confirm-unlock
 check "execute: approved unlock flow succeeds" [ "$status" -eq 0 ]
-check "execute: adb reboot precedes fastboot unlock" sh -c "grep -q '^adb\t-s\t$serial\treboot\tbootloader\t$' '$calls' && grep -q '^fastboot\t-s\t$serial\tflashing\tunlock\t$' '$calls'"
+check "execute: adb reboot precedes fastboot unlock" sh -c "grep -q '^adb${tab}-s${tab}$serial${tab}reboot${tab}bootloader${tab}$' '$calls' && grep -q '^fastboot${tab}-s${tab}$serial${tab}flashing${tab}unlock${tab}$' '$calls'"
 check "execute: result records bootloader unlock" grep -q '^result=bootloader-unlocked$' "$work/approved/stdout"
 check "execute: mutation output names partition and recovery hashes" \
   sh -c "grep -q '^partition_target=bootloader (fastboot flashing unlock)$' '$work/approved/stdout' && grep -q '^factory_recovery_sha256=$factory_hash$' '$work/approved/stdout' && grep -q '^ota_recovery_sha256=$ota_hash$' '$work/approved/stdout' && grep -q '^sku_source=adb-correlated-live$' '$work/approved/stdout'"

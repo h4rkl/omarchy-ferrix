@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use ferrix_network_adapter_api::{BackendError, BackendEvent, NetworkBackend};
-use ferrix_network_api::{ApId, NetworkState, ProfileId};
+use ferrix_network_api::{ApId, NetworkState, ProfileId, SecurityType, Ssid};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
@@ -106,6 +106,17 @@ impl NetworkBackend for FakeBackend {
 
     fn connect(&self, ap: &ApId, passphrase: Option<&str>) -> Result<(), BackendError> {
         self.record("connect", Some(ap.as_str()), passphrase.is_some())
+    }
+
+    /// Recorded as `join-hidden` with the SSID's digest, never the name or
+    /// the passphrase.
+    fn join_hidden(
+        &self,
+        ssid: &Ssid,
+        _security: SecurityType,
+        passphrase: Option<&str>,
+    ) -> Result<(), BackendError> {
+        self.record("join-hidden", Some(&ssid.hash()), passphrase.is_some())
     }
 
     fn connect_profile(&self, profile: &ProfileId) -> Result<(), BackendError> {

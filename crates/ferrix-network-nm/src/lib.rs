@@ -112,6 +112,14 @@ pub mod map {
         key_mgmt(security)
     }
 
+    /// `key-mgmt` for a join by name (`join-hidden`). A hidden network's
+    /// beacon may not be matched to the name, so its flags are unknown and
+    /// the user's choice is taken as is: the transition-mode policy, which
+    /// needs the access point's RSN flags, does not apply.
+    pub fn hidden_key_mgmt(security: SecurityType) -> Option<&'static str> {
+        key_mgmt(security)
+    }
+
     /// NetworkManager's `key-mgmt` setting for joining a network of this
     /// type, or `None` when this adapter does not support joining it.
     pub fn key_mgmt(security: SecurityType) -> Option<&'static str> {
@@ -333,6 +341,10 @@ mod tests {
         assert_eq!(key_mgmt(SecurityType::Open), Some("none"));
         assert_eq!(key_mgmt(SecurityType::Enterprise), None);
         assert_eq!(key_mgmt(SecurityType::Wep), None);
+        assert_eq!(hidden_key_mgmt(SecurityType::Open), Some("none"));
+        assert_eq!(hidden_key_mgmt(SecurityType::Wpa2Psk), Some("wpa-psk"));
+        assert_eq!(hidden_key_mgmt(SecurityType::Wpa3Sae), Some("sae"));
+        assert_eq!(hidden_key_mgmt(SecurityType::Enterprise), None);
     }
 
     #[test]

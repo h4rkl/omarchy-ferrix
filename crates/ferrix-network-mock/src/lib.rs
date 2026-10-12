@@ -7,6 +7,12 @@
 //! as `cmd`-tagged JSON lines; every command is strictly typed and unknown
 //! commands or fields are rejected.
 //!
+//! Hidden networks: an access point marked `hidden` is advertised with an
+//! empty SSID, as a real hidden beacon is, so it can only be joined by name
+//! (`join-hidden`). Once joined, its name is shown, as NetworkManager does
+//! after association; replacing the world (`set-access-points`) hides it
+//! again.
+//!
 //! Secrets: passphrases live in memory for one process lifetime, are
 //! compared for authentication, and are never part of any ack, event, or
 //! `Debug` output. Hardware addresses do not exist here at all: the
@@ -41,6 +47,8 @@ pub const DEFAULT_FREQUENCY_MHZ: u32 = 2437;
 pub const LAB_SSID: &str = "ferrix-lab";
 pub const GUEST_SSID: &str = "ferrix-guest";
 pub const LAB_PASSPHRASE: &str = "mock-passphrase";
+/// The synthetic hidden network in the checked-in profile.
+pub const HIDDEN_SSID: &str = "ferrix-hidden";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -54,6 +62,8 @@ pub struct MockAccessPoint {
     pub signal_percent: u8,
     /// Secret needed to join when `security` needs one. Never printed.
     pub passphrase: Option<Passphrase>,
+    /// Advertised without a name; joinable only with `join-hidden`.
+    pub hidden: bool,
 }
 
 impl fmt::Debug for MockAccessPoint {
@@ -66,6 +76,7 @@ impl fmt::Debug for MockAccessPoint {
                 "passphrase",
                 &self.passphrase.as_ref().map(|_| "<redacted>"),
             )
+            .field("hidden", &self.hidden)
             .finish()
     }
 }
@@ -77,6 +88,7 @@ impl MockAccessPoint {
             security: SecurityType::Wpa2Psk,
             signal_percent: 78,
             passphrase: Some(Passphrase::new(LAB_PASSPHRASE)),
+            hidden: false,
         }
     }
 
@@ -86,6 +98,18 @@ impl MockAccessPoint {
             security: SecurityType::Open,
             signal_percent: 54,
             passphrase: None,
+            hidden: false,
+        }
+    }
+
+    /// A WPA2 network that broadcasts no name.
+    pub fn hidden() -> Self {
+        Self {
+            ssid: Ssid::from(HIDDEN_SSID),
+            security: SecurityType::Wpa2Psk,
+            signal_percent: 63,
+            passphrase: Some(Passphrase::new(LAB_PASSPHRASE)),
+            hidden: true,
         }
     }
 }
@@ -134,6 +158,7 @@ impl MockNetworkConfig {
                 signal_percent: ap.signal_percent.min(100),
                 passphrase: (!ap.passphrase.is_empty())
                     .then(|| Passphrase::new(ap.passphrase.as_str())),
+                hidden: ap.hidden,
             })
             .collect();
         Self {
@@ -189,6 +214,9 @@ pub struct AccessPointSpec {
     pub signal_percent: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<Passphrase>,
+    /// Advertise without a name (see the module docs).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl fmt::Debug for AccessPointSpec {
@@ -201,6 +229,7 @@ impl fmt::Debug for AccessPointSpec {
                 "passphrase",
                 &self.passphrase.as_ref().map(|_| "<redacted>"),
             )
+            .field("hidden", &self.hidden)
             .finish()
     }
 }
@@ -280,7 +309,11 @@ impl MockCommand {
 // ---------------------------------------------------------------------------
 
 struct WorldAp {
+    /// As advertised: `ap.ssid` is empty while the network is hidden.
     ap: AccessPoint,
+    /// The network's real name, used for joins and profiles.
+    name: Ssid,
+    hidden: bool,
     passphrase: Option<Passphrase>,
 }
 
@@ -297,7 +330,9 @@ enum Phase {
 }
 
 struct Join {
-    ap: ApId,
+    /// `None` when a join by name found no network of that name: the
+    /// attempt fails with `not-found` once association times out.
+    ap: Option<ApId>,
     phase: Phase,
     due_at: u64,
     secret_ok: bool,
@@ -336,6 +371,23 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Whether `given` is the secret `world` expects (no expected secret
+/// accepts anything).
+fn secret_matches(world: &WorldAp, given: Option<&Passphrase>) -> bool {
+    match (&world.passphrase, given) {
+        (Some(expected), Some(given)) => expected == given,
+        (None, _) => true,
+        (Some(_), None) => false,
+    }
+}
+
+/// Whether a join chosen as `chosen` can complete against a network of
+/// type `actual`: the same type, or WPA/WPA2 pre-shared key either way.
+fn security_fits(chosen: SecurityType, actual: SecurityType) -> bool {
+    let psk = |s| matches!(s, SecurityType::WpaPsk | SecurityType::Wpa2Psk);
+    chosen == actual || (psk(chosen) && psk(actual))
+}
+
 /// The deterministic backend. Shared between the daemon (as a
 /// [`NetworkBackend`]) and the mock-control channel (as a [`Handler`]).
 pub struct MockNetwork {
@@ -370,7 +422,7 @@ impl MockNetwork {
                 inner.state.radio = RadioState::Enabled;
                 inner.state.access_points = inner.visible();
                 if let Some(ssid) = &config.connected
-                    && let Some(world) = inner.world.iter().find(|w| &w.ap.ssid == ssid)
+                    && let Some(world) = inner.world.iter().find(|w| &w.name == ssid)
                 {
                     let id = world.ap.id.clone();
                     let passphrase = world.passphrase.clone();
@@ -407,6 +459,7 @@ impl MockNetwork {
                             security: spec.security,
                             signal_percent: spec.signal_percent.min(100),
                             passphrase: spec.passphrase.clone(),
+                            hidden: spec.hidden,
                         })
                         .collect();
                     inner.set_world(&aps);
@@ -540,7 +593,7 @@ impl Inner {
             let existing = self
                 .world
                 .iter()
-                .find(|w| w.ap.ssid == spec.ssid && w.ap.security == spec.security)
+                .find(|w| w.name == spec.ssid && w.ap.security == spec.security)
                 .map(|w| w.ap.id.clone());
             let id = existing.unwrap_or_else(|| {
                 let id = ApId::new(format!("ap-{}", self.next_ap));
@@ -552,12 +605,18 @@ impl Inner {
             world.push(WorldAp {
                 ap: AccessPoint {
                     id,
-                    ssid: spec.ssid.clone(),
+                    ssid: if spec.hidden {
+                        Ssid::new(Vec::new())
+                    } else {
+                        spec.ssid.clone()
+                    },
                     bssid_hash: hash_identifier(&seed),
                     signal_percent: spec.signal_percent,
                     security: spec.security,
                     frequency_mhz: Some(DEFAULT_FREQUENCY_MHZ),
                 },
+                name: spec.ssid.clone(),
+                hidden: spec.hidden,
                 passphrase: spec.passphrase.clone(),
             });
         }
@@ -754,17 +813,42 @@ impl Inner {
                 let supplied = passphrase.or_else(|| {
                     self.profiles
                         .iter()
-                        .find(|p| p.profile.ssid == world.ap.ssid)
+                        .find(|p| p.profile.ssid == world.name)
                         .and_then(|p| p.passphrase.clone())
                 });
-                let ok = match (&world.passphrase, &supplied) {
-                    (Some(expected), Some(given)) => expected == given,
-                    (None, _) => true,
-                    (Some(_), None) => false,
-                };
-                (ok, supplied)
+                (secret_matches(world, supplied.as_ref()), supplied)
             }
         };
+        self.begin_join(Some(ap.clone()), secret_ok, effective)
+    }
+
+    /// A join by name: the network need not be visible, and the caller's
+    /// `security` must fit the network's (as a supplicant would fail the
+    /// handshake otherwise). No network of that name fails with
+    /// `not-found` after the association phase.
+    fn start_hidden_join(
+        &mut self,
+        ssid: &Ssid,
+        security: SecurityType,
+        passphrase: Option<Passphrase>,
+    ) -> Vec<NetworkEvent> {
+        let Some(world) = self.world.iter().find(|w| &w.name == ssid) else {
+            return self.begin_join(None, false, None);
+        };
+        let fits = security_fits(security, world.ap.security);
+        let secret_ok = fits
+            && (!world.ap.security.needs_passphrase()
+                || secret_matches(world, passphrase.as_ref()));
+        let id = world.ap.id.clone();
+        self.begin_join(Some(id), secret_ok, passphrase)
+    }
+
+    fn begin_join(
+        &mut self,
+        ap: Option<ApId>,
+        secret_ok: bool,
+        effective: Option<Passphrase>,
+    ) -> Vec<NetworkEvent> {
         let mut events = self.drop_link(ConnectionState::Associating);
         if events.is_empty() {
             // Re-joining from the same state still restarts the machine.
@@ -773,7 +857,7 @@ impl Inner {
             });
         }
         self.join = Some(Join {
-            ap: ap.clone(),
+            ap,
             phase: Phase::Associating,
             due_at: self.clock_ms + PHASE_MS,
             secret_ok,
@@ -782,13 +866,19 @@ impl Inner {
         events
     }
 
-    /// Joins immediately (boot state) without a phase walk.
+    /// Joins immediately (boot state) without a phase walk. A hidden
+    /// network's name is shown from now on.
     fn complete_join(&mut self, ap: &ApId, passphrase: Option<Passphrase>) -> Vec<NetworkEvent> {
-        let Some(world) = self.world.iter().find(|w| &w.ap.id == ap) else {
+        let Some(world) = self.world.iter_mut().find(|w| &w.ap.id == ap) else {
             return Vec::new();
         };
-        let (ssid, security) = (world.ap.ssid.clone(), world.ap.security);
-        let mut events = self.set_connection(ConnectionState::Connected { ap: ap.clone() });
+        let (ssid, security) = (world.name.clone(), world.ap.security);
+        let mut events = Vec::new();
+        if world.hidden && world.ap.ssid != world.name {
+            world.ap.ssid = world.name.clone();
+            events.extend(self.refresh_visible());
+        }
+        events.extend(self.set_connection(ConnectionState::Connected { ap: ap.clone() }));
         let ip = self.ip_policy.clone();
         events.extend(self.set_ip(Some(ip)));
         let connectivity = self.connectivity_policy.clone();
@@ -854,6 +944,15 @@ impl Inner {
                 if policy == ConnectResult::Timeout {
                     return fail(self, NetworkError::TimedOut);
                 }
+                if join.ap.is_none() {
+                    // NetworkManager's SSID_NOT_FOUND maps the same way.
+                    return fail(
+                        self,
+                        NetworkError::NotFound {
+                            id: "ssid".to_owned(),
+                        },
+                    );
+                }
                 join.phase = Phase::Authenticating;
                 join.due_at += PHASE_MS;
                 self.set_connection(ConnectionState::Authenticating)
@@ -874,7 +973,10 @@ impl Inner {
                     let passphrase = join.passphrase.take();
                     self.join = None;
                     self.connect_result = ConnectResult::Connected;
-                    self.complete_join(&ap, passphrase)
+                    match ap {
+                        Some(ap) => self.complete_join(&ap, passphrase),
+                        None => Vec::new(),
+                    }
                 }
             },
         }
@@ -931,7 +1033,36 @@ impl NetworkBackend for MockNetwork {
                 }
                 .into());
             }
+            // A beacon without a name cannot be joined as such; the name
+            // has to come from the user (`join-hidden`).
+            if inner
+                .world
+                .iter()
+                .any(|w| &w.ap.id == ap && w.ap.ssid.as_bytes().is_empty())
+            {
+                return Err(BackendError::unsupported(
+                    "joining a hidden network without its name",
+                ));
+            }
             inner.start_join(ap, passphrase.map(Passphrase::new))
+        };
+        self.broadcast_all(&events);
+        Ok(())
+    }
+
+    fn join_hidden(
+        &self,
+        ssid: &Ssid,
+        security: SecurityType,
+        passphrase: Option<&str>,
+    ) -> Result<(), BackendError> {
+        let events = {
+            let mut inner = lock(&self.inner);
+            self.guard(&inner)?;
+            if !inner.state.radio.is_enabled() {
+                return Err(NetworkError::RadioDisabled.into());
+            }
+            inner.start_hidden_join(ssid, security, passphrase.map(Passphrase::new))
         };
         self.broadcast_all(&events);
         Ok(())
@@ -957,12 +1088,13 @@ impl NetworkBackend for MockNetwork {
                 stored.profile.security,
                 stored.passphrase.clone(),
             );
+            // By name, as a saved hidden profile is joined without a
+            // visible name; the radio is on, so the world is on the air.
             let ap = inner
-                .state
-                .access_points
+                .world
                 .iter()
-                .find(|ap| ap.ssid == ssid && ap.security == security)
-                .map(|ap| ap.id.clone())
+                .find(|w| w.name == ssid && w.ap.security == security)
+                .map(|w| w.ap.id.clone())
                 .ok_or_else(not_found)?;
             inner.start_join(&ap, passphrase)
         };
@@ -1003,9 +1135,9 @@ impl NetworkBackend for MockNetwork {
                 .connection
                 .connected_ap()
                 .cloned()
-                .or_else(|| inner.join.as_ref().map(|j| j.ap.clone()))
+                .or_else(|| inner.join.as_ref().and_then(|j| j.ap.clone()))
                 .and_then(|id| inner.world.iter().find(|w| w.ap.id == id))
-                .is_some_and(|w| w.ap.ssid == removed.profile.ssid);
+                .is_some_and(|w| w.name == removed.profile.ssid);
             if linked {
                 events.extend(inner.drop_link(ConnectionState::Disconnected));
             }
@@ -1185,10 +1317,159 @@ route = "speaker"
         let profile = Profile::load(path).expect("checked-in profile parses");
         let config = MockNetworkConfig::from_profile(&profile);
         assert_eq!(config.connected, Some(Ssid::from(LAB_SSID)));
+        assert!(
+            config
+                .access_points
+                .iter()
+                .any(|ap| ap.hidden && ap.ssid == Ssid::from(HIDDEN_SSID))
+        );
         let (mock, _rx) = mock(config);
         let state = mock.snapshot().unwrap();
         assert!(state.connection.is_connected());
-        assert_eq!(state.access_points.len(), 2);
+        assert_eq!(state.access_points.len(), 3);
+        assert_eq!(
+            state
+                .access_points
+                .iter()
+                .filter(|ap| ap.ssid.as_bytes().is_empty())
+                .count(),
+            1,
+            "the hidden network is listed without its name"
+        );
+    }
+
+    fn with_hidden() -> MockNetworkConfig {
+        MockNetworkConfig {
+            connected: None,
+            access_points: vec![
+                MockAccessPoint::lab(),
+                MockAccessPoint::guest(),
+                MockAccessPoint::hidden(),
+            ],
+            ..MockNetworkConfig::default()
+        }
+    }
+
+    fn hidden_name() -> Ssid {
+        Ssid::from(HIDDEN_SSID)
+    }
+
+    #[test]
+    fn a_hidden_network_joins_only_by_name_and_is_named_once_joined() {
+        let (mock, rx) = mock(with_hidden());
+        let state = mock.snapshot().unwrap();
+        let hidden = state
+            .access_points
+            .iter()
+            .find(|ap| ap.ssid.as_bytes().is_empty())
+            .expect("hidden beacon listed")
+            .clone();
+        assert_eq!(hidden.security, SecurityType::Wpa2Psk);
+        // Its beacon has no name, so it cannot be joined as such.
+        assert_eq!(
+            mock.connect(&hidden.id, Some(LAB_PASSPHRASE)),
+            Err(BackendError::unsupported(
+                "joining a hidden network without its name"
+            ))
+        );
+        mock.join_hidden(&hidden_name(), SecurityType::Wpa2Psk, Some(LAB_PASSPHRASE))
+            .unwrap();
+        assert_eq!(names(&drain(&rx)), ["connection-changed"]);
+        let events = mock.apply(&cmd(r#"{"cmd":"tick","ms":1500}"#)).unwrap();
+        assert_eq!(
+            events.iter().map(NetworkEvent::name).collect::<Vec<_>>(),
+            [
+                "connection-changed",
+                "connection-changed",
+                "access-points-changed",
+                "connection-changed",
+                "ip-changed",
+                "connectivity-changed",
+                "profiles-changed"
+            ]
+        );
+        let state = mock.snapshot().unwrap();
+        assert_eq!(
+            state.connection,
+            ConnectionState::Connected {
+                ap: hidden.id.clone()
+            }
+        );
+        assert_eq!(state.access_point(&hidden.id).unwrap().ssid, hidden_name());
+        assert_eq!(state.profiles.len(), 1);
+        assert_eq!(state.profiles[0].ssid, hidden_name());
+        assert_eq!(state.profiles[0].security, SecurityType::Wpa2Psk);
+        // The saved profile rejoins without the name being visible again.
+        mock.apply(&cmd(
+            r#"{"cmd":"set-access-points","access_points":[{"ssid":"ferrix-hidden","security":"wpa2-psk","signal_percent":63,"passphrase":"mock-passphrase","hidden":true}]}"#,
+        ))
+        .unwrap();
+        assert!(
+            mock.snapshot().unwrap().access_points[0]
+                .ssid
+                .as_bytes()
+                .is_empty()
+        );
+        mock.disconnect().unwrap();
+        mock.connect_profile(&state.profiles[0].id).unwrap();
+        mock.apply(&cmd(r#"{"cmd":"tick","ms":1500}"#)).unwrap();
+        assert!(mock.snapshot().unwrap().connection.is_connected());
+        let text = format!("{:?}", MockAccessPoint::hidden());
+        assert!(!text.contains(LAB_PASSPHRASE) && text.contains("hidden: true"));
+    }
+
+    #[test]
+    fn hidden_joins_fail_on_a_wrong_secret_wrong_security_or_unknown_name() {
+        let (mock, _rx) = mock(with_hidden());
+        let failed = |mock: &MockNetwork| mock.snapshot().unwrap().connection;
+        for (security, secret) in [
+            (SecurityType::Wpa2Psk, Some("wrong-passphrase")),
+            (SecurityType::Wpa2Psk, None),
+            (SecurityType::Wpa3Sae, Some(LAB_PASSPHRASE)),
+            (SecurityType::Open, None),
+        ] {
+            mock.join_hidden(&hidden_name(), security, secret).unwrap();
+            mock.apply(&cmd(r#"{"cmd":"tick","ms":1000}"#)).unwrap();
+            assert_eq!(
+                failed(&mock),
+                ConnectionState::Failed {
+                    error: NetworkError::AuthenticationFailed
+                },
+                "{security} {}",
+                secret.is_some()
+            );
+        }
+        assert!(mock.snapshot().unwrap().profiles.is_empty());
+        // WPA (1) and WPA2 share the pre-shared key handshake.
+        mock.join_hidden(&hidden_name(), SecurityType::WpaPsk, Some(LAB_PASSPHRASE))
+            .unwrap();
+        mock.apply(&cmd(r#"{"cmd":"tick","ms":1500}"#)).unwrap();
+        assert!(mock.snapshot().unwrap().connection.is_connected());
+        // No network of that name: not found after association, like
+        // NetworkManager's SSID_NOT_FOUND.
+        mock.join_hidden(&Ssid::from("ferrix-nowhere"), SecurityType::Open, None)
+            .unwrap();
+        assert_eq!(failed(&mock), ConnectionState::Associating);
+        let events = mock.apply(&cmd(r#"{"cmd":"tick","ms":500}"#)).unwrap();
+        assert_eq!(
+            events[0],
+            NetworkEvent::ConnectionChanged {
+                connection: ConnectionState::Failed {
+                    error: NetworkError::NotFound { id: "ssid".into() }
+                }
+            }
+        );
+        // A visible network may be joined by name too.
+        mock.join_hidden(&Ssid::from(GUEST_SSID), SecurityType::Open, None)
+            .unwrap();
+        mock.apply(&cmd(r#"{"cmd":"tick","ms":1500}"#)).unwrap();
+        assert!(mock.snapshot().unwrap().connection.is_connected());
+        // Radio off refuses it like every join.
+        mock.set_radio(false).unwrap();
+        assert_eq!(
+            mock.join_hidden(&hidden_name(), SecurityType::Wpa2Psk, Some(LAB_PASSPHRASE)),
+            Err(BackendError::Network(NetworkError::RadioDisabled))
+        );
     }
 
     #[test]

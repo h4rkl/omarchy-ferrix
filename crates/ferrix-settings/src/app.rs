@@ -179,7 +179,7 @@ impl Settings {
                 match error {
                     // A typed connect failure (wrong secrets, unsupported
                     // security) is the connection's state, shown with Retry.
-                    ClientError::Network(error) if name == "connect" => {
+                    ClientError::Network(error) if name == "connect" || name == "join-hidden" => {
                         self.model.connect_failed(error);
                     }
                     ClientError::Network(_) | ClientError::Protocol { .. } => {
@@ -344,6 +344,16 @@ impl Settings {
             Action::Scan => self.network_action("scan", |c| c.scan()),
             Action::Connect { ap, passphrase } => {
                 self.network_action("connect", move |c| c.connect_ap(&ap, passphrase.as_deref()));
+            }
+            Action::JoinHidden {
+                ssid,
+                security,
+                passphrase,
+            } => {
+                let ssid = ferrix_network_api::Ssid::from(ssid);
+                self.network_action("join-hidden", move |c| {
+                    c.join_hidden(&ssid, security, passphrase.as_deref())
+                });
             }
             Action::Disconnect => self.network_action("disconnect", |c| c.disconnect()),
             Action::Forget(profile) => self.network_action("forget", move |c| c.forget(&profile)),

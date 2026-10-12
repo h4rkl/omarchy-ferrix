@@ -143,13 +143,14 @@ fn schema_mismatch_is_rejected_at_hello() {
         &h.service,
         &mut connection,
         Request::Hello {
-            schema_version: 2,
+            // A peer built before `join-hidden` (schema 1) is refused.
+            schema_version: 1,
             client_kind: ClientKind::Tool,
         },
     ) else {
-        panic!("schema 2 must be rejected");
+        panic!("schema 1 must be rejected");
     };
-    assert!(reason.contains("schema 2"), "{reason}");
+    assert!(reason.contains("schema 1"), "{reason}");
     assert!(!connection.hello_done, "a rejected hello does not count");
     assert!(matches!(
         dispatch(&h.service, &mut connection, Request::Scan {}),

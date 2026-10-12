@@ -211,7 +211,7 @@ feed() {
 }
 
 mutations() {
-  grep -E '^adb\t[^[:space:]]+\t(reboot|sideload)\t|^adb\t-s\t[^[:space:]]+\t(reboot|sideload)\t' "$calls" | sed 's/\t$//' || true
+  grep -E '^adb'"$tab"'[^[:space:]]+'"$tab"'(reboot|sideload)'"$tab"'|^adb'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'(reboot|sideload)'"$tab"'' "$calls" | sed 's/'"$tab"'$//' || true
 }
 
 transcript_of() {

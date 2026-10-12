@@ -8,6 +8,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+tab=$(printf '\t')
 radios="$root/tools/pixel-9a/radios.sh"
 fixtures="$root/tools/pixel-9a/tests/fixtures/radios"
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
@@ -296,7 +297,7 @@ wwan_sit_tsv="$work/wwan_sit/pixel-9a/radios/evidence-latest.tsv"
 check "inventory: radio-first WWAN/SIT route stays unsupported without ModemManager" \
   sh -c 'awk -F "\t" '\''$1 == "telephony" && $2 == "unsupported" && $3 == "wwan-sit-surface-no-modemmanager-modem" { found=1 } END { exit !found }'\'' "$1"' sh "$wwan_sit_tsv"
 check "inventory: radio-first evidence identifies s5300_modem separately from CPIF" \
-  sh -c 'grep "^telephony\t" "$1" | grep -Fq "radio-first s5300_modem WWAN/SIT surface observed" && grep -Fq "s5300_modem_module=loaded s5300_modem_driver=bound wwan_devices=1" "$1"' sh "$wwan_sit_tsv"
+  env TAB="$tab" sh -c 'grep "^telephony$TAB" "$1" | grep -Fq "radio-first s5300_modem WWAN/SIT surface observed" && grep -Fq "s5300_modem_module=loaded s5300_modem_driver=bound wwan_devices=1" "$1"' sh "$wwan_sit_tsv"
 export STUB_FIXTURES="$fixtures"
 
 # A manifest mismatch must never be promoted to working networking, even when
@@ -325,7 +326,7 @@ firmware_bt_bad_tsv="$work/bluetooth_firmware_mismatch/pixel-9a/radios/evidence-
 check "inventory: Bluetooth firmware mismatch stays unsupported" \
   sh -c 'awk -F "\t" '\''$1 == "bluetooth" && $2 == "unsupported" && $3 == "controller-powered-firmware-unverified" { found=1 } END { exit !found }'\'' "$1"' sh "$firmware_bt_bad_tsv"
 check "inventory: Bluetooth firmware mismatch names exact BCM.hcd path" \
-  sh -c 'grep "^bluetooth\t" "$1" | grep -Fq "/lib/firmware/brcm/BCM.hcd"' sh "$firmware_bt_bad_tsv"
+  env TAB="$tab" sh -c 'grep "^bluetooth$TAB" "$1" | grep -Fq "/lib/firmware/brcm/BCM.hcd"' sh "$firmware_bt_bad_tsv"
 export STUB_FIXTURES="$fixtures"
 
 # A present driver/controller is not sufficient evidence. If the typed

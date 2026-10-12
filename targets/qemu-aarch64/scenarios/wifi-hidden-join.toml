@@ -1,0 +1,77 @@
+schema_version = 1
+name = "wifi-hidden-join"
+description = "A synthetic hidden WPA2 network (listed without a name) cannot be joined from the list, only by name: an unknown name fails not-found, a wrong synthetic passphrase fails authentication-failed, and the right one connects, names the access point, and saves a profile."
+
+[[step]]
+service = "network"
+command = { cmd = "set-adapter", present = true }
+note = "setup: restore the profile boot state (mock state persists across scenarios)"
+
+[[step]]
+service = "network"
+command = { cmd = "set-radio", enabled = true }
+note = "setup"
+
+[[step]]
+service = "network"
+command = { cmd = "set-access-points", access_points = [ { ssid = "ferrix-lab", security = "wpa2-psk", signal_percent = 78, passphrase = "mock-passphrase" }, { ssid = "ferrix-guest", security = "open", signal_percent = 41 }, { ssid = "ferrix-hidden", security = "wpa2-psk", signal_percent = 63, passphrase = "mock-passphrase", hidden = true } ] }
+ack = { status = "ok" }
+note = "setup: the profile's synthetic access points, with ferrix-hidden hidden again"
+
+[[step]]
+service = "network"
+command = { cmd = "set-connect-result", result = "connected" }
+ack = { status = "ok" }
+
+[[step]]
+service = "network"
+command = { cmd = "connect", ssid = "ferrix-hidden", passphrase = "mock-passphrase" }
+expect_ack_error = true
+note = "the hidden network has no visible name, so the list path cannot reach it"
+
+[[step]]
+service = "network"
+command = { cmd = "join-hidden", ssid = "ferrix-nowhere", security = "open" }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "associating" } } ]
+note = "client verb: join by name; no network answers to this name"
+
+[[step]]
+service = "network"
+command = { cmd = "tick", ms = 5000 }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "failed", error = { kind = "not-found", id = "ssid" } } } ]
+note = "NetworkManager's SSID_NOT_FOUND maps the same way"
+
+[[step]]
+service = "network"
+command = { cmd = "join-hidden", ssid = "ferrix-hidden", security = "wpa2-psk", passphrase = "wrong-passphrase" }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "associating" } } ]
+note = "client verb; wrong synthetic passphrase"
+
+[[step]]
+service = "network"
+command = { cmd = "tick", ms = 5000 }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "authenticating" } }, { event = "network-event", kind = "connection-changed", connection = { state = "failed", error = { kind = "authentication-failed" } } } ]
+
+[[step]]
+service = "network"
+command = { cmd = "join-hidden", ssid = "ferrix-hidden", security = "wpa2-psk" }
+expect_ack_error = true
+note = "the service refuses a protected join without a passphrase before the backend sees it"
+
+[[step]]
+service = "network"
+command = { cmd = "join-hidden", ssid = "ferrix-hidden", security = "wpa2-psk", passphrase = "mock-passphrase" }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "associating" } } ]
+note = "client verb; right synthetic passphrase"
+
+[[step]]
+service = "network"
+command = { cmd = "tick", ms = 5000 }
+expect = [ { event = "network-event", kind = "connection-changed", connection = { state = "authenticating" } }, { event = "network-event", kind = "connection-changed", connection = { state = "configuring" } }, { event = "network-event", kind = "access-points-changed" }, { event = "network-event", kind = "connection-changed", connection = { state = "connected" } }, { event = "network-event", kind = "connectivity-changed", connectivity = { state = "full" } }, { event = "network-event", kind = "profiles-changed" } ]
+note = "once joined, the access point is listed by name (access-points-changed) and a profile is saved"
+
+[[step]]
+service = "network"
+command = { cmd = "set-access-points", access_points = [ { ssid = "ferrix-lab", security = "wpa2-psk", signal_percent = 78, passphrase = "mock-passphrase" }, { ssid = "ferrix-guest", security = "open", signal_percent = 41 }, { ssid = "ferrix-hidden", security = "wpa2-psk", signal_percent = 63, passphrase = "mock-passphrase", hidden = true } ] }
+ack = { status = "ok" }
+note = "teardown: hide ferrix-hidden again"
