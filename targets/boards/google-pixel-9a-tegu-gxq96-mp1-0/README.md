@@ -1518,6 +1518,32 @@ from code and is documented with the thresholds and limits in
 Offline tests: `just pixel-9a-mic-acoustic-proof-test`. It has not run on
 the phone; a run needs a separate owner decision.
 
+### Bluetooth A2DP output preflight (issue #91)
+
+`just pixel-9a-a2dp-output-preflight`
+(`tools/pixel-9a/a2dp-output-preflight.sh`) is a read-only preflight for
+proving output on a Bluetooth A2DP sink instead of the NO-GO internal
+speakers. It uses the CDC-ACM transport below and sends the exact
+`a2dp-output-preflight-remote.sh` body. That body reads the following:
+
+- BlueZ, with `bluetoothctl list/show/devices Paired/info`;
+- the PipeWire graph, with `wpctl status/inspect`;
+- package versions, from the apk database file;
+- OpenRC service status;
+- the two internal speaker-path controls, with `amixer cget`;
+- open playback PCM fds.
+
+It reports counts, classes, versions, and yes/no matches only: no address,
+device name, node name, or serial. The result is `candidate-observed`
+(exit 0) or `blocked` (exit 6) with every reason. Every run prints
+`active_gate=closed`. No playback mode exists, because the on-image
+PipeWire/WirePlumber explicit-target fallback semantics are unverified.
+Checks, limits, and the remaining gate are in
+[`audio-route-decision.md`](audio-route-decision.md#bluetooth-a2dp-output-preflight-issue-91).
+Transcripts go to ignored `out/pixel-9a/a2dp-output-preflight/`. Offline
+tests: `just pixel-9a-a2dp-output-preflight-test`. It has not run on the
+phone.
+
 ## CDC-ACM guest probe transport (issue #52)
 
 The Ferrix dev rootfs is built with `--no-sshd`, so the read-only inventory
