@@ -228,13 +228,22 @@ else
 fi
 printf 'opener_scan=%s\n' "$s2_scan"
 s2_pids=$(printf '%s\n' "$s2_holders" | awk 'NF { print $1 }' | sort -u)
-s2_held=$(printf '%s\n' "$s2_holders" | awk 'NF { print $2 }' | sort -u | tr -cd 'A-Za-z0-9_.\n-' | head -n 16 | s2_join)
+s2_held=$(printf '%s\n' "$s2_holders" | awk -v known="$cpif_nodes" '
+	BEGIN { split(known, names, " "); for (i in names) allowed[names[i]] = 1 }
+	NF { if ($2 in allowed) print $2; else print "other" }
+' | sort -u | head -n 16 | s2_join)
 printf 'opener_holder_count=%s\n' "$(printf '%s\n' "$s2_pids" | s2_lines)"
 printf 'opener_held_nodes=%s\n' "${s2_held:-none}"
 s2_comms=
 for s2_pid in $s2_pids; do
 	case "$s2_pid" in *[!0-9]*) continue ;; esac
-	s2_comm=$(head -c 32 "$cpif_proc/$s2_pid/comm" 2>/dev/null | s2_clean)
+	# A process may choose its own comm, so never send arbitrary task names
+	# across the transport or retain them in the transcript.
+	s2_comm=$(head -c 32 "$cpif_proc/$s2_pid/comm" 2>/dev/null)
+	case "$s2_comm" in
+		exynos-modem|sit-proxy|ModemManager) ;;
+		*) s2_comm=other ;;
+	esac
 	s2_comms="$s2_comms${s2_comm:-gone}
 "
 done
@@ -332,7 +341,14 @@ else s2_scratch=wrong-owner-mode
 fi
 printf 'scratch=%s\n' "$s2_scratch"
 s2_scratch_entries=0
-[ "$s2_scratch" != ok ] || s2_scratch_entries=$(ls -A "$cpif_scratch" 2>/dev/null | s2_lines)
+if [ "$s2_scratch" = ok ]; then
+	# A failed listing must never turn an unreadable scratch directory into
+	# an apparent empty directory.
+	s2_scratch_entries=unavailable
+	if s2_listing=$(ls -A "$cpif_scratch" 2>/dev/null); then
+		s2_scratch_entries=$(printf '%s\n' "$s2_listing" | s2_lines)
+	fi
+fi
 printf 'scratch_entries=%s\n' "$s2_scratch_entries"
 for s2_dir in uecapconfig carrierconfig; do
 	if [ -d "$cpif_fs/vendor/firmware/$s2_dir" ]; then s2_fw=present; else s2_fw=missing; fi

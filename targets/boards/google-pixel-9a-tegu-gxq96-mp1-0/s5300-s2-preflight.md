@@ -42,7 +42,8 @@ Outputs go, mode 0600, to the ignored `out/pixel-9a/s5300-s2-preflight/`:
 
 These files contain no serial, port name, partition label, block device
 name, file name under `/mnt/vendor`, PID, kernel log, IMEI/SIM data, or
-per-unit bytes. Process names appear only for CPIF holders (at most eight).
+per-unit bytes. CPIF holder task names are reduced to the known service
+names or `other`; any unexpected CPIF class entry is also `other`.
 Package-file hashes and versions are included.
 
 Exit status: 0 `go`, 8 `no-go`, 9 `incomplete`; 2 usage; 3 transport or guest
@@ -127,7 +128,7 @@ only the later S2 workflow can observe it.
 | OpenRC overrides | conf.d, instances, rc.conf, local.d, udev rules | none; only `modemmanager_opts` in `conf.d/modemmanager` | now |
 | Arm token | `/run/ferrix-s5300-cpif.armed` | absent | now |
 | `/run` | `cpif_check_run` | tmpfs, root-owned, not group/other-writable | now |
-| Scratch | `/run/exynos-modem` | absent (not yet provisioned), or root:root 0700 and empty | now (provisioning is an active step) |
+| Scratch | `/run/exynos-modem` | absent (not yet provisioned), or root:root 0700 and confirmed empty; an unreadable listing blocks | now (provisioning is an active step) |
 | Firmware dirs | uecapconfig, carrierconfig | present | now |
 | Partitions | uevent `PARTNAME`, sysfs | each role unique; no direct mount | now |
 | Stale/partial mounts (pre-mount) | mountinfo, loop `backing_file`, holders | no `/mnt/vendor` mount, no role-backed loop, no holder | now |
@@ -333,7 +334,7 @@ change; **not implemented**):
 characterisation above.
 
 Run on 2026-10-12 (macOS arm64 host, offline): `s5300-s2-preflight.sh`
-passed all 222 checks. `s5300-mounts-service.sh` (with the new partial-start
+passed all 238 checks. `s5300-mounts-service.sh` (with the new partial-start
 characterisation), `s5300-cpif-services.sh` (108 checks), and
 `s5300-cpif-inventory.sh` (144 checks) also passed, and `git diff --check`
 was clean. Three deliberate regressions, each in a throwaway copy, were

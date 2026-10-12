@@ -230,8 +230,9 @@ awk -v nodes="$nodes" -v modules="$modules" -v files="$pinned_files" '
 	# Every enumerated or numeric field is checked here, once, so the
 	# classification below never sees a value outside its reviewed set.
 	function oneof(v, list,    n, a, i) { n = split(list, a, "|"); for (i = 1; i <= n; i++) if (v == a[i]) return 1; return 0 }
-	function valid(k, v) {
-		if (k ~ /^(uid|slot_value_count|cp_platform_count|wwan_devices|class_node_count|class_extra_nodes|opener_holder_count|init_instances|rc_conf_mentions|confd_instances|local_d_mentions|udev_overrides|sit_socket_dir|scratch_entries|vendor_mounts)$/ ||
+	function valid(k, v, count, fields, i) {
+		if (k == "scratch_entries") return v == "unavailable" || (v ~ /^[0-9]+$/ && length(v) <= 6)
+		if (k ~ /^(uid|slot_value_count|cp_platform_count|wwan_devices|class_node_count|class_extra_nodes|opener_holder_count|init_instances|rc_conf_mentions|confd_instances|local_d_mentions|udev_overrides|sit_socket_dir|vendor_mounts)$/ ||
 			k ~ /^(proc|rc_daemon|runlevel|pidfile)\./ || k ~ /^part\.[a-z_]+\.(count|loops|direct_mounts|holders)$/ || k ~ /^dest\.[a-z_]+\.mounts$/)
 			return v ~ /^[0-9]+$/ && length(v) <= 6
 		if (k ~ /^file\..*\.sha256$/) return oneof(v, "missing|symlink|unreadable") || (v ~ /^[0-9a-f]+$/ && length(v) == 64)
@@ -252,6 +253,22 @@ awk -v nodes="$nodes" -v modules="$modules" -v files="$pinned_files" '
 		if (k == "env.target") return oneof(v, "exact|other|missing|duplicate")
 		if (k == "env.backend") return oneof(v, "google-kleaf-cpif|linux-google-tegu-wwan|missing|duplicate|empty|other")
 		if (k == "opener_scan") return oneof(v, "clean|held|incomplete|not-run")
+		if (k == "opener_held_nodes") {
+			if (v == "none") return 1
+			if (v == "") return 0
+			count = split(v, fields, ",")
+			if (count > 13) return 0
+			for (i = 1; i <= count; i++) if (!(fields[i] in known_node) && fields[i] != "other") return 0
+			return 1
+		}
+		if (k == "opener_holder_comms") {
+			if (v == "none") return 1
+			if (v == "") return 0
+			count = split(v, fields, ",")
+			if (count > 4) return 0
+			for (i = 1; i <= count; i++) if (!oneof(fields[i], "ModemManager|exynos-modem|sit-proxy|other")) return 0
+			return 1
+		}
 		if (k == "openrc_state_dir") return oneof(v, "present|missing")
 		if (k == "arm_token") return oneof(v, "absent|present|symlink")
 		if (k == "scratch") return oneof(v, "absent|ok|symlink|not-directory|wrong-owner-mode")
@@ -260,7 +277,7 @@ awk -v nodes="$nodes" -v modules="$modules" -v files="$pinned_files" '
 	BEGIN {
 		split("probe dt_model dt_compatible kernel_release uid hw_revision slot_source slot_value_count slot_suffix pidns env_file env.target env.backend check.target pins_file check.package pkg.device-google-tegu pkg.exynos-modem pkg.modemmanager-samsung-sit check.cli cp_platform_count cp_driver modem_state wwan_devices check.surface class_node_count class_extra_nodes opener_scan opener_holder_count opener_held_nodes opener_holder_comms proc.s5300_daemons proc.modemmanager openrc_state_dir service.ferrix-s5300-mounts service.exynos-modem service.sit-proxy service.modemmanager service.ferrix-radio-firmware rc_daemon.exynos-modem rc_daemon.sit-proxy runlevel.ferrix-s5300-mounts runlevel.exynos-modem runlevel.sit-proxy init_instances confd.ferrix-s5300-mounts confd.exynos-modem confd.sit-proxy confd.modemmanager rc_conf_mentions confd_instances local_d_mentions udev_overrides arm_token pidfile.exynos-modem pidfile.sit-proxy sit_socket_dir check.run scratch scratch_entries fw.uecapconfig fw.carrierconfig vendor_mounts check.sources probe_complete", g, " ")
 		for (i in g) required[g[i]] = 1
-		split(nodes, n, " "); for (i in n) required["node." n[i]] = 1
+		split(nodes, n, " "); for (i in n) { required["node." n[i]] = 1; known_node[n[i]] = 1 }
 		split(modules, m, " "); for (i in m) required["module." m[i]] = 1
 		split(files, f, " "); for (i in f) { required["file." f[i] ".sha256"] = 1; required["file." f[i] ".pin"] = 1 }
 		split("modem_img efs persist modem_userdata", d, " "); split("mounts source ro fstype", df, " ")
@@ -405,7 +422,7 @@ for name in ferrix-s5300-mounts exynos-modem sit-proxy modemmanager ferrix-radio
 done
 for name in exynos-modem sit-proxy; do
 	state=$(get "service.$name")
-	case "$state" in stopped) ;; unknown) ;; *) block "service-$name-$state" ;; esac
+	case "$state" in stopped) ;; *) block "service-$name-$state" ;; esac
 	[ "$(num "rc_daemon.$name")" -eq 0 ] || block "stale-openrc-daemon-record-$name"
 	[ "$(num "pidfile.$name")" -eq 0 ] || block "stale-pidfile-$name"
 done
@@ -441,11 +458,11 @@ emit arm_token "$token"
 emit sit_socket_dir "$(num sit_socket_dir)"
 [ "$(passfail check.run)" = pass ] || block run-not-root-tmpfs
 scratch=$(oneof scratch absent ok symlink not-directory wrong-owner-mode)
-scratch_entries=$(num scratch_entries)
+scratch_entries=$(get scratch_entries)
 emit scratch "$scratch"
 emit scratch_entries "$scratch_entries"
 case "$scratch" in
-	ok) [ "$scratch_entries" -eq 0 ] || block scratch-not-empty ;;
+	ok) case "$scratch_entries" in 0) ;; unavailable) block scratch-list-incomplete ;; *) block scratch-not-empty ;; esac ;;
 	absent) ;;
 	*) block "scratch-$scratch" ;;
 esac

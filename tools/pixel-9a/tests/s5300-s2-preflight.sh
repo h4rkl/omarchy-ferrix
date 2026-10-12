@@ -376,10 +376,12 @@ cp "$pout" "$work/clean.out"
 
 probe_case 'held through an alias' 'mkdir -p "$fx/elsewhere"; mkfifo "$fx/elsewhere/alias"; cp "$fx/rdev/umts_boot0" "$fx/rdev/alias"; ln -s "$fx/elsewhere/alias" "$fx/proc/100/task/100/fd/9"'
 check 'alias: held, node and holder name reported, no pid' sh -c 'grep -Fxq opener_scan=held "$1" && grep -Fxq opener_held_nodes=umts_boot0 "$1" && grep -Fxq opener_holder_comms=ModemManager "$1" && grep -Fxq opener_holder_count=1 "$1" && ! grep -q "=100$" "$1"' sh "$pout"
+probe_case 'holder comm is private' 'printf "SECRETIMEI1\n" >"$fx/proc/100/comm"; ln -s "$fx/dev/umts_boot0" "$fx/proc/100/task/100/fd/9"'
+check 'holder comm: only other leaves the guest' sh -c 'grep -Fxq opener_holder_comms=other "$1" && ! grep -Fq SECRETIMEI1 "$1"' sh "$pout"
 probe_case 'held by a non-leader thread' 'ln -s "$fx/dev/umts_rfs0" "$fx/proc/100/task/101/fd/4"'
 check 'thread: held' po opener_held_nodes=umts_rfs0
 probe_case 'held extra class node' 'mkfifo "$fx/umts_router"; echo "e3 40" >"$fx/rdev/umts_router"; mkdir -p "$fx/sys/class/cpif/umts_router"; echo 227:64 >"$fx/sys/class/cpif/umts_router/dev"; ln -s "$fx/umts_router" "$fx/proc/100/task/100/fd/5"'
-check 'extra class node: counted and held' sh -c 'grep -Fxq class_extra_nodes=1 "$1" && grep -Fxq opener_held_nodes=umts_router "$1"' sh "$pout"
+check 'extra class node: counted and held without retaining its name' sh -c 'grep -Fxq class_extra_nodes=1 "$1" && grep -Fxq opener_held_nodes=other "$1" && ! grep -Fq umts_router "$1"' sh "$pout"
 probe_case 'unlistable fd directory' 'chmod 000 "$fx/proc/100/task/101/fd"'
 check 'unlistable: the scan is incomplete, not clean' po opener_scan=incomplete
 probe_case 'other PID namespace' 'rm "$fx/proc/self/ns/pid"; ln -s "pid:[4026532001]" "$fx/proc/self/ns/pid"'
@@ -437,8 +439,11 @@ derive confd -e 's/^confd\.sit-proxy=absent$/confd.sit-proxy=override/'
 derive rcconf -e 's/^rc_conf_mentions=0$/rc_conf_mentions=1/'
 derive stale-mount -e 's/^vendor_mounts=0$/vendor_mounts=1/' -e 's/^dest\.modem_img\.mounts=0$/dest.modem_img.mounts=1/' -e 's/^part\.modem\.loops=0$/part.modem.loops=1/'
 derive started -e 's/^service\.exynos-modem=stopped$/service.exynos-modem=started/'
+derive unknown-exynos -e 's/^service\.exynos-modem=stopped$/service.exynos-modem=unknown/'
+derive unknown-sit -e 's/^service\.sit-proxy=stopped$/service.sit-proxy=unknown/'
 derive pidfile -e 's/^pidfile\.sit-proxy=0$/pidfile.sit-proxy=1/'
 derive scratch -e 's/^scratch=absent$/scratch=ok/' -e 's/^scratch_entries=0$/scratch_entries=2/'
+derive scratch-list-incomplete -e 's/^scratch=absent$/scratch=ok/' -e 's/^scratch_entries=0$/scratch_entries=unavailable/'
 derive scratch-mode -e 's/^scratch=absent$/scratch=wrong-owner-mode/'
 derive pidns -e 's/^pidns=initial$/pidns=other/'
 derive slot -e 's/^slot_value_count=1$/slot_value_count=2/' -e 's/^slot_suffix=_b$/slot_suffix=none/'
@@ -458,6 +463,8 @@ derive bad-enum -e 's/^service\.sit-proxy=stopped$/service.sit-proxy=crashed/'
 derive bad-count -e 's/^vendor_mounts=0$/vendor_mounts=many/'
 derive bad-sha -e 's/^file\.sit-proxy\.sha256=.*/file.sit-proxy.sha256=abc/'
 derive bad-value -e 's/^cp_driver=.*/cp_driver=..\/cp/'
+derive bad-holder-comm -e 's/^opener_holder_comms=.*/opener_holder_comms=SECRETIMEI1/'
+derive bad-held-node -e 's/^opener_held_nodes=.*/opener_held_nodes=SECRETIMEI1/'
 derive not-complete -e 's/^probe_complete=yes$/probe_complete=no/'
 derive qemu -e 's/^dt_model=.*/dt_model=QEMU Virtual Machine/'
 
@@ -529,8 +536,11 @@ nogo rcconf rcconf openrc-override-rc_conf_mentions
 nogo stale-mount stale-mount stale-mount-modem_img
 check 'stale-mount: the stale loop is named too' reports device_blockers stale-loop-modem
 nogo started started service-exynos-modem-started
+nogo unknown-exynos unknown-exynos service-exynos-modem-unknown
+nogo unknown-sit unknown-sit service-sit-proxy-unknown
 nogo pidfile pidfile stale-pidfile-sit-proxy
 nogo scratch scratch scratch-not-empty
+nogo scratch-list-incomplete scratch-list-incomplete scratch-list-incomplete
 nogo scratch-mode scratch-mode scratch-wrong-owner-mode
 nogo pidns pidns not-initial-pid-namespace
 nogo slot slot slot-not-exactly-one
@@ -564,6 +574,8 @@ refuse bad-enum bad-enum 5
 refuse bad-count bad-count 5
 refuse bad-sha bad-sha 5
 refuse bad-value bad-value 5
+refuse bad-holder-comm bad-holder-comm 5
+refuse bad-held-node bad-held-node 5
 refuse not-complete not-complete 5
 refuse qemu qemu 4
 refuse identity go 4 4
