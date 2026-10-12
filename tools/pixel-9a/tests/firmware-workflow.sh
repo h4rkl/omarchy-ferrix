@@ -2,6 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+tab=$(printf '\t')
 workflow="$root/tools/pixel-9a/firmware.sh"
 
 [ -x "$workflow" ] || {
@@ -152,7 +153,7 @@ PATH="$fake_bin:$PATH" "$workflow" stage >/dev/null
   { echo 'bundle extractor did not stage a regular file' >&2; exit 1; }
 [ -f "$work/bundle-out/staged/lib/firmware/carrierconfig/carrier-extra.conf" ] ||
   { echo 'bundle extractor did not stage the second regular file' >&2; exit 1; }
-grep -q '^firmware\tmodem-s5300\tvendor.img\t/firmware/carrierconfig/carrier.conf\tlib/firmware/carrierconfig/carrier.conf\t' \
+grep -q '^firmware'"$tab"'modem-s5300'"$tab"'vendor.img'"$tab"'/firmware/carrierconfig/carrier.conf'"$tab"'lib/firmware/carrierconfig/carrier.conf'"$tab"'' \
   "$work/bundle-out/firmware-manifest.tsv"
 FERRIX_FAKE_BUNDLE_MODE=nested-sibling \
 FERRIX_PIXEL9A_PINS="$work/recovery.pins" \

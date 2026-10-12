@@ -6,6 +6,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+tab=$(printf '\t')
 discover="$root/tools/pixel-9a/discover.sh"
 fails=0
 
@@ -199,7 +200,7 @@ run_discovery fastboot_query_absent
 check "dynamic: absent Fastboot value is refused" [ "$status" -eq 5 ]
 unset STUB_FASTBOOT_GETVAR_ABSENT
 
-bad_calls=$(grep -vE '^adb\tdevices\t-l\t$|^adb\t-s\t[^[:space:]]+\tshell\tgetprop\tro\.[^[:space:]]+\t$|^fastboot\tdevices\t-l\t$|^fastboot\t-s\t[^[:space:]]+\tgetvar\t(product|variant|hw-revision|current-slot|slot-count|unlocked|secure|is-userspace)\t$' "$calls" || true)
+bad_calls=$(grep -vE '^adb'"$tab"'devices'"$tab"'-l'"$tab"'$|^adb'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'shell'"$tab"'getprop'"$tab"'ro\.[^[:space:]]+'"$tab"'$|^fastboot'"$tab"'devices'"$tab"'-l'"$tab"'$|^fastboot'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'getvar'"$tab"'(product|variant|hw-revision|current-slot|slot-count|unlocked|secure|is-userspace)'"$tab"'$' "$calls" || true)
 check "dynamic: every stubbed device call was read-only" [ -z "$bad_calls" ]
 [ -z "$bad_calls" ] || printf '%s\n' "$bad_calls"
 

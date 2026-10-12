@@ -238,8 +238,13 @@ update_side_effects() {
   case "${STUB_FULL_STORAGE_ON_UPDATE:-}" in
     readonly) chmod a-w "$restore_dir"/*.txt "$restore_dir" ;;
     enospc)
+      # Swap each transcript for a /dev/full symlink by rename(2), so the
+      # name never disappears. The workflow's background `tee -a` logger
+      # opens the transcript lazily with O_CREAT; with a separate rm and ln
+      # it could recreate a regular file in between, and ln then failed and
+      # left the storage fault unmodelled (seen on Linux CI, #127).
       for transcript in "$restore_dir"/*.txt; do
-        rm -f "$transcript" && ln -s /dev/full "$transcript"
+        ln -s /dev/full "$transcript.enospc" && mv -f "$transcript.enospc" "$transcript"
       done
       ;;
   esac
@@ -625,7 +630,7 @@ check "execute: failed update reports result=failed" grep -q '^result=failed$' "
 check "execute: stage directory is removed after a failed update" [ -z "$(stage_dirs_of update_fail)" ]
 check "execute: failed update stdout never claims completion" sh -c "! grep -q 'factory-restore-complete' '$work/update_fail/stdout'"
 
-bad_calls=$(grep -vE '^adb\tdevices\t-l\t$|^adb\t-s\t[^[:space:]]+\tshell\tgetprop\t[^[:space:]]+\t$|^adb\t-s\t[^[:space:]]+\tget-state\t$|^adb\t-s\t[^[:space:]]+\treboot\tbootloader\t$|^fastboot\tdevices\t-l\t$|^fastboot\t-s\t[^[:space:]]+\tgetvar\t(product|variant|hw-revision|current-slot|slot-count|unlocked|serialno|version-bootloader|version-baseband|is-userspace|secure)\t$|^fastboot\t-s\t[^[:space:]]+\tflash\t(bootloader|radio)\t[^[:space:]]+\t$|^fastboot\t-s\t[^[:space:]]+\treboot-bootloader\t$|^fastboot\t-s\t[^[:space:]]+\t(-w\t)?update\t[^[:space:]]+\t$' "$calls" || true)
+bad_calls=$(grep -vE '^adb'"$tab"'devices'"$tab"'-l'"$tab"'$|^adb'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'shell'"$tab"'getprop'"$tab"'[^[:space:]]+'"$tab"'$|^adb'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'get-state'"$tab"'$|^adb'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'reboot'"$tab"'bootloader'"$tab"'$|^fastboot'"$tab"'devices'"$tab"'-l'"$tab"'$|^fastboot'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'getvar'"$tab"'(product|variant|hw-revision|current-slot|slot-count|unlocked|serialno|version-bootloader|version-baseband|is-userspace|secure)'"$tab"'$|^fastboot'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'flash'"$tab"'(bootloader|radio)'"$tab"'[^[:space:]]+'"$tab"'$|^fastboot'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'reboot-bootloader'"$tab"'$|^fastboot'"$tab"'-s'"$tab"'[^[:space:]]+'"$tab"'(-w'"$tab"')?update'"$tab"'[^[:space:]]+'"$tab"'$' "$calls" || true)
 check "dynamic: the last run used only allow-listed verbs" [ -z "$bad_calls" ]
 [ -z "$bad_calls" ] || printf '%s\n' "$bad_calls"
 
