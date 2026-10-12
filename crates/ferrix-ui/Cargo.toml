@@ -24,4 +24,4 @@ sha2 = "0.10"
 usvg = { version = "0.48", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }
