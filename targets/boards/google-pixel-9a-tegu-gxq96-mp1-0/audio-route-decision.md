@@ -797,8 +797,11 @@ route and a read-only protection-active signal. It found neither and stays
 [safe alternative](#safe-alternative) above: playback proof through a
 Bluetooth A2DP sink, never the internal TAS2572 speakers or earpiece. It is
 fixture-, fake-tool- and fake-guest-tested
-(`just pixel-9a-a2dp-output-preflight-test`). One read-only preflight also
-ran on the exact phone on 2026-10-12 and returned the expected blocked result.
+(`just pixel-9a-a2dp-output-preflight-test`). Probe version 2 ran read-only
+on the exact phone twice on 2026-10-12, both times blocked (see
+[exact-device results](#a2dp-exact-device-results)). Probe version 3 adds
+the [filter and WirePlumber contract](#a2dp-route-source-review-issue-91)
+below. It is offline-tested only and **has not run on the phone**.
 **No playback mode exists.** The
 [active-proof gate](#a2dp-active-proof-gate) below lists what is missing.
 
@@ -825,8 +828,32 @@ ran on the exact phone on 2026-10-12 and returned the expected blocked result.
     `api.bluez5.profile` starts with `a2dp-sink`. Other classes are
     bluez-other (for example HFP/HSP), ALSA (`device.api=alsa` or
     `alsa_output.*`), null (`auto_null` or `support.null-audio-sink`),
-    other, and inspect-failed. It also counts Audio streams and filters,
-    and records the default sink's class and the A2DP sink's codec.
+    other, and inspect-failed. It also counts Audio streams, and records
+    the default sink's class and the A2DP sink's codec. From v3, section
+    headers in `wpctl status` match only at the tree prefix, so a node or
+    stream name ending in `Sinks:` cannot hide later rows. An inspect that
+    prints a reviewed property twice counts as inspect-failed, so a value
+    with an embedded newline cannot forge a property line.
+  - From v3, every Audio filter node is inspected. (`wpctl status` lists
+    link-group members under Filters.) Only the two halves of
+    WirePlumber's BlueZ source loopback are recognised, and only when they
+    are bound to the matched A2DP sink; see the
+    [filter contract](#bluez-source-loopback-filter-contract). Every other
+    filter node is other, unbound, or inspect-failed.
+  - From v3, the WirePlumber daemon. The probe requires all of these:
+    - exactly one process named `wireplumber`, whose argv is only
+      `/usr/bin/wireplumber`;
+    - an environment that sets none of `WIREPLUMBER_{CONFIG,DATA,MODULE}_DIR`
+      or `XDG_{CONFIG,DATA}_{HOME,DIRS}`;
+    - no file in any higher-priority WirePlumber search directory:
+      `~/.config/wireplumber`, `~/.local/share/wireplumber`,
+      `/etc/xdg/wireplumber`, `/etc/wireplumber`, and
+      `/usr/local/share/wireplumber`. The home comes from the daemon's
+      `HOME`, or else `/etc/passwd`;
+    - a `/usr/share/wireplumber` tree of regular files only, whose digest
+      equals the [reviewed package tree](#reviewed-sources).
+
+    Environment values, the home path, and file names are never printed.
   - Whether the A2DP sink's node-name address and `api.bluez5.address`
     agree, and name the one connected Audio Sink device.
   - `amixer cget` of `TDM_0_RX Mixer EP1` and `TAS25XX ASI Switch`. These
@@ -857,7 +884,24 @@ ran on the exact phone on 2026-10-12 and returned the expected blocked result.
   - a reachable graph with exactly one bluez-a2dp sink that names that
     device;
   - zero bluez-other, ALSA, other, or uninspectable sinks;
-  - zero streams and zero filters, and an unambiguous default;
+  - zero streams and an unambiguous default;
+  - zero filters, or (v3) exactly the bound BlueZ source-loopback pair:
+    - one filter group of two nodes, one capture half and one source half;
+    - both naming the matched device and sharing one link group;
+    - nothing unbound, unrecognised, or uninspectable.
+
+    Otherwise the blockers are `audio-filters-present`, followed by each
+    of `filter-inspect-failed`, `unrecognised-filter-present`,
+    `bluez-loopback-not-bound-to-sink`, and `bluez-loopback-pair-incomplete`
+    that applies;
+  - (v3) the reviewed builds, `pipewire-versions-not-reviewed` otherwise:
+    PipeWire, `pipewire-spa-bluez`, and `pipewire-tools` exactly
+    `1.6.8-r4`, and WirePlumber exactly `0.5.15-r0`;
+  - (v3) one WirePlumber daemon, with the reviewed invocation, zero
+    override files, and the reviewed data tree. The matching blockers are
+    `wireplumber-daemon-not-one`, `wireplumber-invocation-unreviewed`,
+    `wireplumber-config-override-present`, and
+    `wireplumber-config-unreviewed`;
   - both watched controls `off`;
   - zero playback PCM openers (`pcmC*D*p`, any card and device) from a
     complete, non-empty `/proc/*/fd` scan. The scan follows the
@@ -871,7 +915,8 @@ ran on the exact phone on 2026-10-12 and returned the expected blocked result.
   the exact board, 5 malformed output. Every run also prints
   `active_proof=not-implemented`, `active_gate=closed`, and
   `audio_capability=unsupported`. `capabilities.toml` is never edited.
-- **Exact-device result.** On the newly staged Kleaf image, the read-only
+- <a id="a2dp-exact-device-results"></a>**Exact-device results (probe v2).**
+  First run: on the newly staged Kleaf image, the read-only
   preflight found BlueZ 5.86-r2, PipeWire 1.6.8-r4, WirePlumber 0.5.15-r0,
   `pipewire-spa-bluez` 1.6.8-r4, and `pipewire-tools` 1.6.8-r4. One powered
   Bluetooth controller was present, but zero audio sinks were paired or
@@ -883,57 +928,207 @@ ran on the exact phone on 2026-10-12 and returned the expected blocked result.
   `bluez-a2dp-sink-count-not-one`. No playback or pairing ran. The redacted
   transcript stays ignored under `out/pixel-9a/a2dp-output-preflight/`.
 
+  Second run, as reported by the session that operates the phone. The
+  image and versions were the same, and one Audio Sink was paired and
+  connected. The graph had:
+  - exactly one bluez-a2dp sink, which was the default, used codec LDAC,
+    and had an address matching that device;
+  - zero ALSA, null, or other sinks, and zero streams.
+
+  The watched controls were off and a complete opener scan found zero. The
+  result was `blocked` solely on `audio-filters-present`, because `wpctl`
+  listed two filter nodes. A follow-up read-only look at their property
+  keys found:
+  - `bluez5.loopback` and `node.autoconnect=true` on both;
+  - `node.dont-fallback=true` on one;
+  - `node.group`, `node.link-group`, `target.object`,
+    `adapt.follower.spa-node`, `media.name`, and `node.virtual`.
+
+  No values containing addresses were saved. That key set matches the
+  source review below. The node names, media classes, link group, and
+  target value were **not** captured. The pair identification is therefore
+  inferred from source, not observed.
+
+### A2DP route source review (issue #91)
+
+Offline review, 2026-10-12, of the exact builds the exact-device runs
+reported. Source and packages were downloaded to a scratch directory
+outside Git and are not committed. Line numbers refer to the tagged
+sources below.
+
+#### Reviewed sources
+
+| Input | Pin | Verification |
+| --- | --- | --- |
+| PipeWire | tag [`1.6.8`](https://gitlab.freedesktop.org/pipewire/pipewire/-/tree/1.6.8) | archive sha512 `afa52e58…79187` equals Alpine's `APKBUILD` |
+| WirePlumber | tag [`0.5.15`](https://gitlab.freedesktop.org/pipewire/wireplumber/-/tree/0.5.15) | archive sha512 `4e27d2d4…475492ea` equals Alpine's `APKBUILD` |
+| Alpine packaging | aports `3.24-stable` (the v26.06 channel's `branch_aports`, `pmos/channels.cfg`): `community/pipewire` 1.6.8-r4 at [`ad5814b3`](https://gitlab.alpinelinux.org/alpine/aports/-/commit/ad5814b3ee6f1aef1ec86c64c973948d7869511d), `community/wireplumber` 0.5.15-r0 at [`adcd5342`](https://gitlab.alpinelinux.org/alpine/aports/-/commit/adcd5342b81044f65eb3a5eaceee3d084ebfb182) | WirePlumber carries no patch; PipeWire's only patch is `systemd-units-wo-libsystemd.patch` (unit files, not routing) |
+| postmarketOS overlay | pmaports `v26.06` ([`1c36715c`](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/1c36715c14a2712bf3746a26dccb0ba5e93a0b2a/main/postmarketos-base-ui)), `postmarketos-base-ui-audio-backend-pipewire` | its only WirePlumber file is `wireplumber.conf.d/50-bluetooth.conf`, which sets `bluez5.hfphsp-backend-native-modem = "any"` (sha256 `417570d7…5ce342`) |
+| Binary packages | Alpine v3.24 aarch64 `wireplumber-0.5.15-r0.apk` (sha256 `6cfe7171…73ed2f`), `pipewire-1.6.8-r4.apk` (`811263c9…e1c1`), `pipewire-spa-bluez-1.6.8-r4.apk` (`91d33e17…f1f0`), `pipewire-tools-1.6.8-r4.apk` (`91ff014e…2f3e`); pmOS v26.06 `postmarketos-base-ui-audio-backend-pipewire-51-r0.apk` (`0d1536de…427cf`) | the apk's `/usr/share/wireplumber` (74 files) is byte-identical to the tagged source's install tree (`src/meson.build:20-24`, `src/config/meson.build:1-2`) |
+
+The probe's `wp_data_sha256` is computed over the union of those two
+packages' `/usr/share/wireplumber` (75 files): the sha256 of the sorted
+`sha256sum ./path` lines, `4be643c4ed1f2ba088dcd7e33dbce325131f1c6aef2a1d1aed7ec64e7c335b79`.
+
+#### Findings
+
+- **S1. The two filters are WirePlumber's BlueZ source loopback.**
+  `src/scripts/monitors/bluez.lua:456-513` (`checkProfiles`) creates one
+  `libpipewire-module-loopback` per connected device that offers a
+  `headset` profile. With `bluetooth.autoswitch-to-headset-profile`, which
+  defaults to `true` (`src/config/wireplumber.conf:873-878`), it does so
+  even while the A2DP profile is active. `CreateDeviceLoopbackSource`
+  (`bluez.lua:412-454`) gives the two halves these properties:
+  - capture half: `node.name = bluez_capture_internal.<address>`,
+    `media.class = Stream/Input/Audio/Internal`, `bluez5.loopback`,
+    `node.passive`, `node.dont-fallback`, `node.linger`, and
+    `target.object = bluez_input.<address with _>.0` (the device's SCO
+    source, named by `getNodeName`, `bluez.lua:233-237`);
+  - source half: `node.name = bluez_input.<address>`,
+    `media.class = Audio/Source`, `bluez5.loopback`, `node.virtual = false`,
+    and `device.id` of the BlueZ device.
+
+  `module-loopback.c:907-912` and `935-939` give both halves one
+  `node.group` and `node.link-group` (`loopback-<pid>-<id>`), set
+  `node.virtual` and `media.name` (`982-987`), and connect both streams
+  with `PW_STREAM_FLAG_AUTOCONNECT` (`751`, `765`). That flag sets
+  `node.autoconnect = true` (`src/pipewire/stream.c:2085-2087`). This
+  matches the key set seen on the phone.
+- **S2. Neither half can carry a playback stream.** The capture half is an
+  input stream that targets a *source*. The source half is a device-type
+  `Audio/Source`. WirePlumber links only stream items
+  (`linking/rescan.lua:45-58`, `checkLinkable`). A playback stream's target
+  direction is a sink (`lib/common-utils.lua:37-48`). With
+  `node.dont-fallback`, a missing SCO source leaves the capture half
+  waiting, not linked elsewhere (`linking/find-defined-target.lua:116-127`,
+  `node.linger`). The pair is the headset-microphone path, not an output
+  path.
+- **S3. `wpctl status` places link-group nodes only under Filters.** Sinks,
+  Sources, and Streams all exclude nodes with `node.link-group`
+  (`src/tools/wpctl.c:494-545`). A filter-chain or loopback *sink* would
+  therefore appear only as a filter. That is why every filter node must be
+  classified, and why no filter count other than this exact pair is
+  accepted. `wpctl inspect` prints each property as `key = "value"`
+  without escaping (`wpctl.c:930`).
+- **S4. Explicit target and fallback.** `pw-cat --target` sets
+  `target.object` only if `--properties` did not already set it
+  (`src/tools/pw-cat.c:2286-2300`, `2494-2495`). `--target 0` means "do
+  not link" and clears autoconnect (`2297-2299`). WirePlumber's
+  `find-defined-target.lua` runs first among the target hooks. It takes
+  `target.object` (`45-48`); a numeric value is matched against
+  `object.serial` (`76-82`). If the target is missing or not linkable and
+  `node.dont-fallback` is set, it destroys the stream with "defined target
+  not found", or keeps it unlinked if `node.linger`, and stops later hooks
+  (`116-127`). So no default, best, media-role, or audio-group target is
+  chosen. Without `node.dont-move`, the `default` metadata's
+  `target.object` for the stream overrides its property (`55-70`).
+  Without `node.dont-reconnect`, `checkFollowDefault`
+  (`lib/linking-utils.lua:170-193`) can convert a stream linked to the
+  default sink into one that follows the default.
+  `node/state-stream.lua:58` and `89-115` restore a stored volume and
+  target unless `state.restore-props` and `state.restore-target` are
+  `false`. `linking/get-filter-from-target.lua:56-75` may redirect a stream
+  with a defined target into a *smart* filter bound to that target. The
+  preflight rejects every filter but the non-smart BlueZ pair.
+- **S5. Target disappearance.** When the bound sink goes away, the link is
+  removed and a rescan re-runs target selection for the stream. Under S4,
+  with `node.dont-fallback` and an `object.serial` target, the stream is
+  destroyed or left unlinked. Serials are never reused within one
+  PipeWire instance, so a reconnected headset does not inherit the stream.
+  `fallback-sink.lua` adds `auto_null` only when no sink exists.
+
+#### BlueZ source-loopback filter contract
+
+Probe v3 recognises a filter node as one half of the pair only when all of
+these hold. The comparison happens in the guest; nothing but counts leaves
+it.
+
+- `bluez5.loopback = "true"` and no `filter.smart` or
+  `stream.capture.sink` property.
+- Capture half: the name is `bluez_capture_internal.<A>`; the media class is
+  `Stream/Input/Audio/Internal`; `node.dont-fallback` and `node.passive`
+  are `true`; and `target.object` is `bluez_input.<A with _>.0`.
+- Source half: the name is `bluez_input.<A>`; the media class is
+  `Audio/Source`; and `device.id` equals the matched A2DP sink's
+  `device.id`.
+- `<A>` (compared case-insensitively) is the address of the one matched
+  A2DP sink. That sink is bluez-a2dp, its node name and
+  `api.bluez5.address` agree, and it is the only connected Audio Sink.
+- Both halves have the same non-empty `node.link-group`. `wpctl` lists
+  exactly one filter group and exactly two filter nodes.
+
+The offline tests reject a wrong device, a wrong `device.id`, no matched
+sink, one half only, split or disagreeing link groups, a third member, an
+extra filter group, a source half that is a sink, a smart filter, a
+capture-sink capture half, a capture half that may fall back, is not
+passive, or targets another source, a missing marker, a vanished or
+incomplete inspect, and a duplicated property. They also cover a stream
+named like a section header.
+
+#### Inference limits
+
+- The pair identification comes from source and the observed key names.
+  The node names, media classes, target, and link group of the two phone
+  filters were not captured. Only a probe-v3 run on the phone can show
+  that the classifier recognises them.
+- The review covers Lua scripts and configuration, which the v3 probe
+  fingerprints, and the C sources named above. It does not cover the
+  installed binaries beyond their apk versions. It does not cover
+  PipeWire's own `pipewire.conf`/`client.conf` drop-ins. It does not cover
+  persistent WirePlumber settings under `~/.local/state`, but S4's
+  properties are honoured regardless of `linking.*` settings.
+- Every check is a snapshot: the graph can change between the preflight
+  and any later stream. BlueZ 5.86-r2 is not in the routing path and was
+  not reviewed.
+
 ### A2DP active-proof gate
 
-A bounded A2DP stimulus/restore mode is **not** implemented. The issue
-allows one only when a fail-closed explicit sink route can be guaranteed.
-That cannot be shown offline:
+A bounded A2DP stimulus/restore mode is **not** implemented, and this
+slice deliberately does not add one. The source review above settles the
+earlier open point: which stream properties keep a stream off every sink
+but its target. But the revised classifier and the exact sink and filter
+shapes have not yet been observed on the phone, and playback code built
+on unobserved shapes would not be fail-closed. Every run prints
+`active_gate_reason=revised-preflight-unobserved-on-target`.
 
-1. **Explicit-target semantics are unverified on the target versions.**
-   `pw-cat --target` sets the stream's target. Whether WirePlumber falls
-   back to the default or another sink depends on the WirePlumber version
-   and its policy properties. Those properties include `node.dont-fallback`,
-   `node.dont-reconnect`, `node.autoconnect`, and the target-object
-   handling. It also matters whether the target is given as a serial or a
-   name. The on-image versions are recorded above, but neither their source
-   nor behaviour was reviewed for this contract. Guessing them would not be
-   fail-closed.
-2. **The A2DP sink shape is unobserved.** No paired device has been seen on
-   this image. The node-name format, the `api.bluez5.profile` value, and
-   the address property are standard PipeWire spellings. They are not yet
-   physical observations. The classifier is fail-closed on them: a
-   different shape reads `bluez-other` or `inspect-failed`, which blocks.
-3. **Stimulus tool presence is established, but routing is not.** The phone
-   has `pipewire-tools`; presence alone does not prove safe playback.
+Design for a later, separately reviewed mode, from S4 and S5:
 
-What a later slice needs, in order:
+- **Preconditions.** The full v3 preflight returns `candidate-observed`
+  in the same session.
+- **Owner decision.** A typed per-run phrase bound to a hash of the
+  observed sink identity, versions, and kernel. The hash never leaves the
+  guest in clear.
+- **Stimulus.** One generated tone of at most 2 s, through
+  `pw-cat --playback --raw` from stdin with a sample count bound, under
+  `timeout`, `--volume` well below 1, and no sink-volume write. The
+  sink's numeric `object.serial` (never `0`) is the target, given as both
+  `--target` and `target.object` in `--properties`, together with
+  `node.dont-fallback = true`, `node.dont-reconnect = true`,
+  `node.dont-move = true`, `node.linger = false`,
+  `state.restore-props = false`, and `state.restore-target = false`.
+- **Independent invariant.** The design must not rely only on those
+  properties. With no ALSA sink in the graph, the worst misroute is the
+  null sink or the same headset, never TAS. The mode polls during the
+  tone and kills the stream if any of these happens:
+  - an ALSA (or any non-bound) sink appears;
+  - a playback PCM fd opens;
+  - a watched control leaves `off`;
+  - the stream links to anything but the bound sink.
 
-- **A candidate physical preflight run.** It needs an owner-paired, connected,
-  A2DP-profile headset or speaker. Pairing goes through Ferrix Settings,
-  and pairing keys stay on the device. No other Bluetooth audio device may
-  be connected, and Android/Waydroid must not be playing. The run must
-  report `candidate-observed`, and the transcript records the exact package
-  versions.
-- **An offline source review** of pinned PipeWire and WirePlumber at those
-  versions. It must name the exact `pw-cat` invocation and stream properties
-  that leave a stream unlinked when its target is missing.
-- **A design that holds even if that review is wrong.** Under the
-  preflight's condition there is no ALSA sink in the graph. The worst
-  PipeWire misroute is then the null sink or the same headset, never the
-  internal speaker. The active mode should rely on that invariant, and not
-  only on the target property. It must:
-  - repeat the full preflight in the same session;
-  - bind a typed per-run phrase to a hash of the observed sink identity,
-    versions, and kernel, which never leaves the guest in clear;
-  - abort and stop the stream if a playback PCM fd opens, if an ALSA sink
-    appears, or if the stream links anywhere but the bound sink;
-  - play one short generated tone, at most 2 s and well below full scale,
-    with no volume write (sink volume is read only, and the run refuses
-    above a pre-registered bound);
-  - finish with a final preflight showing no stream, no PCM opener, and
-    both watched controls still `off`.
-- **A fresh owner decision for each run.** The owner confirms audibility by
-  ear, because the headset output cannot be measured from the phone.
+  An ALSA sink matters because WirePlumber's UCM route selection could
+  run an enable sequence.
+- **Restoration.** A final preflight shows no stream, no PCM opener, and
+  both watched controls still `off`. The mode writes no mixer, default,
+  profile, or volume, so there is nothing else to restore.
+- **Audibility.** The owner confirms it by ear on each run.
+
+The ordered next steps:
+
+1. A probe-v3 read-only run on the phone with the same headset reports
+   `candidate-observed`.
+2. A reviewed active-mode slice implements the design above, with offline
+   tests.
+3. A separate owner decision per run.
 
 The internal speaker and earpiece stay NO-GO under #83/#90. This workflow
 does not change that, and it never falls back to them.
@@ -980,7 +1175,10 @@ or call audio. Speaker playback stays blocked by the
 protection review above. For output, the read-only
 [A2DP preflight](#bluetooth-a2dp-output-preflight-issue-91) (#91) is
 offline-tested and returned the expected blocked result on the exact phone.
-The next preflight needs an owner-paired A2DP device, and no
-playback mode exists until its
-[active-proof gate](#a2dp-active-proof-gate) is closed. Keep `[audio]`
+Probe v2 then blocked on the owner-paired headset only because of two
+filters. The [source review](#a2dp-route-source-review-issue-91) identifies
+them as WirePlumber's BlueZ source loopback, and probe v3 accepts exactly
+that bound pair. The next step is a probe-v3 read-only run. No playback
+mode exists until the [active-proof gate](#a2dp-active-proof-gate) is
+closed. Keep `[audio]`
 unsupported until an audible output route and its routing are proved.

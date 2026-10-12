@@ -1527,7 +1527,10 @@ speakers. It uses the CDC-ACM transport below and sends the exact
 `a2dp-output-preflight-remote.sh` body. That body reads the following:
 
 - BlueZ, with `bluetoothctl list/show/devices Paired/info`;
-- the PipeWire graph, with `wpctl status/inspect`;
+- the PipeWire graph, with `wpctl status/inspect`, including every filter
+  node;
+- the WirePlumber daemon's invocation, its override directories, and a
+  digest of `/usr/share/wireplumber`;
 - package versions, from the apk database file;
 - OpenRC service status;
 - the two internal speaker-path controls, with `amixer cget`;
@@ -1535,14 +1538,17 @@ speakers. It uses the CDC-ACM transport below and sends the exact
 
 It reports counts, classes, versions, and yes/no matches only: no address,
 device name, node name, or serial. The result is `candidate-observed`
-(exit 0) or `blocked` (exit 6) with every reason. Every run prints
-`active_gate=closed`. No playback mode exists, because the on-image
-PipeWire/WirePlumber explicit-target fallback semantics are unverified.
-Checks, limits, and the remaining gate are in
+(exit 0) or `blocked` (exit 6) with every reason. The only filters it
+accepts are WirePlumber's BlueZ source-loopback pair bound to the matched
+A2DP sink, and it requires the reviewed PipeWire 1.6.8-r4 and WirePlumber
+0.5.15-r0 builds and configuration. Every run prints `active_gate=closed`.
+No playback mode exists, because the revised classifier and the sink and
+filter shapes are not yet observed on the phone. Checks, the pinned-source
+review, limits, and the remaining gate are in
 [`audio-route-decision.md`](audio-route-decision.md#bluetooth-a2dp-output-preflight-issue-91).
 Transcripts go to ignored `out/pixel-9a/a2dp-output-preflight/`. Offline
-tests: `just pixel-9a-a2dp-output-preflight-test`. It has not run on the
-phone.
+tests: `just pixel-9a-a2dp-output-preflight-test`. Probe v2 ran on the
+phone and blocked; probe v3 has not run on the phone.
 
 ## CDC-ACM guest probe transport (issue #52)
 
