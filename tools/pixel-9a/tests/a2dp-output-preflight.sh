@@ -21,7 +21,9 @@ probe="$root/tools/pixel-9a/a2dp-output-preflight-remote.sh"
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
 fails=0
 command -v python3 >/dev/null 2>&1 || { echo 'python3 is required for the CDC-ACM transport test' >&2; exit 1; }
-status_before=$(cksum <"$root/docs/status.md")
+# The evidence record is docs/status.md plus every docs/status-log/ month.
+status_sum() { cat "$root/docs/status.md" "$root"/docs/status-log/*.md | cksum; }
+status_before=$(status_sum)
 plan_before=$(cksum <"$root/plans/pixel-9a-daily-phone.md")
 capabilities_before=$(cksum <"$root/targets/boards/$target_id/capabilities.toml")
 
@@ -783,7 +785,7 @@ check "e2e headset: no address, name, node name, or serial in output or transcri
 	sh -c '! printf "%s\n" "$1" | grep -Eiq "66[:_]77|0A[:_]0B|Synthetic|bluez_output|bluez_input|bluez_capture|loopback-|SYNSERIAL" &&
 		! grep -rEiq "66[:_]77|0A[:_]0B|Synthetic|bluez_output|bluez_input|bluez_capture|loopback-|SYNSERIAL" "$2"' sh "$out" "$work/run-e2e-candidate"
 
-check "no test edits docs/status.md" [ "$(cksum <"$root/docs/status.md")" = "$status_before" ]
+check "no test edits docs/status.md or docs/status-log/" [ "$(status_sum)" = "$status_before" ]
 check "no test edits the daily-phone plan" [ "$(cksum <"$root/plans/pixel-9a-daily-phone.md")" = "$plan_before" ]
 check "no test edits capabilities.toml" [ "$(cksum <"$root/targets/boards/$target_id/capabilities.toml")" = "$capabilities_before" ]
 

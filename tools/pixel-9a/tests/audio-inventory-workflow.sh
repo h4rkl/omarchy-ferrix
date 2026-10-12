@@ -16,7 +16,9 @@ probe="$root/tools/pixel-9a/audio-inventory-remote.sh"
 fixtures="$root/tools/pixel-9a/tests/fixtures/audio"
 target_id=google-pixel-9a-tegu-gxq96-mp1-0
 fails=0
-status_before=$(cksum <"$root/docs/status.md")
+# The evidence record is docs/status.md plus every docs/status-log/ month.
+status_sum() { cat "$root/docs/status.md" "$root"/docs/status-log/*.md | cksum; }
+status_before=$(status_sum)
 capabilities_before=$(cksum <"$root/targets/boards/$target_id/capabilities.toml")
 
 check() {
@@ -162,9 +164,9 @@ check "privacy: underscore Bluetooth MAC is hashed" \
 check "privacy: serials are removed" sh -c '! grep -Eq "SYNSERIAL42|SYNAUD0001" "$1"' sh "$transcript"
 check "privacy: cookies are removed" sh -c '! grep -Eq "1234567890|6f6f:aa11" "$1"' sh "$transcript"
 check "privacy: host names are removed" sh -c '! grep -q "ferrix-synth-host" "$1"' sh "$transcript"
-check "inventory: capabilities.toml and status.md are untouched" \
-  sh -c '[ "$1" = "$(cksum <"$3")" ] && [ "$2" = "$(cksum <"$4")" ]' sh \
-    "$status_before" "$capabilities_before" "$root/docs/status.md" \
+check "inventory: capabilities.toml, status.md and status-log are untouched" \
+  sh -c '[ "$1" = "$2" ] && [ "$3" = "$(cksum <"$4")" ]' sh \
+    "$status_before" "$(status_sum)" "$capabilities_before" \
     "$root/targets/boards/$target_id/capabilities.toml"
 
 # --- every interface absent: explicit unavailable/unknown, never success ---
