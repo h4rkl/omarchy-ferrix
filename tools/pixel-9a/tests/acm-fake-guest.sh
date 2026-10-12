@@ -43,8 +43,12 @@ if [ -f "$ctl/header_lines" ]; then
 	body=$ctl/body.$n
 fi
 cmp -s "$body" "$ACM_GUEST_PROBE" || { echo 'stub: probe bytes differ'; exit 97; }
-[ ! -f "$ctl/sleep" ] || sleep "$(cat "$ctl/sleep")"
-[ ! -f "$ctl/flood" ] || awk -v n="$(cat "$ctl/flood")" \
+sleep=$ctl/sleep
+[ ! -f "$ctl/sleep.$n" ] || sleep=$ctl/sleep.$n
+[ ! -f "$sleep" ] || sleep "$(cat "$sleep")"
+flood=$ctl/flood
+[ ! -f "$ctl/flood.$n" ] || flood=$ctl/flood.$n
+[ ! -f "$flood" ] || awk -v n="$(cat "$flood")" \
 	'BEGIN { line = sprintf("%063d", 0); for (i = 0; i < n; i += 64) print line }'
 [ ! -f "$ctl/real" ] || exec /bin/sh "$ctl/stdin"
 # fixture.N / exit.N answer only the Nth run of this guest.

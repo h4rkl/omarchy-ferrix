@@ -5,7 +5,8 @@ inventory findings (2026-10-11, [AoC offline](#physical-finding-2026-10-11-aoc-o
 after #58, [TAS25xx tuning missing](#physical-finding-after-58-tas25xx-tuning-missing);
 after #61, [ALSA card bound](#physical-finding-after-61-alsa-card-bound))
 and a [temporary UCM/route probe](#discovery-only-ucm-profile-issue-2).**
-Nothing here is physical audio playback or capture evidence.
+The physical capture below measured only very low-level PCM; acoustic pickup
+and speaker playback remain unproved.
 `capabilities.toml` keeps `[audio] status = "unsupported"`
 (`capabilities.toml:27-29`). It is written for issue #2; the AoC firmware
 slice is issue #55 and the TAS25xx tuning slice is issue #59.
@@ -24,7 +25,7 @@ audio sources and generated module lists still need review where noted.
 | Loaded modules (dev route) | `initramfs-init-kleaf:371-378` loads all of Kleaf's generated `system_dlkm.modules.load` and `vendor_dlkm.modules.load`. Firmware lookup points at the rootfs while they load. `tools/pixel-9a/dev-compose.py:203-218` copies those lists unfiltered from the Kleaf archives. | Which audio modules are in those generated lists, or whether they probe. The lists are build outputs and are not checked in. |
 | Radio-first route | `modules-vendor-dlkm:1-4` and `modules-system-dlkm:1-3` select no loadable modules. | Applies only to the native radio route. The Kleaf dev route above is a different route. |
 | Firmware | Issue #55 adds one `audio-aoc` controller to `firmware-policy.toml` and one stage row, `vendor.img:/firmware/aoc.bin` → `lib/firmware/aoc.bin` (`firmware-stage-allowlist.tsv`), with an optional runtime row (`pmos/device-google-tegu/firmware-allowlist.tsv`). The physical #58 image brought AoC online. Issue #59 adds the same shape for `audio-tas25xx`: `vendor.img:/firmware/tismartpa_driver_tuning.bin` → `lib/firmware/tismartpa_driver_tuning.bin`, optional at runtime. The `display-audio-touch` controller still has `required_names = []`. `allow_unlisted_paths = false`, and the stage workflow refuses persist or `*calib*` rows. | That the factory TAS tuning parses and initialises the amplifier on this kernel. Haptics (CS40L26) firmware is not staged. No bytes are in Git. |
-| Userspace | The device package depends on `alsa-ucm-conf`, `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD`). The target pmbootstrap config now explicitly lists `alsa-utils` for diagnostics, and the rootfs builder checks its final apk database. It enables `ferrix-pipewire` and `ferrix-audio`. Issue #2 adds a discovery-only UCM profile ([below](#discovery-only-ucm-profile-issue-2)). | A working speaker/mic route or audio stream. The freshly booted `f1c4fdf` image predates the explicit `alsa-utils` dependency and has only Dummy Output. |
+| Userspace | The device package depends on `alsa-ucm-conf`, `pipewire`, `pipewire-spa-bluez`, and `wireplumber` (`pmos/device-google-tegu/APKBUILD`). The target pmbootstrap config explicitly lists `alsa-utils` for diagnostics, and the rootfs builder checks its final apk database. It enables `ferrix-pipewire` and `ferrix-audio`. Issue #2 adds a discovery-only UCM profile ([below](#discovery-only-ucm-profile-issue-2)). | A working speaker/mic route or audio stream. The booted `7be5d5b` image includes `alsa-utils` but still exposes only Dummy Output. |
 | AoC loader | `pmos/device-google-tegu/ferrix-aoc-firmware.initd` is a fail-open OpenRC one-shot, ordered before `ferrix-pipewire`, `ferrix-audio`, and `ferrix-core`. Nothing `need`s it. It writes `aoc.bin` to the AoC `firmware` control once, and only when `revision` reads `Offline` and the staged image matches its manifest row. It has bounded waits. The physical #58 inventory found the service started and AoC online. | That the sound card binds or audio works. Offline tests also cover the service failure paths (`tools/pixel-9a/tests/aoc-firmware-runtime.sh`). |
 | Services | `ferrix-pipewire.initd:6-18` runs PipeWire as `user` after `ferrix-radio-firmware`. `ferrix-audio.initd:13-49` runs WirePlumber and waits up to 10 s for `wpctl status`. `docs/status.md:517-521` records only that both are supervised and respawn. | Any ALSA node in the PipeWire graph. A running daemon is not an audio device. |
 | Android audio | Waydroid audio goes through `pipewire-pulse` (`pmos/android/packages:11-23`). | Any hardware output. With no ALSA sink, it reaches only whatever PipeWire offers. |
@@ -442,6 +443,152 @@ output, and mic capture each need a separate, owner-approved active test at
 low volume. That test needs captured audio as evidence and comes after the
 amplifier is identified. Call audio stays blocked on telephony.
 
+## Microphone capture proof workflow (issue #2, physical PCM capture)
+
+`just pixel-9a-mic-capture-proof` (`tools/pixel-9a/mic-capture-proof.sh`,
+guest body `mic-capture-proof-remote.sh`) is the checked-in first active
+audio test. It is fixture- and fake-guest-tested
+(`just pixel-9a-mic-capture-proof-test`). Its preflight and one approved
+capture ran on the exact phone, with the limits below.
+
+- **Scope.** It writes one control, `EP1 TX Mixer INTERNAL_MIC_TX`
+  (internal-mic back end to the EP1 capture front end), and records from
+  PCM 8, the UCM `Mic` device. It never writes `TDM_0_RX Mixer EP1`, any
+  `TAS25XX` control, any volume or limiter, and never plays audio. Those two
+  speaker-side controls are only read, before and after.
+- **preflight** (default, read-only) checks the exact device tree, the pinned
+  Kleaf kernel, root, alsa-utils `amixer`/`arecord`, `od` byte order, and
+  one card whose driver is `aoc-snd-card`. It then checks that the
+  microphone control is a single rw `BOOLEAN` reading `off`, that both
+  speaker-side controls read `off`, and that no proof directory is left over.
+  PCM 8 is identified as follows:
+  - **Listing.** Every `/proc/asound/pcm` line must carry the kernel's
+    `CC-DD: ` prefix. Exactly one may be `00-08`. It must split on ` : `
+    into id, name, and one `capture N` field, all within the reported
+    character set. The id must be exactly `EP1 capture (*)` (the dynamic
+    `fe_ep1_tx` front end, observed below), with one substream. A duplicate
+    line is `ambiguous`. Extra fields, a bad prefix, or bad characters are
+    `malformed`. A `playback` or bidirectional entry fails the direction
+    check.
+  - **Cross-check.** `arecord -l` lists capture devices through the control
+    device without opening a PCM. It must have exactly one `card 0 …
+    device 8` line with the same id and name. Its `Subdevices: 1/1` must
+    show every substream unopened, as counted by the kernel.
+  - **Procfs.** If `/proc/asound/card0/pcm8c` exists, its `info` and
+    `sub0/status` must both be readable. `info` must agree with the listing
+    (stream, id, name, substream count), and the status must read `closed`.
+    If the directory does not exist, the state is reported as
+    `not-exposed`, which is never read as closed. A directory missing its
+    files is `partial`, and the preflight refuses.
+  - **Openers.** No `/proc/*/fd` link may target a file named `pcmC0D8c` in
+    any directory, so a node seen through another mount namespace still
+    counts. The scan must be complete: at least one fd table listed, no
+    timeout, and no `ls` complaint other than a process that exited
+    mid-scan.
+- **Typed confirmation.** The capture phrase embeds the first 12 hex digits
+  of a binding: SHA-256 of the card driver, PCM 8's listing key, id, name,
+  direction, substream count and procfs exposure, the microphone control
+  numid, and the kernel release. A phrase from an earlier
+  preflight fails if any of those changed. The guest checks the full binding
+  again and repeats every preflight check before it changes anything.
+- **capture** creates `/run/ferrix-mic-capture-proof` (0700). It writes the
+  route `on`, verifies the write, and runs
+  `timeout 8 arecord -D hw:0,8 -t raw -f S16_LE -r 48000 -c 2 -d 2`. It then
+  writes back the recorded original `off`, verifies it, and only then
+  measures the file. Last, it deletes the file and checks that both
+  speaker-side controls still read `off`. It also checks that PCM 8 is back
+  in its preflight state (`closed` or `not-exposed`) with no fd or
+  kernel-counted opener. An
+  EXIT/HUP/INT/TERM trap restores the route and deletes the file. The
+  transport's Ctrl-C on timeout reaches that trap. If the transport fails,
+  the host loses the session output. It then runs one read-only preflight to
+  observe the route and directory. `restore` (its own fixed phrase) writes
+  `off` to the same control only if it reads `on`.
+- **Measurement.** The recording is raw, so every counted byte is PCM; a
+  `RIFF` header is refused rather than skipped. The guest returns per-channel
+  min/max/mean, AC RMS (DC removed), zero and clipped counts, leading zero
+  frames, and 100 ms window AC RMS range. No sample or audio content leaves
+  the guest, and the transcript stays in ignored
+  `out/pixel-9a/mic-capture-proof/`. The host classifies the result:
+  `digital-silence`, `constant-level` (AC RMS < 0.5 LSB), `saturated` (> 1 %
+  clipped), `non-silent-low-level` (< 32 LSB, about −60 dBFS), or
+  `non-silent-signal`. A short recording gets a `short-capture-` prefix, and
+  a failed one is `capture-failed-*`.
+- **What a pass would mean.** A non-silent class shows that the AoC capture
+  path delivered varying samples through PCM 8. It does not prove acoustic
+  pickup. That needs a controlled stimulus, such as two captures with and
+  without a known sound, and stays out of this slice. `[audio]` stays
+  `unsupported`, and the workflow never edits `capabilities.toml`.
+- **Physical read-only preflight** (PM-run on
+  `physical:google-pixel-9a-tegu-gxq96-mp1-0`, booted audio-tools image,
+  pinned kernel; no capture attempted). The earlier probe refused safely
+  because this kernel has no `/proc/asound/card0/pcm8c/info` or
+  `sub0/status`. `/proc/asound/card0` holds only `id`, `aoc_aocdump_state`,
+  and `aoc_audio_state`. `/proc/asound/pcm` has the exact line
+  `00-08: EP1 capture (*) :  : capture 1`, so the name is empty.
+  `arecord -l` shows `card 0: googleaocsndcar [google,aoc-snd-card],
+  device 8: EP1 capture (*) []`, `Subdevices: 1/1`. There was one AoC card,
+  the tools were correct, and no process held the PCM. The `amixer cget`
+  shape parsed correctly: `EP1 TX Mixer INTERNAL_MIC_TX` is numid 365,
+  `BOOLEAN`, `rw------`, `off`, and `TDM_0_RX Mixer EP1` and
+  `TAS25XX ASI Switch` read `off`. The listing-based identification above
+  was written for this shape and is fake-guest-tested against it. The
+  revised read-only preflight then passed on the image composed from
+  `674157b` (manifest SHA-256
+  `03516f711bcb84d3f3c6029f29ee98ad6a31c7a1384f33a56cf6a164a662d407`):
+  `pcm_procfs=not-exposed`, `Subdevices: 1/1`, zero fd openers, complete
+  opener scan, and both speaker-side controls off. Why the kernel lacks
+  per-PCM procfs (likely `CONFIG_SND_VERBOSE_PROCFS` off) is not traced.
+- **One owner-approved capture** on that same exact device recorded 384000
+  raw bytes (96000 frames) from `hw:0,8` at S16_LE 48 kHz stereo. The mic
+  route returned to `off`, the temporary file was deleted, PCM 8 had no
+  opener afterwards, and both speaker-side controls stayed `off`;
+  `anomalies=none`. Channel 0 AC RMS was 2.23 LSB (max-channel −83.3 dBFS)
+  and channel 1 was digital zero. `non-silent-low-level` means the AoC path
+  supplied varying PCM bytes. No controlled sound was used, so whether the
+  internal microphone responds acoustically is still unknown.
+- **Unverified on hardware.** Whether PipeWire/WirePlumber opens PCM 8 once the route
+  is on: the earlier temporary probe needed a WirePlumber restart, and a
+  busy PCM is classified `capture-failed-busy`. Whether DPCM prepare succeeds
+  at 2 ch/48 kHz/S16_LE on `hw` without `plughw`. Whether the AoC start/stop
+  of the mic endpoints has side effects. The Linux AoC firmware's own mic
+  gain, and whether a mic needs a bias or power control that this route
+  does not cover.
+
+## Speaker playback safety review (issue #2)
+
+The checked-in records were reviewed read-only, together with a local,
+uncommitted copy of pinned `amplifiers` `33976d76…` `tas25xx/`, `aoc`
+`ac69293d…`, and tegu `6276884d…` (plus a zumapro checkout at `8831630e…`,
+which is not a recorded pin). They do **not** show speaker
+playback is safe, so no speaker test is implemented.
+
+- The tegu DT binds two TAS2572 channels (`0x48`, `0x49`) to `TDM_0_RX`/`TX`.
+  `TDM_0_TX` presumably carries the amplifier's I/V sense back to AoC. On
+  Pixel, closed-loop speaker protection is expected to run in the AoC DSP
+  under Android's audio HAL rather than in this kernel driver. That is not
+  verified from source. A grep of the pinned `aoc` tree finds no Linux-side
+  speaker-protection or calibration control.
+- The driver's protection and calibration code (`algo/`: `TAS25XX_ALGO`,
+  calibration, `smartamp_calib.bin`) is compiled only under
+  `CONFIG_TAS25XX_ALGO`. That symbol has no default. The tegu
+  `tegu_defconfig` and `BUILD.bazel` and the zumapro `zumapro_defconfig`
+  name no `TAS25XX` symbol at all. Where Kleaf enables `SND_SOC_TAS25XX` was
+  not traced, so `ALGO` being off is likely but unproven. Per-unit calibration
+  (`/persist/audio/smartamp_calib.bin`, `speaker.cal`) is deliberately not
+  staged.
+- `TAS25XX ASI Switch`, the limiter switches and most other TAS controls are
+  not defined in driver source. They come from the factory tuning file's
+  `KCNTR` block, so their register effects are opaque bytes. Only
+  `TAS25XX CODEC PROFILE` is a driver control.
+- On Linux the observed limiter switches read `off` and the TAS playback
+  volumes read `110`/`116`. Whether AoC applies any protection without the
+  Android HAL's calibration handshake is unknown.
+
+Speaker playback stays blocked until a separate owner-approved slice
+records that AoC protection state, chooses a bounded low-level stimulus, and
+defines how the TAS profile, ASI, and limiter states are restored.
+
 ## Unknowns
 
 - Whether the pinned `aoc` tree builds an ALSA/ASoC machine driver for tegu,
@@ -474,9 +621,11 @@ amplifier is identified. Call audio stays blocked on telephony.
 ## Next physical slice
 
 The read-only `audio-inventory.sh` and its mock tests are checked in. The
-AoC card and UCM profile were observed on the exact target, and the first
-PipeWire-provider image exposed only Dummy Output. The running image lacks
-`alsa-utils`; the next build explicitly includes it. Repeat the read-only
-inventory, then use the recorded mixer controls for a bounded route and
-stream trial. Keep `[audio]` unsupported until speaker playback and
-non-silent microphone capture are observed on this phone.
+AoC card and UCM profile were observed on the exact target. The revised
+preflight and one bounded capture have passed on the `674157b` image, but
+the very low channel-0 level and silent channel 1 do not establish acoustic
+pickup. A separate approved controlled-stimulus test should compare quiet
+and known-sound captures and investigate the channel split. Recheck the
+PipeWire graph on the new image. Speaker playback stays blocked by the
+protection review above. Keep `[audio]` unsupported until both an audible
+output route and actual acoustic microphone response are observed.

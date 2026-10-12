@@ -480,6 +480,21 @@ pixel-9a-audio-inventory-test:
 pixel-9a-audio-ucm-test:
     @sh "{{root}}/tools/pixel-9a/tests/audio-ucm-profile.sh"
 
+# Issue #2 internal-microphone capture proof on a booted exact Ferrix dev
+# guest over its CDC-ACM bring-up shell. `preflight` (the default) is
+# read-only and prints the per-run typed confirmation bound to the observed
+# card, PCM 8, mixer numid, and kernel. `capture` with that phrase in
+# FERRIX_PIXEL9A_MIC_CAPTURE_CONFIRM sets only `EP1 TX Mixer INTERNAL_MIC_TX`
+# on, records at most 2 s of raw S16_LE 48 kHz stereo from hw:0,8 under guest
+# /run, restores the route, measures the PCM bytes, and deletes the file.
+# `restore` (FERRIX_PIXEL9A_MIC_RESTORE_CONFIRM) puts that one route back to
+# off. Never plays audio or writes a speaker, amplifier, or volume control.
+pixel-9a-mic-capture-proof *args:
+    @sh "{{root}}/tools/pixel-9a/mic-capture-proof.sh" {{args}}
+
+pixel-9a-mic-capture-proof-test:
+    @sh "{{root}}/tools/pixel-9a/tests/mic-capture-proof.sh"
+
 # Read-only issue #34 filesystem inventory of the four S5300 modem source
 # partitions on a booted exact Ferrix dev guest over its CDC-ACM bring-up
 # shell. Never mounts or writes, and never reports the safety gate as passed.
