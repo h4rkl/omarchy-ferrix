@@ -1230,15 +1230,19 @@ An existing mount at a destination is accepted only if it passes the same
 refused. `stop` first verifies every mounted destination the same way and
 refuses, before any unmount or detach, anything that is not exactly the
 read-only loop over that destination's source. It then unmounts each
-destination without forcing and detaches that loop only once nothing mounts
-it. It never clears the partitions' `ro` flag. The device package now also
+destination without forcing and runs `losetup -d` on that loop only once
+nothing mounts it. It never clears the partitions' `ro` flag. On the exact
+device (2026-10-12, S2 run), `stop` returned 0 and left no mount, but all
+four role loops stayed attached (`autoclear=1`, no holders) until a reboot.
+A successful `losetup -d` does not prove the loop was detached. The device package now also
 depends on `util-linux-misc` (which ships `/sbin/blockdev` on Alpine) and
 `losetup`.
 
 Known limits of the service change:
 
 - Detaching does not clear a loop's `ro=1`, so every start and stop cycle
-  uses up four loops whose `ro` reads 0 until the next reboot. With the GKI
+  uses up four loops whose `ro` reads 0 until the next reboot. On the
+  device the role loops also stayed attached after `stop` (above). With the GKI
   default of 16 loop devices, roughly four cycles leave none, and `start`
   then refuses. A start that fails partway leaves the sources it already
   mounted in place, still verified. OpenRC then keeps the modem services

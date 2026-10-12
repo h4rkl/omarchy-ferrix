@@ -13,7 +13,14 @@ Question reviewed: do the current OpenRC services
 (`ferrix-s5300-cpif.sh`) already make a fail-closed, one-shot S2 workflow
 possible, with no change to the accepted service or its pin?
 
-**Conclusion: not yet.** No active S2 command is checked in. The gaps below
+**Conclusion: not yet.** No active S2 command is checked in.
+
+**Update 2026-10-12.** The owner approved one manual S2 run on the 1-r3
+image (`physical:google-pixel-9a-tegu-gxq96-mp1-0`). The CP stayed `ONLINE`
+for about 13.9 minutes of samples, with no panic. RFS service could not be
+observed. That run did not change this conclusion. It answered some
+questions below, and the answers are marked inline. The full record is in
+[`s5300-s2-preflight.md`](s5300-s2-preflight.md#exact-device-s2-active-cp-boot-on-the-1-r3-image-2026-10-12). The gaps below
 must be closed, or explicitly accepted by the owner, first. The read-only
 preflight ([`s5300-s2-preflight.md`](s5300-s2-preflight.md)) stays the only
 checked-in S2 workflow.
@@ -37,7 +44,10 @@ checked-in S2 workflow.
    stopping `ferrix-s5300-mounts` touches services that only `use` it. A
    teardown that must be verified by its outcome needs these semantics first.
    A read-only, device-side characterisation can supply them. It must not
-   start any S5300 service.
+   start any S5300 service. *Partly observed in the 2026-10-12 manual run:
+   `arm` worked on a stopped service, the token was used once, and `stop`
+   on a live pidfile daemon returned 0. A failed or killed `start_pre`, and
+   stop on a crashed daemon, are still unobserved.*
 3. **The opener scan lacks a positive control on the device.** *(Offline fix in #107, `device-google-tegu` 1-r4; open until a rebuilt image passes on the exact phone.)* The scan
    matches holders by `stat -L` device number on every thread's fd table, and
    it fails closed on unreadable entries. On the one exact-device run it
@@ -80,7 +90,13 @@ checked-in S2 workflow.
      observable.
    - Kernel-log crash signatures for Google CPIF have not been reviewed, so
      any crash classifier would be a heuristic.
-   - Whether the CP returns to `OFFLINE` after the daemon stops is unknown.
+   - *Answered 2026-10-12:* the CP does **not** return to `OFFLINE` after
+     the daemon stops. It stayed `ONLINE` until a reboot. Stopping
+     `ferrix-s5300-mounts` also left the four role loop devices attached
+     (`autoclear=1`, no holders). A teardown therefore ends with a reboot.
+   - Known-benign kernel-log keyword hits (CPIF `bootdump_*`,
+     `crash_reason type:65535`, Wi-Fi `dhd_dump_*`) are listed in the
+     preflight record. They are not yet a reviewed crash-signature list.
 
 ## What is already sufficient
 
