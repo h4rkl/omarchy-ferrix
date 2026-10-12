@@ -16,6 +16,41 @@
   bounded active workflow, owner decision, and audible proof remain pending.
   Internal TAS playback remains NO-GO and `[audio]` stays `unsupported`.
 
+## 2026-10-12 (S5300 CPIF staging; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- A new postmarketOS product/rootfs and seven-image development bundle were
+  built from reviewed source commit `1b70e3a` on the native x86_64 builder,
+  using the pinned Kleaf kernel and factory firmware allowlist. The bundle
+  (`tegu-kleaf-dev-20261012T042324Z`) was transferred with all seven artifact
+  hashes checked against its ignored manifest. The checked-in recovery-gated
+  flash preflight passed on the single exact unlocked device with the tested,
+  hash-verified stock restore available. Six slot-B images and `userdata`
+  were flashed through `just pixel-9a-dev-flash`; the device rebooted into
+  Ferrix on the pinned 6.1.124 kernel. No bootloader or radio partition was
+  written.
+- On the booted phone, `device-google-tegu` 1-r2, `exynos-modem`
+  0.1.0_git20260731-r3, and `modemmanager-samsung-sit`
+  1.25.95_git20260731-r3 were installed. All seven entries in the installed
+  S5300 service/source hash manifest matched. `ferrix-s5300-mounts`,
+  `exynos-modem`, and `sit-proxy` were stopped and absent from default
+  runlevels; the arm token was absent. `/run` was tmpfs and both `/` and
+  `/run` were root-owned mode 0755. The checked-in `exynos-modem provision`
+  action created `/run/exynos-modem` as a real root-owned mode 0700 directory
+  on that tmpfs; the services remained stopped.
+- The target preflight refused at its intentional source-mount gate, asking
+  for manual `ferrix-s5300-mounts` start. No source was mounted and no CPIF
+  node was opened. The E1 read-only inventory again returned `go`: required
+  nodes/modules were present and CP was `OFFLINE`. The separate read-only
+  mount preflight found the current-slot modem source and all three per-unit
+  sources unique, unmounted, unheld and of expected filesystem types, with
+  `preflight_problems=none`. It made no mounts; its policy result remains
+  `owner-review-required`, consistent with the earlier accepted #34 proof.
+  Aggregate transcripts and generated images remain ignored under `out/`.
+  This proves #81 runtime scratch staging and #88 package/service staging,
+  not CP boot, NV validity, SIM recognition, registration, data, SMS or calls.
+  `[telephony]` remains `unsupported`; #92 owns a separate bounded manual
+  CP boot workflow and fresh decision.
+
 ## 2026-10-12 (controlled-tone microphone pickup; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - After the owner's separate one-run approval and documented Mac-speaker setup,

@@ -113,11 +113,14 @@ the project must not silently call that a fully functioning Pixel 9a.
   [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79) found both required
   NV files regular and exactly `0x80000` bytes, with clean read-only-loop
   teardown. This meets the TOC size gate only. [#81](https://github.com/h4rkl/omarchy-ferrix/issues/81)
-  moved private NV scratch output to `/run/exynos-modem` in source, but
-  the package and exact-device ownership proof remain. [#88](https://github.com/h4rkl/omarchy-ferrix/issues/88)
-  stages the CPIF service and explicit preflight. It passed offline checks;
-  a fresh postmarketOS rootfs/image and physical package proof are next,
-  without starting CP. [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92)
+  moved private NV scratch output to `/run/exynos-modem`; the exact phone now
+  proves that directory is root-owned mode 0700 on tmpfs.
+  [#88](https://github.com/h4rkl/omarchy-ferrix/issues/88) staged the CPIF
+  service in a fresh postmarketOS image from `1b70e3a`. The image booted on
+  the exact phone; installed package hashes matched, services stayed off,
+  read-only source and E1 checks passed, and the deliberate preflight stopped
+  at the unstarted source mounts. CP remained `OFFLINE`.
+  [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92)
   owns the bounded manual CP boot workflow, opener-scan hardening, stop order,
   and fresh owner decision after the staging proof.
   The source review also found that the Rust seven-byte FMT
@@ -140,8 +143,8 @@ the project must not silently call that a fully functioning Pixel 9a.
   with Rust, native sandbox and headless QEMU checks passing. These are
   protocol fixes; they do not prove a working carrier, SIM, call or SMS on
   the Pixel.
-- Next dependency order: deploy and prove the #81/#88 packages, then a
-  separately reviewed manual CP boot trial; establish Bluetooth output and
+- Next dependency order: review the #81/#88 physical staging evidence, then
+  a separately reviewed manual CP boot trial; establish Bluetooth output and
   a measured mic path while #90 resolves internal-speaker protection; bring
   up the modem and carrier data;
   then complete SMS, calls with two-way audio, power
