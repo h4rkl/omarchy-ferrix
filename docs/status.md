@@ -1,5 +1,35 @@
 # Status
 
+## 2026-10-12 (S5300 S2 read-only preflight, issue #92; offline only)
+
+- New checked-in `just pixel-9a-s5300-s2-preflight`
+  (`tools/pixel-9a/s5300-s2-preflight.sh` and `-remote.sh`) for the exact
+  Pixel 9a. It runs one read-only CDC-ACM session made of the pinned issue #92
+  alias-aware CPIF library plus a guest body. It reports `go`/`no-go`/
+  `incomplete` with a `pre-mount`/`post-mount` phase, and writes an ignored
+  0600 transcript and JSON summary.
+- Device checks: identity, slot, kernel, backend, installed package files
+  and releases against the checked-in 1-r3 (image skew), CP `OFFLINE`, nodes,
+  a complete opener scan, OpenRC state, runlevels and overrides, the arm token,
+  pidfiles, `/run` and scratch, and stale or partial source mounts.
+- Host recovery artifacts are reported separately from device facts. The
+  source and NV checks are deferred until an owner-approved manual mounts
+  start.
+- It opens no CPIF node, writes nothing, starts, mounts, provisions or arms
+  nothing, and always reports `cp_boot_authorized=no` and
+  `active_s2_workflow=not-implemented`.
+- On the installed 1-r2 image it is expected to return `no-go` for
+  `file-s5300-cpif.sh` and `pkg-device-google-tegu` skew until a rebuilt
+  image is flashed. Whether bootconfig carries the hardware revision is
+  unobserved.
+- The partial-mount path of the unchanged, #34-accepted
+  `ferrix-s5300-mounts` was reviewed. A failed start leaves earlier read-only
+  loop mounts in place with no checked-in teardown. A characterisation test
+  now pins that behaviour, and a rollback contract is proposed in
+  `s5300-s2-preflight.md`; until then the rule is to reboot.
+- Offline tests pass. No phone, USB, ADB/Fastboot, builder, service, or CP was
+  touched, and no physical or CP boot evidence exists. `[telephony]` remains
+  `unsupported`.
 ## 2026-10-12 (A2DP route source review and preflight v3; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - Probe v2 ran on the exact phone with one paired, connected Audio Sink
