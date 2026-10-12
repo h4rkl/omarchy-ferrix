@@ -133,35 +133,24 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
-      - name: Pixel CDC-ACM inventory contracts (mock)
+      # Every offline Pixel 9a test under tools/pixel-9a/tests/ (stubbed
+      # adb/fastboot/guest; no device). The runner discovers the tests, so a
+      # new tests/<feature>.sh or .py is gated here without a CI edit. gawk
+      # and busybox let the S5300 services test exercise every awk it
+      # supports; e2fsprogs backs the dev-compose ext4 staging check. The
+      # adapter test fetches the hash-pinned exynos-modem archive and
+      # Cargo.lock crates, applies the target-local patches, and runs the
+      # patched tests and CLI contract natively. Evidence label: mock.
+      - name: Install Pixel 9a offline test tools
         run: |
-          sh tools/pixel-9a/tests/acm-probe.sh
-          sh tools/pixel-9a/tests/audio-inventory-workflow.sh
-          sh tools/pixel-9a/tests/mic-capture-proof.sh
-          sh tools/pixel-9a/tests/mic-acoustic-proof.sh
-          sh tools/pixel-9a/tests/a2dp-output-preflight.sh
-          sh tools/pixel-9a/tests/a2dp-active-proof.sh
-          sh tools/pixel-9a/tests/s5300-source-inventory.sh
-          sh tools/pixel-9a/tests/s5300-cpif-inventory.sh
-          sh tools/pixel-9a/tests/s5300-mount-proof.sh
-          sh tools/pixel-9a/tests/s5300-nv-metadata.sh
-          sh tools/pixel-9a/tests/s5300-mounts-service.sh
-          sh tools/pixel-9a/tests/s5300-cpif-services.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gawk busybox e2fsprogs
 
-      # Fetches the hash-pinned exynos-modem archive and Cargo.lock crates,
-      # applies the target-local patches, and runs the patched tests and CLI
-      # contract natively. No device or modem node is involved.
-      - name: Pixel S5300 CPIF adapter patches (offline contract)
+      - name: Pixel 9a offline tests (mock)
         env:
           FERRIX_S5300_ADAPTER_FETCH: "1"
           FERRIX_S5300_ADAPTER_FULL: "1"
-        run: sh tools/pixel-9a/tests/exynos-modem-cpif-adapter.sh
-
-      - name: Pixel AoC firmware loader (mock)
-        run: sh tools/pixel-9a/tests/aoc-firmware-runtime.sh
-
-      - name: Pixel AoC UCM profile (offline)
-        run: sh tools/pixel-9a/tests/audio-ucm-profile.sh
+        run: sh tools/pixel-9a/test-offline.sh
 
   sandbox-check:
     name: Native sandbox (privileged container, arm64)
