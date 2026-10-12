@@ -73,9 +73,10 @@ the project must not silently call that a fully functioning Pixel 9a.
   one owner-approved capture returned 384000 PCM bytes with a very low
   channel-0 signal and digital silence on channel 1. This proves varying
   PCM data, not acoustic pickup. [#80](https://github.com/h4rkl/omarchy-ferrix/issues/80)
-  adds an offline-tested controlled-tone microphone workflow. Its exact-device
-  read-only preflight passed; a new active run needs its own owner decision
-  and physical setup.
+  added the controlled-tone microphone workflow. After a separate owner
+  approval, one exact-device 2 s run detected the Mac speaker's gated tone on
+  channel 0 and verified route and recording cleanup. This is physical
+  internal-mic pickup evidence; sensitivity and call audio remain unproven.
   The new image still exposes only Dummy Output with no usable ALSA source.
   [#83](https://github.com/h4rkl/omarchy-ferrix/issues/83) reviewed the
   pinned source and effective TAS modules and decided **NO-GO** for internal
@@ -128,7 +129,8 @@ the project must not silently call that a fully functioning Pixel 9a.
   device exists, and 30 `rmnet*` netdevs exist before CP boot. The probe
   opened no CPIF node. This is pre-boot kernel evidence only; the adapter's
   physical integration and runtime CP boot trial remain; the #79 NV size gate
-  is met without showing firmware acceptance.
+  is met without showing firmware acceptance. The owner reports a SIM is
+  physically inserted; no Ferrix SIM-detection claim follows before CP boot.
 - The telephony subscribe race [#66](https://github.com/h4rkl/omarchy-ferrix/issues/66)
   was closed by [PR #67](https://github.com/h4rkl/omarchy-ferrix/pull/67).
   The separate snapshot/event gap [#68](https://github.com/h4rkl/omarchy-ferrix/issues/68)
