@@ -75,3 +75,9 @@ modem_loader = "exynos-modem"
 proxy = "sit-proxy"
 modemmanager = "modemmanager"
 ordering = "mounts -> exynos-modem -> sit-proxy -> modemmanager"
+# No S5300 service is linked into a runlevel, and ModemManager only orders
+# after them (`use`), so nothing starts them at boot on either backend.
+# google-kleaf-cpif also needs `rc-service exynos-modem preflight`, then
+# `arm`, then a manual start; see ../../s5300-cpif-integration.md.
+start_policy = "manual-only"
+kernel_backends = ["linux-google-tegu-wwan", "google-kleaf-cpif"]

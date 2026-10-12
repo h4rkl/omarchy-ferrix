@@ -575,6 +575,14 @@ pixel-9a-s5300-mounts-test:
 pixel-9a-s5300-cpif-adapter-test:
     @sh "{{root}}/tools/pixel-9a/tests/exynos-modem-cpif-adapter.sh"
 
+# Offline contract of the exact Pixel S5300 service integration (issue #88):
+# per-backend exynos-modem/sit-proxy CLI, the manual-only google-kleaf-cpif
+# preflight/provision/arm/start path, package hash pins, no runlevel links,
+# ModemManager ordering, and the Kleaf composer's backend pairing. CPIF nodes
+# are FIFO stand-ins that block if opened. Not physical evidence.
+pixel-9a-s5300-cpif-services-test:
+    @sh "{{root}}/tools/pixel-9a/tests/s5300-cpif-services.sh"
+
 # Generic, vendor-agnostic read-only device front door. Discovery only uses
 # adb devices/getprop and fastboot devices/getvar; matching, proposing, and
 # pinned downloads never contact a device. Mutation lives only in target-scoped

@@ -1,5 +1,24 @@
 # Status
 
+## 2026-10-12 (S5300 CPIF service staging, issue #88; offline only)
+
+- The exact Pixel 9a package now selects the reviewed Google Kleaf CPIF CLI
+  and private `/run/exynos-modem` scratch path in the development image.
+  `ferrix-s5300-mounts`, `exynos-modem`, and `sit-proxy` remain absent from
+  the default runlevel. On CPIF, OpenRC uses optional ordering dependencies
+  for the source mounts and modem daemon; a manual start cannot auto-start
+  them before its explicit preflight and one-use arm gate. The legacy WWAN
+  route retains its required dependencies. The accepted #34 mount service
+  is unchanged.
+- The target-local preflight pins installed service files and package version,
+  the exact kernel and CPIF surface, source mount verification, NV file size,
+  and private scratch metadata. Offline checks passed: 98 CPIF service cases,
+  the rootfs and accepted mount workflow suites, and the patched modem/SIT
+  adapter tests. OpenRC behavior, the new packages, and scratch ownership
+  still require proof in a fresh image on the exact phone. No new image was
+  built or flashed in this code slice; no mount, CP node, or modem service was
+  started. Telephony remains unsupported.
+
 ## 2026-10-12 (speaker protection NO-GO; exact Pixel source and effective image review)
 
 - Issue #83's read-only source and built-module review found that neither the

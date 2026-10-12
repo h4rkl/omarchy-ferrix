@@ -5,16 +5,69 @@ export FERRIX_TARGET FERRIX_EVIDENCE FERRIX_TELEPHONY_BACKEND FERRIX_S5300_KERNE
 
 name="Exynos SIT port multiplexer"
 description="Owns S5300 SIT ports and exposes root-only Unix sockets"
-supervisor=supervise-daemon
 command=/usr/sbin/sit-proxy
-command_args="--dev /dev/wwan0sit0 --dev /dev/wwan0sit1 --socket-dir /run/sit-proxy"
-respawn_delay=2
+case "${FERRIX_S5300_KERNEL_BACKEND:-}" in
+	linux-google-tegu-wwan)
+		supervisor=supervise-daemon
+		command_args="--dev /dev/wwan0sit0 --dev /dev/wwan0sit1 --socket-dir /run/sit-proxy"
+		respawn_delay=2
+		;;
+	google-kleaf-cpif)
+		# Google Kleaf CPIF FMT channels 245/246 (patch 0002). The nodes exist
+		# before CP boot, so there is nothing to wait for and no respawn.
+		command_args="--kernel-backend google-kleaf-cpif --dev /dev/umts_ipc0 --dev /dev/umts_ipc1 --socket-dir /run/sit-proxy"
+		command_background=yes
+		pidfile=/run/sit-proxy.pid
+		;;
+	*)
+		command_args=
+		;;
+esac
+extra_commands="preflight"
+description_preflight="Read-only google-kleaf-cpif checks; opens no CPIF node"
+
+# The exact output of --print-config for the CPIF command_args above.
+cpif_sit_config='kernel_backend=google-kleaf-cpif
+dev.0=/dev/umts_ipc0
+dev.1=/dev/umts_ipc1
+socket_dir=/run/sit-proxy'
 
 depend() {
-	need ferrix-s5300-mounts exynos-modem
+	# The deptree must follow a backend change in backends.env.
+	config /etc/ferrix/backends.env
 	need ferrix-radio-firmware
-	after udev exynos-modem
+	case "${FERRIX_S5300_KERNEL_BACKEND:-}" in
+		linux-google-tegu-wwan)
+			need ferrix-s5300-mounts exynos-modem
+			;;
+		*)
+			# Never pull in the mounts or the CP daemon on CPIF (or a refused
+			# backend): start_pre requires exynos-modem to be started already.
+			use ferrix-s5300-mounts exynos-modem
+			;;
+	esac
+	after udev ferrix-s5300-mounts exynos-modem
 	before modemmanager
+}
+
+# The checked-in google-kleaf-cpif checks; a missing library is a refusal.
+load_cpif_checks() {
+	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = google-kleaf-cpif ] || {
+		eerror "this command is only for FERRIX_S5300_KERNEL_BACKEND=google-kleaf-cpif"
+		return 1
+	}
+	[ -f /usr/lib/ferrix/s5300-cpif.sh ] && [ ! -L /usr/lib/ferrix/s5300-cpif.sh ] || {
+		eerror "the S5300 CPIF check library is missing"
+		return 1
+	}
+	. /usr/lib/ferrix/s5300-cpif.sh
+}
+
+preflight() {
+	load_cpif_checks || return 1
+	ebegin "Checking the google-kleaf-cpif SIT inputs (no CPIF node is opened)"
+	cpif_sit_preflight "$cpif_sit_config" $command_args
+	eend $?
 }
 
 start_pre() {
@@ -22,15 +75,22 @@ start_pre() {
 		eerror "sit-proxy binary is missing"
 		return 1
 	}
-	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = "linux-google-tegu-wwan" ] || {
-		eerror "S5300 userspace requires the pinned linux-google-tegu-wwan kernel backend"
-		return 1
-	}
-	# The community driver exports WWAN SIT character nodes only after the
-	# exynos-modem daemon boots the CP to ONLINE.  Do not require /sys/class/wwan
-	# here: doing so would race the boot daemon and prevent those ports from ever
-	# being created.  supervise-daemon retries sit-proxy until the nodes appear;
-	# the backend gate above still refuses Google's incompatible cpif ABI.
+	case "${FERRIX_S5300_KERNEL_BACKEND:-}" in
+		linux-google-tegu-wwan)
+			# The community driver exports WWAN SIT character nodes only after the
+			# exynos-modem daemon boots the CP to ONLINE.  Do not require
+			# /sys/class/wwan here: doing so would race the boot daemon and prevent
+			# those ports from ever being created.  supervise-daemon retries
+			# sit-proxy until the nodes appear.
+			;;
+		google-kleaf-cpif)
+			load_cpif_checks && cpif_sit_preflight "$cpif_sit_config" $command_args || return 1
+			;;
+		*)
+			eerror "sit-proxy refuses kernel backend '${FERRIX_S5300_KERNEL_BACKEND:-}'"
+			return 1
+			;;
+	esac
 	checkpath -d -m 0755 /run/sit-proxy
 }
 

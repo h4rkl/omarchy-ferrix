@@ -10,6 +10,9 @@ description="ModemManager Samsung SIT daemon"
 
 depend() {
 	need dbus
-	need ferrix-s5300-mounts exynos-modem sit-proxy
+	# Order after the S5300 chain when it runs, but never pull it in: those
+	# services start only manually on the exact Pixel, and a `need` here
+	# would start them (and the CP) whenever ModemManager starts.
+	use ferrix-s5300-mounts exynos-modem sit-proxy
 	after udev ferrix-s5300-mounts exynos-modem sit-proxy
 }

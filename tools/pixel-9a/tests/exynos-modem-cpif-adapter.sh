@@ -102,6 +102,11 @@ cargo_stage() {
 	expect 'exynos-modem google-kleaf-cpif accepts its explicit nodes and none' \
 		"kernel_backend=google-kleaf-cpif${nl}boot_dev=none${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/oem_ipc1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}scratch_dir=/run/exynos-modem${nl}crash_dump_boot=disabled" \
 		"$em" --boot-dev none --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/oem_ipc1 --kernel-backend google-kleaf-cpif --print-config
+	# The exact CPIF command_args of exynos-modem.initd and the text its
+	# preflight compares (s5300-cpif-integration.md).
+	expect 'exynos-modem the exact exynos-modem.initd CPIF CLI' \
+		"kernel_backend=google-kleaf-cpif${nl}boot_dev=/dev/umts_boot0${nl}rfs_dev=/dev/umts_rfs0${nl}oem_gems_dev=/dev/oem_ipc1${nl}uecap_dir=/vendor/firmware/uecapconfig${nl}scratch_dir=/run/exynos-modem${nl}crash_dump_boot=disabled" \
+		"$em" --model 5300 --kernel-backend google-kleaf-cpif --uecap-dir /vendor/firmware/uecapconfig --boot-dev /dev/umts_boot0 --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/oem_ipc1 --print-config
 	refuse 'the legacy OEM node on google-kleaf-cpif' \
 		"$em" --kernel-backend google-kleaf-cpif --oem-gems-dev /dev/umts_oem1 --print-config
 	refuse 'a WWAN RFS node on google-kleaf-cpif' \
@@ -118,6 +123,9 @@ cargo_stage() {
 	expect 'sit-proxy google-kleaf-cpif selects umts_ipc0/1' \
 		"kernel_backend=google-kleaf-cpif${nl}dev.0=/dev/umts_ipc0${nl}dev.1=/dev/umts_ipc1${nl}socket_dir=/run/sit-proxy" \
 		"$sp" --kernel-backend google-kleaf-cpif --print-config
+	expect 'sit-proxy the exact sit-proxy.initd CPIF CLI' \
+		"kernel_backend=google-kleaf-cpif${nl}dev.0=/dev/umts_ipc0${nl}dev.1=/dev/umts_ipc1${nl}socket_dir=/run/sit-proxy" \
+		"$sp" --kernel-backend google-kleaf-cpif --dev /dev/umts_ipc0 --dev /dev/umts_ipc1 --socket-dir /run/sit-proxy --print-config
 	refuse 'a WWAN SIT node on google-kleaf-cpif' \
 		"$sp" --kernel-backend google-kleaf-cpif --dev /dev/wwan0sit0 --print-config
 	refuse 'a repeated CPIF SIT node' \
@@ -153,16 +161,23 @@ for p in $patches; do
 	check "static: $p adds no process spawning or network code" \
 		sh -c '! grep -E "^\+.*(std::process::Command|TcpStream|UdpSocket|std::net::)" "$1"' sh "$pkg/$p"
 done
-# The patches only make the backend selectable; nothing in the checked-in
-# integration selects it, so CP boot on Kleaf stays off until a reviewed
-# change (and its physical gates) enables it.
-check "static: backend environment still pairs the radio-first kernel" \
+# The package default stays the radio-first WWAN pairing; only the Kleaf
+# composer pairs google-kleaf-cpif, and each init script maps each backend to
+# its own explicit CLI (s5300-cpif-integration.md). The full service contract
+# lives in s5300-cpif-services.sh.
+check "static: package backend environment still pairs the radio-first kernel" \
 	grep -q '^FERRIX_S5300_KERNEL_BACKEND=linux-google-tegu-wwan$' "$device/ferrix-backends.env"
+check "static: exynos-modem.initd keeps the exact WWAN CLI" \
+	grep -qx '		command_args="--model 5300 --uecap-dir /vendor/firmware/uecapconfig --boot-dev /dev/umts_boot0 --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/umts_oem1"' "$device/exynos-modem.initd"
+check "static: exynos-modem.initd maps google-kleaf-cpif to its explicit nodes" \
+	grep -qx '		command_args="--model 5300 --kernel-backend google-kleaf-cpif --uecap-dir /vendor/firmware/uecapconfig --boot-dev /dev/umts_boot0 --rfs-dev /dev/umts_rfs0 --oem-gems-dev /dev/oem_ipc1"' "$device/exynos-modem.initd"
+check "static: sit-proxy.initd keeps the exact WWAN CLI" \
+	grep -qx '		command_args="--dev /dev/wwan0sit0 --dev /dev/wwan0sit1 --socket-dir /run/sit-proxy"' "$device/sit-proxy.initd"
+check "static: sit-proxy.initd maps google-kleaf-cpif to umts_ipc0/1" \
+	grep -qx '		command_args="--kernel-backend google-kleaf-cpif --dev /dev/umts_ipc0 --dev /dev/umts_ipc1 --socket-dir /run/sit-proxy"' "$device/sit-proxy.initd"
 for initd in exynos-modem.initd sit-proxy.initd; do
-	check "static: $initd still refuses every backend but linux-google-tegu-wwan" \
-		grep -q '\[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = "linux-google-tegu-wwan" \] ||' "$device/$initd"
-	check "static: $initd does not select google-kleaf-cpif" \
-		sh -c '! grep -v "^[[:space:]]*#" "$1" | grep -nE "google-kleaf-cpif|--kernel-backend|oem_ipc|umts_ipc"' sh "$device/$initd"
+	check "static: $initd refuses every other backend" \
+		grep -q "refuses kernel backend '\${FERRIX_S5300_KERNEL_BACKEND:-}'" "$device/$initd"
 done
 check "static: exynos-modem recipe installs no service or runlevel" \
 	sh -c '! grep -nE "rc-update|openrc|initd|install_if" "$1"' sh "$pkg/APKBUILD"
@@ -172,6 +187,8 @@ check "static: source manifest names the private scratch directory" \
 	grep -q "^scratch_directory = \"$scratch_dir\"\$" "$sources"
 check "static: exynos-modem.initd provisions the scratch directory root-owned 0700" \
 	grep -q "^	checkpath -d -m 0700 -o root:root $scratch_dir\$" "$device/exynos-modem.initd"
+check "static: the CPIF provisioning provisions the same directory root-owned 0700" \
+	grep -q '^	checkpath -d -m 0700 -o root:root "$cpif_scratch" ||' "$device/ferrix-s5300-cpif.sh"
 check "static: nothing provisions the unused /var/lib/exynos-modem or /tmp sinks" \
 	sh -c '! cat "$1" "$2" | grep -v "^[[:space:]]*#" | grep -nE "/var/lib/exynos-modem|/tmp"' sh "$device/exynos-modem.initd" "$sources"
 check "static: 0003 adds no /tmp path literal" \

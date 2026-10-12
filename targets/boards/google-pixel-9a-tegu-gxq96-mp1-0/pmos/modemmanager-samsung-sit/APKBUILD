@@ -2,7 +2,7 @@
 maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260731
-pkgrel=2
+pkgrel=3
 pkgdesc="ModemManager with Samsung SIT support for the Exynos S5300"
 url="https://git.deusch.me/pixel-mainline/ModemManager"
 arch="aarch64"
@@ -142,5 +142,5 @@ udev() {
 sha512sums="
 9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb972653c182fb994521e0f64602a00b22c54f0e83f282f11322b856978a9355ccfd8ea  modemmanager-14a0013a28e5d5eec513c65e75d7549678ecc61e.tar.gz
 2be18878972bee9924cdf28d2f124e126c30c02da4e96f0567acbea2f5a84278f116cf08f644499b10b82eb9baedabcfb62ad4c1e010f3afa82c8b403a922e59  modemmanager.rules
-32474880a1bb189582ec13f491af9e37e0c7a8b62710e7118703da9e073a1c2bd0305753bb9c7924dfacc8a7d8d4c0af7b3bfd076b154c5fdbb163bc3450398a  modemmanager.initd
+7dbde2b0bdceb482e66605cd98c8f384a1d6f169148c409aa66a6263dab6e4996f61fa4bb9d6a8390b63c474a08df1477fea79ecb7c029a578dba9faa801feef  modemmanager.initd
 "
