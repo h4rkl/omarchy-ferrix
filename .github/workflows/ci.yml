@@ -42,7 +42,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # Include `labeled` so applying the opt-in label after PR creation starts
+  # the scenario job without another code change.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       qemu_runner:
