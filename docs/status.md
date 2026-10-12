@@ -1,5 +1,21 @@
 # Status
 
+## 2026-10-12 (Settings Sound output label; physical observation and mock fix)
+
+- `physical:google-pixel-9a-tegu-gxq96-mp1-0`: the image composed from
+  `7be5d5b` (manifest SHA-256
+  `c4824a99ffb79bdba50c753573a977e8047d7edd6e56429c1d90bab336252210`)
+  booted to an inspected launcher and Settings Sound page. PipeWire exposed
+  only Dummy Output, but the Output row said `speaker` because the unavailable
+  adapter carries a placeholder route with no available outputs. The volume
+  and mute controls correctly said audio was unsupported. Captures and raw
+  audio inventory remain ignored under `out/`.
+- The Settings model now checks whether the reported route is available
+  before naming it. A no-route mock preview was inspected: Output says audio
+  is unsupported. The focused Settings tests and clippy pass. This UI fix has
+  not yet been built or booted on the phone, and speaker/mic function is still
+  unproved.
+
 ## 2026-10-12 (Pixel 9a: S5300 sources mount only through a read-only loop, issue #34; offline only)
 
 - **Change:** `ferrix-s5300-mounts` no longer mounts any partition directly.
