@@ -32,6 +32,26 @@
   exclude gate-locked electrical coupling over the shared USB host, and it
   would not calibrate sensitivity. `[audio]` stays `unsupported`.
 
+## 2026-10-12 (S5300 NV metadata; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- The checked-in issue #79 preflight passed on the still-booted `674157b`
+  Ferrix image and pinned 6.1.124 kernel. The accepted `ferrix-s5300-mounts`
+  service matched; `efs` was a unique, unmounted, unheld f2fs partition
+  already block-read-only; both modem services were absent from runlevels.
+  After a fresh, explicit owner approval for one per-unit access, exactly one
+  metadata mount ran through a verified read-only loop with `norecovery`.
+  `nv_normal.bin` and `nv_protected.bin` were regular files of 524288 bytes
+  each, meeting the CP3A TOC minimum of `0x80000`. The workflow unmounted and
+  detached, reported `post_check=clean`, `anomalies=none`, and
+  `mount_observation=no-write-observed`. The redacted transcript stays ignored
+  under `out/pixel-9a/s5300-nv-metadata/`; file contents were not opened or
+  retained.
+- This is a metadata-size observation only. It does not establish NV validity,
+  CP firmware acceptance, or absence of writes by another path. No modem
+  service or CP node was started. The #81 scratch-output, packaging and
+  runtime-skew gates still stand before a manual CP boot trial; telephony
+  remains unsupported.
+
 ## 2026-10-12 (S5300 CPIF userspace adapter; offline only)
 
 - PR #82 adds hash-pinned, target-local patches to the pinned GPL

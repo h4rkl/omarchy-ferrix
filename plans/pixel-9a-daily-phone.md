@@ -96,9 +96,11 @@ the project must not silently call that a fully functioning Pixel 9a.
   after target-local reset, SRINFO and OEM loop adaptations. E1 device
   inventory is complete. [PR #82](https://github.com/h4rkl/omarchy-ferrix/pull/82)
   adds the offline-tested target-local adapter while keeping CPIF services
-  disabled. Read-only NV checks in
-  [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79), private NV scratch
-  output in [#81](https://github.com/h4rkl/omarchy-ferrix/issues/81), and a
+  disabled. The one owner-approved physical metadata mount in
+  [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79) found both required
+  NV files regular and exactly `0x80000` bytes, with clean read-only-loop
+  teardown. This meets the TOC size gate only. Private NV scratch output in
+  [#81](https://github.com/h4rkl/omarchy-ferrix/issues/81), and a
   separate integration and runtime-skew review remain before a manual CP boot.
   The source review also found that the Rust seven-byte FMT
   codec is described as a tegu SIT envelope without source support;
@@ -110,8 +112,8 @@ the project must not silently call that a fully functioning Pixel 9a.
   expected nodes are character devices in one `cpif` class, no WWAN class
   device exists, and 30 `rmnet*` netdevs exist before CP boot. The probe
   opened no CPIF node. This is pre-boot kernel evidence only; the adapter's
-  physical integration, read-only NV size checks in #79 and runtime CP boot
-  trial remain.
+  physical integration and runtime CP boot trial remain; the #79 NV size gate
+  is met without showing firmware acceptance.
 - The telephony subscribe race [#66](https://github.com/h4rkl/omarchy-ferrix/issues/66)
   was closed by [PR #67](https://github.com/h4rkl/omarchy-ferrix/pull/67).
   The separate snapshot/event gap [#68](https://github.com/h4rkl/omarchy-ferrix/issues/68)
@@ -119,9 +121,10 @@ the project must not silently call that a fully functioning Pixel 9a.
   with Rust, native sandbox and headless QEMU checks passing. These are
   protocol fixes; they do not prove a working carrier, SIM, call or SMS on
   the Pixel.
-- Next dependency order: finish the S5300 NV metadata and scratch-output
-  gates; establish a safe, audible output and measured mic path; bring up the
-  modem and carrier data; then complete SMS, calls with two-way audio, power
+- Next dependency order: complete the S5300 scratch-output and integration
+  gates, then a separately reviewed manual CP boot trial; establish a safe,
+  audible output and measured mic path; bring up the modem and carrier data;
+  then complete SMS, calls with two-way audio, power
   and suspend reliability, camera/location, update/recovery, and sustained
   daily-use testing. Continue parallel host-only slices when physical work
   waits on evidence, but never promote a board capability from them.
