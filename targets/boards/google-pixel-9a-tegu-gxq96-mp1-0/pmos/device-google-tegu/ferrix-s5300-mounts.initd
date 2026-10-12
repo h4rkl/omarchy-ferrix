@@ -395,26 +395,57 @@ start() {
 	eend 0
 }
 
+# The exact partition label behind destination $1.
+destination_label() {
+	case "$1" in
+		"$mount_root/modem_img") resolve_modem_label ;;
+		"$mount_root/efs") printf 'efs\n' ;;
+		"$mount_root/persist") printf 'persist\n' ;;
+		"$mount_root/modem_userdata") printf 'modem_userdata\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+# Succeed only if the mount at destination $1 is exactly the read-only loop
+# over its source partition that start would have accepted; leaves the loop
+# in loop_name.
+verify_own_mount() {
+	label=$(destination_label "$1") || return 1
+	device=$(resolve_partition "$label") || return 1
+	fstype=$(probe_fstype "$device") || return 1
+	verify_mount "$device" "$1" "$fstype"
+}
+
 stop() {
 	ebegin "Unmounting exact Pixel 9a modem inputs"
 	# The daemon must be stopped by OpenRC dependency ordering before this
 	# service is stopped.  Never force an unmount: a busy mount is safer left in
-	# place than torn down while the modem owns an fd.  A loop is detached
-	# only after its mount is gone; the partitions stay read-only.
-	for destination in "$mount_root/modem_userdata" "$mount_root/persist" "$mount_root/efs" "$mount_root/modem_img"; do
-		entry=$(mount_entry "$destination") || continue
-		read -r mounted_root mounted_dev mounted_type mounted_source mount_options super_options <<EOF
-$entry
-EOF
+	# place than torn down while the modem owns an fd.  Only a mount that
+	# passes the same verify_mount as start is unmounted, and only its own
+	# loop is detached, after its mount is gone; anything else at a
+	# destination (a direct partition mount, another source, a writable or
+	# foreign loop) is refused before any destination is touched.  The
+	# partitions stay read-only.
+	destinations="$mount_root/modem_userdata $mount_root/persist $mount_root/efs $mount_root/modem_img"
+	for destination in $destinations; do
+		mount_entry "$destination" >/dev/null || continue
+		verify_own_mount "$destination" || {
+			eerror "refusing to stop: $destination is not a verified read-only loop mount of its source"
+			eend 1
+			return 1
+		}
+	done
+	for destination in $destinations; do
+		mount_entry "$destination" >/dev/null || continue
+		# Re-verify immediately before the unmount in case the mount changed.
+		verify_own_mount "$destination" || {
+			eerror "refusing to stop: $destination changed before it could be unmounted"
+			eend 1
+			return 1
+		}
+		own_loop=$loop_name
 		umount -- "$destination" || { eerror "could not unmount $destination"; eend 1; return 1; }
-		loop_name=$(readlink -f "$mounted_source" 2>/dev/null) || loop_name=$mounted_source
-		loop_name=${loop_name##*/}
-		case "$loop_name" in
-			loop[0-9]|loop[0-9][0-9]|loop[0-9][0-9][0-9]) ;;
-			*) continue ;;
-		esac
-		[ "$mounted_dev" = "$(sys_value "$loop_name/dev")" ] || continue
-		detach_loop "$loop_name" || { eend 1; return 1; }
+		detach_loop "$own_loop" || { eend 1; return 1; }
 	done
 	eend 0
 }

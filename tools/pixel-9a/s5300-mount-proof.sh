@@ -236,9 +236,10 @@ service_contract() {
 	printf '%s\n' "$code" | grep -Fq 'verify_loop "$attached" "$device" "$fstype"' || return 1
 	printf '%s\n' "$code" | grep -Fq 'verify_loop "$loop_name" "$device" "$fstype"' || return 1
 	! printf '%s\n' "$code" | grep -Eq 'setrw|[l]osetup -[a-z]*f|--find' || return 1
-	for package in blkid blockdev losetup; do
+	for package in blkid util-linux-misc losetup; do
 		grep -Eq "^[[:space:]]*$package[[:space:]]*\$" "$service_apkbuild" || return 1
 	done
+	! grep -Eq '^[[:space:]]*blockdev[[:space:]]*$' "$service_apkbuild" || return 1
 	sha512=$( (shasum -a 512 "$service_initd" 2>/dev/null || sha512sum "$service_initd") | cut -c1-128)
 	[ "$(awk '$2 == "ferrix-s5300-mounts.initd" { print $1 }' "$service_apkbuild")" = "$sha512" ]
 }

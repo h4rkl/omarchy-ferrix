@@ -31,10 +31,14 @@ sh -n "$initd"
 
 # --- static contract -----------------------------------------------------------
 code=$(grep -v '^[[:space:]]*#' "$initd")
-for package in blkid blockdev losetup; do
+for package in blkid util-linux-misc losetup; do
 	grep -Eq "^[[:space:]]*$package[[:space:]]*$" "$package_dir/APKBUILD" ||
-		fail "device package must depend on util-linux $package for the S5300 mounts"
+		fail "device package must depend on $package (util-linux blkid, blockdev, losetup) for the S5300 mounts"
 done
+# Alpine has no `blockdev` package; /sbin/blockdev ships in util-linux-misc.
+if grep -Eq '^[[:space:]]*blockdev[[:space:]]*$' "$package_dir/APKBUILD"; then
+	fail 'device package depends on a non-existent blockdev package'
+fi
 [ "$(awk '$2 == "ferrix-s5300-mounts.initd" { print $1 }' "$package_dir/APKBUILD")" = "$(sha512_file "$initd")" ] ||
 	fail 'APKBUILD sha512 for ferrix-s5300-mounts.initd is stale'
 if printf '%s\n' "$code" | grep -Eq 'mountpoint -q|/proc/mounts|-o "?ro,nosuid'; then
@@ -52,6 +56,10 @@ printf '%s\n' "$code" | grep -Eq '^[[:space:]]*blockdev --setro "\$device"' ||
 if printf '%s\n' "$code" | grep -Eq 'setrw|--setro[^"]*0|losetup -[a-z]*f|--find|autoclear'; then
 	fail 'S5300 mounts clear BLKROSET or let losetup pick an unverified loop'
 fi
+awk '/^stop\(\)/ { inside = 1 } inside && /verify_own_mount "\$destination"/ { if (!v) v = NR } inside && /umount --/ { u = NR }
+	inside && /detach_loop/ { d = NR } inside && /^}/ { inside = 0 }
+	END { exit !(v && u && d && v < u && u < d) }' "$initd" ||
+	fail 'S5300 mounts stop must verify its own loop mount before any unmount or detach'
 awk '/^mount_one\(\)/ { inside = 1 } inside && /blockdev --setro/ { s = NR } inside && /sys_value "\$part_name\/ro"\)" = 1/ { r = NR }
 	inside && /losetup --read-only/ { l = NR } inside && /verify_loop "\$attached"/ { v = NR } inside && /^[[:space:]]*mount -t/ { m = NR }
 	inside && /^}/ { inside = 0 }
@@ -550,5 +558,46 @@ grep -E "^99 1 7:3 " "$fx/mountinfo" | sed "s#$fx/mnt/vendor/modem_userdata#/els
 if run stop; then fail 'S5300 mounts stop detached a loop that is still mounted elsewhere'; fi
 grep -q 'leaving loop3 attached: it is still mounted' "$fx/err" || fail 'S5300 mounts stop shared-loop refusal reason'
 loop_bound loop3 || fail 'S5300 mounts stop released a loop that is still mounted'
+
+stop_refuses() {
+	# description reason
+	if run stop; then fail "S5300 mounts stop accepted $1"; fi
+	grep -q -- "$2" "$fx/err" || { cat "$fx/err" >&2; fail "S5300 mounts stop refusal reason: $1"; }
+	[ "$(count '^umount ')" -eq 0 ] && [ "$(count '^losetup -d ')" -eq 0 ] ||
+		fail "S5300 mounts stop unmounted or detached after refusing $1"
+}
+stop_after_start() {
+	fixture
+	run start || { cat "$fx/err" >&2; fail 'S5300 mounts refused a clean start before a stop refusal check'; }
+	: >"$fx/log"
+}
+fixture
+run stop || { cat "$fx/err" >&2; fail 'S5300 mounts stop refused when nothing was mounted'; }
+[ "$(count '^umount ')" -eq 0 ] && [ "$(count '^losetup ')" -eq 0 ] || fail 'S5300 mounts stop acted with nothing mounted'
+fixture
+premount_partition "$fx/mnt/vendor/efs" sda12 ext4 ro,nosuid,nodev,noexec ro,noload
+stop_refuses 'a direct partition mount at efs' 'sda12 itself is mounted'
+grep -q "refusing to stop: $fx/mnt/vendor/efs" "$fx/err" || fail 'S5300 mounts stop did not name the refused destination'
+fixture
+premount_loop 3 sda13 efs ext4 ro,nosuid,nodev,noexec ro,noload
+stop_refuses 'a loop over a foreign partition at efs' 'it is not backed by'
+loop_bound loop3 || fail 'S5300 mounts stop released a foreign loop'
+stop_after_start
+printf '60 1 0:30 / %s rw - tmpfs tmpfs rw\n' "$fx/mnt/vendor/persist" >>"$fx/mountinfo"
+stop_refuses 'an unknown mount stacked on persist' 'it is not all of a read-only loop'
+for n in 0 1 2 3; do loop_bound "loop$n" || fail "S5300 mounts stop released loop$n after refusing"; done
+stop_after_start
+echo 0 >"$fx/sys/loop1/ro"
+stop_refuses 'a writable loop at efs' 'the loop is not read-only'
+stop_after_start
+rm "$fx/bootconfig"
+# modem_userdata, persist, and efs verify, but modem_img cannot be tied to a
+# slot, so nothing at all is unmounted.
+stop_refuses 'a modem image mount whose slot cannot be resolved' 'exactly one androidboot.slot_suffix is required'
+[ "$(grep -c "^99 1 7:" "$fx/mountinfo")" -eq 4 ] || fail 'S5300 mounts stop removed a mount before refusing another'
+stop_after_start
+export FAKE_BLKID_VERSION='BusyBox v1.37.0 multi-call binary.'
+stop_refuses 'a stop without util-linux blkid' 'util-linux blkid is required'
+unset FAKE_BLKID_VERSION
 
 echo 'pixel-9a s5300 mounts service tests passed'

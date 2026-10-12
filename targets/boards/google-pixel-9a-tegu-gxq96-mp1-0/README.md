@@ -1131,9 +1131,13 @@ source, after the slot, label, and `blkid -p` checks, the service:
 
 An existing mount at a destination is accepted only if it passes the same
 `verify_mount`, so a direct partition mount left by an older service is
-refused. `stop` unmounts each destination without forcing. It detaches the
-loop only once nothing mounts it. It never clears the partitions' `ro` flag.
-The device package now also depends on util-linux `blockdev` and `losetup`.
+refused. `stop` first verifies every mounted destination the same way and
+refuses, before any unmount or detach, anything that is not exactly the
+read-only loop over that destination's source. It then unmounts each
+destination without forcing and detaches that loop only once nothing mounts
+it. It never clears the partitions' `ro` flag. The device package now also
+depends on `util-linux-misc` (which ships `/sbin/blockdev` on Alpine) and
+`losetup`.
 
 Known limits of the service change:
 
@@ -1161,7 +1165,7 @@ statically checks that the checked-in service has exactly one mount call and
 that this call mounts the attached loop. It also checks for
 `blockdev --setro` and `losetup --read-only`, that both new and existing
 mounts go through `verify_loop`, that the package depends on `blkid`,
-`blockdev`, and `losetup`, and that the APKBUILD `sha512` matches the file.
+`util-linux-misc`, and `losetup` (and not on a `blockdev` package), and that the APKBUILD `sha512` matches the file.
 The guest preflight reports the SHA-256 of its installed
 `/etc/init.d/ferrix-s5300-mounts`, and the host compares it with the
 checked-in file. If the static check fails, the result is

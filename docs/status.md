@@ -13,9 +13,12 @@
   type. `verify_mount` now requires the mount source to be that loop, and it
   refuses a direct partition mount, including an existing one. Every refusal
   after the attach detaches only the loop the service attached, and only
-  once nothing mounts it. `stop` never forces an unmount and never clears
-  `BLKROSET`. The device package depends on `blockdev` and `losetup`, and the
-  APKBUILD checksum is updated. The service stays out of the dev runlevel.
+  once nothing mounts it. `stop` first runs the same `verify_mount` on every
+  mounted destination and refuses, before any unmount or detach, a direct,
+  foreign, writable, or unknown mount. It never forces an unmount and never
+  clears `BLKROSET`. The device package depends on `util-linux-misc` (Alpine's
+  provider of `/sbin/blockdev`; there is no `blockdev` package) and
+  `losetup`, and the APKBUILD checksum is updated. The service stays out of the dev runlevel.
   No CP boot was attempted, and capabilities are unchanged.
 - **Proof workflow:** `just pixel-9a-s5300-mount-proof` now gates on the
   actual service contract. A static check covers the single loop mount
