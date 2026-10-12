@@ -50,219 +50,83 @@ independent feasibility and evidence. If any remains unavailable, the owner
 must decide whether a narrower, explicitly named release target is acceptable;
 the project must not silently call that a fully functioning Pixel 9a.
 
-## Current delivery checkpoint — 2026-10-12
+## Evidence snapshot — 2026-10-12 (reconciled at `463d8ec`)
 
-- The pinned stock factory restore is physically tested, and the exact
-  `tegu` / `GXQ96` / `MP1.0` device subsequently booted stock Android and
-  returned to the Ferrix Kleaf development route. Preserve the stock
-  recovery invariant before every image write. Slot-B development flashes
-  remain reversible through that checked-in restore route.
-- [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) remains open.
-  [PR #63](https://github.com/h4rkl/omarchy-ferrix/pull/63) put the AoC UCM
-  profile and PipeWire provider in the rootfs;
-  [PR #64](https://github.com/h4rkl/omarchy-ferrix/pull/64) added typed output
-  volume/mute and Settings Sound;
-  [PR #65](https://github.com/h4rkl/omarchy-ferrix/pull/65) pinned
-  `alsa-utils`; and [PR #70](https://github.com/h4rkl/omarchy-ferrix/pull/70)
-  corrected the unavailable output label. The physical image built from
-  `7be5d5b` booted and exposed the AoC ALSA card, UCM files and tools, but
-  PipeWire still showed only Dummy Output and no source. The newer `674157b`
-  image booted and its inspected Sound page correctly labels Output and Mute
-  unsupported. [PR #73](https://github.com/h4rkl/omarchy-ferrix/pull/73)
-  delivered the gated mic proof. Its revised physical preflight passed, and
-  one owner-approved capture returned 384000 PCM bytes with a very low
-  channel-0 signal and digital silence on channel 1. This proves varying
-  PCM data, not acoustic pickup. [#80](https://github.com/h4rkl/omarchy-ferrix/issues/80)
-  added the controlled-tone microphone workflow. After a separate owner
-  approval, one exact-device 2 s run detected the Mac speaker's gated tone on
-  channel 0 and verified route and recording cleanup. This is physical
-  internal-mic pickup evidence; sensitivity and call audio remain unproven.
-  The new image still exposes only Dummy Output with no usable ALSA source.
-  [#83](https://github.com/h4rkl/omarchy-ferrix/issues/83) reviewed the
-  pinned source and effective TAS modules and decided **NO-GO** for internal
-  speaker or earpiece playback: the kernel protection path is absent, while
-  AoC protection without Android HAL setup and output gain remain unknown.
-  A separate Bluetooth A2DP output proof can advance #2 without driving TAS.
-  [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) tracks that path;
-  the read-only exact-phone preflight found the BlueZ and PipeWire components,
-  a powered controller, and a null default sink, but no paired or connected
-  audio sink. It made no audio or pairing changes.
-  [#90](https://github.com/h4rkl/omarchy-ferrix/issues/90) reviewed the pinned
-  public AoC source and found no Linux protection-active signal or documented
-  default without Android HAL setup. Its decision remains **NO-GO**.
-  [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) tracks the missing
-  protection and gain contract before an internal-speaker trial can be designed.
-  Keep audio unsupported.
-- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) source-mount gate
-  is accepted by the owner for a future manual CP boot.
-  [PR #69](https://github.com/h4rkl/omarchy-ferrix/pull/69) merged a
-  read-only loop barrier for S5300 source mounts with offline proof tests.
-  The replacement rootfs was built, hash-checked, flashed through the
-  checked-in recovery-gated route and booted on the exact phone. Its service
-  matched the checked-in bytes. The read-only preflight and one proof of
-  each source partition, including three per-unit roles approved by the
-  owner, completed through verified read-only loops with no reported write
-  anomaly. The workflow still reports `owner-review-required` because it
-  cannot decide the policy gate automatically; the owner explicitly accepted
-  the proof results on 2026-10-12. [PR #75](https://github.com/h4rkl/omarchy-ferrix/pull/75)
-  records a conditional CPIF E0 ABI decision: route A remains viable only
-  after target-local reset, SRINFO and OEM loop adaptations. E1 device
-  inventory is complete. [PR #82](https://github.com/h4rkl/omarchy-ferrix/pull/82)
-  adds the offline-tested target-local adapter while keeping CPIF services
-  disabled. The one owner-approved physical metadata mount in
-  [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79) found both required
-  NV files regular and exactly `0x80000` bytes, with clean read-only-loop
-  teardown. This meets the TOC size gate only. [#81](https://github.com/h4rkl/omarchy-ferrix/issues/81)
-  moved private NV scratch output to `/run/exynos-modem`; the exact phone now
-  proves that directory is root-owned mode 0700 on tmpfs.
-  [#88](https://github.com/h4rkl/omarchy-ferrix/issues/88) staged the CPIF
-  service in a fresh postmarketOS image from `1b70e3a`. The image booted on
-  the exact phone; installed package hashes matched, services stayed off,
-  read-only source and E1 checks passed, and the deliberate preflight stopped
-  at the unstarted source mounts. CP remained `OFFLINE`.
-  [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92)
-  owns the bounded manual CP boot workflow, opener-scan hardening, stop order,
-  and fresh owner decision after the staging proof.
-  The source review also found that the Rust seven-byte FMT
-  codec is described as a tegu SIT envelope without source support;
-  [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) tracks correction
-  before that codec is used for tegu control traffic.
-- [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) E1 read-only
-  inventory on the exact booted Pixel returned `go`: the three CPIF modules
-  are Live, one CPIF platform device is bound and `OFFLINE`, all twelve
-  expected nodes are character devices in one `cpif` class, no WWAN class
-  device exists, and 30 `rmnet*` netdevs exist before CP boot. The probe
-  opened no CPIF node. This is pre-boot kernel evidence only; the adapter's
-  physical integration and runtime CP boot trial remain; the #79 NV size gate
-  is met without showing firmware acceptance. The owner reports a SIM is
-  physically inserted; no Ferrix SIM-detection claim follows before CP boot.
-- The telephony subscribe race [#66](https://github.com/h4rkl/omarchy-ferrix/issues/66)
-  was closed by [PR #67](https://github.com/h4rkl/omarchy-ferrix/pull/67).
-  The separate snapshot/event gap [#68](https://github.com/h4rkl/omarchy-ferrix/issues/68)
-  was closed by [PR #71](https://github.com/h4rkl/omarchy-ferrix/pull/71),
-  with Rust, native sandbox and headless QEMU checks passing. These are
-  protocol fixes; they do not prove a working carrier, SIM, call or SMS on
-  the Pixel.
-- Next dependency order: review the #81/#88 physical staging evidence, then
-  a separately reviewed manual CP boot trial; establish Bluetooth output and
-  a measured mic path while #90 resolves internal-speaker protection; bring
-  up the modem and carrier data;
-  then complete SMS, calls with two-way audio, power
-  and suspend reliability, camera/location, update/recovery, and sustained
-  daily-use testing. Continue parallel host-only slices when physical work
-  waits on evidence, but never promote a board capability from them.
+Labels follow `docs/status.md`: `physical` means the exact
+`google-pixel-9a-tegu-gxq96-mp1-0`; `mock`, `offline` and `QEMU` results
+never promote a board capability. The [capability matrix](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/capabilities.toml)
+is unchanged by this snapshot: power, display, input, network (Wi-Fi) and
+Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
+`unsupported`**.
 
-## Earlier evidence snapshot — 2026-10-12 (historical milestones)
-
-- On 2026-10-09 the exact device booted the Kleaf development route to Ferrix
-  Home unattended, with app isolation. The board matrix marks power reporting,
-  display, input, Wi-Fi, and Bluetooth discovery `supported`. WPA2 and a
-  WPA2/WPA3 transition AP joined; pairing, an SAE-only AP, and long-run radio
-  reliability have not been demonstrated. The optional Waydroid/Fulguris
-  browser launched on hardware. See the [physical status entry](../docs/status.md).
-- The matrix still marks **audio, telephony, and lifecycle unsupported**.
-  PipeWire/WirePlumber process supervision is not speaker or microphone
-  evidence. The Kleaf route does not have a working S5300 modem backend;
-  Phone and Messages show modem absent. The experimental radio-first kernel
-  has not re-proven the working Kleaf capabilities.
-- Camera is absent. Mali acceleration is optional for correctness, but
-  Fulguris performance and video playback remain work in progress. Power-key
-  blanking, suspend/resume, real Bluetooth pairing, GNSS, NFC, fingerprint,
-  safe charging/thermal behaviour, and release-grade updates lack physical
-  evidence. A software-rendered UI alone is not the performance gate.
-- The 2026-10-11 [restore record](../docs/status.md) says the pinned
-  factory restore ran out of host disk space during `vendor.img` extraction.
-  The device stayed in ordinary Fastboot on slot B; stock Android boot after
-  that attempt was **unverified**. The wrapper's false success marker was
-  fixed with offline tests. That failed run was not recovery proof.
-- On 2026-10-12, #25's offline recovery-script hardening was merged in
-  [PR #36](https://github.com/h4rkl/omarchy-ferrix/pull/36);
-  after the owner freed host space, the checked-in pinned factory restore ran
-  on the exact device. Its bootloader, radio, and `fastboot -w update` stages
-  all returned success, including all 29 `super` chunks. Its redacted ignored
-  transcript is `out/pixel-9a/restore/20261011T201345Z.txt`. The phone
-  rebooted. Initial ADB property queries returned `error: closed` while
-  Android started; fresh checked-in discovery later verified the same Pixel
-  9a on stock Android 17 build `CP3A.260905.009`, slot B, unlocked/orange.
-  [Merged PR #47](https://github.com/h4rkl/omarchy-ferrix/pull/47) records the
-  redacted physical evidence, and #25 is closed.
-  The S5300 source route decision was merged in
-  [PR #33](https://github.com/h4rkl/omarchy-ferrix/pull/33).
-- [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37) is closed by
-  [merged PR #41](https://github.com/h4rkl/omarchy-ferrix/pull/41): hosted
-  Rust, strict arm64 sandbox, and headless QEMU CI all passed. The sandbox
-  gate ran all 15 integration tests with no skips.
-- [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38) is closed by
-  [merged PR #39](https://github.com/h4rkl/omarchy-ferrix/pull/39): the
-  GitHub arm64 QEMU job recorded `check-passed` and saved its guest cache.
-  This is QEMU/mock evidence only.
-- [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34) has an offline
-  fail-closed calibration-mount gate merged in
-  [PR #40](https://github.com/h4rkl/omarchy-ferrix/pull/40). Rootfs and CI
-  passed. A read-only S5300 source filesystem inventory was merged in
-  [PR #49](https://github.com/h4rkl/omarchy-ferrix/pull/49). Its SSH path
-  was replaced with the CDC-ACM shell in
-  [PR #54](https://github.com/h4rkl/omarchy-ferrix/pull/54). The physical
-  read-only run found `modem_b` ext4 and `efs`, `persist`, and
-  `modem_userdata` f2fs, all unmounted and uniquely resolved. On-device
-  journal-recovery suppression remains unproved, so CP boot stays blocked
-  and #34 stays open.
-- [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42) is closed by
-  [merged PR #43](https://github.com/h4rkl/omarchy-ferrix/pull/43), aligning
-  the Pixel rootfs runtime allowlist with two already staged optional Mali
-  firmware aliases. This is no GPU hardware evidence.
-- [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) has an offline
-  audio source and inventory decision merged in
-  [PR #44](https://github.com/h4rkl/omarchy-ferrix/pull/44).
-  A read-only audio inventory workflow was merged in
-  [PR #45](https://github.com/h4rkl/omarchy-ferrix/pull/45), with mock tests
-  and CI passing; #54 supplied the CDC-ACM transport. The physical run found
-  no ALSA card or PCM and an `Offline` AoC with deferred sound-card probe.
-  [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55) is now closed
-  after [PR #58](https://github.com/h4rkl/omarchy-ferrix/pull/58) and a
-  physical image brought AoC online. ALSA still has no card: TAS25xx cannot
-  load `tismartpa_driver_tuning.bin`, and the sound-card probe fails `-2`.
-  [#59](https://github.com/h4rkl/omarchy-ferrix/issues/59) delivered that
-  target firmware/probe slice through PR #61 and a fresh physical image
-  loaded the pinned TAS tuning file; the AoC ALSA card now exposes 34 PCM
-  entries. A temporary, hash-matched UCM copy parsed on the phone. The
-  installed `pulseaudio-wireplumber` package was found to disable hardware
-  audio monitoring; temporarily removing its fragment exposed the ALSA
-  device. With both observed backend mixer switches enabled and the TAS
-  amplifier switch off, WirePlumber exposed speaker and mic nodes. All
-  temporary files and switches were restored. The target rootfs now pins the
-  PipeWire provider, but a fresh image with that fix has not booted. Speaker
-  playback, non-silent mic capture, route, and mute evidence remain absent;
-  #2 stays open.
-- [#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed by
-  [merged PR #48](https://github.com/h4rkl/omarchy-ferrix/pull/48), which
-  makes an ADB or Fastboot identity-query failure explicit. The successful
-  later discovery has complete identity, build, and slot fields.
-- [#50](https://github.com/h4rkl/omarchy-ferrix/issues/50) is closed by
-  [merged PR #51](https://github.com/h4rkl/omarchy-ferrix/pull/51), which
-  waits for the network event wake callback in the daemon test. This fixed a
-  CI race and adds no phone evidence.
-- [#53](https://github.com/h4rkl/omarchy-ferrix/issues/53) tracks review of
-  an unpublished, diverged native-builder checkout with Pixel audio and UI
-  changes. A fresh build uses an isolated worktree at reviewed GitHub main;
-  the older branch and ignored artifacts remain intact pending issue-linked
-  PR review.
-- A fresh `f49a460` source attempt passed kernel, product, firmware, pmOS
-  rootfs, and development-image builds; all seven transferred image hashes
-  matched the bundle manifest. The checked-in recovery-invariant flash on
-  slot B succeeded, and an inspected host webcam capture shows Ferrix Home
-  on the physical panel. The inspected DRM framebuffer identifies that Home
-  as the `ferrix-basic-screen` reference surface, not the product shell;
-  #12 and related shell issues remain. The CDC-ACM guest shell and both
-  read-only physical inventories ran. This is boot and diagnosis evidence,
-  not a daily-phone acceptance result; details and limits are in
-  `docs/status.md`.
+- **Recovery (physical).** The pinned `CP3A.260905.009` factory restore
+  completed on the exact device and same-device discovery then verified stock
+  Android 17 on slot B, unlocked ([status entry](../docs/status.md#2026-10-12-pixel-9a-pinned-stock-recovery-verified-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0);
+  [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25) closed via
+  [PR #36](https://github.com/h4rkl/omarchy-ferrix/pull/36) and
+  [PR #47](https://github.com/h4rkl/omarchy-ferrix/pull/47)). The earlier
+  out-of-disk attempt and the owner-run `fastboot -w` are superseded history,
+  not current blockers. Recheck the recovery invariant before every image
+  write. The main checkout carries uncommitted user changes in
+  `docs/status.md` and the factory-restore files; preserve them.
+- **Current image (physical).** The Kleaf development bundle built from
+  `1b70e3a` (`device-google-tegu` 1-r2, `exynos-modem` and
+  `modemmanager-samsung-sit` r3) was flashed to slot B through
+  `just pixel-9a-dev-flash` and booted Ferrix on the pinned 6.1.124 kernel
+  with S5300 services stopped and CP `OFFLINE`
+  ([CPIF staging entry](../docs/status.md#2026-10-12-s5300-cpif-staging-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
+  The earlier `f49a460` boot showed the `ferrix-basic-screen` reference
+  surface, not the product shell; #12 and related shell issues remain open.
+- **Modem (physical, pre-boot only).** [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34)
+  is closed: one `modem_b` and three per-unit read-only loop mount proofs
+  passed and the owner accepted the source-mount gate
+  ([record](https://github.com/h4rkl/omarchy-ferrix/issues/34#issuecomment-6116464948)).
+  E0 (PR #75), E1 `go` (PR #78), the target-local CPIF adapter (PR #82, offline),
+  the #79 NV size gate, #81 private scratch and #88 package/service staging
+  are complete. [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92):
+  the read-only S2 preflight merged in [PR #104](https://github.com/h4rkl/omarchy-ferrix/pull/104);
+  its one physical run on the 1-r2 image returned `no-go` **solely** for
+  checked-in 1-r3 versus installed 1-r2 source/image skew, with no device
+  blocker ([S2 entry](../docs/status.md#2026-10-12-s5300-s2-read-only-preflight-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0),
+  [board record](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s2-preflight.md)).
+  A refreshed 1-r3 image is being built; its result is not yet recorded. No
+  CPIF node has been opened and no CP boot has been attempted; the active S2
+  workflow is not implemented. A partial `ferrix-s5300-mounts` start
+  currently requires a reboot. A SIM is physically installed but has not been
+  recognised by Ferrix. [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76)
+  must correct the FMT codec boundary before tegu control traffic.
+- **Audio (physical).** The AoC ALSA card binds. One controlled-tone
+  acoustic proof ([#80](https://github.com/h4rkl/omarchy-ferrix/issues/80))
+  detected the tone on **channel 0 only**; channel 1 was digital zero. That
+  is one pickup observation, not calibrated sensitivity or call audio
+  ([entry](../docs/status.md#2026-10-12-controlled-tone-microphone-pickup-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)).
+  Internal TAS speaker and earpiece playback is **NO-GO** because the
+  protection route is unknown (#83, #90 closed;
+  [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) open;
+  [research](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/aoc-speaker-protection-research.md)).
+  [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91): read-only
+  preflight v3 (PR #101) observed one connected LDAC A2DP sink as
+  `candidate-observed`, with `active_gate=closed`; no tone has played
+  ([entry](../docs/status.md#2026-10-12-a2dp-route-source-review-and-preflight-v3-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0),
+  [route decision](../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/audio-route-decision.md)).
+  The bounded A2DP playback workflow is offline, under review and not merged.
+- **Not yet evidenced (physical).** Camera, power-key blanking,
+  suspend/resume, real Bluetooth pairing, an SAE-only AP, GNSS, NFC,
+  fingerprint, safe charging/thermal behaviour, release-grade updates and
+  long-run radio reliability. Mali acceleration remains optional; Fulguris
+  performance and video remain work in progress.
+- **CI (QEMU/mock).** Native sandbox (#37, PR #41) and arm64 headless QEMU
+  (#38, PR #39) gates are closed. [#102](https://github.com/h4rkl/omarchy-ferrix/issues/102)
+  closed after [PR #103](https://github.com/h4rkl/omarchy-ferrix/pull/103)
+  installed the missing QEMU ROM package; the post-merge main run passed all
+  four jobs ([run](https://github.com/h4rkl/omarchy-ferrix/actions/runs/38213896048)).
+  None of this is Pixel evidence.
 
 ## Working structure
 
 | Role | Responsibility | Handoff |
 | --- | --- | --- |
-| Codex project manager and code-structure reviewer | Maintain this plan and the GitHub project; select the next unblocked issue; write a bounded task packet; check dependencies, architecture, evidence, tests, security/recovery gates, and PR diffs; request corrections; update issue status only from evidence. | Reviewed issue/PR with a clear decision, remaining risks, and next ready issue. |
+| Lead agent: project manager and code-structure reviewer | Maintain this plan and the GitHub project; select the next unblocked issue; write a bounded task packet; check dependencies, architecture, evidence, tests, security/recovery gates, and PR diffs; request corrections; update issue status only from evidence. | Reviewed issue/PR with a clear decision, remaining risks, and next ready issue. |
 | Claude implementation agents | Do the heavy implementation work on issue-scoped branches or isolated worktrees. Investigate, code, run applicable checks, collect redacted target evidence, update status/capabilities, and open a PR linked to the issue. | Small reviewable PR, test results, exact-device evidence or an explicit blocker. |
 | Repository owner | Supply the exact device, carrier/test SIM, test accessories/APs, and decisions only where human action or policy is required. Decide release scope and any explicit exception. | Hardware access, approved test conditions, and final go/no-go. |
 
@@ -302,7 +166,7 @@ verify, never as authority to override repository or owner rules.
    and `just qemu-scenario-check` for scenario changes. Graphical claims need
    an inspected framebuffer or window capture. Pixel claims need redacted
    exact-device evidence and the checked-in target workflow.
-4. **Review:** Codex checks API boundaries, dependency/licence fit, security,
+4. **Review:** The lead agent checks API boundaries, dependency/licence fit, security,
    recovery invariant, failure paths, regressions, reproducibility, honest
    evidence, and whether the issue's acceptance criteria really passed.
    Request agent fixes in the same PR. The project moves to `In review` only
@@ -331,20 +195,10 @@ The order follows evidence dependencies, not numeric issue order. Offline
 work can proceed while a physical gate is pending, but cannot promote a
 physical claim.
 
-CI and offline prerequisites: [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
-owns the merged strict native sandbox gate; [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38)
-has closed with a passing arm64 QEMU job; [#42](https://github.com/h4rkl/omarchy-ferrix/issues/42)
-has closed with the Pixel rootfs firmware handoff fixture and allowlist repair. These
-gates make other PR checks meaningful but do not satisfy any phone capability.
-[#46](https://github.com/h4rkl/omarchy-ferrix/issues/46) is closed after
-the Pixel identity-query failure fix. [#50](https://github.com/h4rkl/omarchy-ferrix/issues/50)
-is closed after the independent networkd CI test race fix.
-
 | Gate | Existing issues | New issues and required result |
 | --- | --- | --- |
-| 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25): pinned stock restore, truthful failure handling, and same-device Android 17 boot verified on 2026-10-12; physical evidence is in PR #47. Recheck the recovery invariant before every new device load. |
-| 0a. Physical inventory transport | #2 and #34 read-only inventories | [#52](https://github.com/h4rkl/omarchy-ferrix/issues/52) / PR #54: CDC-ACM transport merged and both inventories ran on the booted exact device. Carry their findings into #34 and #55; neither inventory promotes a capability. |
-| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): accepted recovery-safe modem calibration mounts. [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55): load pinned AoC firmware and re-inventory ALSA. [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79): verify S5300 NV input sizes through the accepted read-only mount barrier. [#81](https://github.com/h4rkl/omarchy-ferrix/issues/81): harden NV scratch output before CP boot. [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76): correct the Rust FMT codec boundary before using it for tegu SIT. [#80](https://github.com/h4rkl/omarchy-ferrix/issues/80): controlled acoustic mic proof. [#83](https://github.com/h4rkl/omarchy-ferrix/issues/83): speaker protection review NO-GO; [#90](https://github.com/h4rkl/omarchy-ferrix/issues/90): establish the missing safe Linux AoC path. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
+| 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25) closed: pinned stock restore and same-device Android 17 boot verified. Recheck the recovery invariant before every image write. |
+| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | Completed prerequisites: #34 source mounts, #79 NV sizes, #81 scratch, #88 staging; #55/#59 AoC/TAS binding, #80 mic pickup, #83/#90 speaker NO-GO. Open: [#92](https://github.com/h4rkl/omarchy-ferrix/issues/92) bounded manual CP boot and teardown (1-r3 image, pre-mount GO and fresh owner decision first); [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) FMT codec for tegu SIT; [#91](https://github.com/h4rkl/omarchy-ferrix/issues/91) A2DP output without TAS; [#94](https://github.com/h4rkl/omarchy-ferrix/issues/94) speaker protection and gain contract; [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27) ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #27 end-to-end proof depends on #1 and #2. |
 | 2. Power and radios | [#9](https://github.com/h4rkl/omarchy-ferrix/issues/9) power key, blanking, suspend/wake, sensors; [#24](https://github.com/h4rkl/omarchy-ferrix/issues/24) Wi-Fi hardening; [#5](https://github.com/h4rkl/omarchy-ferrix/issues/5) Bluetooth pairing; [#7](https://github.com/h4rkl/omarchy-ferrix/issues/7) hidden Wi-Fi; [#8](https://github.com/h4rkl/omarchy-ferrix/issues/8) time/RTC | [#26](https://github.com/h4rkl/omarchy-ferrix/issues/26): charge/thermal/endurance, with screen-off drain dependent on #9. |
 | 3. Camera, location and other hardware | [#3](https://github.com/h4rkl/omarchy-ferrix/issues/3) camera; #9 owns orientation/proximity/ambient sensors | [#28](https://github.com/h4rkl/omarchy-ferrix/issues/28) GNSS/location; [#29](https://github.com/h4rkl/omarchy-ferrix/issues/29) NFC/fingerprint feasibility and proof. |
 | 4. App and shell usability | [#19](https://github.com/h4rkl/omarchy-ferrix/issues/19) browser performance/video/screen fit; [#4](https://github.com/h4rkl/omarchy-ferrix/issues/4) optional GPU; [#12](https://github.com/h4rkl/omarchy-ferrix/issues/12), [#21](https://github.com/h4rkl/omarchy-ferrix/issues/21), [#22](https://github.com/h4rkl/omarchy-ferrix/issues/22), [#23](https://github.com/h4rkl/omarchy-ferrix/issues/23) shell/navigation/notifications; [#14](https://github.com/h4rkl/omarchy-ferrix/issues/14) text; [#16](https://github.com/h4rkl/omarchy-ferrix/issues/16) pmOS QEMU graphics | No duplicate browser or shell issue. Keep browser usability evidence distinct from hardware GPU support. |
@@ -355,14 +209,14 @@ Issue #20 remains a UI/icon follow-up; its open state must be reconciled with
 the newer icon evidence in `docs/status.md` before scheduling more icon work.
 [#53](https://github.com/h4rkl/omarchy-ferrix/issues/53) owns review of
 unpublished builder commits through separate PRs; do not merge or reset that
-checkout wholesale.
+checkout wholesale. [#99](https://github.com/h4rkl/omarchy-ferrix/issues/99)
+tracks a host rootfs-build password-quoting fix; it adds no phone evidence.
 Closed issues #6, #13, #15, and #17 are historical inputs, not proof of Pixel
 daily-phone acceptance. Do not open duplicates for work already owned above.
 
-Cross-cutting delivery gates [#37](https://github.com/h4rkl/omarchy-ferrix/issues/37)
-and [#38](https://github.com/h4rkl/omarchy-ferrix/issues/38) restore
-meaningful native sandbox and QEMU CI before merging implementation PRs.
-Neither promotes a phone capability.
+Closed CI and tooling gates — #37, #38, #42, #46, #50, #52 and #102 — keep
+other PR checks meaningful but satisfy no phone capability. A new red main
+check blocks merges until it is diagnosed in its own issue.
 
 ## Physical-device invariant and evidence rules
 
@@ -391,9 +245,19 @@ charging LED, touch, or physical panel behaviour needs external observation.
 
 On every new work session: read this goal and authority section; check
 `git status` and preserve user edits; fetch the live GitHub project/issues;
-read the newest exact-device status and capability matrix; resolve #25 or its
-successor recovery evidence before physical experiments; identify one small
-unblocked issue; send Claude an issue-scoped task packet; review its PR and
-evidence; then reconcile issue state, plan, status and matrix. The standing
-goal remains a fully functioning postmarketOS-based Pixel 9a phone until the
-owner changes it or #32 records an evidence-backed release decision.
+read the newest exact-device status and capability matrix; confirm the
+recovery invariant still holds; identify one small unblocked issue; send
+Claude an issue-scoped task packet; review its PR and evidence; then
+reconcile issue state, plan, status and matrix.
+
+Next actionable step from this snapshot (#92): when the refreshed 1-r3
+image build finishes, the lead agent verifies its manifest hashes and records the
+build result, flashes it through the recovery-gated
+`just pixel-9a-dev-flash`, and reruns the read-only
+`just pixel-9a-s5300-s2-preflight`. Only a pre-mount `go`, plus a fresh
+owner decision, permits the manual source mounts; the active S2 boot and
+teardown workflow still needs its own reviewed PR before any CPIF node opens.
+In parallel and off-device, review the #91 A2DP playback workflow before any
+audible run, and continue #94, #76 and #99. The standing goal remains a fully
+functioning postmarketOS-based Pixel 9a phone until the owner changes it or
+#32 records an evidence-backed release decision.
