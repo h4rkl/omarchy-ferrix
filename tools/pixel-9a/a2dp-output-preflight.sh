@@ -17,17 +17,21 @@ set -eu
 #                       connected Audio Sink device, exactly one bluez A2DP
 #                       sink whose node name and BlueZ address both name that
 #                       device, no ALSA/other/headset/unreadable sink, no
-#                       audio stream or filter, both internal speaker-path
-#                       controls `off`, no open ALSA playback PCM, pw-cat with
-#                       --target and --properties, and the reviewed services,
-#                       packages, kernel, and root
+#                       audio stream, no filter other than WirePlumber's
+#                       BlueZ source-loopback pair bound to that device, both
+#                       internal speaker-path controls `off`, no open ALSA
+#                       playback PCM, pw-cat with --target and --properties,
+#                       the reviewed PipeWire/WirePlumber versions, one
+#                       WirePlumber daemon with the reviewed invocation and
+#                       configuration tree and no override file, and the
+#                       reviewed services, packages, kernel, and root
 #   blocked             anything else, with the reasons in
 #                       a2dp_preflight_problems
 #
-# Neither result opens the active proof. No playback mode exists: whether a
-# pw-cat stream aimed at that sink can fall back to another sink, and how the
-# on-image WirePlumber honours an explicit target, are not verified on the
-# target (audio-route-decision.md, "Bluetooth A2DP output preflight").
+# Neither result opens the active proof. No playback mode exists: the
+# pinned-source review (audio-route-decision.md, "A2DP route source review")
+# names the stream properties that keep a stream off every sink but its
+# target. An active playback workflow has not yet been implemented.
 # The guest never plays or records audio, pairs, connects, trusts, powers,
 # scans, selects a profile or default, changes a volume, writes a mixer
 # control, loads modules, or starts or stops a service. capabilities.toml is
@@ -51,7 +55,10 @@ out="${FERRIX_OUT_DIR:-$root/out}/pixel-9a/a2dp-output-preflight"
 dt_model='ZUMA PRO TEGU MP on ZUMA PRO'
 dt_compatible='google,ZUMA PRO TEGU'
 pinned_kernel=6.1.124-android14-11-ga4662a84a15f
-active_gate_reason=pipewire-explicit-target-fallback-unverified-on-target
+active_gate_reason=active-playback-workflow-not-implemented
+# Versions whose source and packaged configuration were reviewed for #91.
+reviewed_pipewire=1.6.8-r4
+reviewed_wireplumber=0.5.15-r0
 max_output=65536
 acm_timeout=${FERRIX_PIXEL9A_ACM_TIMEOUT:-120}
 
@@ -137,6 +144,9 @@ bt_controllers bt_powered bt_paired_query bt_paired bt_paired_audio_sink bt_conn
 pipewire_socket pipewire_graph graph_sinks graph_streams graph_filters
 graph_sink_bluez_a2dp graph_sink_bluez_other graph_sink_alsa graph_sink_null graph_sink_other graph_sink_inspect_failed
 default_sink_class a2dp_sink_codec a2dp_sink_device_match a2dp_sink_default
+graph_filter_groups graph_filter_bt_capture graph_filter_bt_source graph_filter_bt_unbound graph_filter_other
+graph_filter_inspect_failed filter_link_group_match
+wireplumber_daemon wireplumber_invocation wireplumber_config_overrides wireplumber_data_tree
 watch.tdm_0_rx_mixer_ep1 watch.tas25xx_asi_switch pcm_scan_procs pcm_opener_scan playback_pcm_openers probe_complete'
 
 # validate FILE: prints nothing and succeeds only for the exact key set.
@@ -171,7 +181,7 @@ cat "$work/guest.out" >>"$transcript"
 
 get() { sed -n "s/^$1=//p" "$2" | sed -n '1p'; }
 g() { get "$1" "$work/guest.out"; }
-[ "$(g probe)" = a2dp-output-preflight ] && [ "$(g probe_version)" = 2 ] && [ "$(g probe_complete)" = yes ] ||
+[ "$(g probe)" = a2dp-output-preflight ] && [ "$(g probe_version)" = 3 ] && [ "$(g probe_complete)" = yes ] ||
 	die 'guest did not report the reviewed preflight probe' 5
 [ "$(g dt_model)" = "$dt_model" ] && [ "$(g dt_compatible)" = "$dt_compatible" ] ||
 	die 'guest output does not carry the exact tegu identity' 4
@@ -195,6 +205,14 @@ preflight_problems() {
 		case "$(get "pkg.$package" "$f")" in absent|unavailable|'') add "package-$(printf '%s' "$package" | tr '_' '-')-not-installed" ;; esac
 	done
 	[ "$(get spa_bluez_plugin "$f")" = present ] || add spa-bluez-plugin-missing
+	# The route review holds only for the exact reviewed builds.
+	{ [ "$(get pkg.pipewire "$f")" = "$reviewed_pipewire" ] && [ "$(get pkg.pipewire_spa_bluez "$f")" = "$reviewed_pipewire" ] &&
+		[ "$(get pkg.pipewire_tools "$f")" = "$reviewed_pipewire" ] && [ "$(get pkg.wireplumber "$f")" = "$reviewed_wireplumber" ]; } ||
+		add pipewire-versions-not-reviewed
+	[ "$(get wireplumber_daemon "$f")" = one ] || add wireplumber-daemon-not-one
+	[ "$(get wireplumber_invocation "$f")" = reviewed ] || add wireplumber-invocation-unreviewed
+	n_is wireplumber_config_overrides 0 || add wireplumber-config-override-present
+	[ "$(get wireplumber_data_tree "$f")" = reviewed ] || add wireplumber-config-unreviewed
 	for service in bluetooth ferrix_bluetooth_uart ferrix_pipewire ferrix_audio; do
 		[ "$(get "service.$service" "$f")" = started ] || add "service-$(printf '%s' "$service" | tr '_' '-')-not-started"
 	done
@@ -213,7 +231,24 @@ preflight_problems() {
 		n_is graph_sink_other 0 || add unclassified-sink-present
 		n_is graph_sink_inspect_failed 0 || add sink-inspect-failed
 		n_is graph_streams 0 || add audio-streams-present
-		n_is graph_filters 0 || add audio-filters-present
+		# Zero filters, or exactly WirePlumber's BlueZ source-loopback pair:
+		# one group of two nodes, one capture and one source half, both bound
+		# to the matched A2DP sink and sharing the link group. Anything else
+		# blocks, with every specific reason after audio-filters-present.
+		fp=''
+		if n_is graph_filters 0; then
+			n_is graph_filter_groups 0 || fp=bluez-loopback-pair-incomplete
+		else
+			n_is graph_filter_inspect_failed 0 || fp="${fp:+$fp,}filter-inspect-failed"
+			n_is graph_filter_other 0 || fp="${fp:+$fp,}unrecognised-filter-present"
+			n_is graph_filter_bt_unbound 0 || fp="${fp:+$fp,}bluez-loopback-not-bound-to-sink"
+			# Every node must be one counted half: the class counts sum to two.
+			{ n_is graph_filters 2 && n_is graph_filter_groups 1 && n_is graph_filter_bt_capture 1 &&
+				n_is graph_filter_bt_source 1 && n_is graph_filter_bt_unbound 0 && n_is graph_filter_other 0 &&
+				n_is graph_filter_inspect_failed 0 && [ "$(get filter_link_group_match "$f")" = yes ]; } ||
+				fp="${fp:+$fp,}bluez-loopback-pair-incomplete"
+		fi
+		[ -z "$fp" ] || { add audio-filters-present; add "$fp"; }
 		[ "$(get default_sink_class "$f")" != ambiguous ] || add default-sink-ambiguous
 		if n_is graph_sink_bluez_a2dp 1; then
 			[ "$(get a2dp_sink_device_match "$f")" = yes ] || add a2dp-sink-device-mismatch
@@ -234,6 +269,8 @@ for key in pkg.bluez pkg.pipewire pkg.wireplumber pkg.pipewire_spa_bluez pkg.pip
 	pw_cat_target_option pw_cat_properties_option bt_controllers bt_powered bt_paired bt_paired_audio_sink \
 	bt_connected_audio_sink pipewire_graph graph_sinks graph_sink_bluez_a2dp graph_sink_alsa graph_sink_null \
 	default_sink_class a2dp_sink_codec a2dp_sink_device_match a2dp_sink_default \
+	graph_filters graph_filter_groups graph_filter_bt_capture graph_filter_bt_source filter_link_group_match \
+	wireplumber_daemon wireplumber_invocation wireplumber_config_overrides wireplumber_data_tree \
 	watch.tdm_0_rx_mixer_ep1 watch.tas25xx_asi_switch pcm_opener_scan playback_pcm_openers; do
 	printf '%s=%s\n' "$key" "$(g "$key")"
 done

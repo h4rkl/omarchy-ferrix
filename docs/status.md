@@ -1,5 +1,33 @@
 # Status
 
+## 2026-10-12 (A2DP route source review and preflight v3; physical:google-pixel-9a-tegu-gxq96-mp1-0)
+
+- Probe v2 ran on the exact phone with one paired, connected Audio Sink
+  (reported by the session that operates the phone). Every check held except
+  two filter nodes, so the result was `blocked` on `audio-filters-present`.
+- A review of pinned PipeWire 1.6.8 and WirePlumber 0.5.15 identifies those
+  nodes as WirePlumber's BlueZ source loopback, the headset-microphone path,
+  not an output path. Alpine 3.24 packaging and the pmOS v26.06 overlay were
+  hash-checked against the sources. The review also names the stream
+  properties that keep an explicit-target stream off every other sink.
+  Sources, links, and limits are in
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/audio-route-decision.md`.
+- Read-only probe v3 accepts only that pair bound to the matched sink. It
+  also pins the reviewed builds and requires the reviewed WirePlumber
+  invocation, no override files, and the packaged configuration-tree
+  digest. It passed 223 fake-guest cases
+  (`just pixel-9a-a2dp-output-preflight-test`). On the exact phone, a v3
+  read-only run with the headset connected reported `candidate-observed`:
+  one LDAC bluez-a2dp default sink matched the connected Audio Sink, and
+  the two filters matched the bound BlueZ source-loopback pair. The two
+  speaker controls were off, the PCM opener scan was complete with zero
+  openers, and the reviewed WirePlumber daemon/configuration checks passed.
+  An earlier v3 run blocked while the accessory was disconnected. Aggregate
+  transcripts remain ignored under `out/pixel-9a/a2dp-output-preflight/`.
+- No playback mode was added; `active_gate=closed`. An audible proof and a
+  separate owner decision remain. Internal TAS playback remains NO-GO and
+  `[audio]` stays `unsupported`.
+
 ## 2026-10-12 (Bluetooth A2DP output preflight; physical:google-pixel-9a-tegu-gxq96-mp1-0)
 
 - The checked-in read-only #91 preflight ran on the newly staged Kleaf image.
