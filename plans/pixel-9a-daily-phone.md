@@ -90,11 +90,19 @@ the project must not silently call that a fully functioning Pixel 9a.
   the proof results on 2026-10-12. [PR #75](https://github.com/h4rkl/omarchy-ferrix/pull/75)
   records a conditional CPIF E0 ABI decision: route A remains viable only
   after target-local reset, SRINFO and OEM loop adaptations. E1 device
-  inventory, adapter review and read-only NV checks remain prerequisites to
-  a manual CP boot. The source review also found that the Rust seven-byte FMT
+  inventory is complete; adapter review and read-only NV checks in
+  [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79) remain before a
+  manual CP boot. The source review also found that the Rust seven-byte FMT
   codec is described as a tegu SIT envelope without source support;
   [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76) tracks correction
   before that codec is used for tegu control traffic.
+- [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) E1 read-only
+  inventory on the exact booted Pixel returned `go`: the three CPIF modules
+  are Live, one CPIF platform device is bound and `OFFLINE`, all twelve
+  expected nodes are character devices in one `cpif` class, no WWAN class
+  device exists, and 30 `rmnet*` netdevs exist before CP boot. The probe
+  opened no CPIF node. This is pre-boot kernel evidence only; the adapter,
+  read-only NV size checks in #79 and runtime CP boot trial remain.
 - The telephony subscribe race [#66](https://github.com/h4rkl/omarchy-ferrix/issues/66)
   was closed by [PR #67](https://github.com/h4rkl/omarchy-ferrix/pull/67).
   The separate snapshot/event gap [#68](https://github.com/h4rkl/omarchy-ferrix/issues/68)
@@ -301,7 +309,7 @@ is closed after the independent networkd CI test race fix.
 | --- | --- | --- |
 | 0. Known-good device and recovery | Existing Pixel workflows and board proposal | [#25](https://github.com/h4rkl/omarchy-ferrix/issues/25): pinned stock restore, truthful failure handling, and same-device Android 17 boot verified on 2026-10-12; physical evidence is in PR #47. Recheck the recovery invariant before every new device load. |
 | 0a. Physical inventory transport | #2 and #34 read-only inventories | [#52](https://github.com/h4rkl/omarchy-ferrix/issues/52) / PR #54: CDC-ACM transport merged and both inventories ran on the booted exact device. Carry their findings into #34 and #55; neither inventory promotes a capability. |
-| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): prove recovery-safe modem calibration mounts before CP boot. [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55): load pinned AoC firmware and re-inventory ALSA. [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76): correct the Rust FMT codec boundary before using it for tegu SIT. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
+| 1. Basic phone services | [#1](https://github.com/h4rkl/omarchy-ferrix/issues/1) S5300 modem/SIM/data/SMS/call state; [#2](https://github.com/h4rkl/omarchy-ferrix/issues/2) playback/capture/routing | [#34](https://github.com/h4rkl/omarchy-ferrix/issues/34): prove recovery-safe modem calibration mounts before CP boot. [#55](https://github.com/h4rkl/omarchy-ferrix/issues/55): load pinned AoC firmware and re-inventory ALSA. [#79](https://github.com/h4rkl/omarchy-ferrix/issues/79): verify S5300 NV input sizes through the accepted read-only mount barrier. [#76](https://github.com/h4rkl/omarchy-ferrix/issues/76): correct the Rust FMT codec boundary before using it for tegu SIT. [#27](https://github.com/h4rkl/omarchy-ferrix/issues/27): ordinary voice, VoLTE/IMS, call audio and separate emergency readiness. #1 and #2 are independent early investigations but #27 end-to-end proof depends on both. |
 | 2. Power and radios | [#9](https://github.com/h4rkl/omarchy-ferrix/issues/9) power key, blanking, suspend/wake, sensors; [#24](https://github.com/h4rkl/omarchy-ferrix/issues/24) Wi-Fi hardening; [#5](https://github.com/h4rkl/omarchy-ferrix/issues/5) Bluetooth pairing; [#7](https://github.com/h4rkl/omarchy-ferrix/issues/7) hidden Wi-Fi; [#8](https://github.com/h4rkl/omarchy-ferrix/issues/8) time/RTC | [#26](https://github.com/h4rkl/omarchy-ferrix/issues/26): charge/thermal/endurance, with screen-off drain dependent on #9. |
 | 3. Camera, location and other hardware | [#3](https://github.com/h4rkl/omarchy-ferrix/issues/3) camera; #9 owns orientation/proximity/ambient sensors | [#28](https://github.com/h4rkl/omarchy-ferrix/issues/28) GNSS/location; [#29](https://github.com/h4rkl/omarchy-ferrix/issues/29) NFC/fingerprint feasibility and proof. |
 | 4. App and shell usability | [#19](https://github.com/h4rkl/omarchy-ferrix/issues/19) browser performance/video/screen fit; [#4](https://github.com/h4rkl/omarchy-ferrix/issues/4) optional GPU; [#12](https://github.com/h4rkl/omarchy-ferrix/issues/12), [#21](https://github.com/h4rkl/omarchy-ferrix/issues/21), [#22](https://github.com/h4rkl/omarchy-ferrix/issues/22), [#23](https://github.com/h4rkl/omarchy-ferrix/issues/23) shell/navigation/notifications; [#14](https://github.com/h4rkl/omarchy-ferrix/issues/14) text; [#16](https://github.com/h4rkl/omarchy-ferrix/issues/16) pmOS QEMU graphics | No duplicate browser or shell issue. Keep browser usability evidence distinct from hardware GPU support. |

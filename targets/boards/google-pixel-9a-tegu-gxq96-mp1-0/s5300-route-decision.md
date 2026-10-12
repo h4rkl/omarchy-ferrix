@@ -65,12 +65,12 @@ work around.
 | Kleaf route boots exact device to Home | Physical, exact target | docs/status.md 2026-10-09 |
 | Kleaf build includes `shm_ipc`, `cpif_page`, `cpif` | Source/config (`modules-initfs`, `kernel-config.tegu`) | not observed loaded |
 | DT selects `PROTOCOL_SIT`; FMT 245/246, RFS 41, OEM 129–136, rmnet 181–210, boot 241 | Pinned source | `s5300-channels.toml` |
-| FMT userspace envelope (7-byte packed header) | Pinned source, `ferrix-s5300-cpif` round-trip tests | not exercised on device |
-| Opening `umts_boot0`/`umts_ipc*` triggers link `init_comm` (active, not read-only) | Pinned source | `ipc_io_device.c` |
+| tegu SIT payload framing; the seven-byte `sipc_fmt_hdr` belongs to the SIPC path | E0 pinned-source comparison; Rust codec correction tracked in #76 | not exercised on device |
+| Opening `umts_boot0`/`umts_ipc*` calls `init_comm` and changes open counts; the pinned SIT handler returns without link setup | Pinned source, E0 | runtime module skew remains, so E1 does not open nodes |
 | CP boot inputs: TOC `BOOT`/MAIN/VSS/APM from current-slot `modem.bin`, EFS NV, persist `cpsha`, runtime 161-byte handover | External `exynos-modem` source | not exercised |
 | Physical S5300 + stock firmware can attach on this board | External Halium port report | not Ferrix evidence; Android RIL path |
-| **U1** Does `cpif` load and probe on the dev boot; `modem_state`; which `/dev` nodes and class name exist | Unknown | E1 |
-| **U2** Google CPIF boot/load ioctl contract (image struct, offsets, sequence) fully defined by GPL kernel source | Unknown | E0 |
+| **U1** Does `cpif` load and probe on the dev boot; `modem_state`; which `/dev` nodes and class name exist | Physical E1 `go`: three modules Live, one bound `cp_interface`, `OFFLINE`, twelve `cpif` class character nodes; 30 `rmnet*` before CP boot | E1; issue #1 |
+| **U2** Google CPIF boot/load ioctl contract (image struct, offsets, sequence) fully defined by GPL kernel source | E0 found the normal cold-boot layouts and encodings defined and factory-module commands matching; runtime firmware acceptance remains unknown | E0, then S2 |
 | **U3** FMT payload on `umts_ipc0/1` byte-identical to what `wwan0sit0/1` gives `sit-proxy` | Unknown (same CP firmware; both kernels strip the SIT link header, still unproven) | E0, then S3 |
 | **U4** Driver/firmware skew: pinned CPIF `a8976934` (android16, 6.1.124 dev GKI) vs CP3A `modem.bin` shipped with stock 6.1.162 | Unknown | E0 (offline `modinfo` of factory `cpif.ko`), S2 |
 | **U5** SIT/GEMS command vocabulary sufficient for SIM/attach/data/SMS/voice | External plugin's claim only | S3–S7 |
@@ -159,16 +159,24 @@ OEM and FMT paths also need CLI arguments (`/dev/oem_ipc1`,
 unpublished source `fd5221767c57`. NV file sizes are also unknown. The next
 step is E1, plus read-only NV presence and size checks once S0 allows it.
 
-**E1, read-only dev-boot inventory** (lead, existing `radios.sh` CPIF probe
-or `discover_at`; nothing opened):
+**E1, read-only dev-boot inventory** (`just pixel-9a-s5300-cpif-inventory`
+over CDC-ACM; nothing opened; the exact `go`/`no-go`/`incomplete` rules and
+remaining unknowns are in the
+[README](README.md#s5300-cpif-e1-inventory-issue-1)):
 - `/proc/modules` contains `cpif`, `shm_ipc`, and `cpif_page`;
 - the `samsung,exynos-cp` platform device is bound;
-- `modem_state` is `OFFLINE` (or similar non-ONLINE);
+- `modem_state` is exactly `OFFLINE` for an E1 `go`;
 - `/dev/umts_boot0`, `umts_ipc0`, `umts_ipc1`, `umts_rfs0`, and `oem_ipc*`
   are character devices, with their class/subsystem recorded;
 - Record whether `rmnet*` netdevs exist before CP boot; their absence at this
   stage alone does not reject A.
 
+`go` needs all of these, exactly one bound platform device, exactly
+`OFFLINE`, all twelve nodes in one sysfs class with matching device numbers,
+and no WWAN surface. An unreadable fact gives `incomplete`, never `go`.
+The exact-device run on the `674157b` image met those criteria without
+opening any CPIF node. The observed `rmnet*` count was 30 before CP boot;
+this does not establish a data connection.
 If the modules are not loaded, fix module loading first (cheap). If the
 platform node is missing or probe fails in dmesg, that is a kernel/DT problem:
 investigate it before any userspace work.
