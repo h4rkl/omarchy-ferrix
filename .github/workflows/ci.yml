@@ -125,7 +125,7 @@ jobs:
             libpixman-1-dev libxkbcommon-dev libgbm-dev libegl1-mesa-dev
 
       - name: Cache cargo registry and target directory
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: cargo fmt --check
         run: cargo fmt --check
@@ -390,7 +390,7 @@ jobs:
           rustup show
 
       - name: Cache cargo registry and target directory
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Download guest artifacts from qemu-check
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v5.0.0
