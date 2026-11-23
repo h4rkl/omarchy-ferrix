@@ -58,19 +58,20 @@ Evidence labelled `physical:` applies to this exact target only.
 
 The ten newest log entries, newest first:
 
-1. [2026-10-12: 1-r5 image, S5300 S2 pre-mount GO with opener positive control and unit/boot identity](status-log/2026-10.md#2026-10-12-1-r5-image-s5300-s2-pre-mount-go-with-opener-positive-control-and-unitboot-identity-issues-107-and-108-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-2. [2026-10-12: device-google-tegu 1-r5: /mnt/vendor via install script](status-log/2026-10.md#2026-10-12-device-google-tegu-1-r5-mntvendor-via-install-script-builder-evidence-no-physical-claim)
-3. [2026-10-12: A2DP active proof play](status-log/2026-10.md#2026-10-12-a2dp-active-proof-play-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-4. [2026-10-12: S5300 S2 active CP boot](status-log/2026-10.md#2026-10-12-s5300-s2-active-cp-boot-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-5. [2026-10-12: S5300 S2 decision binding](status-log/2026-10.md#2026-10-12-s5300-s2-decision-binding-issue-108-offline-only-no-physical-claim)
-6. [2026-10-12: S5300 CPIF opener-scan positive control](status-log/2026-10.md#2026-10-12-s5300-cpif-opener-scan-positive-control-issue-107-offline-only)
-7. [2026-10-12: 1-r3 image and S5300 S2 pre-mount GO](status-log/2026-10.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-8. [2026-10-12: S5300 S2 read-only preflight](status-log/2026-10.md#2026-10-12-s5300-s2-read-only-preflight-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-9. [2026-10-12: A2DP active proof dry runs](status-log/2026-10.md#2026-10-12-a2dp-active-proof-dry-runs-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0-dry-only)
-10. [2026-10-12: A2DP active proof workflow](status-log/2026-10.md#2026-10-12-a2dp-active-proof-workflow-mock-google-pixel-9a-tegu-gxq96-mp1-0)
+1. [2026-11-04: Pixel 9a stock Android restore](status-log/2026-11.md#2026-11-04-utc-pixel-9a-stock-android-restore)
+2. [2026-10-12: 1-r5 image, S5300 S2 pre-mount GO with opener positive control and unit/boot identity](status-log/2026-10.md#2026-10-12-1-r5-image-s5300-s2-pre-mount-go-with-opener-positive-control-and-unitboot-identity-issues-107-and-108-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+3. [2026-10-12: device-google-tegu 1-r5: /mnt/vendor via install script](status-log/2026-10.md#2026-10-12-device-google-tegu-1-r5-mntvendor-via-install-script-builder-evidence-no-physical-claim)
+4. [2026-10-12: A2DP active proof play](status-log/2026-10.md#2026-10-12-a2dp-active-proof-play-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+5. [2026-10-12: S5300 S2 active CP boot](status-log/2026-10.md#2026-10-12-s5300-s2-active-cp-boot-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+6. [2026-10-12: S5300 S2 decision binding](status-log/2026-10.md#2026-10-12-s5300-s2-decision-binding-issue-108-offline-only-no-physical-claim)
+7. [2026-10-12: S5300 CPIF opener-scan positive control](status-log/2026-10.md#2026-10-12-s5300-cpif-opener-scan-positive-control-issue-107-offline-only)
+8. [2026-10-12: 1-r3 image and S5300 S2 pre-mount GO](status-log/2026-10.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+9. [2026-10-12: S5300 S2 read-only preflight](status-log/2026-10.md#2026-10-12-s5300-s2-read-only-preflight-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+10. [2026-10-12: A2DP active proof dry runs](status-log/2026-10.md#2026-10-12-a2dp-active-proof-dry-runs-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0-dry-only)
 
 ## Log
 
+- [`docs/status-log/2026-11.md`](status-log/2026-11.md)
 - [`docs/status-log/2026-10.md`](status-log/2026-10.md)
 - [`docs/status-log/2026-09.md`](status-log/2026-09.md)
 

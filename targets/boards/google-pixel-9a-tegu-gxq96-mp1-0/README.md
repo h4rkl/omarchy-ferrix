@@ -1,5 +1,12 @@
 # Google Pixel 9a — tegu / GXQ96 / MP1.0
 
+Stock recovery refresh (2026-11-04 UTC): the pinned Android 17
+`CP3A.260905.009` factory restore completed with exit 0 on slot B, wiped
+userdata/metadata, and requested reboot without relocking. Ignored evidence:
+`out/pixel-9a/restore/20261104T195914Z.txt`. Post-restore discovery at
+`20:06:14Z` returned `no-device`; fresh Android boot verification is pending.
+The Ferrix observations below describe earlier sessions.
+
 > **Current state (2026-10-10):** on the
 > [development flash route](#development-flash-route) Ferrix boots from slot b
 > and reaches home unattended under required app isolation. Power, display,
