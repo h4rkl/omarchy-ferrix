@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::CgroupOutcome;
+use crate::{CgroupOutcome, SeccompOutcome, SeccompPolicy};
 
 /// The application's filesystem view ([`crate::fsview`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -194,6 +194,9 @@ pub struct IsolationPolicy {
     pub resources: ResourcePolicy,
     /// Filesystem view; a minimal root unless the manifest asks to inherit.
     pub fs_view: FsViewPolicy,
+    /// System-call filter ([`crate::seccomp`]); the default profile unless
+    /// the launch configuration relaxes it.
+    pub seccomp: SeccompPolicy,
 }
 
 impl Default for IsolationPolicy {
@@ -211,6 +214,7 @@ impl Default for IsolationPolicy {
             run_dir: RunDirPolicy::default(),
             resources: ResourcePolicy::default(),
             fs_view: FsViewPolicy::default(),
+            seccomp: SeccompPolicy::default(),
         }
     }
 }
@@ -230,6 +234,7 @@ impl IsolationPolicy {
             run_dir: RunDirPolicy::default(),
             resources: ResourcePolicy::none(),
             fs_view: FsViewPolicy::inherit(),
+            seccomp: SeccompPolicy::unconfined(),
         }
     }
 
@@ -283,6 +288,8 @@ pub struct AppliedIsolation {
     pub network: NetworkOutcome,
     /// Filesystem view (`{mode: inherit}` unless a minimal root was built).
     pub fs_view: FsViewOutcome,
+    /// The installed system-call filter.
+    pub seccomp: SeccompOutcome,
     /// The application's cgroup (`{}` when none was created).
     pub cgroup: CgroupOutcome,
 }
@@ -303,7 +310,8 @@ impl IsolationReport {
             || requested.no_new_privs
             || requested.run_dir.is_private()
             || requested.resources.cgroup
-            || requested.fs_view.is_minimal();
+            || requested.fs_view.is_minimal()
+            || requested.seccomp.is_confined();
         Self {
             requested,
             applied: AppliedIsolation::default(),

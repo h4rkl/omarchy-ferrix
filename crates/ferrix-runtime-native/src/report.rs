@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     AppliedIsolation, CgroupOutcome, FsViewOutcome, IsolationPolicy, IsolationReport, NamespaceSet,
-    NetworkOutcome, RunDirOutcome,
+    NetworkOutcome, RunDirOutcome, SeccompOutcome,
 };
 
 /// Builds one record: `evidence` first, then `event`, then the fields.
@@ -57,6 +57,8 @@ pub struct SandboxReady {
     pub network: NetworkOutcome,
     /// `{mode, root, data_dir, home, read_only}` from stage 2.
     pub fs_view: FsViewOutcome,
+    /// `{profile, denied, allowed}` from stage 2.
+    pub seccomp: SeccompOutcome,
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -68,6 +70,7 @@ impl SandboxReady {
             cgroup: self.cgroup.clone(),
             network: self.network.clone(),
             fs_view: self.fs_view.clone(),
+            seccomp: self.seccomp.clone(),
             ..self
                 .namespaces
                 .applied(self.private_tmp, self.no_new_privs, self.run_dir.clone())
@@ -92,6 +95,7 @@ pub struct InitReport {
     pub no_new_privs: bool,
     pub run_dir: RunDirOutcome,
     pub fs_view: FsViewOutcome,
+    pub seccomp: SeccompOutcome,
     pub reasons: Vec<String>,
 }
 
@@ -416,6 +420,11 @@ mod tests {
                 home: None,
                 read_only: vec!["/usr".to_owned(), "/etc".to_owned()],
             },
+            seccomp: SeccompOutcome {
+                profile: Some(crate::SeccompProfile::Default),
+                denied: 45,
+                allowed: Vec::new(),
+            },
             degraded: false,
             reason: None,
         };
@@ -439,6 +448,11 @@ mod tests {
         assert_eq!(report.applied.cgroup, ready.cgroup);
         assert!(report.applied.net_namespace && report.applied.network.loopback_up);
         assert_eq!(report.applied.fs_view, ready.fs_view);
+        assert!(report.applied.seccomp.applied());
+        assert!(
+            text.contains(r#""seccomp":{"profile":"default","denied":45}"#),
+            "{text}"
+        );
         assert!(
             text.contains(r#""fs_view":{"mode":"minimal","root":"pivot_root","data_dir":"/root/.local/share/ferrix/org.ferrix.terminal","read_only":["/usr","/etc"]}"#),
             "{text}"

@@ -317,6 +317,12 @@ impl Runtime for NativeRuntime {
                 reason: "run_dir.mode private requires mount_namespace".to_owned(),
             });
         }
+        if let Err(reason) = crate::seccomp::validate_allow(&launch.isolation.seccomp) {
+            return Err(AppError::InvalidDescriptor {
+                id: Some(app.id.clone()),
+                reason,
+            });
+        }
         if launch.isolation.fs_view.is_minimal() && !launch.isolation.mount_namespace {
             return Err(AppError::InvalidDescriptor {
                 id: Some(app.id.clone()),
@@ -670,6 +676,23 @@ mod tests {
             ..IsolationPolicy::default()
         };
         assert!(!with_grants(inherit, &files).fs_view.home);
+    }
+
+    #[test]
+    fn an_unknown_seccomp_relaxation_is_an_invalid_descriptor() {
+        let app = descriptor();
+        let policy = IsolationPolicy {
+            seccomp: crate::SeccompPolicy {
+                allow: vec!["not_a_syscall".to_owned()],
+                ..crate::SeccompPolicy::default()
+            },
+            ..IsolationPolicy::default()
+        };
+        let config = launch_value(&["sh", "-c", "exit 0"], policy);
+        assert!(matches!(
+            runtime().launch(&app, &config, &context()),
+            Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("not_a_syscall")
+        ));
     }
 
     #[test]

@@ -27,6 +27,7 @@ mod plan;
 mod policy;
 mod report;
 mod runtime;
+pub mod seccomp;
 mod sockets;
 
 pub use cgroup::{
@@ -37,4 +38,5 @@ pub use plan::*;
 pub use policy::*;
 pub use report::*;
 pub use runtime::*;
+pub use seccomp::{SeccompOutcome, SeccompPolicy, SeccompProfile};
 pub use sockets::*;

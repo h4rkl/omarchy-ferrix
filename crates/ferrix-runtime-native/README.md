@@ -207,6 +207,42 @@ be built is `sandbox-mount-failed{target:"/"}` and fails closed under
 `files-home` (Contacts exports to `~/Documents` until a document portal
 exists, #11); every other application sees only its data directory.
 
+## System-call filter (`seccomp`, issue #10)
+
+```json
+"isolation": { "seccomp": { "profile": "default" | "unconfined", "allow": ["ptrace"] } }
+```
+
+`default` installs a default-deny-dangerous filter compiled with
+[`seccompiler`](https://github.com/rust-vmm/seccompiler) (rust-vmm,
+`Apache-2.0 OR BSD-3-Clause`, taken under Apache-2.0; its only dependency is
+`libc`; Linux-only dependency). Everything is allowed except the calls in
+`seccomp::DENIED_SYSCALLS` (plus `ioperm`/`iopl`/`uselib` on x86_64), which
+return `EPERM`: loading kernel code or BPF (`kexec_*`, `*_module`, `bpf`),
+reaching into other processes (`ptrace`, `process_vm_*`, `pidfd_getfd`,
+`kcmp`), changing the filesystem view or namespaces the sandbox built
+(`mount`, `umount2`, `pivot_root`, `chroot`, the new mount API,
+`mount_setattr`, `setns`, `unshare`, and `clone` with any `CLONE_NEW*`
+flag), the kernel keyring, system-wide state (clocks, hostname, swap,
+`reboot`, `acct`, quotas, `syslog`), and exploit primitives (`userfaultfd`,
+`perf_event_open`, `open_by_handle_at`). `clone3` returns `ENOSYS` from a
+second, stacked filter (its flags sit behind a pointer), so libc falls back
+to `clone`. Stage 2 installs the filters last, after every mount and
+`no_new_privs`, before it reports and starts the application; stage 2
+itself and every descendant run under them.
+
+The escape hatch is per launch configuration (the runtime-private part of
+the descriptor, so each runtime adapter decides what its payload needs):
+`allow` removes named entries from the deny list (`clone-namespaces` for the
+`clone` rule); a name that is not on the deny list is `InvalidDescriptor`, so
+a typo never reads as a relaxation. `profile: unconfined` installs nothing.
+The Android runtime (Waydroid) does not use this sandbox and is not covered.
+`sandbox-ready` gains `seccomp: {profile, denied, allowed}`; a kernel that
+refuses the filter (no `CONFIG_SECCOMP_FILTER`) is a
+`sandbox-degraded{feature:"seccomp"}` record and fails closed under
+`Required` (`unmet: seccomp`). `kexec_file_load`'s number is pinned in the
+source because musl's aarch64 `libc` bindings lack it.
+
 ## Readiness and records
 
 Readiness is observable: stage 2 reports to stage 1 and stage 1 reports to the
@@ -254,14 +290,14 @@ unless `FERRIX_SANDBOX_TESTS=required`, which turns every skip into a failure.
 ## Not provided yet
 
 No uid change (the application keeps the launcher's identity, mapped 1:1 in a
-user namespace), no seccomp filter, no cgroup freezing (limits only, see
+user namespace), no cgroup freezing (limits only, see
 above), no per-application network routing (granted apps share the launcher
 network), no filesystem restriction under `fs_view: inherit` beyond `/proc`,
 `/tmp`, and the socket directory (with `run_dir: private` the rest of `/run`,
 including the D-Bus system bus socket, stays visible; `private-run` hides
 it), and no capability dropping beyond `no_new_privs`: a root launcher's
 application is still root inside its namespaces, so the read-only binds hold
-only as long as it cannot `mount` (seccomp, below). Socket
+only as long as it cannot `mount` (the seccomp filter refuses it). Socket
 visibility is enforced only when the manifest sets `run_dir.mode`; the
 services enforce capabilities per request regardless (ADR-004 §3). Sandbox
 `isolation()` is only as truthful as the readiness report; the `sandbox-ready`
@@ -307,3 +343,9 @@ and a new file lands in the real home; `HOME=/etc` with `files-home` is
 `IsolationUnavailable`; `inherit` sees the host file and still gets the
 data directory. The cgroup tests run under `inherit` because they signal
 through host files.
+The seccomp tests cover: under the default profile a root application in its
+namespaces cannot `mount` a tmpfs, remount `/usr` read-write, `unshare -n`
+or `-U`, or `chroot`, and `/proc/self/status` shows `Seccomp: 2`; the
+control run with `profile: unconfined` gets as far as the `mount` (exit
+20), so the refusal is the filter's; `allow: [mount, umount2]` lets the
+mount through while `unshare` stays refused.

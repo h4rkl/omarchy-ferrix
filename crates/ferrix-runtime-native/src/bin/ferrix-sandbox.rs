@@ -90,6 +90,9 @@ mod linux {
         DEV_DIRS, DEV_NODES, SYSTEM_DIRS, app_data_dir, exposable_home, ferrix_config_dir,
         home_dir, mounts_under, under_root,
     };
+    use ferrix_runtime_native::seccomp::{
+        denies_clone_namespaces, effective_denied, syscall_number,
+    };
     use ferrix_runtime_native::{
         AppliedIsolation, EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport,
         IsolationMode, IsolationPolicy, NamespaceSet, NetworkOutcome, ProbeReport, RUN_ROOT,
@@ -99,6 +102,7 @@ mod linux {
     };
     use ferrix_runtime_native::{CgroupError, CgroupOutcome, app_cgroup_name, cgroup_slice};
     use ferrix_runtime_native::{FsViewMode, FsViewOutcome};
+    use ferrix_runtime_native::{SeccompOutcome, SeccompPolicy, SeccompProfile};
     use rustix::io::Errno;
     use rustix::mount::{
         MountFlags, MountPropagationFlags, UnmountFlags, mount, mount_bind, mount_bind_recursive,
@@ -637,6 +641,7 @@ mod linux {
         let mut no_new_privs = false;
         let mut run_dir_outcome = RunDirOutcome::default();
         let mut fs_view = FsViewOutcome::default();
+        let mut seccomp = SeccompOutcome::default();
         match listener
             .map(|l| l.wait_for_line(&mut child, INIT_REPORT_TIMEOUT, &mut forward_pending))
         {
@@ -646,6 +651,7 @@ mod linux {
                     no_new_privs = report.no_new_privs;
                     run_dir_outcome = report.run_dir;
                     fs_view = report.fs_view;
+                    seccomp = report.seccomp;
                     notes.extend(report.reasons);
                 }
                 Err(e) => notes.push(format!("unreadable init report: {e}")),
@@ -680,6 +686,7 @@ mod linux {
             || (args.policy.run_dir.is_private()
                 && run_dir_outcome.mode != args.policy.run_dir.mode)
             || (args.policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal)
+            || (args.policy.seccomp.is_confined() && !seccomp.applied())
             || (args.policy.resources.cgroup && !cgroup.applied())
             || (applied.net && !network.loopback_up)
             || !notes.is_empty();
@@ -693,6 +700,7 @@ mod linux {
             cgroup,
             network,
             fs_view,
+            seccomp,
             degraded,
             reason: (!notes.is_empty()).then(|| notes.join("; ")),
         };
@@ -1158,6 +1166,108 @@ mod linux {
         })
     }
 
+    // -- seccomp (issue #10) ----------------------------------------------
+
+    /// Installs the launch's system-call filter on this thread; stage 2's
+    /// application (and every descendant) inherits it across `fork` and
+    /// `execve`. Two filters are stacked: the deny list (plus `clone` with
+    /// any namespace flag) returns `EPERM`, and `clone3` returns `ENOSYS` so
+    /// libc falls back to `clone`, whose flags the first filter can read.
+    /// `seccompiler::apply_filter` also sets `no_new_privs`, which seccomp
+    /// requires of an unprivileged caller.
+    fn install_seccomp(policy: &SeccompPolicy) -> Result<SeccompOutcome, String> {
+        use std::collections::BTreeMap;
+
+        use seccompiler::{
+            BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition,
+            SeccompFilter, SeccompRule, TargetArch, apply_filter,
+        };
+
+        if !policy.is_confined() {
+            return Ok(SeccompOutcome::default());
+        }
+        let arch =
+            TargetArch::try_from(std::env::consts::ARCH).map_err(|e| format!("seccomp: {e}"))?;
+        let compile = |rules: BTreeMap<i64, Vec<SeccompRule>>, errno: i32| {
+            SeccompFilter::new(
+                rules,
+                SeccompAction::Allow,
+                SeccompAction::Errno(errno.unsigned_abs()),
+                arch,
+            )
+            .and_then(BpfProgram::try_from)
+            .map_err(|e| format!("seccomp filter: {e}"))
+        };
+
+        let denied = effective_denied(policy);
+        let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
+        for name in &denied {
+            let number =
+                syscall_number(name).ok_or_else(|| format!("seccomp: no number for {name}"))?;
+            rules.insert(number, Vec::new());
+        }
+        let mut count = denied.len();
+        if denies_clone_namespaces(policy) {
+            let namespace_flags = [
+                libc::CLONE_NEWNS,
+                libc::CLONE_NEWCGROUP,
+                libc::CLONE_NEWUTS,
+                libc::CLONE_NEWIPC,
+                libc::CLONE_NEWUSER,
+                libc::CLONE_NEWPID,
+                libc::CLONE_NEWNET,
+                libc::CLONE_NEWTIME,
+            ];
+            let mut clone_rules = Vec::new();
+            for flag in namespace_flags {
+                let flag = u64::from(flag.unsigned_abs());
+                let condition = SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::MaskedEq(flag),
+                    flag,
+                )
+                .and_then(|condition| SeccompRule::new(vec![condition]))
+                .map_err(|e| format!("seccomp clone rule: {e}"))?;
+                clone_rules.push(condition);
+            }
+            rules.insert(libc::SYS_clone, clone_rules);
+            count += 1;
+        }
+        let deny = compile(rules, libc::EPERM)?;
+        let clone3 = compile(
+            BTreeMap::from([(libc::SYS_clone3, Vec::new())]),
+            libc::ENOSYS,
+        )?;
+        apply_filter(&clone3).map_err(|e| format!("install seccomp (clone3): {e}"))?;
+        apply_filter(&deny).map_err(|e| format!("install seccomp: {e}"))?;
+        Ok(SeccompOutcome {
+            profile: Some(SeccompProfile::Default),
+            denied: count,
+            allowed: policy.allow.clone(),
+        })
+    }
+
+    fn apply_seccomp(
+        evidence: &str,
+        app: &str,
+        policy: &IsolationPolicy,
+        reasons: &mut Vec<String>,
+    ) -> SeccompOutcome {
+        match install_seccomp(&policy.seccomp) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                emit(&record(
+                    evidence,
+                    "sandbox-degraded",
+                    json!({ "app": app, "feature": "seccomp", "error": error }),
+                ));
+                reasons.push(error);
+                SeccompOutcome::default()
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Stage 2: PID 1 of the new PID namespace
     // -----------------------------------------------------------------------
@@ -1529,6 +1639,9 @@ mod linux {
         drop_inherited_capabilities(evidence, app, &mut reasons);
         let no_new_privs =
             args.policy.no_new_privs && apply_no_new_privs(evidence, app, &mut reasons);
+        // Last, after every mount: from here on this process and the
+        // application cannot mount, pivot, unshare or ptrace.
+        let seccomp = apply_seccomp(evidence, app, &args.policy, &mut reasons);
 
         if args.policy.mode == IsolationMode::Required {
             let (wanted, _) = kernel_namespaces(&args.policy, geteuid().is_root());
@@ -1548,6 +1661,9 @@ mod linux {
             }
             if args.policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal {
                 unmet.push("fs_view");
+            }
+            if args.policy.seccomp.is_confined() && !seccomp.applied() {
+                unmet.push("seccomp");
             }
             if !unmet.is_empty() || !reasons.is_empty() {
                 let mut detail = Vec::new();
@@ -1573,6 +1689,7 @@ mod linux {
                 no_new_privs,
                 run_dir: run_dir_outcome,
                 fs_view: fs_view.clone(),
+                seccomp,
                 reasons: reasons.clone(),
             };
             let _ = send_line(name, &serde_json::to_string(&report).unwrap_or_default());
@@ -1700,17 +1817,20 @@ mod linux {
             });
         let no_new_privs =
             policy.no_new_privs && apply_no_new_privs(evidence, "probe", &mut reasons);
+        let seccomp = apply_seccomp(evidence, "probe", policy, &mut reasons);
         let report = ProbeReport {
             degraded: !reasons.is_empty()
                 || (policy.private_tmp && !private_tmp)
                 || (policy.no_new_privs && !no_new_privs)
                 || (policy.run_dir.is_private() && run_dir_outcome.mode != policy.run_dir.mode)
                 || (policy.resources.cgroup && !cgroup.applied())
-                || (policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal),
+                || (policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal)
+                || (policy.seccomp.is_confined() && !seccomp.applied()),
             applied: AppliedIsolation {
                 cgroup,
                 network,
                 fs_view,
+                seccomp,
                 ..applied.applied(private_tmp, no_new_privs, run_dir_outcome)
             },
             reason: (!reasons.is_empty()).then(|| reasons.join("; ")),

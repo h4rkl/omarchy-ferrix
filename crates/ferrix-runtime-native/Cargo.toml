@@ -23,6 +23,11 @@ rustix = { version = "1", features = ["process"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1", features = ["process", "thread", "mount", "system", "fs", "net"] }
 signal-hook = "0.4"
+# seccomp-bpf filter compiler (rust-vmm; Apache-2.0 OR BSD-3-Clause, used
+# under Apache-2.0). Its only dependency is libc; it does not build on macOS.
+seccompiler = { version = "0.5", default-features = false }
+# Syscall numbers for the deny list (MIT OR Apache-2.0; already in the tree).
+libc = "0.2"
 
 [[bin]]
 name = "ferrix-sandbox"

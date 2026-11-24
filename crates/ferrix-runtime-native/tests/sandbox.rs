@@ -24,8 +24,9 @@ use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use ferrix_runtime_native::{
     APPD_SOCKET_FILE, FsViewMode, FsViewPolicy, ISOLATION_UNAVAILABLE_STATUS, IsolationMode,
     IsolationPolicy, NativeLaunch, NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV,
-    ResourcePolicy, RunDirMode, RunDirPolicy, SandboxReady, TELEPHONYD_SOCKET_FILE, UserNamespace,
-    emit, find_record, probe_sandbox_with, sandbox_plan, skipped_record,
+    ResourcePolicy, RunDirMode, RunDirPolicy, SandboxReady, SeccompPolicy, SeccompProfile,
+    TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan,
+    skipped_record,
 };
 
 const SANDBOX: &str = env!("CARGO_BIN_EXE_ferrix-sandbox");
@@ -1085,5 +1086,83 @@ fn inherit_keeps_the_launcher_filesystem_and_still_sets_the_data_dir() {
     let report: ferrix_runtime_native::IsolationReport =
         serde_json::from_value(running.diagnostics()).unwrap();
     assert_eq!(report.applied.fs_view.mode, FsViewMode::Inherit);
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// seccomp (issue #10, increment 4)
+// ---------------------------------------------------------------------------
+
+/// Actions a root application inside its own namespaces could take without
+/// the filter; each that succeeds is its own exit code.
+const FORBIDDEN_SYSCALLS: &str = r#"
+    mkdir -p /tmp/m
+    mount -t tmpfs none /tmp/m 2>/dev/null && exit 20        # mount
+    mount -o remount,rw /usr 2>/dev/null && exit 21          # undo the read-only view
+    unshare -n true 2>/dev/null && exit 22                   # new namespaces
+    unshare -U true 2>/dev/null && exit 23
+    chroot / true 2>/dev/null && exit 24                     # chroot (escape primitive)
+    grep -q '^Seccomp:[[:space:]]*2' /proc/self/status || exit 25
+    exit 0
+"#;
+
+fn seccomp(policy: SeccompPolicy) -> IsolationPolicy {
+    IsolationPolicy {
+        seccomp: policy,
+        ..IsolationPolicy::default()
+    }
+}
+
+#[test]
+fn default_seccomp_profile_refuses_dangerous_system_calls() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", FORBIDDEN_SYSCALLS], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    let filter = &report.applied.seccomp;
+    assert_eq!(filter.profile, Some(SeccompProfile::Default), "{report:?}");
+    // The deny list plus the clone-with-namespace-flags rule.
+    assert_eq!(
+        filter.denied,
+        ferrix_runtime_native::seccomp::denied_for_target().len() + 1
+    );
+    assert!(!report.degraded, "{report:?}");
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+#[test]
+fn without_the_filter_the_same_mount_succeeds() {
+    // The control for the test above: the refusal comes from seccomp, not
+    // from missing privilege.
+    let policy = seccomp(SeccompPolicy::unconfined());
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", FORBIDDEN_SYSCALLS], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(!report.applied.seccomp.applied(), "{report:?}");
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 20 });
+}
+
+#[test]
+fn the_escape_hatch_relaxes_only_the_named_calls() {
+    let policy = seccomp(SeccompPolicy {
+        allow: vec!["mount".to_owned(), "umount2".to_owned()],
+        ..SeccompPolicy::default()
+    });
+    if !available(&policy) {
+        return;
+    }
+    let script = r#"mkdir -p /tmp/m && mount -t tmpfs none /tmp/m && umount /tmp/m || exit 30
+        unshare -n true 2>/dev/null && exit 31
+        exit 0"#;
+    let mut running = launch(&["sh", "-c", script], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(report.applied.seccomp.allowed, ["mount", "umount2"]);
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
 }

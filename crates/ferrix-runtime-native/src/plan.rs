@@ -90,6 +90,7 @@ impl NamespaceSet {
             cgroup: Default::default(),
             network: Default::default(),
             fs_view: Default::default(),
+            seccomp: Default::default(),
         }
     }
 }
@@ -126,6 +127,7 @@ pub fn needs_sandbox(policy: &IsolationPolicy) -> bool {
         || policy.run_dir.is_private()
         || policy.resources.cgroup
         || policy.fs_view.is_minimal()
+        || policy.seccomp.is_confined()
 }
 
 /// Serializes a policy for the `--policy` argument.
