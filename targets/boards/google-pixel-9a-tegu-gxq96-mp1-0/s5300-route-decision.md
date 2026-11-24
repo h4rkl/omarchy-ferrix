@@ -201,7 +201,9 @@ them. On CPIF, `exynos-modem` starts only after a read-only `preflight` and a
 one-shot `arm` on tmpfs `/run`. These check the target, kernel, package pins,
 binary configuration, E1 surface with `OFFLINE`, nodes, openers, the
 #34-accepted mounts, NV sizes, and the scratch directory, and open no CPIF
-node. ModemManager CPIF binding (S3) is not implemented.
+node. ModemManager CPIF binding (S3) is implemented offline in
+[`s5300-s3-mm-binding.md`](s5300-s3-mm-binding.md) (2026-11-25) and is
+unproven on the device.
 
 **E1, read-only dev-boot inventory** (`just pixel-9a-s5300-cpif-inventory`
 over CDC-ACM; nothing opened; the exact `go`/`no-go`/`incomplete` rules and
@@ -1091,7 +1093,9 @@ abuild/pmbootstrap packaging, and anything on the device.
 
 ### Limitations and blockers
 
-- **ModemManager CPIF binding (S3) is not implemented.** Nothing here can make
+- **ModemManager CPIF binding (S3) was not implemented here.** It is now
+  implemented offline in [`s5300-s3-mm-binding.md`](s5300-s3-mm-binding.md)
+  (2026-11-25). The original note follows: nothing here can make
   `mmcli -L` list a modem on CPIF. This needs the SIT plugin to accept the
   CPIF class or bind through the `sit-proxy` sockets, plus
   `ID_MM_PHYSDEV_UID` grouping. That has to be reviewed against the pinned

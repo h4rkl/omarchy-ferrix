@@ -23,6 +23,7 @@ pkg="$board/pmos/device-google-tegu"
 # the /mnt/vendor install script, #92, and the #107 opener control).
 device_release=$(sed -n 's/^pkgver=//p' "$pkg/APKBUILD")-r$(sed -n 's/^pkgrel=//p' "$pkg/APKBUILD")
 mm="$board/pmos/modemmanager-samsung-sit"
+mm_release=$(sed -n 's/^pkgver=//p' "$mm/APKBUILD")-r$(sed -n 's/^pkgrel=//p' "$mm/APKBUILD")
 lib="$pkg/ferrix-s5300-cpif.sh"
 pins="$pkg/s5300-cpif-services.sha256"
 host="$root/tools/pixel-9a/s5300-s2-preflight.sh"
@@ -261,7 +262,7 @@ EOF
 	cp "$pkg/s5300-userspace-sources.toml" "$fx/usr/share/ferrix/pixel-9a/"
 	cp "$pkg/99-google-tegu-sit.rules" "$fx/usr/lib/udev/rules.d/"
 	repin
-	printf 'P:device-google-tegu\nV:%s\n\nP:exynos-modem\nV:0.1.0_git20260731-r3\n\nP:modemmanager-samsung-sit\nV:1.25.95_git20260731-r3\n\n' "$device_release" \
+	printf 'P:device-google-tegu\nV:%s\n\nP:exynos-modem\nV:0.1.0_git20260731-r3\n\nP:modemmanager-samsung-sit\nV:%s\n\n' "$device_release" "$mm_release" \
 		>"$fx/lib/apk/db/installed"
 	cat >"$fx/usr/sbin/exynos-modem" <<EOF
 #!/bin/sh

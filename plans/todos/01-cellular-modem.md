@@ -28,7 +28,13 @@ are spec 02.
   Teardown needs a reboot because the CP stays `ONLINE` after a daemon stop
   (#116) and the role loops stay attached after a mounts stop (#117). "RFS
   served" cannot be observed because `exynos-modem` sets no `output_log`.
-- Not started: S3 (`sit-proxy`, ModemManager attach, SIM, registration).
+- Done (offline, 2026-11-25): S3 ModemManager CPIF binding. A hash-pinned
+  fork patch, gated udev tags and a `sit-proxy` re-trigger hand `umts_ipc0/1`
+  (proxy sockets only) and `rmnet0` to the SIT plugin as one modem
+  ([`s5300-s3-mm-binding.md`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s3-mm-binding.md)).
+  Expect no IMEI: the plugin has no SIT identity loader, and there is no AT
+  port on CPIF.
+- Not started on device: S3 (`mmcli -L`, SIM, registration).
   A SIM is in the phone but Ferrix has never read it.
 - Ready on QEMU/mock: `ferrix-telephonyd`, `ferrix-telephony-mm`, Phone,
   Messages, the SMS store, and the APN through `FERRIX_TELEPHONY_APN`.

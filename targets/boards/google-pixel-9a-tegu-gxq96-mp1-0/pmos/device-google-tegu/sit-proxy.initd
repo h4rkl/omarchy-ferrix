@@ -94,9 +94,43 @@ start_pre() {
 	checkpath -d -m 0755 /run/sit-proxy
 }
 
+# google-kleaf-cpif only (S3, s5300-s3-mm-binding.md): umts_ipc0/1 and rmnet0
+# exist from module load, so 99-google-tegu-sit.rules hands them to
+# ModemManager only while both sockets exist. Re-running the rules for exactly
+# those three devices synthesises "change" uevents; it opens no CPIF node.
+sit_socket_dir=/run/sit-proxy
+
+cpif_retrigger_modem_ports() {
+	udevadm trigger --action=change --subsystem-match=cpif --sysname-match='umts_ipc[01]' &&
+		udevadm trigger --action=change --subsystem-match=net --sysname-match=rmnet0 &&
+		udevadm settle --timeout=10
+}
+
+start_post() {
+	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = google-kleaf-cpif ] || return 0
+	attempt=0
+	while [ "$attempt" -lt 50 ]; do
+		[ -S "$sit_socket_dir/0" ] && [ -S "$sit_socket_dir/1" ] && break
+		sleep 0.1
+		attempt=$((attempt + 1))
+	done
+	[ -S "$sit_socket_dir/0" ] && [ -S "$sit_socket_dir/1" ] || {
+		eerror "sit-proxy did not create $sit_socket_dir/0 and $sit_socket_dir/1"
+		return 1
+	}
+	cpif_retrigger_modem_ports || {
+		eerror "could not re-run the CPIF ModemManager udev rules"
+		return 1
+	}
+}
+
 stop_post() {
-	for socket in /run/sit-proxy/0 /run/sit-proxy/1; do
+	for socket in "$sit_socket_dir/0" "$sit_socket_dir/1"; do
 		[ -S "$socket" ] || continue
 		rm -f "$socket"
 	done
+	# With the sockets gone the rules drop the ModemManager tags again.
+	[ "${FERRIX_S5300_KERNEL_BACKEND:-}" = google-kleaf-cpif ] || return 0
+	cpif_retrigger_modem_ports || eerror "could not re-run the CPIF ModemManager udev rules"
+	return 0
 }
