@@ -55,6 +55,21 @@ docker pull --platform linux/arm64 "$image" >/dev/null
 docker create --platform linux/arm64 --name "$container" "$image" sh -c 'sleep 600' >/dev/null
 docker start "$container" >/dev/null
 docker exec "$container" sh -ec 'apk add --no-cache linux-virt weston weston-backend-drm weston-shell-desktop weston-terminal seatd mesa-dri-gallium eudev libinput-udev pixman libinput-libs libseat libdrm libxkbcommon mesa-gbm libgcc >/dev/null'
+# Fallback fonts for the shared ferrix-ui text path (#14): the embedded IBM
+# Plex faces cover Latin; Arabic, Devanagari, CJK and wider Latin/Cyrillic/
+# Greek come from Alpine's Noto packages (SIL OFL 1.1; the licence travels in
+# each face's name table). Only the locale packs Ferrix exercises are kept
+# (Regular + Bold, one Regular CJK collection): the full packages are ~145 MB
+# and every initramfs byte is decompressed at boot. The kept list, the package
+# versions and a hash of the font tree are recorded in the manifest.
+font_packages="font-noto font-noto-arabic font-noto-devanagari font-noto-cjk"
+font_files="NotoSans-Regular.ttf NotoSans-Bold.ttf NotoSansMono-Regular.ttf NotoSansMono-Bold.ttf NotoSansArabic-Regular.ttf NotoSansArabic-Bold.ttf NotoSansDevanagari-Regular.ttf NotoSansDevanagari-Bold.ttf NotoSansCJK-Regular.ttc"
+docker exec -e "FONT_FILES=$font_files" "$container" sh -ec 'apk add --no-cache '"$font_packages"' >/dev/null
+cd /usr/share/fonts/noto
+for f in *; do case " $FONT_FILES " in *" $f "*) ;; *) rm -f "$f" ;; esac; done
+for f in $FONT_FILES; do [ -f "$f" ] || { echo "missing guest font $f" >&2; exit 1; }; done'
+font_versions=$(for p in $font_packages; do docker exec "$container" apk info -e -v "$p"; done | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+[ -n "$font_versions" ] || { echo "cannot resolve guest font package versions" >&2; exit 1; }
 docker export "$container" | tar -xf - -C "$stage"
 docker stop "$container" >/dev/null
 docker rm "$container" >/dev/null
@@ -92,12 +107,13 @@ if [ -f "$contacts_fixtures" ]; then
 fi
 # Third-party notices for material compiled into the ferrix-ui binaries
 # (docs/licensing.md): the Apache-2.0 licence of the pinned Material Symbols
-# subset used for the UI glyphs (with its README/NOTICE) and the JetBrains Mono
-# OFL. Installed as /usr/share/licenses/ferrix/<name>/.
+# subset used for the UI glyphs (with its README/NOTICE) and the IBM Plex OFL
+# (with its README). Installed as /usr/share/licenses/ferrix/<name>/.
 rm -rf "$out/product/licenses"
 for notice in "material-symbols:$root/crates/ferrix-ui/assets/icons/material-symbols/LICENSE" \
               "material-symbols:$root/crates/ferrix-ui/assets/icons/material-symbols/README.md" \
-              "jetbrains-mono:$root/crates/ferrix-ui/assets/OFL.txt"; do
+              "ibm-plex:$root/crates/ferrix-ui/assets/fonts/ibm-plex/LICENSE.txt" \
+              "ibm-plex:$root/crates/ferrix-ui/assets/fonts/ibm-plex/README.md"; do
   name=${notice%%:*}
   file=${notice#*:}
   [ -f "$file" ] || { echo "missing third-party notice $file" >&2; exit 1; }
@@ -128,10 +144,12 @@ for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferri
   service_hashes="$service_hashes\"${key}_sha256\":\"$hash\","
 done
 grants_hash=$(shasum -a 256 "$root/apps/grants.json" | awk '{print $1}')
+# Guest font tree: sorted relative paths and contents under /usr/share/fonts.
+fonts_hash=$(cd "$stage/usr/share/fonts" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s\n' "$f"; cat "$f"; done | shasum -a 256 | awk '{print $1}')
 # Catalog hash: sorted descriptor file names and contents, so a changed or
 # added app changes the manifest.
 apps_hash=$(cd "$root/apps" && for f in $(ls *.json | sort); do printf '%s\n' "$f"; cat "$f"; done | shasum -a 256 | awk '{print $1}')
 # Theme hash: the exact colors.toml shipped as /etc/ferrix/colors.toml.
 colors_hash=$(shasum -a 256 "$out/product/colors.toml" | awk '{print $1}')
-printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s",%s"apps_sha256":"%s","grants_sha256":"%s","contacts_fixtures_sha256":"%s","colors_sha256":"%s","third_party_notices_sha256":"%s","profile":"%s","colors":"%s","mock_control_ports":["ferrix.control","ferrix.telephony","ferrix.network"]}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$service_hashes" "$apps_hash" "$grants_hash" "$contacts_fixtures_hash" "$colors_hash" "$notices_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
+printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s",%s"apps_sha256":"%s","grants_sha256":"%s","contacts_fixtures_sha256":"%s","colors_sha256":"%s","third_party_notices_sha256":"%s","guest_fonts_sha256":"%s","guest_font_packages":"%s","profile":"%s","colors":"%s","mock_control_ports":["ferrix.control","ferrix.telephony","ferrix.network"]}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$service_hashes" "$apps_hash" "$grants_hash" "$contacts_fixtures_hash" "$colors_hash" "$notices_hash" "$fonts_hash" "$font_versions" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
 printf 'built: %s/Image and %s/initramfs.cpio.gz\n' "$out" "$out"

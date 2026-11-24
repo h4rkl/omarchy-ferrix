@@ -1,6 +1,6 @@
 //! Composition of the basic screen in the Omarchy Ferrix visual system
 //! (`docs/design.md`): dark slate surfaces, steel type, one rust accent per
-//! region, hairline borders, tight radii, JetBrains Mono. GrapheneOS-style
+//! region, hairline borders, tight radii, IBM Plex. GrapheneOS-style
 //! status bar, minimal launcher grid, and bottom gesture pill where mobile UX
 //! is needed. Colors come from `ferrix_ui::theme::get()` so a loaded
 //! `colors.toml` restyles every surface. This is a reference surface
@@ -1536,7 +1536,9 @@ mod tests {
 
     #[test]
     fn glyph_falls_back_to_the_first_letter_when_the_face_lacks_it() {
-        let ty = Type::load().expect("embedded fonts load");
+        // Embedded faces only: a host with a colour emoji face installed would
+        // otherwise resolve the phone emoji.
+        let ty = Type::embedded().expect("embedded fonts load");
         let mut tile = test_tiles().remove(0);
         tile.icon.glyph = ">_".to_owned();
         assert_eq!(tile_glyph(&ty, &tile), ">_");

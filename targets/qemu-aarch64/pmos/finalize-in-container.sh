@@ -85,8 +85,8 @@ for descriptor in /product/apps/*.json; do
   install -Dm644 "$descriptor" "$mnt/usr/share/ferrix/apps/$(basename "$descriptor")"
 done
 [ -f "$mnt/usr/share/ferrix/apps/grants.json" ] || fail "missing-grants" "/product/apps/grants.json not staged"
-# Third-party notices staged by qemu-build.sh (Material Symbols licence, JetBrains
-# Mono OFL; docs/licensing.md).
+# Third-party notices staged by qemu-build.sh (Material Symbols licence, IBM
+# Plex OFL; docs/licensing.md).
 if [ -d /product/licenses ]; then
   for notice in /product/licenses/*/*; do
     rel=${notice#/product/licenses/}

@@ -48,7 +48,9 @@ pub enum Crumb {
 
 /// Longest breadcrumb label before it is shortened.
 const CRUMB_CHARS: usize = 14;
-/// JetBrains Mono advances 600/1000 em; chip text is 0.42 of chip height.
+/// IBM Plex Mono advances 600/1000 em: the viewer column width, and a safe
+/// upper bound for chip labels (Plex Sans Condensed is narrower). Chip text
+/// is 0.42 of chip height.
 const MONO_ADVANCE: f32 = 0.6;
 
 pub struct Layout {
