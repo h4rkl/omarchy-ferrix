@@ -7,6 +7,73 @@ use serde::{Deserialize, Serialize};
 
 use crate::CgroupOutcome;
 
+/// The application's filesystem view ([`crate::fsview`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FsViewMode {
+    /// The launcher's filesystem, with the private `/proc`, `/tmp` and
+    /// socket-directory views on top.
+    #[default]
+    Inherit,
+    /// A minimal root: read-only system directories, a minimal `/dev`, the
+    /// application's data directory, and the home folder only with
+    /// `files-home`.
+    Minimal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FsViewPolicy {
+    pub mode: FsViewMode,
+    /// Bind the user's home folder read-write. Under `ferrix_appd` the
+    /// runtime derives it from the `files-home` grant (`crate::with_grants`);
+    /// a manifest value is replaced.
+    pub home: bool,
+}
+
+impl Default for FsViewPolicy {
+    fn default() -> Self {
+        Self {
+            mode: FsViewMode::Minimal,
+            home: false,
+        }
+    }
+}
+
+impl FsViewPolicy {
+    pub fn inherit() -> Self {
+        Self {
+            mode: FsViewMode::Inherit,
+            home: false,
+        }
+    }
+
+    pub fn is_minimal(&self) -> bool {
+        self.mode == FsViewMode::Minimal
+    }
+}
+
+/// What the sandbox did to the filesystem view (`mode: inherit` and nothing
+/// else when no root was built).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FsViewOutcome {
+    pub mode: FsViewMode,
+    /// How the root was entered: `pivot_root`, or `move-chroot` on an
+    /// initramfs root, which the kernel cannot pivot away from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// The writable data directory ([`ferrix_app_api::APP_DATA_DIR_ENV`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<String>,
+    /// The home folder, when `files-home` exposed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    /// Host directories bound read-only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub read_only: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UserNamespace {
@@ -125,6 +192,8 @@ pub struct IsolationPolicy {
     pub run_dir: RunDirPolicy,
     /// Per-application cgroup and its limits.
     pub resources: ResourcePolicy,
+    /// Filesystem view; a minimal root unless the manifest asks to inherit.
+    pub fs_view: FsViewPolicy,
 }
 
 impl Default for IsolationPolicy {
@@ -141,6 +210,7 @@ impl Default for IsolationPolicy {
             mode: IsolationMode::Required,
             run_dir: RunDirPolicy::default(),
             resources: ResourcePolicy::default(),
+            fs_view: FsViewPolicy::default(),
         }
     }
 }
@@ -159,6 +229,7 @@ impl IsolationPolicy {
             mode: IsolationMode::BestEffort,
             run_dir: RunDirPolicy::default(),
             resources: ResourcePolicy::none(),
+            fs_view: FsViewPolicy::inherit(),
         }
     }
 
@@ -210,6 +281,8 @@ pub struct AppliedIsolation {
     pub run_dir: RunDirOutcome,
     /// Loopback-only network view (`{}` unless `net_namespace`).
     pub network: NetworkOutcome,
+    /// Filesystem view (`{mode: inherit}` unless a minimal root was built).
+    pub fs_view: FsViewOutcome,
     /// The application's cgroup (`{}` when none was created).
     pub cgroup: CgroupOutcome,
 }
@@ -229,7 +302,8 @@ impl IsolationReport {
             || requested.private_tmp
             || requested.no_new_privs
             || requested.run_dir.is_private()
-            || requested.resources.cgroup;
+            || requested.resources.cgroup
+            || requested.fs_view.is_minimal();
         Self {
             requested,
             applied: AppliedIsolation::default(),

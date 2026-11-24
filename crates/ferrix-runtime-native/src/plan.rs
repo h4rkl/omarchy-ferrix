@@ -89,6 +89,7 @@ impl NamespaceSet {
             run_dir,
             cgroup: Default::default(),
             network: Default::default(),
+            fs_view: Default::default(),
         }
     }
 }
@@ -124,6 +125,7 @@ pub fn needs_sandbox(policy: &IsolationPolicy) -> bool {
         || policy.no_new_privs
         || policy.run_dir.is_private()
         || policy.resources.cgroup
+        || policy.fs_view.is_minimal()
 }
 
 /// Serializes a policy for the `--policy` argument.

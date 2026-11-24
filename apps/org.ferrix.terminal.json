@@ -11,7 +11,8 @@
   "capabilities": [
     "shell",
     "background",
-    "network"
+    "network",
+    "files-home"
   ],
   "launch": {
     "exec": [

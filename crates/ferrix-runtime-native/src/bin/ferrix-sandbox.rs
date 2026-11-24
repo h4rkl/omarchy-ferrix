@@ -86,6 +86,10 @@ mod linux {
     use ferrix_app_api::ExitReason;
     use ferrix_runtime_native::cgroup::{join_cgroup, remove_app_cgroup, setup_app_cgroup};
     use ferrix_runtime_native::channel::{ReportListener, ReportSender, WaitOutcome, send_line};
+    use ferrix_runtime_native::fsview::{
+        DEV_DIRS, DEV_NODES, SYSTEM_DIRS, app_data_dir, exposable_home, ferrix_config_dir,
+        home_dir, mounts_under, under_root,
+    };
     use ferrix_runtime_native::{
         AppliedIsolation, EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport,
         IsolationMode, IsolationPolicy, NamespaceSet, NetworkOutcome, ProbeReport, RUN_ROOT,
@@ -94,10 +98,11 @@ mod linux {
         select_namespaces, shell_status_of,
     };
     use ferrix_runtime_native::{CgroupError, CgroupOutcome, app_cgroup_name, cgroup_slice};
+    use ferrix_runtime_native::{FsViewMode, FsViewOutcome};
     use rustix::io::Errno;
     use rustix::mount::{
         MountFlags, MountPropagationFlags, UnmountFlags, mount, mount_bind, mount_bind_recursive,
-        mount_change, mount_move, unmount,
+        mount_change, mount_move, mount_remount, unmount,
     };
     use rustix::process::{
         Pid, Signal, WaitOptions, getegid, geteuid, kill_process, set_parent_process_death_signal,
@@ -631,6 +636,7 @@ mod linux {
         let mut private_tmp = false;
         let mut no_new_privs = false;
         let mut run_dir_outcome = RunDirOutcome::default();
+        let mut fs_view = FsViewOutcome::default();
         match listener
             .map(|l| l.wait_for_line(&mut child, INIT_REPORT_TIMEOUT, &mut forward_pending))
         {
@@ -639,6 +645,7 @@ mod linux {
                     private_tmp = report.private_tmp;
                     no_new_privs = report.no_new_privs;
                     run_dir_outcome = report.run_dir;
+                    fs_view = report.fs_view;
                     notes.extend(report.reasons);
                 }
                 Err(e) => notes.push(format!("unreadable init report: {e}")),
@@ -672,6 +679,7 @@ mod linux {
             || (args.policy.no_new_privs && !no_new_privs)
             || (args.policy.run_dir.is_private()
                 && run_dir_outcome.mode != args.policy.run_dir.mode)
+            || (args.policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal)
             || (args.policy.resources.cgroup && !cgroup.applied())
             || (applied.net && !network.loopback_up)
             || !notes.is_empty();
@@ -684,6 +692,7 @@ mod linux {
             run_dir: run_dir_outcome,
             cgroup,
             network,
+            fs_view,
             degraded,
             reason: (!notes.is_empty()).then(|| notes.join("; ")),
         };
@@ -792,6 +801,361 @@ mod linux {
                 CgroupOutcome::default()
             }
         }
+    }
+
+    // -- filesystem view (issue #10) --------------------------------------
+
+    fn env_var(key: &str) -> Option<String> {
+        std::env::var(key).ok()
+    }
+
+    const MOUNTINFO: &str = "/proc/self/mountinfo";
+
+    /// `/proc/self/mountinfo` opened by [`keep_mountinfo`].
+    static KEPT_MOUNTINFO: std::sync::OnceLock<std::sync::Mutex<std::fs::File>> =
+        std::sync::OnceLock::new();
+
+    /// The probe stays outside the PID namespace whose fresh procfs it
+    /// mounts over `/proc`, so `/proc/self` stops resolving for it. It opens
+    /// its mountinfo first; the file is bound to the caller's mount
+    /// namespace and regenerated on every read from offset 0. Stage 2 (PID 1
+    /// inside the namespace) reads the path directly.
+    fn keep_mountinfo() {
+        if let Ok(file) = std::fs::File::open(MOUNTINFO) {
+            let _ = KEPT_MOUNTINFO.set(std::sync::Mutex::new(file));
+        }
+    }
+
+    fn read_mountinfo() -> Result<String, String> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        match std::fs::read_to_string(MOUNTINFO) {
+            Ok(text) => Ok(text),
+            Err(error) => {
+                let kept = KEPT_MOUNTINFO
+                    .get()
+                    .ok_or_else(|| io_error("read", Path::new(MOUNTINFO), &error))?;
+                let mut file = kept
+                    .lock()
+                    .map_err(|_| "mountinfo lock poisoned".to_owned())?;
+                let mut text = String::new();
+                file.seek(SeekFrom::Start(0))
+                    .and_then(|_| file.read_to_string(&mut text))
+                    .map_err(|e| io_error("read kept", Path::new(MOUNTINFO), e))?;
+                Ok(text)
+            }
+        }
+    }
+
+    fn io_error(what: &str, path: &Path, e: impl std::fmt::Display) -> String {
+        format!("{what} {}: {e}", path.display())
+    }
+
+    /// Remounts the bind at `target` and every mount below it read-only,
+    /// keeping each mount's own `nosuid`/`nodev`/`noexec`/atime flags: the
+    /// kernel refuses a remount that would clear a flag locked by a user
+    /// namespace, and the submounts (`/etc/hosts` in a container,
+    /// `/sys/fs/cgroup`) need it as much as the top.
+    fn remount_read_only(target: &Path) -> Result<(), String> {
+        let mountinfo = read_mountinfo()?;
+        let entries = mounts_under(&mountinfo, target);
+        if entries.is_empty() {
+            return Err(format!("{} is not a mount point", target.display()));
+        }
+        for entry in entries {
+            let mut flags = MountFlags::BIND | MountFlags::RDONLY;
+            for (option, flag) in [
+                ("nosuid", MountFlags::NOSUID),
+                ("nodev", MountFlags::NODEV),
+                ("noexec", MountFlags::NOEXEC),
+                ("noatime", MountFlags::NOATIME),
+                ("nodiratime", MountFlags::NODIRATIME),
+                ("relatime", MountFlags::RELATIME),
+            ] {
+                if entry.has(option) {
+                    flags |= flag;
+                }
+            }
+            mount_remount(&entry.mount_point, flags, "")
+                .map_err(|e| io_error("remount read-only", &entry.mount_point, e))?;
+        }
+        Ok(())
+    }
+
+    fn bind_dir(source: &Path, dest: &Path, read_only: bool) -> Result<(), String> {
+        std::fs::create_dir_all(dest).map_err(|e| io_error("create", dest, e))?;
+        mount_bind_recursive(source, dest).map_err(|e| io_error("bind", source, e))?;
+        if read_only {
+            remount_read_only(dest)?;
+        }
+        Ok(())
+    }
+
+    fn bind_file(source: &Path, dest: &Path) -> Result<(), String> {
+        std::fs::File::create(dest).map_err(|e| io_error("create", dest, e))?;
+        mount_bind(source, dest).map_err(|e| io_error("bind", source, e))
+    }
+
+    fn tmpfs(dest: &Path, flags: MountFlags, options: &std::ffi::CStr) -> Result<(), String> {
+        std::fs::create_dir_all(dest).map_err(|e| io_error("create", dest, e))?;
+        mount("tmpfs", dest, "tmpfs", flags, options)
+            .map_err(|e| io_error("mount tmpfs on", dest, e))
+    }
+
+    /// A minimal `/dev`: the standard character devices bound from the host,
+    /// a private devpts instance (so an application never sees another's
+    /// ptys), a private `/dev/shm`, the GPU nodes when present, and the usual
+    /// symlinks. Block devices, input devices and everything else stay out.
+    fn build_dev(root: &Path) -> Result<(), String> {
+        let dev = root.join("dev");
+        tmpfs(
+            &dev,
+            MountFlags::NOSUID | MountFlags::NOEXEC,
+            c"mode=0755,size=64k",
+        )?;
+        for node in DEV_NODES {
+            let source = Path::new("/dev").join(node);
+            if source.exists() {
+                bind_file(&source, &dev.join(node))?;
+            }
+        }
+        let pts = dev.join("pts");
+        std::fs::create_dir(&pts).map_err(|e| io_error("create", &pts, e))?;
+        if mount(
+            "devpts",
+            &pts,
+            "devpts",
+            MountFlags::NOSUID | MountFlags::NOEXEC,
+            c"newinstance,ptmxmode=0666,mode=0620",
+        )
+        .is_err()
+        {
+            mount_bind_recursive("/dev/pts", &pts).map_err(|e| io_error("bind", &pts, e))?;
+        }
+        tmpfs(
+            &dev.join("shm"),
+            MountFlags::NOSUID | MountFlags::NODEV,
+            c"mode=1777,size=64m",
+        )?;
+        for dir in DEV_DIRS {
+            let source = Path::new("/dev").join(dir);
+            if source.is_dir() {
+                bind_dir(&source, &dev.join(dir), false)?;
+            }
+        }
+        for (link, target) in [
+            ("ptmx", "pts/ptmx"),
+            ("fd", "/proc/self/fd"),
+            ("stdin", "/proc/self/fd/0"),
+            ("stdout", "/proc/self/fd/1"),
+            ("stderr", "/proc/self/fd/2"),
+        ] {
+            std::os::unix::fs::symlink(target, dev.join(link))
+                .map_err(|e| io_error("symlink", &dev.join(link), e))?;
+        }
+        Ok(())
+    }
+
+    /// The paths a minimal root is built from, resolved before anything is
+    /// mounted.
+    struct ViewPlan {
+        data_dir: Option<PathBuf>,
+        home: Option<PathBuf>,
+        expose_home: bool,
+        config: Option<PathBuf>,
+    }
+
+    fn populate_root(root: &Path, plan: &ViewPlan) -> Result<FsViewOutcome, String> {
+        let mut outcome = FsViewOutcome {
+            mode: FsViewMode::Minimal,
+            ..FsViewOutcome::default()
+        };
+        for dir in SYSTEM_DIRS {
+            let source = Path::new(dir);
+            let Ok(meta) = std::fs::symlink_metadata(source) else {
+                continue;
+            };
+            let dest = under_root(root, source);
+            if meta.file_type().is_symlink() {
+                let target =
+                    std::fs::read_link(source).map_err(|e| io_error("readlink", source, e))?;
+                std::os::unix::fs::symlink(&target, &dest)
+                    .map_err(|e| io_error("symlink", &dest, e))?;
+            } else if meta.is_dir() {
+                bind_dir(source, &dest, true)?;
+                outcome.read_only.push((*dir).to_owned());
+            }
+        }
+        build_dev(root)?;
+        // The sandbox's own fresh /proc, its /run view, and /tmp (only the
+        // /tmp mount itself: the staging root lives below it).
+        bind_dir(Path::new("/proc"), &root.join("proc"), false)?;
+        bind_dir(Path::new("/sys"), &root.join("sys"), true)?;
+        outcome.read_only.push("/sys".to_owned());
+        bind_dir(Path::new(RUN_ROOT), &root.join("run"), false)?;
+        let tmp = root.join("tmp");
+        std::fs::create_dir(&tmp).map_err(|e| io_error("create", &tmp, e))?;
+        mount_bind("/tmp", &tmp).map_err(|e| io_error("bind", Path::new("/tmp"), e))?;
+        // A socket directory outside /run (nested runs, tests) stays visible.
+        let sockets = run_dir();
+        if !sockets.starts_with(RUN_ROOT) && sockets.is_dir() {
+            bind_dir(&sockets, &under_root(root, &sockets), false)?;
+        }
+        if let Some(home) = &plan.home {
+            if plan.expose_home {
+                bind_dir(home, &under_root(root, home), false)?;
+                outcome.home = Some(home.display().to_string());
+            } else {
+                // An empty, writable stand-in so `$HOME` still exists.
+                let dest = under_root(root, home);
+                std::fs::create_dir_all(&dest).map_err(|e| io_error("create", &dest, e))?;
+            }
+        }
+        if let Some(data) = &plan.data_dir
+            && !(plan.expose_home && plan.home.as_ref().is_some_and(|h| data.starts_with(h)))
+        {
+            let dest = under_root(root, data);
+            std::fs::create_dir_all(&dest).map_err(|e| io_error("create", &dest, e))?;
+            mount_bind(data, &dest).map_err(|e| io_error("bind", data, e))?;
+        }
+        outcome.data_dir = plan.data_dir.as_ref().map(|d| d.display().to_string());
+        if let Some(config) = &plan.config
+            && config.is_dir()
+            && !(plan.expose_home && plan.home.as_ref().is_some_and(|h| config.starts_with(h)))
+        {
+            bind_dir(config, &under_root(root, config), true)?;
+            outcome.read_only.push(config.display().to_string());
+        }
+        Ok(outcome)
+    }
+
+    /// Enters `root`: `pivot_root(".", ".")` then detaching the old root
+    /// (pivot_root(2)); an initramfs root cannot be pivoted away from
+    /// (EINVAL), so there the new root is moved over `/` and entered with
+    /// `chroot` (what container runtimes do on a ramfs root).
+    fn enter_root(root: &Path) -> Result<&'static str, String> {
+        rustix::process::chdir(root).map_err(|e| io_error("chdir", root, e))?;
+        match rustix::process::pivot_root(".", ".") {
+            Ok(()) => {
+                unmount(".", UnmountFlags::DETACH)
+                    .map_err(|e| format!("detach the old root: {e}"))?;
+                rustix::process::chdir("/").map_err(|e| format!("chdir /: {e}"))?;
+                Ok("pivot_root")
+            }
+            Err(Errno::INVAL) => {
+                mount_move(".", "/").map_err(|e| format!("move the new root over /: {e}"))?;
+                rustix::process::chroot(".").map_err(|e| format!("chroot: {e}"))?;
+                rustix::process::chdir("/").map_err(|e| format!("chdir /: {e}"))?;
+                Ok("move-chroot")
+            }
+            Err(e) => Err(format!("pivot_root: {e}")),
+        }
+    }
+
+    /// Creates the application's data directory (owner-only) on the host
+    /// before any view is built; `None` when no absolute data root exists.
+    fn prepare_data_dir(app: &str, reasons: &mut Vec<String>) -> Option<PathBuf> {
+        use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+        let dir = app_data_dir(env_var, app)?;
+        if let Err(e) = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+        {
+            reasons.push(io_error("data directory", &dir, e));
+            return None;
+        }
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        Some(dir)
+    }
+
+    /// Builds the minimal root on a tmpfs at a staging directory in `/tmp`
+    /// (the application's own tmpfs with `private_tmp`) and enters it.
+    fn build_minimal_root(
+        policy: &IsolationPolicy,
+        data_dir: Option<&Path>,
+        reasons: &mut Vec<String>,
+    ) -> Result<FsViewOutcome, String> {
+        let home = home_dir(env_var);
+        let expose_home = match (&home, policy.fs_view.home) {
+            (_, false) => false,
+            (None, true) => {
+                reasons.push("files-home: HOME is not an absolute path".to_owned());
+                false
+            }
+            (Some(home), true) => match exposable_home(home) {
+                Ok(()) if home.is_dir() => true,
+                Ok(()) => {
+                    reasons.push(format!("files-home: {} is not a directory", home.display()));
+                    false
+                }
+                Err(error) => {
+                    reasons.push(format!("files-home: {error}"));
+                    false
+                }
+            },
+        };
+        let plan = ViewPlan {
+            data_dir: data_dir.map(Path::to_path_buf),
+            home: home.filter(|h| exposable_home(h).is_ok()),
+            expose_home,
+            config: ferrix_config_dir(env_var),
+        };
+        let staging = PathBuf::from("/tmp").join(format!(".ferrix-root-{}", std::process::id()));
+        std::fs::create_dir(&staging).map_err(|e| io_error("create", &staging, e))?;
+        let built = mount(
+            "tmpfs",
+            &staging,
+            "tmpfs",
+            MountFlags::NOSUID | MountFlags::NODEV,
+            c"mode=0755,size=16m",
+        )
+        .map_err(|e| io_error("mount tmpfs on", &staging, e))
+        .and_then(|()| populate_root(&staging, &plan));
+        let mut outcome = match built {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let _ = unmount(&staging, UnmountFlags::DETACH);
+                let _ = std::fs::remove_dir(&staging);
+                return Err(error);
+            }
+        };
+        let method = enter_root(&staging)?;
+        // The staging directory is now an empty directory inside the view's
+        // /tmp (its mount belonged to the detached old tree).
+        let _ = std::fs::remove_dir(&staging);
+        outcome.root = Some(method.to_owned());
+        Ok(outcome)
+    }
+
+    /// Applies `fs_view` in stage 2 (or the probe). `Err` carries the
+    /// reason; the caller decides whether that is fatal.
+    fn apply_fs_view(
+        evidence: &str,
+        app: &str,
+        policy: &IsolationPolicy,
+        mount_namespace: bool,
+        data_dir: Option<&Path>,
+        reasons: &mut Vec<String>,
+    ) -> Result<FsViewOutcome, String> {
+        let inherit = || FsViewOutcome {
+            data_dir: data_dir.map(|d| d.display().to_string()),
+            ..FsViewOutcome::default()
+        };
+        if !policy.fs_view.is_minimal() {
+            return Ok(inherit());
+        }
+        if !mount_namespace {
+            reasons.push("fs_view needs the mount namespace".to_owned());
+            return Ok(inherit());
+        }
+        build_minimal_root(policy, data_dir, reasons).map_err(|error| {
+            emit(&record(
+                evidence,
+                "sandbox-mount-failed",
+                json!({ "app": app, "target": "/", "error": error }),
+            ));
+            error
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -1134,6 +1498,34 @@ mod linux {
                     RunDirOutcome::default()
                 }
             };
+        let data_dir = prepare_data_dir(app, &mut reasons);
+        let fs_view = match apply_fs_view(
+            evidence,
+            app,
+            &args.policy,
+            applied.mount,
+            data_dir.as_deref(),
+            &mut reasons,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) if args.policy.mode == IsolationMode::Required => {
+                // Never start the application with the launcher's whole
+                // filesystem when a minimal view was required.
+                emit(&record(
+                    evidence,
+                    "sandbox-failed",
+                    json!({ "app": app, "reason": format!("required fs_view: {error}") }),
+                ));
+                return exit_code(ISOLATION_UNAVAILABLE_STATUS);
+            }
+            Err(error) => {
+                reasons.push(format!("fs_view: {error}"));
+                FsViewOutcome {
+                    data_dir: data_dir.as_ref().map(|d| d.display().to_string()),
+                    ..FsViewOutcome::default()
+                }
+            }
+        };
         drop_inherited_capabilities(evidence, app, &mut reasons);
         let no_new_privs =
             args.policy.no_new_privs && apply_no_new_privs(evidence, app, &mut reasons);
@@ -1153,6 +1545,9 @@ mod linux {
             if args.policy.run_dir.is_private() && run_dir_outcome.mode != args.policy.run_dir.mode
             {
                 unmet.push("run_dir");
+            }
+            if args.policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal {
+                unmet.push("fs_view");
             }
             if !unmet.is_empty() || !reasons.is_empty() {
                 let mut detail = Vec::new();
@@ -1177,13 +1572,19 @@ mod linux {
                 private_tmp,
                 no_new_privs,
                 run_dir: run_dir_outcome,
+                fs_view: fs_view.clone(),
                 reasons: reasons.clone(),
             };
             let _ = send_line(name, &serde_json::to_string(&report).unwrap_or_default());
         }
 
         let program = &args.exec[0];
-        let child = match Command::new(program).args(&args.exec[1..]).spawn() {
+        let mut command = Command::new(program);
+        command.args(&args.exec[1..]);
+        if let Some(dir) = &fs_view.data_dir {
+            command.env(ferrix_app_api::APP_DATA_DIR_ENV, dir);
+        }
+        let child = match command.spawn() {
             Ok(child) => child,
             Err(e) => {
                 emit(&record(
@@ -1274,6 +1675,8 @@ mod linux {
                     .map(|e| format!("uid_map: {e}")),
             );
         }
+        // Before the fresh /proc covers the launcher's (see keep_mountinfo).
+        keep_mountinfo();
         let network = if applied.net {
             setup_network(evidence, "probe", &mut reasons)
         } else {
@@ -1289,6 +1692,12 @@ mod linux {
                 reasons.push(format!("run_dir: {error}"));
                 RunDirOutcome::default()
             });
+        // No data directory: the probe must not leave one behind.
+        let fs_view = apply_fs_view(evidence, "probe", policy, applied.mount, None, &mut reasons)
+            .unwrap_or_else(|error| {
+                reasons.push(format!("fs_view: {error}"));
+                FsViewOutcome::default()
+            });
         let no_new_privs =
             policy.no_new_privs && apply_no_new_privs(evidence, "probe", &mut reasons);
         let report = ProbeReport {
@@ -1296,10 +1705,12 @@ mod linux {
                 || (policy.private_tmp && !private_tmp)
                 || (policy.no_new_privs && !no_new_privs)
                 || (policy.run_dir.is_private() && run_dir_outcome.mode != policy.run_dir.mode)
-                || (policy.resources.cgroup && !cgroup.applied()),
+                || (policy.resources.cgroup && !cgroup.applied())
+                || (policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal),
             applied: AppliedIsolation {
                 cgroup,
                 network,
+                fs_view,
                 ..applied.applied(private_tmp, no_new_privs, run_dir_outcome)
             },
             reason: (!reasons.is_empty()).then(|| reasons.join("; ")),

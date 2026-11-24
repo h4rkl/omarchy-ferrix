@@ -22,10 +22,10 @@ use ferrix_app_api::{
 };
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use ferrix_runtime_native::{
-    APPD_SOCKET_FILE, ISOLATION_UNAVAILABLE_STATUS, IsolationMode, IsolationPolicy, NativeLaunch,
-    NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV, ResourcePolicy, RunDirMode, RunDirPolicy,
-    SandboxReady, TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with,
-    sandbox_plan, skipped_record,
+    APPD_SOCKET_FILE, FsViewMode, FsViewPolicy, ISOLATION_UNAVAILABLE_STATUS, IsolationMode,
+    IsolationPolicy, NativeLaunch, NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV,
+    ResourcePolicy, RunDirMode, RunDirPolicy, SandboxReady, TELEPHONYD_SOCKET_FILE, UserNamespace,
+    emit, find_record, probe_sandbox_with, sandbox_plan, skipped_record,
 };
 
 const SANDBOX: &str = env!("CARGO_BIN_EXE_ferrix-sandbox");
@@ -659,6 +659,8 @@ fn cgroup_event(group: &Path, file: &str, key: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// These tests signal phases through files in the host scratch directory,
+/// so the application keeps the launcher's filesystem.
 fn limited(memory_max: Option<u64>, pids_max: Option<u64>) -> IsolationPolicy {
     IsolationPolicy {
         resources: ResourcePolicy {
@@ -667,6 +669,7 @@ fn limited(memory_max: Option<u64>, pids_max: Option<u64>) -> IsolationPolicy {
             pids_max,
             cpu_weight: Some(50),
         },
+        fs_view: FsViewPolicy::inherit(),
         ..IsolationPolicy::default()
     }
 }
@@ -918,5 +921,169 @@ fn readiness_still_arrives_from_inside_a_network_namespace() {
         report.applied.net_namespace && !report.degraded,
         "{report:?}"
     );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem view (issue #10, increment 3)
+// ---------------------------------------------------------------------------
+
+/// A scratch home folder holding a private document; removed on drop.
+struct ScratchHome(PathBuf);
+
+impl ScratchHome {
+    fn new() -> Self {
+        let home = scratch("ferrix-home");
+        std::fs::create_dir_all(home.join("Documents")).unwrap();
+        std::fs::write(home.join("Documents/secret.txt"), "secret").unwrap();
+        Self(home)
+    }
+
+    fn document(&self) -> PathBuf {
+        self.0.join("Documents/secret.txt")
+    }
+
+    fn data_dir(&self) -> PathBuf {
+        self.0.join(".local/share/ferrix/org.ferrix.test")
+    }
+
+    fn context(&self, capabilities: &[AppCapability]) -> LaunchContext {
+        let mut context = granted(capabilities);
+        context
+            .env
+            .push(("HOME".to_owned(), self.0.display().to_string()));
+        context
+    }
+}
+
+impl Drop for ScratchHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn minimal_root_hides_the_host_and_keeps_the_system_read_only() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let home = ScratchHome::new();
+    let host_file = scratch("ferrix-host-file");
+    std::fs::write(&host_file, "host").unwrap();
+    let _host_file = RemoveOnDrop(host_file.clone());
+    // Each forbidden action that succeeds is its own exit code.
+    let script = r#"
+        [ -e "$1" ] && exit 10                                   # host scratch file
+        [ -e "$2" ] && exit 11                                   # home document without files-home
+        [ -x /bin/sh ] && [ -r /etc/passwd ] || exit 12          # system directories present
+        touch /usr/ferrix-probe 2>/dev/null && exit 13           # /usr read-only
+        touch /etc/ferrix-probe 2>/dev/null && exit 14           # /etc read-only
+        echo $$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null && exit 15   # no cgroup escape
+        [ -c /dev/null ] && [ -c /dev/pts/ptmx ] || exit 16      # minimal /dev
+        [ -e /dev/kmsg ] || [ -e /dev/mem ] && exit 17           # nothing else from the host /dev
+        [ "$HOME" = "$3" ] && [ -d "$HOME" ] || exit 18          # an empty stand-in home
+        echo kept > "$FERRIX_APP_DATA_DIR/note" || exit 19       # writable data directory
+        exit 0
+    "#;
+    let mut running = launch_with(
+        &[
+            "sh",
+            "-c",
+            script,
+            "sh",
+            host_file.to_str().unwrap(),
+            home.document().to_str().unwrap(),
+            home.0.to_str().unwrap(),
+        ],
+        policy,
+        &home.context(&[]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    let view = &report.applied.fs_view;
+    assert_eq!(view.mode, FsViewMode::Minimal, "{report:?}");
+    assert_eq!(view.root.as_deref(), Some("pivot_root"), "{report:?}");
+    assert!(view.read_only.iter().any(|d| d == "/usr"), "{report:?}");
+    assert!(view.home.is_none() && !report.degraded, "{report:?}");
+    assert_eq!(
+        view.data_dir.as_deref(),
+        home.data_dir().to_str(),
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    // The data directory is the host's and survives the launch.
+    assert_eq!(
+        std::fs::read_to_string(home.data_dir().join("note")).unwrap(),
+        "kept\n"
+    );
+}
+
+#[test]
+fn files_home_grant_shows_the_home_folder_read_write() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let home = ScratchHome::new();
+    let script = r#"[ "$(cat "$1")" = secret ] && echo made > "$HOME/Documents/new.txt""#;
+    let mut running = launch_with(
+        &["sh", "-c", script, "sh", home.document().to_str().unwrap()],
+        policy,
+        &home.context(&[AppCapability::FilesHome]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.fs_view.home.as_deref(),
+        home.0.to_str(),
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    assert_eq!(
+        std::fs::read_to_string(home.0.join("Documents/new.txt")).unwrap(),
+        "made\n"
+    );
+}
+
+#[test]
+fn a_reserved_directory_is_never_exposed_as_the_home_folder() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let mut context = granted(&[AppCapability::FilesHome]);
+    context.env.push(("HOME".to_owned(), "/etc".to_owned()));
+    let config = serde_json::to_value(NativeLaunch {
+        exec: vec!["true".to_owned()],
+        isolation: policy,
+    })
+    .unwrap();
+    // Required: an unmet grant is a failed launch, not a silent widening.
+    assert!(matches!(
+        runtime().launch(&descriptor(), &config, &context),
+        Err(ferrix_app_api::AppError::IsolationUnavailable { .. })
+    ));
+}
+
+#[test]
+fn inherit_keeps_the_launcher_filesystem_and_still_sets_the_data_dir() {
+    let policy = IsolationPolicy {
+        fs_view: FsViewPolicy::inherit(),
+        ..IsolationPolicy::default()
+    };
+    if !available(&policy) {
+        return;
+    }
+    let home = ScratchHome::new();
+    let script = r#"[ -e "$1" ] && [ -d "$FERRIX_APP_DATA_DIR" ]"#;
+    let mut running = launch_with(
+        &["sh", "-c", script, "sh", home.document().to_str().unwrap()],
+        policy,
+        &home.context(&[]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(report.applied.fs_view.mode, FsViewMode::Inherit);
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
 }

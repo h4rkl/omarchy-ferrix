@@ -212,7 +212,8 @@ fn service_role_identifies_launched_pids_over_the_socket() {
         [
             AppCapability::Shell,
             AppCapability::Background,
-            AppCapability::Network
+            AppCapability::Network,
+            AppCapability::FilesHome
         ]
         .into_iter()
         .collect()
@@ -229,7 +230,7 @@ fn service_role_identifies_launched_pids_over_the_socket() {
     );
     assert_eq!(
         raw,
-        r#"{"reply":"identity","schema_version":1,"app":"org.ferrix.terminal","trust":"untrusted","granted":["shell","background","network"]}"#
+        r#"{"reply":"identity","schema_version":1,"app":"org.ferrix.terminal","trust":"untrusted","granted":["shell","background","network","files-home"]}"#
     );
 
     // Unknown pid: `app: null`, no trust, no grants.

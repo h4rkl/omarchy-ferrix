@@ -79,11 +79,14 @@ pub fn expected_isolation(policy: &IsolationPolicy) -> IsolationReport {
         } else {
             crate::RunDirOutcome::default()
         };
-        let applied = namespaces.applied(
+        let mut applied = namespaces.applied(
             policy.private_tmp && namespaces.mount,
             policy.no_new_privs,
             run_dir,
         );
+        if namespaces.mount {
+            applied.fs_view.mode = policy.fs_view.mode;
+        }
         IsolationReport {
             requested: policy.clone(),
             applied,
@@ -314,6 +317,12 @@ impl Runtime for NativeRuntime {
                 reason: "run_dir.mode private requires mount_namespace".to_owned(),
             });
         }
+        if launch.isolation.fs_view.is_minimal() && !launch.isolation.mount_namespace {
+            return Err(AppError::InvalidDescriptor {
+                id: Some(app.id.clone()),
+                reason: "fs_view.mode minimal requires mount_namespace".to_owned(),
+            });
+        }
         // Socket visibility and network access follow the effective grants
         // `ferrix_appd` computed, never values written into the manifest.
         let launch = NativeLaunch {
@@ -349,7 +358,9 @@ impl Runtime for NativeRuntime {
 ///   not applied;
 /// - a sandboxed application gets a loopback-only network namespace unless
 ///   it holds `network`. A policy that requests no isolation at all (the
-///   explicit unsandboxed opt-out, [`IsolationPolicy::none`]) is left alone.
+///   explicit unsandboxed opt-out, [`IsolationPolicy::none`]) is left alone;
+/// - in a minimal filesystem view the home folder is bound only with
+///   `files-home`.
 pub fn with_grants(mut policy: IsolationPolicy, context: &LaunchContext) -> IsolationPolicy {
     policy.run_dir.sockets = if policy.run_dir.is_private() {
         sockets_for_grants(&context.granted)
@@ -359,6 +370,8 @@ pub fn with_grants(mut policy: IsolationPolicy, context: &LaunchContext) -> Isol
     if needs_sandbox(&policy) {
         policy.net_namespace = !context.granted.contains(&AppCapability::Network);
     }
+    policy.fs_view.home =
+        policy.fs_view.is_minimal() && context.granted.contains(&AppCapability::FilesHome);
     policy
 }
 
@@ -634,6 +647,44 @@ mod tests {
         // The explicit unsandboxed opt-out stays unsandboxed.
         let none = with_grants(IsolationPolicy::none(), &context());
         assert!(!none.net_namespace && !needs_sandbox(&none));
+    }
+
+    #[test]
+    fn home_folder_follows_the_files_home_grant_and_cannot_be_widened() {
+        use crate::FsViewPolicy;
+        use ferrix_app_api::AppCapability;
+        let manifest = IsolationPolicy {
+            fs_view: FsViewPolicy {
+                home: true,
+                ..FsViewPolicy::default()
+            },
+            ..IsolationPolicy::default()
+        };
+        assert!(!with_grants(manifest.clone(), &context()).fs_view.home);
+        let mut files = context();
+        files.granted = [AppCapability::FilesHome].into_iter().collect();
+        assert!(with_grants(manifest, &files).fs_view.home);
+        // Inherit already shows everything; nothing extra is bound.
+        let inherit = IsolationPolicy {
+            fs_view: FsViewPolicy::inherit(),
+            ..IsolationPolicy::default()
+        };
+        assert!(!with_grants(inherit, &files).fs_view.home);
+    }
+
+    #[test]
+    fn minimal_filesystem_view_requires_the_mount_namespace() {
+        let app = descriptor();
+        let policy = IsolationPolicy {
+            mount_namespace: false,
+            private_tmp: false,
+            ..IsolationPolicy::default()
+        };
+        let config = launch_value(&["sh", "-c", "exit 0"], policy);
+        assert!(matches!(
+            runtime().launch(&app, &config, &context()),
+            Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("fs_view")
+        ));
     }
 
     #[test]

@@ -151,7 +151,9 @@ Capability names (`AppCapability`, kebab-case on the wire): `core-state`,
 `telephony-sms`, `telephony-data`, `telephony-radio`, `contacts-read`,
 `contacts-write`, `network-state`, `network-control`, `network` (sockets beyond
 the application's own loopback; without it the native sandbox gives the
-application a loopback-only network namespace). Read-only `*-state`
+application a loopback-only network namespace), `files-home` (the user's home
+folder; without it the sandbox's minimal filesystem view shows only the
+application's data directory). Read-only `*-state`
 grants and privileged `*-control`/
 `*-call`/`*-sms`/`*-write` grants are distinct so a state grant can never
 reach a control verb.

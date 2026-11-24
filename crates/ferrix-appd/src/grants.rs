@@ -114,6 +114,20 @@ mod tests {
         let terminal = AppId::new("org.ferrix.terminal").unwrap();
         assert!(policy.granted(&terminal).contains(&AppCapability::Shell));
         assert!(policy.granted(&terminal).contains(&AppCapability::Network));
+        // The home folder is visible only to Files, the Terminal and
+        // Contacts (its export writes to ~/Documents until a document
+        // portal exists, #11); everyone else sees only its data directory.
+        for (id, capabilities) in &policy.grants {
+            let expected = matches!(
+                id.as_str(),
+                "org.ferrix.files" | "org.ferrix.terminal" | "org.ferrix.contacts"
+            );
+            assert_eq!(
+                capabilities.contains(&AppCapability::FilesHome),
+                expected,
+                "{id} files-home"
+            );
+        }
         let home = AppId::new("org.ferrix.home").unwrap();
         assert!(policy.granted(&home).contains(&AppCapability::CoreControl));
         assert!(

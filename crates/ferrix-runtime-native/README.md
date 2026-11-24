@@ -157,6 +157,56 @@ afterwards; the runtime's listener reads a connection that arrives early and
 writes late, and a sender that closes without writing still ends as the
 child's exit status (`IsolationUnavailable` for 126).
 
+## Filesystem view (`fs_view`, issue #10)
+
+```json
+"isolation": { "fs_view": { "mode": "minimal" | "inherit" } }
+```
+
+`minimal` (the default) makes stage 2 assemble a new root on a 16 MiB
+tmpfs at `/tmp/.ferrix-root-<pid>` and enter it, after the `/proc`, `/tmp`
+and socket-directory views exist and before capabilities are dropped:
+
+- read-only recursive binds of `/usr`, `/etc`, `/bin`, `/sbin`, `/lib`,
+  `/lib64`, `/opt` (a symlink such as a merged-`/usr` `/bin` is recreated as
+  that symlink), and of `/sys`; every submount below them is remounted
+  read-only with its own flags kept (so `/sys/fs/cgroup` cannot be used to
+  leave the application's group);
+- a minimal `/dev`: `null`, `zero`, `full`, `random`, `urandom`, `tty`, a new
+  devpts instance (`newinstance`, so no application sees another's ptys;
+  bind of the host's `/dev/pts` as fallback), a private `/dev/shm`, `dri`
+  when present, and the `ptmx`/`fd`/`std*` symlinks; no block, input or
+  memory devices;
+- the sandbox's own `/proc`, its `/run` view, its `/tmp`, and the socket
+  directory when it is outside `/run` (nested runs, tests);
+- the application's data directory, created owner-only before the view and
+  bound read-write: `$XDG_DATA_HOME/ferrix/<app-id>`, else
+  `$HOME/.local/share/ferrix/<app-id>`, exported as `FERRIX_APP_DATA_DIR`
+  (also under `inherit`);
+- the Ferrix configuration directory (`$XDG_CONFIG_HOME/ferrix`, else
+  `~/.config/ferrix`, for example `keyboard.toml`) read-only;
+- `$HOME`: bound read-write **only with the `files-home` grant**
+  (`fs_view.home`, derived from the effective grants by `with_grants`; a
+  manifest value is replaced). Without it `$HOME` is an empty, writable
+  directory on the root tmpfs (lost at exit). A home that is `/`, not
+  absolute, not normalized, or inside a system directory (`/usr`, `/etc`,
+  `/run`, `/tmp`, `/var`, ...) is never exposed: an unmet `files-home` is a
+  reason, so `Required` fails the launch instead of widening anything.
+
+The root is entered with `pivot_root(".", ".")` and the old root detached;
+on an initramfs root, which the kernel cannot pivot away from (EINVAL), the
+new root is moved over `/` and entered with `chroot` (`root:
+"move-chroot"`; the shadowed initramfs stays reachable to a process that can
+`chroot` again, which seccomp removes). Everything else on the host (`/var`,
+`/srv`, `/mnt`, other homes, the checkout) is absent. `inherit` keeps the
+launcher's filesystem as before (plus the data directory). `sandbox-ready`
+gains `fs_view: {mode, root, data_dir, home, read_only}`; a view that cannot
+be built is `sandbox-mount-failed{target:"/"}` and fails closed under
+`Required` (`unmet: fs_view`). `minimal` requires `mount_namespace`
+(`InvalidDescriptor` otherwise). Grants: Files, Terminal and Contacts hold
+`files-home` (Contacts exports to `~/Documents` until a document portal
+exists, #11); every other application sees only its data directory.
+
 ## Readiness and records
 
 Readiness is observable: stage 2 reports to stage 1 and stage 1 reports to the
@@ -204,11 +254,14 @@ unless `FERRIX_SANDBOX_TESTS=required`, which turns every skip into a failure.
 ## Not provided yet
 
 No uid change (the application keeps the launcher's identity, mapped 1:1 in a
-user namespace), no seccomp filter, no cgroup freezing (limits only, see above),
-no per-application network routing (granted apps share the launcher network), no filesystem view restriction beyond
-`/proc`, `/tmp`, and the socket directory (with `run_dir: private` the rest of
-`/run`, including the D-Bus system bus socket, stays visible; `private-run`
-hides it), and no capability dropping beyond `no_new_privs`. Socket
+user namespace), no seccomp filter, no cgroup freezing (limits only, see
+above), no per-application network routing (granted apps share the launcher
+network), no filesystem restriction under `fs_view: inherit` beyond `/proc`,
+`/tmp`, and the socket directory (with `run_dir: private` the rest of `/run`,
+including the D-Bus system bus socket, stays visible; `private-run` hides
+it), and no capability dropping beyond `no_new_privs`: a root launcher's
+application is still root inside its namespaces, so the read-only binds hold
+only as long as it cannot `mount` (seccomp, below). Socket
 visibility is enforced only when the manifest sets `run_dir.mode`; the
 services enforce capabilities per request regardless (ADR-004 §3). Sandbox
 `isolation()` is only as truthful as the readiness report; the `sandbox-ready`
@@ -243,4 +296,14 @@ root does. The network tests cover: without the `network` grant (with
 `wget` to a TCP service on the launcher's loopback fails while that service
 accepts nothing; with `network` the same `wget` succeeds; a manifest with
 `net_namespace: false` still gets the namespace; the readiness report still
-arrives (not `unverified`) from inside the namespace.
+arrives (not `unverified`) from inside the namespace. The filesystem tests
+cover: under `minimal` a host scratch file and a home document are absent,
+`/bin/sh` and `/etc/passwd` are present, `touch` in `/usr` and `/etc` fails,
+writing the application's pid to `/sys/fs/cgroup/cgroup.procs` fails, `/dev`
+has `null` and a private `pts/ptmx` but no `kmsg`/`mem`, `$HOME` is an empty
+stand-in, and a file written to `$FERRIX_APP_DATA_DIR` is on the host after
+the exit (`root: pivot_root`); with `files-home` the document is readable
+and a new file lands in the real home; `HOME=/etc` with `files-home` is
+`IsolationUnavailable`; `inherit` sees the host file and still gets the
+data directory. The cgroup tests run under `inherit` because they signal
+through host files.

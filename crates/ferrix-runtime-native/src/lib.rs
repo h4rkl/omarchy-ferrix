@@ -22,6 +22,7 @@
 //! runtime in its bootstrap code only.
 
 pub mod cgroup;
+pub mod fsview;
 mod plan;
 mod policy;
 mod report;

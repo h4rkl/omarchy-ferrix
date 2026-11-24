@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    AppliedIsolation, CgroupOutcome, IsolationPolicy, IsolationReport, NamespaceSet,
+    AppliedIsolation, CgroupOutcome, FsViewOutcome, IsolationPolicy, IsolationReport, NamespaceSet,
     NetworkOutcome, RunDirOutcome,
 };
 
@@ -55,6 +55,8 @@ pub struct SandboxReady {
     pub cgroup: CgroupOutcome,
     /// Inside a private network namespace: `{interfaces, loopback_up}`.
     pub network: NetworkOutcome,
+    /// `{mode, root, data_dir, home, read_only}` from stage 2.
+    pub fs_view: FsViewOutcome,
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -65,6 +67,7 @@ impl SandboxReady {
         AppliedIsolation {
             cgroup: self.cgroup.clone(),
             network: self.network.clone(),
+            fs_view: self.fs_view.clone(),
             ..self
                 .namespaces
                 .applied(self.private_tmp, self.no_new_privs, self.run_dir.clone())
@@ -88,6 +91,7 @@ pub struct InitReport {
     pub private_tmp: bool,
     pub no_new_privs: bool,
     pub run_dir: RunDirOutcome,
+    pub fs_view: FsViewOutcome,
     pub reasons: Vec<String>,
 }
 
@@ -405,6 +409,13 @@ mod tests {
                 interfaces: vec!["lo".to_owned()],
                 loopback_up: true,
             },
+            fs_view: FsViewOutcome {
+                mode: crate::FsViewMode::Minimal,
+                root: Some("pivot_root".to_owned()),
+                data_dir: Some("/root/.local/share/ferrix/org.ferrix.terminal".to_owned()),
+                home: None,
+                read_only: vec!["/usr".to_owned(), "/etc".to_owned()],
+            },
             degraded: false,
             reason: None,
         };
@@ -427,6 +438,11 @@ mod tests {
         assert_eq!(report.applied.run_dir, ready.run_dir);
         assert_eq!(report.applied.cgroup, ready.cgroup);
         assert!(report.applied.net_namespace && report.applied.network.loopback_up);
+        assert_eq!(report.applied.fs_view, ready.fs_view);
+        assert!(
+            text.contains(r#""fs_view":{"mode":"minimal","root":"pivot_root","data_dir":"/root/.local/share/ferrix/org.ferrix.terminal","read_only":["/usr","/etc"]}"#),
+            "{text}"
+        );
         assert!(
             text.contains(r#""network":{"interfaces":["lo"],"loopback_up":true}"#),
             "{text}"

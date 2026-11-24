@@ -35,6 +35,11 @@ pub const APP_ID_ENV: &str = "FERRIX_APP_ID";
 pub const APP_INSTANCE_ENV: &str = "FERRIX_APP_INSTANCE";
 /// Environment variable carrying the path of the `ferrix_appd` socket.
 pub const APPD_SOCKET_ENV: &str = "FERRIX_APPD_SOCKET";
+/// Environment variable carrying the application's private, persistent data
+/// directory (`$XDG_DATA_HOME/ferrix/<app-id>`, else
+/// `$HOME/.local/share/ferrix/<app-id>`), set by the native runtime. It is
+/// writable and visible inside the sandbox's minimal filesystem view.
+pub const APP_DATA_DIR_ENV: &str = "FERRIX_APP_DATA_DIR";
 /// Optional non-secret carrier APN passed only to applications granted
 /// `telephony-data`. The application service never records this value.
 pub const TELEPHONY_APN_ENV: &str = "FERRIX_TELEPHONY_APN";
@@ -244,11 +249,15 @@ pub enum AppCapability {
     /// a network namespace holding only `lo`. Distinct from `network-state`
     /// and `network-control`, which reach `ferrix-networkd`, not the network.
     Network,
+    /// Read and write the user's home folder (documents, downloads). Without
+    /// it the native sandbox's minimal filesystem view shows the application
+    /// only its own data directory ([`APP_DATA_DIR_ENV`]).
+    FilesHome,
 }
 
 impl AppCapability {
     /// Every capability, in declaration order.
-    pub const ALL: [AppCapability; 14] = [
+    pub const ALL: [AppCapability; 15] = [
         AppCapability::CoreState,
         AppCapability::CoreControl,
         AppCapability::Shell,
@@ -263,6 +272,7 @@ impl AppCapability {
         AppCapability::NetworkState,
         AppCapability::NetworkControl,
         AppCapability::Network,
+        AppCapability::FilesHome,
     ];
 
     /// The kebab-case wire name (`telephony-call`).
@@ -282,6 +292,7 @@ impl AppCapability {
             AppCapability::NetworkState => "network-state",
             AppCapability::NetworkControl => "network-control",
             AppCapability::Network => "network",
+            AppCapability::FilesHome => "files-home",
         }
     }
 }
@@ -1197,6 +1208,7 @@ mod tests {
             "network-state",
             "network-control",
             "network",
+            "files-home",
         ];
         assert_eq!(AppCapability::ALL.len(), expected.len());
         for (capability, name) in AppCapability::ALL.into_iter().zip(expected) {
