@@ -442,7 +442,8 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
     assets = repo / "crates/ferrix-ui/assets"
     for name, notice in (("material-symbols", assets / "icons/material-symbols/LICENSE"),
                          ("material-symbols", assets / "icons/material-symbols/README.md"),
-                         ("jetbrains-mono", assets / "OFL.txt")):
+                         ("ibm-plex", assets / "fonts/ibm-plex/LICENSE.txt"),
+                         ("ibm-plex", assets / "fonts/ibm-plex/README.md")):
         if not notice.is_file():
             die(f"missing third-party notice {notice}")
         dest = f"/usr/share/licenses/ferrix/{name}/{notice.name}"

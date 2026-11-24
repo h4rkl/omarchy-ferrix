@@ -700,13 +700,19 @@ mod tests {
             Some(&fixtures),
         )
         .unwrap();
-        assert_eq!(service.contact_count(), 8);
-        assert!(
-            service
-                .snapshot()
-                .iter()
-                .all(|c| c.display_name.starts_with("Test Contact "))
-        );
+        assert_eq!(service.contact_count(), 12);
+        // Synthetic names only: "Test Contact NN", or the same phrase in
+        // Arabic, Devanagari or Han for the typography evidence (#14).
+        assert!(service.snapshot().iter().all(|c| {
+            [
+                "Test Contact ",
+                "جهة اتصال تجريبية ",
+                "परीक्षण संपर्क ",
+                "测试联系人 ",
+            ]
+            .iter()
+            .any(|p| c.display_name.starts_with(p))
+        }));
         assert!(service.snapshot().iter().all(|c| {
             c.numbers[0]
                 .e164
@@ -729,7 +735,7 @@ mod tests {
             Some(&fixtures),
         )
         .unwrap();
-        assert_eq!(again.contact_count(), 8);
+        assert_eq!(again.contact_count(), 12);
         assert!(
             events(&captured, "contacts-fixtures-loaded").is_empty(),
             "not reloaded"

@@ -28,7 +28,7 @@ here is physical evidence.
 | Capability | Status | Evidence label | Latest evidence | Owning issues |
 | --- | --- | --- | --- | --- |
 | `power` | `mocked` | QEMU/mock | [2026-10-10](status-log/2026-10.md#2026-10-10-bluetooth-legacy-pin-incoming-pairing-raise-live-scan-countdown-qemumock-only) (`unplugged-to-charging` in `just qemu-check`) | — |
-| `display` | `mocked` | QEMU | [2026-10-10](status-log/2026-10.md#2026-10-10-icon-set-filled-remix-icon-v470-glyphs-issue-20-qemuhost-preview-only) | #12, #14, #16, #20 |
+| `display` | `mocked` | QEMU | [2026-11-24](status-log/2026-11.md#2026-11-24-typography-ibm-plex-noto-fallback-shaping-and-bidi-issue-14-qemu-only) (IBM Plex, Noto fallback, shaping and bidi) | #12, #14, #16, #20 |
 | `input` | `mocked` | QEMU | [2026-10-10](status-log/2026-10.md#2026-10-10-terminal-and-shared-keyboard-key-repeat-selection-and-clipboard-scrollbar-bell-and-title-non-us-layouts-qemu-only) | #12, #21 |
 | `network` | `mocked` | QEMU/mock | [2026-10-09](status-log/2026-10.md#2026-10-09-settings-pages-mic-mute-app-intents-incoming-call-raise-qemumock-only) | #7 |
 | `bluetooth` | `mocked` | QEMU/mock | [2026-10-10](status-log/2026-10.md#2026-10-10-bluetooth-legacy-pin-incoming-pairing-raise-live-scan-countdown-qemumock-only) | — |
@@ -60,16 +60,16 @@ Evidence labelled `physical:` applies to this exact target only.
 
 The ten newest log entries, newest first:
 
-1. [2026-11-24: Power key, screen blanking, idle timeout, power menu, backlight floor (QEMU/mock)](status-log/2026-11.md#2026-11-24-power-key-screen-blanking-idle-timeout-power-menu-backlight-floor-issue-9-qemumock-only)
-2. [2026-11-24: Camera contract, mock cameras, and Camera app](status-log/2026-11.md#2026-11-24-camera-contract-mock-cameras-and-camera-app-issue-3-qemumock-only)
-3. [2026-11-04: Pixel 9a stock Android restore](status-log/2026-11.md#2026-11-04-utc-pixel-9a-stock-android-restore)
-4. [2026-10-12: 1-r5 image, S5300 S2 pre-mount GO with opener positive control and unit/boot identity](status-log/2026-10.md#2026-10-12-1-r5-image-s5300-s2-pre-mount-go-with-opener-positive-control-and-unitboot-identity-issues-107-and-108-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-5. [2026-10-12: device-google-tegu 1-r5: /mnt/vendor via install script](status-log/2026-10.md#2026-10-12-device-google-tegu-1-r5-mntvendor-via-install-script-builder-evidence-no-physical-claim)
-6. [2026-10-12: A2DP active proof play](status-log/2026-10.md#2026-10-12-a2dp-active-proof-play-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-7. [2026-10-12: S5300 S2 active CP boot](status-log/2026-10.md#2026-10-12-s5300-s2-active-cp-boot-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
-8. [2026-10-12: S5300 S2 decision binding](status-log/2026-10.md#2026-10-12-s5300-s2-decision-binding-issue-108-offline-only-no-physical-claim)
-9. [2026-10-12: S5300 CPIF opener-scan positive control](status-log/2026-10.md#2026-10-12-s5300-cpif-opener-scan-positive-control-issue-107-offline-only)
-10. [2026-10-12: 1-r3 image and S5300 S2 pre-mount GO](status-log/2026-10.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+1. [2026-11-24: Typography: IBM Plex, Noto fallback, shaping and bidi](status-log/2026-11.md#2026-11-24-typography-ibm-plex-noto-fallback-shaping-and-bidi-issue-14-qemu-only)
+2. [2026-11-04: Pixel 9a stock Android restore](status-log/2026-11.md#2026-11-04-utc-pixel-9a-stock-android-restore)
+3. [2026-10-12: 1-r5 image, S5300 S2 pre-mount GO with opener positive control and unit/boot identity](status-log/2026-10.md#2026-10-12-1-r5-image-s5300-s2-pre-mount-go-with-opener-positive-control-and-unitboot-identity-issues-107-and-108-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+4. [2026-10-12: device-google-tegu 1-r5: /mnt/vendor via install script](status-log/2026-10.md#2026-10-12-device-google-tegu-1-r5-mntvendor-via-install-script-builder-evidence-no-physical-claim)
+5. [2026-10-12: A2DP active proof play](status-log/2026-10.md#2026-10-12-a2dp-active-proof-play-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+6. [2026-10-12: S5300 S2 active CP boot](status-log/2026-10.md#2026-10-12-s5300-s2-active-cp-boot-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+7. [2026-10-12: S5300 S2 decision binding](status-log/2026-10.md#2026-10-12-s5300-s2-decision-binding-issue-108-offline-only-no-physical-claim)
+8. [2026-10-12: S5300 CPIF opener-scan positive control](status-log/2026-10.md#2026-10-12-s5300-cpif-opener-scan-positive-control-issue-107-offline-only)
+9. [2026-10-12: 1-r3 image and S5300 S2 pre-mount GO](status-log/2026-10.md#2026-10-12-1-r3-image-and-s5300-s2-pre-mount-go-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
+10. [2026-10-12: S5300 S2 read-only preflight](status-log/2026-10.md#2026-10-12-s5300-s2-read-only-preflight-issue-92-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0)
 
 ## Log
 
