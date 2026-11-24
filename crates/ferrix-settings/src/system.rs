@@ -214,7 +214,7 @@ impl Model {
         match self.screen_policy.as_ref() {
             None => self.core_label(),
             Some(policy) if policy.inhibited() => {
-                let reasons: Vec<&str> = policy.reasons().iter().map(|r| r.name()).collect();
+                let reasons: Vec<&str> = policy.screen_reasons().iter().map(|r| r.name()).collect();
                 format!("kept on \u{b7} {}", reasons.join(", "))
             }
             Some(policy) => match policy.idle_timeout_secs {
@@ -854,6 +854,7 @@ mod tests {
         let policy = |secs, inhibitors| ScreenPolicy {
             idle_timeout_secs: secs,
             inhibitors,
+            ..ScreenPolicy::default()
         };
         assert!(m.apply_policy(PolicyFeed::Policy(policy(Some(60), vec![]))));
         assert_eq!(m.screen_timeout_value().as_deref(), Some("1 min"));

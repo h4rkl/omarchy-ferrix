@@ -36,6 +36,35 @@ tools/pixel-9a/devtest/shell-get.py /tmp/fb.ppm out/pixel-9a/devtest/fb.ppm
 
 Keep captures under the ignored `out/` tree; they may show personal data.
 
+## Suspend (opt-in per boot)
+
+`dev/profile.toml` ships `[lifecycle] suspend = "off"`. Two files under
+`/run/ferrix` (tmpfs) control ferrix-core's suspend policy. A reboot clears
+both, so a hard reset always comes back with suspend off.
+
+```sh
+# Opt in for this boot only: s2idle or deep. Then blank with the power key.
+tools/pixel-9a/devtest/shell-run.py 'echo s2idle > /run/ferrix/suspend-opt-in'
+# Kill switch: while this file exists ferrix-core never suspends.
+tools/pixel-9a/devtest/shell-run.py 'touch /run/ferrix/no-suspend'
+# Watch the decisions in the core's log.
+tools/pixel-9a/devtest/shell-run.py "grep -E 'suspend-(request|resumed|blocked)' /var/log/ferrix-core.log | tail"
+```
+
+- The core reads both files whenever the policy changes, and reads them
+  again at the deadline.
+- The kill switch always wins over the opt-in file and the profile.
+- Write the opt-in file before blanking the screen.
+- The policy suspends after the screen has been blanked for
+  `suspend_after_blank_secs` (30 s) with no inhibitor held. After a
+  background wake with the screen still off, it suspends again after
+  another delay.
+- While Wi-Fi is on, its host-wake IRQ ends s2idle within about 0.3 s, so
+  expect short cycles until Wi-Fi wake filtering exists.
+- The CDC-ACM shell survived every probe cycle. A cycle that never resumes
+  needs the human to hold Volume Down + Power. After that reboot, suspend
+  is off again.
+
 The read-only inventory workflows (`just pixel-9a-audio-inventory`,
 `just pixel-9a-s5300-source-inventory`) use the same port through
 `tools/pixel-9a/acm-probe.py`, which adds exact-byte transfer, a guest-side
