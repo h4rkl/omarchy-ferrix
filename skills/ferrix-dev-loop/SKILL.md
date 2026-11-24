@@ -87,6 +87,13 @@ OpenRC to settle. The possible outcomes are:
 - stock Android: the bootloader fell back to slot a, which is still stock
 - a timeout
 
+Ferrix never marks slot b boot-successful (#175): after a `set_active` the
+bootloader allows 3 boots, then stops in Fastboot with `slot-retry-count:b=1`
+("Enter reason: BL1 requested"). `reflash.sh` resets the counter after a flash
+(`set-active a`, then `set-active b`; a is never booted). Mid-session, if a
+reboot lands in Fastboot with retry-count 1, run the same two
+`just pixel-9a-dev-flash set-active` steps, then `just pixel-9a-dev-flash reboot`.
+
 If the phone cannot get back to Fastboot, **stop** and ask the human to
 hold Volume Down + Power. Never call raw `fastboot flash|erase|oem` or
 `adb` mutations.
