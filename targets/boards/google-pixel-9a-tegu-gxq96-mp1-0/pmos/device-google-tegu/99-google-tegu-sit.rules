@@ -4,3 +4,21 @@
 ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*sit*", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", ENV{ID_MM_SIT_CARRIER_CONFIG_DIRECTORY}="/vendor/firmware/carrierconfig"
 # The AT veneer is not the modem control protocol and must not race SIT.
 ACTION=="add|change", SUBSYSTEM=="wwan", KERNEL=="wwan*at*", ENV{ID_MM_PORT_IGNORE}="1"
+
+# Google Kleaf CPIF (route A, S3; see s5300-s3-mm-binding.md). The pinned
+# cpif driver creates umts_ipc0/1 (SIT FMT channels 245/246) and rmnet0 with
+# no parent device, so they carry no driver and no shared physical device:
+# ID_MM_KERNEL_DRIVER names the cp_interface platform driver and
+# ID_MM_PHYSDEV_UID groups them into one modem. They exist from module load,
+# long before the CP boots, so they are handed to ModemManager only while
+# both sit-proxy sockets exist; sit-proxy.initd re-runs these rules after it
+# starts and after it stops. ModemManager reaches the FMT channels only
+# through those sockets (ID_MM_SIT_PROXY_REQUIRED) and never opens a CPIF node.
+ACTION!="add|change", GOTO="ferrix_tegu_cpif_end"
+SUBSYSTEM!="cpif|net", GOTO="ferrix_tegu_cpif_end"
+TEST!="/sys/class/cpif", GOTO="ferrix_tegu_cpif_end"
+TEST!="/run/sit-proxy/0", GOTO="ferrix_tegu_cpif_end"
+TEST!="/run/sit-proxy/1", GOTO="ferrix_tegu_cpif_end"
+SUBSYSTEM=="cpif", KERNEL=="umts_ipc[01]", ENV{ID_MM_CANDIDATE}="1", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PHYSDEV_UID}="google-tegu-s5300-cpif", ENV{ID_MM_KERNEL_DRIVER}="cp_interface", ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", ENV{ID_MM_SIT_PROXY_REQUIRED}="1", ENV{ID_MM_SIT_CARRIER_CONFIG_DIRECTORY}="/vendor/firmware/carrierconfig"
+SUBSYSTEM=="net", KERNEL=="rmnet0", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PHYSDEV_UID}="google-tegu-s5300-cpif", ENV{ID_MM_KERNEL_DRIVER}="cp_interface"
+LABEL="ferrix_tegu_cpif_end"

@@ -1,0 +1,324 @@
+# S5300 S3: ModemManager binding on the Google Kleaf CPIF route (issue #1)
+
+Status: **offline only, 2026-11-25.** Nothing here has run on a phone. The
+patch compiles against the pinned ModemManager tree and its unit tests pass
+in an Alpine container; the udev and service changes pass the repository's
+offline suites. Whether `mmcli -L` lists a modem on the exact device is the
+S3 gate in [`s5300-route-decision.md`](s5300-route-decision.md#stopgo-summary),
+and it is still open.
+
+Target: `google-pixel-9a-tegu-gxq96-mp1-0`, route A (Kleaf GKI 6.1.124 with
+Google's `cpif`). Route B (`linux-google-tegu-wwan`, `wwan0sit*`) keeps its
+behaviour.
+
+## Why no modem appeared
+
+What the lead saw on 2026-11-24: the CP was `ONLINE`, `exynos-modem` and
+`sit-proxy` ran, `/run/sit-proxy/0` and `/1` existed, and a restarted
+ModemManager said `No modems were found`. The pinned sources explain that,
+and they also show that udev rules alone could not fix it.
+
+### Pinned inputs
+
+| Input | Pin | Verified |
+| --- | --- | --- |
+| ModemManager fork | `git.deusch.me/pixel-mainline/ModemManager` archive `14a0013a28e5d5eec513c65e75d7549678ecc61e` | sha512 `9add05d1…ccfd8ea` matches `pmos/modemmanager-samsung-sit/APKBUILD` |
+| `exynos-modem` / `sit-proxy` | `git.deusch.me/pixel-mainline/exynos-modem` archive `634e8eb404c3fcf959dce6a0b0d97b33ba0fc346` | sha512 `fa081999…ff4357c` matches `pmos/exynos-modem/APKBUILD` |
+| Google CPIF driver | `private/google-modules/radio/samsung/s5300` at `a8976934fe7f396627f9900958eb1457a74ebcca` in the Kleaf tree on the build host | read-only `grep`/`sed`; nothing built or written |
+
+### Kernel: what the CPIF nodes look like (CPIF `a8976934`)
+
+- `modem_main.c`, `cpif_cdev_alloc_region()`: `class_create(THIS_MODULE,
+  "cpif")`. The FMT nodes are in the **`cpif` subsystem**, not `wwan`.
+- `modem_io_device.c`, `cpif_cdev_create_device()`:
+  `device_create(iod->msd->cdev_class, NULL, …, "%s", iod->name)`. The
+  parent is `NULL`, so `umts_ipc0`/`umts_ipc1` sit under
+  `/sys/devices/virtual/cpif/` with **no parent device and no driver**.
+- `modem_io_device.c`, `sipc5_init_io_device()`, `IODEV_NET`:
+  `alloc_netdev_mqs()` plus `register_netdev()`, with no `SET_NETDEV_DEV()`.
+  The `rmnet*` netdevs are also **virtual and driverless**.
+- `modem_main.c:980`: the platform driver bound to `samsung,exynos-cp` is
+  `cp_interface` (E1 observed it bound).
+
+### ModemManager fork (`14a0013a`): why nothing bound
+
+1. `src/plugins/samsung-sit/mm-plugin-samsung-sit.c`,
+   `mm_plugin_create_samsung_sit()`: allowed subsystems `{ "wwan", "net" }`,
+   allowed drivers `{ "s5300-modem" }`. ModemManager's udev client watches
+   only the union of plugin subsystems (`mm-base-manager.c`, `process_scan()`
+   and `g_udev_client_new (mm_plugin_manager_get_subsystems (…))`), so
+   **`cpif` devices are never seen**.
+2. `src/80-mm-candidate.rules` sets `ID_MM_CANDIDATE` only for `tty`, `net`,
+   `cdc-wdm` and `wwan`, and `mm-base-manager.c` `device_added()` drops any
+   port without it.
+3. `src/mm-plugin.c`, `apply_pre_probing_filters()`: when
+   `mm_device_get_drivers()` is `NULL`, the port is "filtered as couldn't
+   retrieve drivers". For a parentless device,
+   `src/kerneldevice/mm-kernel-device-udev.c` `preload_contents_other()`
+   takes the driver from `g_udev_device_get_driver()`, which is `NULL`.
+4. `src/mm-base-modem.c`, `base_modem_internal_grab_port()`: only `net`,
+   `tty`, `usbmisc`, `rpmsg`, `qrtr`, `virtual` and `wwan` ports can be
+   grabbed. Anything else is "unhandled port type".
+5. `src/plugins/samsung-sit/mm-sit-client.c`, `mm_sit_proxy_socket_path()`:
+   the socket index is the digit after `sit`. Any other name maps to `0`, so
+   **`umts_ipc0` and `umts_ipc1` would both go to `/run/sit-proxy/0`**.
+6. `mm-sit-client.c`, `mm_sit_client_open()`: if the proxy socket does not
+   answer, it warns and **opens `/dev/<node>` directly**. On CPIF the nodes
+   exist from module load, before the CP boots. A plain udev tag would
+   therefore let ModemManager open `umts_ipc*` at boot, breaking the
+   "only `sit-proxy` opens FMT" invariant and the preflight opener scan.
+
+What the udev properties do (same fork):
+
+| Property | Read in | Effect |
+| --- | --- | --- |
+| `ID_MM_PORT_TYPE_SIT` | `src/mm-port-probe.c`, `ADD_HINT_FROM_UDEV_TAG` | Marks the port as SIT. `mm_port_probe_run()` then presets the AT/QCDM/QMI/MBIM results to FALSE, so nothing is sent ("no destructive probing"). The `wwan` `type` attribute `SIT` does the same on route B. |
+| `ID_MM_SIT_PROXY` | `mm-plugin-samsung-sit.c` `create_modem()` → `mm-broadband-modem-samsung-sit.c` `mm_broadband_modem_samsung_sit_peek_client()` | Use `mm_sit_client_new_proxy()`. That connects an AF_UNIX stream to `/run/sit-proxy/<index>` (`mm-port-serial-sit.c` `mm_port_serial_sit_new_socket()`, `MM_PORT_SUBSYS_UNIX`), and falls back to the node (item 6). |
+| `ID_MM_SIT_CARRIER_CONFIG_DIRECTORY` | `create_modem()` | Directory holding `cfg.db`, `manifests/` and `confseqs/`. The default is `/vendor/firmware/carrierconfig`. The RFS server must see the same path. |
+| `ID_MM_DEVICE_PROCESS` | `src/mm-filter.c` `mm_filter_port()` | Explicit allowlist, checked before the "virtual device" rule. |
+| `ID_MM_PHYSDEV_UID` | `mm-kernel-device-udev.c` `kernel_device_get_physdev_uid()` | Ports with the same value become one device (one modem). Without a physdev each parentless port would be its own device. |
+
+The SIT ports are opened in name order, one SIT stack per port
+(`compare_sit_ports()`; `mm_sit_client_new_proxy()`). A SIT-only modem is
+allowed without an AT port (`mm-base-modem.c` `organize_ports()`:
+`if (sit) allow_modem_without_at_port = TRUE`).
+
+### sit-proxy (`634e8eb4`): what each socket carries
+
+- `crates/sit-proxy/src/main.rs`: one listening socket per `--dev`, named by
+  its position (`args.socket_dir.join(index.to_string())`).
+- On this route `sit-proxy.initd` passes `--kernel-backend google-kleaf-cpif
+  --dev /dev/umts_ipc0 --dev /dev/umts_ipc1 --socket-dir /run/sit-proxy`.
+  So `/run/sit-proxy/0` is FMT channel 245 (`umts_ipc0`) and
+  `/run/sit-proxy/1` is FMT channel 246 (`umts_ipc1`).
+- Module doc in `main.rs` and `port.rs`: a socket carries whole SIT frames
+  exactly as the node would, with no wrapping and no handshake. The proxy
+  routes on the 8-byte header, rewrites the token per client (`mux.rs`), and
+  unions `SET_INDICATION_FILTER`. It is the single owner of the node.
+
+## Options considered
+
+- **(a) udev rules only.** Not possible. ModemManager never watches `cpif`
+  (item 1), the ports have no driver (item 3), and the core cannot grab them
+  (item 4).
+- **(b) Bind through the sockets without a kernel device.** ModemManager
+  creates modems only from kernel (udev) devices or `mmcli
+  --report-kernel-event`. A socket has no udev device to hang a modem on, so
+  (b) still needs a device to represent the port. The socket is the right
+  *transport*, not a replacement for the device.
+- **(c) Chosen: tag the CPIF nodes as SIT ports, patch the fork to accept
+  them, and use the sit-proxy sockets as the only transport.**
+
+## Chosen approach
+
+### ModemManager patch: `pmos/modemmanager-samsung-sit/0001-samsung-sit-google-kleaf-cpif-binding.patch`
+
+The patch is hash-pinned in `APKBUILD` `source`/`sha512sums`, and `pkgrel` goes
+from 3 to 4. `default_prepare` applies it with `patch -p1`. It changes 9
+files (+134/−8 lines) and leaves SIT protocol behaviour alone:
+
+- `mm-kernel-device-udev.c` `preload_contents_other()`: if a parentless device
+  reports no driver, use the udev property `ID_MM_KERNEL_DRIVER`. A
+  kernel-reported driver always takes precedence.
+- `mm-plugin.c`: add `{ "cpif", MM_PORT_PROBE_AT }` to `subsys_flags_map`.
+  `apply_pre_probing_filters()` filters a `cpif` port unless udev declared it
+  `ID_MM_PORT_TYPE_SIT`. SIT probe results are preset, so the probe finishes
+  with "no more probings needed" and sends nothing. The flag matters because
+  with no flags every port would be "deferred until suggested", and no plugin
+  would ever claim the device.
+- `mm-base-modem.c` `base_modem_internal_grab_port()`: grab a `cpif` port
+  only when its type is `MM_PORT_TYPE_SIT`. It becomes the same plain SIT
+  `MMPort` as on `wwan`.
+- `mm-plugin-samsung-sit.c`: watch `cpif` too, and accept the `cp_interface`
+  driver. The new `ID_MM_SIT_PROXY_REQUIRED` implies `ID_MM_SIT_PROXY` and
+  calls `mm_broadband_modem_samsung_sit_set_proxy_required()`.
+- `mm-broadband-modem-samsung-sit.[ch]`: a proxy-required modem builds its
+  clients with `mm_sit_client_new_proxy_only()`.
+- `mm-sit-client.[ch]`: `mm_sit_client_new_proxy_only()` clears the fallback
+  device, so `open()` returns the socket error and **never opens the node**.
+  `mm_sit_proxy_socket_path()` maps `umts_ipcN` to `/run/sit-proxy/N`.
+- `tests/test-sit-protocol.c`: `/MM/sit/client/proxy-socket-path` covers
+  `wwan0sit0/1`, `umts_ipc0/1` and an unknown name.
+  `/MM/sit/client/proxy-only-no-fallback` checks that a proxy-only client is
+  proxied from the start and keeps the node name. The open-failure path logs
+  at warning level, and that test binary has no log backend (it segfaults in
+  `_mm_log`, before and after this patch alike), so the missing fallback is
+  covered by source review only.
+
+### udev: `pmos/device-google-tegu/99-google-tegu-sit.rules`
+
+The route B lines are unchanged. A new gated block (`ferrix_tegu_cpif_end`)
+applies only on `add|change`, only to `cpif`/`net`, only when
+`/sys/class/cpif` exists, and only while **both** `/run/sit-proxy/0` and
+`/run/sit-proxy/1` exist:
+
+- `umts_ipc[01]` (`cpif`): `ID_MM_CANDIDATE`, `ID_MM_DEVICE_PROCESS`,
+  `ID_MM_PHYSDEV_UID=google-tegu-s5300-cpif`,
+  `ID_MM_KERNEL_DRIVER=cp_interface`, `ID_MM_PORT_TYPE_SIT`,
+  `ID_MM_SIT_PROXY`, `ID_MM_SIT_PROXY_REQUIRED`, and
+  `ID_MM_SIT_CARRIER_CONFIG_DIRECTORY=/vendor/firmware/carrierconfig`.
+- `rmnet0` (`net`; `ID_MM_CANDIDATE` already comes from `80-mm-candidate.rules`):
+  `ID_MM_DEVICE_PROCESS`, the same `ID_MM_PHYSDEV_UID`, and
+  `ID_MM_KERNEL_DRIVER=cp_interface`. The three ports form one modem.
+
+No other CPIF node is ever tagged: not `umts_boot0`, `umts_rfs0`, `oem_ipc*`,
+`umts_router`, or the other 29 `rmnet*`.
+
+### sit-proxy service: `pmos/device-google-tegu/sit-proxy.initd`
+
+The rules are evaluated when a device appears, and the nodes appear long
+before `sit-proxy` runs, so the service re-runs them itself. This applies to
+`google-kleaf-cpif` only; on route B both hooks return at once.
+
+- `start_post` waits up to 5 s for both sockets. It then runs `udevadm trigger
+  --action=change` for `cpif` `umts_ipc[01]` and for `net` `rmnet0`, followed by
+  `udevadm settle --timeout=10`. A synthesised uevent opens no node.
+- `stop_post` removes the sockets as before, then re-triggers, so the tags
+  disappear and ModemManager drops the ports (`device_added()` →
+  not candidate → `device_removed()`).
+
+The pinned SHA-256s in `s5300-cpif-services.sha256` (rules and
+`/etc/init.d/sit-proxy`) are regenerated, the `device-google-tegu` sha512sums
+are updated, and `pkgrel` goes from 7 to 8. No service is added to any
+runlevel. `exynos-modem` and its library pins are untouched.
+
+### Data path grouping
+
+Only `rmnet0` is grouped. The bearer uses
+`mm_base_modem_get_best_data_port (…, MM_PORT_TYPE_NET)`
+(`mm-bearer-samsung-sit.c`), and the SIT data-call record (`MMSitDataCall`,
+`mm-sit-protocol.h`) carries a `cid` but no interface name. Which `rmnetN`
+(DT channels 181–210) the CP uses for a given PDN is not in the GPL sources,
+so S5 has to establish it. Grouping all 30 would only make the choice
+arbitrary.
+
+## What remains unproven
+
+- **Everything on the device.** That includes whether eudev applies the `TEST`
+  gates and whether the re-trigger reaches ModemManager as expected.
+- **U3:** that the bytes on `umts_ipc0/1` match what `wwan0sit0/1` give
+  `sit-proxy`.
+- **That the plugin's SIT init sequence works with this CP firmware build**
+  (U4 skew, U5 vocabulary).
+- **Identity fields.** The plugin does not implement equipment-identifier,
+  manufacturer, model or revision loading. They come from generic AT, and the
+  plugin docs say that needs the s5300 AT WWAN port. No AT port is tagged on
+  CPIF: `umts_router` is the DUN channel 21, and opening it is out of S3
+  scope. The fork's message catalogue lists `GET_IMEI` (`0x0401`), but there
+  is no request or parser for it. So **expect `mmcli -m 0` to show no
+  equipment identifier**. The S3 "IMEI is readable" criterion will probably
+  not be met by this patch alone. It is a plugin vocabulary gap to record
+  upstream (route decision S4–S7 rule) and must not be guessed in Ferrix.
+- **Carrier-profile selection without the AT port** depends on the SIT
+  `0x4602` ICCID/IMSI path alone, so MVNO disambiguation by SPN/GID may be
+  weaker.
+- **The second SIT stack.** `/run/sit-proxy/1` maps to `umts_ipc1` by
+  construction, but DSDS behaviour is unexercised.
+- **`rmnet0` as the data interface for the default PDN** (S5).
+- **How ModemManager behaves when `sit-proxy` stops under it:** socket HUP,
+  then port removal from the re-trigger.
+
+## On-device test procedure (lead only)
+
+Prerequisites: an image built through the checked-in builder that contains
+`device-google-tegu` r8 and `modemmanager-samsung-sit` 1.25.95_git20260731-r4
+(`exynos-modem` stays r3), flashed through the recovery-gated workflow, and a
+completed S2 path (preflight, arm, start) with the CP `ONLINE`. Do not start
+`sit-proxy` before the CP is `ONLINE`.
+
+1. **Check packages and pins (read-only).**
+
+   ```sh
+   apk info -v device-google-tegu modemmanager-samsung-sit exynos-modem
+   cd / && sha256sum -c /usr/share/ferrix/pixel-9a/s5300-cpif-services.sha256
+   grep -c ferrix_tegu_cpif_end /usr/lib/udev/rules.d/99-google-tegu-sit.rules   # 6
+   ls /etc/runlevels/*/ | grep -E 'exynos-modem|sit-proxy|ferrix-s5300-mounts'   # nothing
+   ```
+
+2. **Before `sit-proxy` starts, nothing CPIF-side is tagged.**
+
+   ```sh
+   udevadm info /sys/class/cpif/umts_ipc0 | grep ID_MM_     # expect no output
+   udevadm info /sys/class/net/rmnet0 | grep ID_MM_         # only ID_MM_CANDIDATE=1
+   mmcli -L                                                 # No modems were found
+   ```
+
+3. **Raise ModemManager logging (no restart needed).**
+
+   ```sh
+   mmcli -G debug
+   ```
+
+4. **Start sit-proxy (after `exynos-modem` has the CP `ONLINE`).**
+
+   ```sh
+   rc-service sit-proxy start
+   ls -l /run/sit-proxy/                                    # sockets 0 and 1
+   udevadm info /sys/class/cpif/umts_ipc0 | grep ID_MM_
+   # expect: ID_MM_CANDIDATE=1, ID_MM_DEVICE_PROCESS=1,
+   #   ID_MM_PHYSDEV_UID=google-tegu-s5300-cpif, ID_MM_KERNEL_DRIVER=cp_interface,
+   #   ID_MM_PORT_TYPE_SIT=1, ID_MM_SIT_PROXY=1, ID_MM_SIT_PROXY_REQUIRED=1,
+   #   ID_MM_SIT_CARRIER_CONFIG_DIRECTORY=/vendor/firmware/carrierconfig
+   udevadm info /sys/class/cpif/umts_ipc1 | grep ID_MM_     # same set
+   udevadm info /sys/class/net/rmnet0 | grep ID_MM_         # CANDIDATE, DEVICE_PROCESS, PHYSDEV_UID, KERNEL_DRIVER
+   ```
+
+   If the tags are missing, run the trigger by hand once and record that:
+   `udevadm trigger --action=change --subsystem-match=cpif
+   --sysname-match='umts_ipc[01]'; udevadm trigger --action=change
+   --subsystem-match=net --sysname-match=rmnet0; udevadm settle`.
+
+5. **Confirm the opener invariant.** Only `sit-proxy` may hold the FMT nodes:
+
+   ```sh
+   for p in /proc/[0-9]*; do ls -l "$p/fd" 2>/dev/null | grep -q 'umts_ipc' && echo "${p#/proc/} $(cat "$p/comm")"; done
+   # expect exactly one line: <pid> sit-proxy
+   ```
+
+6. **S3 gate.** Allow about 10 s for probing:
+
+   ```sh
+   mmcli -L
+   # GO shape: /org/freedesktop/ModemManager1/Modem/0 [<manufacturer or unknown>] <model or unknown>
+   mmcli -m 0
+   ```
+
+   Expected shape (values vary; redact as below):
+
+   ```text
+     General  |                path: /org/freedesktop/ModemManager1/Modem/0
+              |           device id: <hash>
+     Hardware |        manufacturer: --        (probably empty: no AT port)
+              |               model: --
+              |   equipment id: --              (IMEI gap, see above)
+     System   |              device: google-tegu-s5300-cpif
+              |             drivers: cp_interface
+              |              plugin: samsung-sit
+              |        primary port: umts_ipc0   (expected)
+              |               ports: rmnet0 (net), umts_ipc0 (sit), umts_ipc1 (sit)
+     Status   |               state: disabled | locked | failed (sim-missing)
+     3GPP     |                imei: --
+     SIM      |    primary sim path: /org/freedesktop/ModemManager1/SIM/0   (if present)
+   ```
+
+   GO for S3 means one modem, `plugin: samsung-sit`, the three ports above,
+   and a reported SIM state (present or missing). Record whether the IMEI is
+   readable. The expected answer is no; that is the known gap, not a STOP.
+
+7. **Logs to keep.** Collect with `logread` or the service output capture used
+   for S2, and `dmesg`. Look for these lines: `opened Samsung SIT logical stack
+   0 on umts_ipc0 (via sit-proxy)`, the same for stack 1 on `umts_ipc1`, and the
+   absence of `couldn't reach sit-proxy` and `falling back`. If a
+   `failed to open serial device` refers to `/run/sit-proxy/N`, it means the
+   proxy was not reachable. It must never refer to `/dev/umts_ipc*`.
+
+8. **Stop order (unchanged):** `rc-service sit-proxy stop`. `mmcli -L`
+   should then return to `No modems were found`, and the `udevadm info` tags
+   from step 4 should be gone. Leave `exynos-modem` as the S2 procedure says;
+   a re-arm needs a reboot.
+
+**Redact before committing evidence:** IMEI/IMEISV, IMSI, ICCID, MSISDN/own
+numbers, the SIM path's identifiers, operator-specific SPN/GID values if
+unusual, cell IDs/TAC/LAC/PCI and any `mmcli --location-get` output, the
+`device id` hash, unit serials, and any `sit-proxy --trace` file. A trace
+contains subscriber data and must stay out of Git.
