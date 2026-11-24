@@ -7,5 +7,18 @@
     "glyph": "◉",
     "tone": "neutral"
   },
-  "launchable": false
+  "launchable": true,
+  "capabilities": [
+    "camera"
+  ],
+  "launch": {
+    "exec": [
+      "ferrix-camera"
+    ],
+    "isolation": {
+      "run_dir": {
+        "mode": "private-run"
+      }
+    }
+  }
 }

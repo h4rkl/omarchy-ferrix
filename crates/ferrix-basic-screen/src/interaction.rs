@@ -874,12 +874,12 @@ mod tests {
         input.up(0, &mut state, SIZE);
         assert_eq!(state.page, Page::Launcher);
         assert_eq!(state.pending_launch.len(), 2);
-        let camera = state
-            .tile_index(&AppId::new("org.ferrix.camera").unwrap())
-            .expect("camera tile");
-        input.down(0, tile_center(SIZE, n, camera), &mut state, SIZE);
+        let placeholder = state
+            .tile_index(&AppId::new("org.ferrix.placeholder").unwrap())
+            .expect("placeholder tile");
+        input.down(0, tile_center(SIZE, n, placeholder), &mut state, SIZE);
         input.up(0, &mut state, SIZE);
-        assert_eq!(state.page, Page::Reference(camera));
+        assert_eq!(state.page, Page::Reference(placeholder));
         assert_eq!(
             state.pending_launch.len(),
             2,

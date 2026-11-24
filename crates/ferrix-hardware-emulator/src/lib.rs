@@ -10,8 +10,10 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod bluetooth;
+mod camera;
 
 pub use bluetooth::{MOCK_PAIR_STEP_MS, MOCK_REMOTE_TIMEOUT_MS, MOCK_REMOTE_TYPING_MS};
+pub use camera::{MockCamera, render as render_camera_pattern};
 
 use ferrix_hardware_api::{
     Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothPin, BluetoothSession, BluetoothState,

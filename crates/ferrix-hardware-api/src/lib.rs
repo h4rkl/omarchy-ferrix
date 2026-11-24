@@ -19,6 +19,14 @@ use std::sync::mpsc::Sender;
 
 use serde::{Deserialize, Serialize};
 
+mod camera;
+
+pub use camera::{
+    CAMERA_FRAME_EDGE_MAX, CAMERA_ID_MAX, CAMERA_PREVIEW_FPS_MAX, Camera, CameraFacing,
+    CameraFrame, CameraId, CameraInfo, CameraMode, CameraRotation, CameraStream, FrameSize,
+    PixelFormat, PreviewRequest, UnsupportedCamera, sort_cameras,
+};
+
 /// Current schema version of the serialized state and event types.
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -38,13 +46,15 @@ pub enum Capability {
     Audio,
     Telephony,
     Lifecycle,
+    /// Cameras: enumeration, preview, and stills (ADR-009).
+    Camera,
     /// Deterministic test control of mocked state. Only mocked targets provide it.
     MockControl,
 }
 
 impl Capability {
     /// All capabilities, in matrix order.
-    pub const ALL: [Capability; 9] = [
+    pub const ALL: [Capability; 10] = [
         Capability::Power,
         Capability::Display,
         Capability::Input,
@@ -53,6 +63,7 @@ impl Capability {
         Capability::Audio,
         Capability::Telephony,
         Capability::Lifecycle,
+        Capability::Camera,
         Capability::MockControl,
     ];
 
@@ -66,6 +77,7 @@ impl Capability {
             Capability::Audio => "audio",
             Capability::Telephony => "telephony",
             Capability::Lifecycle => "lifecycle",
+            Capability::Camera => "camera",
             Capability::MockControl => "mock-control",
         }
     }
@@ -116,6 +128,12 @@ pub enum HardwareError {
     Unsupported {
         capability: Capability,
     },
+    /// The capability exists but this one feature of it does not (camera
+    /// video, for example).
+    FeatureUnsupported {
+        capability: Capability,
+        feature: String,
+    },
     InvalidValue {
         capability: Capability,
         reason: String,
@@ -129,6 +147,13 @@ pub enum HardwareError {
 impl HardwareError {
     pub fn unsupported(capability: Capability) -> Self {
         HardwareError::Unsupported { capability }
+    }
+
+    pub fn feature_unsupported(capability: Capability, feature: impl Into<String>) -> Self {
+        HardwareError::FeatureUnsupported {
+            capability,
+            feature: feature.into(),
+        }
     }
 
     pub fn invalid(capability: Capability, reason: impl Into<String>) -> Self {
@@ -152,6 +177,10 @@ impl fmt::Display for HardwareError {
             HardwareError::Unsupported { capability } => {
                 write!(f, "{capability} is unsupported on this target")
             }
+            HardwareError::FeatureUnsupported {
+                capability,
+                feature,
+            } => write!(f, "{capability} {feature} is unsupported on this target"),
             HardwareError::InvalidValue { capability, reason } => {
                 write!(f, "invalid {capability} value: {reason}")
             }

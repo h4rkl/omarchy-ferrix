@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ferrix_app_protocol::{Client as AppdClient, ClientRole, Report};
+use ferrix_app_api::AppIntent;
+use ferrix_app_protocol::{Client as AppdClient, ClientRole, IntentInbox, Report};
 use ferrix_ui::client::{ClientConfig, ClientHandler, Wake};
 use ferrix_ui::clock::MinuteClock;
 use ferrix_ui::draw::{Canvas, Type};
@@ -30,6 +31,8 @@ struct Files {
     appd_socket: Option<PathBuf>,
     appd: Option<AppdClient>,
     appd_unavailable_reported: bool,
+    /// `show-pictures` (the Camera hand-off), at launch and while running.
+    intents: IntentInbox,
     last_ui_state: (String, String),
 }
 
@@ -47,24 +50,46 @@ pub fn run(initial_size: (u32, u32)) -> Result<(), String> {
         ferrix_ui::clock::spawn_minute_ticker(move || tick());
         let home = Home::from_env(|key| std::env::var(key).ok());
         let model = Model::new(home, TimeZone::system());
+        let appd_socket = std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        let intents = IntentInbox::start(appd_socket.as_deref(), TIMEOUT, Arc::clone(&wake));
         let mut files = Files {
             ty: Type::load()?,
             clock: MinuteClock::now(),
             model,
             input: Input::default(),
-            appd_socket: std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from),
+            appd_socket,
             appd: None,
             appd_unavailable_reported: false,
+            intents,
             last_ui_state: (String::new(), String::new()),
         };
+        files.apply_intents();
         files.report_ui_state();
         Ok(files)
     })
 }
 
+fn apply_intent(model: &mut Model, intent: &AppIntent) -> bool {
+    match intent {
+        AppIntent::ShowPictures => {
+            model.show_pictures();
+            true
+        }
+        _ => false,
+    }
+}
+
 impl Files {
+    fn apply_intents(&mut self) -> bool {
+        let model = &mut self.model;
+        self.intents
+            .dispatch(&EVIDENCE.to_string(), APP_ID, emit, |i| {
+                apply_intent(model, i)
+            })
+    }
+
     fn after_input(&mut self) {
         for outcome in std::mem::take(&mut self.model.outcomes) {
             emit(format!(
@@ -209,7 +234,8 @@ impl ClientHandler for Files {
     fn wake(&mut self) -> bool {
         // Pick up changes other apps made (a Contacts export) while the
         // list is on screen; other pages keep what they show.
-        let changed = self.model.page == Page::Browse && self.model.refresh();
+        let mut changed = self.model.page == Page::Browse && self.model.refresh();
+        changed |= self.apply_intents();
         if changed {
             self.report_ui_state();
         }

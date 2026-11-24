@@ -60,6 +60,9 @@ pub struct Outcome {
     pub error: Option<&'static str>,
 }
 
+/// The XDG pictures folder below home that Camera saves into.
+pub const PICTURES: &str = "Pictures";
+
 pub struct Model {
     pub home: Result<Home, FsError>,
     /// Folder components below home.
@@ -206,6 +209,19 @@ impl Model {
             Kind::File => self.view(&entry.name),
             Kind::Link => self.fail(&FsError::OutsideHome),
             Kind::Other => self.fail(&FsError::NotAFile),
+        }
+    }
+
+    /// The `show-pictures` hand-off (Camera's gallery button): the home
+    /// folder's `Pictures`, or home itself (with a notice) when there is no
+    /// such folder yet. Any open page or form is left.
+    pub fn show_pictures(&mut self) {
+        self.go_to(Vec::new());
+        self.refresh();
+        if self.entry(PICTURES).is_some() {
+            self.open(PICTURES);
+        } else {
+            self.fail(&FsError::NotFound);
         }
     }
 
@@ -484,6 +500,22 @@ mod tests {
     use super::*;
     use crate::store::testdir::TestDir;
     use std::fs;
+
+    #[test]
+    fn show_pictures_opens_the_pictures_folder_from_anywhere() {
+        let (dir, mut m) = model();
+        m.open("Documents");
+        m.inspect(0);
+        m.show_pictures();
+        assert_eq!(m.page, Page::Browse);
+        assert!(m.cwd.is_empty(), "no Pictures yet: home, with a notice");
+        assert!(m.notice.is_some());
+        fs::create_dir_all(dir.path().join("home/Pictures")).unwrap();
+        m.open("Documents");
+        m.show_pictures();
+        assert_eq!(m.cwd, [PICTURES]);
+        assert_eq!(m.page, Page::Browse);
+    }
 
     fn model() -> (TestDir, Model) {
         let dir = TestDir::new();

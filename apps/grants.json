@@ -40,6 +40,9 @@
     ],
     "org.ferrix.browser": [
       "background"
+    ],
+    "org.ferrix.camera": [
+      "camera"
     ]
   }
 }

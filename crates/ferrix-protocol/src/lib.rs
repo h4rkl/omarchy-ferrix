@@ -18,6 +18,8 @@ use ferrix_hardware_api::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod camera;
+
 pub const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
