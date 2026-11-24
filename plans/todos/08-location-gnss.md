@@ -1,6 +1,8 @@
 # 08 — Location and GNSS
 
-Status: open, not started · Issue: #28 · Depends on: 00, 12 (location
+Status: open; deliverable 1 feasibility done (NO-GO:
+[`gnss-source-evidence.md`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/gnss-source-evidence.md))
+· Issue: #28 · Depends on: 00, 12 (location
 permission) · Sensors for rotation and proximity belong to spec 04
 
 ## Goal

@@ -32,6 +32,7 @@ use crate::diff::diff;
 use crate::{TransitionKeyMgmt, map};
 
 const NM_SERVICE: &str = "org.freedesktop.NetworkManager";
+const DEVICE_INTERFACE: &str = "org.freedesktop.NetworkManager.Device";
 const ROOT_PATH: &str = "/";
 
 // ---------------------------------------------------------------------------
@@ -213,6 +214,12 @@ pub struct NetworkManagerBackend {
     /// Access-point ids we handed out, so `connect` can resolve the path.
     aps: Mutex<HashMap<ApId, OwnedObjectPath>>,
     transition: TransitionKeyMgmt,
+    /// Object path of the managed device, so the signal drain can pick its
+    /// `StateChanged` out of the stream without calling D-Bus.
+    managed_path: Mutex<Option<OwnedObjectPath>>,
+    /// FAILED reason of the current join attempt, from `StateChanged`
+    /// (see [`map::track_failure`]). FAILED is too brief for snapshots.
+    join_failure: Mutex<Option<u32>>,
 }
 
 impl NetworkManagerBackend {
@@ -234,6 +241,8 @@ impl NetworkManagerBackend {
             sinks: Mutex::new(Vec::new()),
             aps: Mutex::new(HashMap::new()),
             transition,
+            managed_path: Mutex::new(None),
+            join_failure: Mutex::new(None),
         });
         let first = backend.enumerate()?;
         lock(&backend.watch).last = first;
@@ -347,6 +356,31 @@ impl NetworkManagerBackend {
         })
     }
 
+    /// Deletes saved Wi-Fi profiles for `ssid` before a join that brings
+    /// its own secret, so a Retry after a wrong passphrase replaces the
+    /// failed profile instead of leaving a stale duplicate beside it.
+    fn replace_profiles_for(&self, ssid: &[u8]) -> Result<(), BackendError> {
+        let settings = SettingsProxyBlocking::new(&self.connection).map_err(bus_error)?;
+        for path in settings.list_connections().map_err(bus_error)? {
+            let proxy = SettingsConnectionProxyBlocking::builder(&self.connection)
+                .path(path.clone())
+                .map_err(bus_error)?
+                .build()
+                .map_err(bus_error)?;
+            let Ok(all) = proxy.get_settings() else {
+                continue;
+            };
+            let Some(wireless) = all.get("802-11-wireless") else {
+                continue;
+            };
+            let saved: Vec<u8> = field(wireless, "ssid").unwrap_or_default();
+            if saved == ssid {
+                proxy.delete().map_err(bus_error)?;
+            }
+        }
+        Ok(())
+    }
+
     fn profiles(&self) -> Result<Vec<SavedProfile>, BackendError> {
         let settings = SettingsProxyBlocking::new(&self.connection).map_err(bus_error)?;
         let mut profiles = Vec::new();
@@ -400,8 +434,10 @@ impl NetworkManagerBackend {
             return Ok(state);
         };
         state.adapter = AdapterPresence::Present { kind: managed.kind };
+        *lock(&self.managed_path) = Some(managed.path.clone());
         let device = self.device(&managed.path)?;
         let (device_state, reason) = device.state_reason().unwrap_or((0, 0));
+        let pending = *lock(&self.join_failure);
         state.ip = device
             .ip4_config()
             .ok()
@@ -412,7 +448,8 @@ impl NetworkManagerBackend {
                     reason: "no wireless adapter; ethernet-like transport".to_owned(),
                 };
                 let link = ApId::new(map::id_from_path("link", managed.path.as_str()));
-                state.connection = map::connection_state(device_state, reason, || link);
+                state.connection =
+                    map::connection_state_after(device_state, reason, pending, || link);
             }
             AdapterKind::Wifi => {
                 state.radio = if manager.wireless_enabled().map_err(bus_error)? {
@@ -439,9 +476,10 @@ impl NetworkManagerBackend {
                 let active_id = active
                     .filter(|p| p.as_str() != ROOT_PATH)
                     .map(|p| ApId::new(map::id_from_path("ap", p.as_str())));
-                state.connection = map::connection_state(device_state, reason, || {
-                    active_id.unwrap_or_else(|| ApId::new("ap-unknown"))
-                });
+                state.connection =
+                    map::connection_state_after(device_state, reason, pending, || {
+                        active_id.unwrap_or_else(|| ApId::new("ap-unknown"))
+                    });
                 *lock(&self.aps) = ids;
                 let mut watch = lock(&self.watch);
                 let last_scan = wireless.last_scan().unwrap_or(0);
@@ -476,6 +514,29 @@ impl NetworkManagerBackend {
 
     fn broadcast(&self, event: BackendEvent) {
         lock(&self.sinks).retain(|sink| sink.send(event.clone()).is_ok());
+    }
+
+    /// Records the FAILED reason from the managed device's
+    /// `Device.StateChanged (new, old, reason)`, before the refresher runs.
+    fn note_state_changed(&self, message: &zbus::Message) {
+        let header = message.header();
+        let is_state_changed = header.interface().map(|i| i.as_str()) == Some(DEVICE_INTERFACE)
+            && header.member().map(|m| m.as_str()) == Some("StateChanged");
+        if !is_state_changed {
+            return;
+        }
+        let managed = lock(&self.managed_path).clone();
+        let Some(managed) = managed else {
+            return;
+        };
+        if header.path().map(|p| p.as_str()) != Some(managed.as_str()) {
+            return;
+        }
+        let Ok((new_state, _old, reason)) = message.body().deserialize::<(u32, u32, u32)>() else {
+            return;
+        };
+        let mut pending = lock(&self.join_failure);
+        *pending = map::track_failure(*pending, new_state, reason);
     }
 
     /// Re-enumerates and publishes the diff (or a restart snapshot).
@@ -522,14 +583,18 @@ impl NetworkManagerBackend {
         let changes = MessageIterator::for_match_rule(changes, &self.connection, Some(64))
             .map_err(bus_error)?;
         let signal_wake = wake.clone();
+        let signal_backend = Arc::clone(self);
         thread::Builder::new()
             .name("ferrix-network-nm-signals".to_owned())
             .spawn(move || {
                 for message in changes {
-                    if message.is_ok() {
-                        // A pending wake already covers this change.
-                        let _ = signal_wake.try_send(());
-                    }
+                    let Ok(message) = message else {
+                        continue;
+                    };
+                    // Local only: no D-Bus calls on this thread (see above).
+                    signal_backend.note_state_changed(&message);
+                    // A pending wake already covers this change.
+                    let _ = signal_wake.try_send(());
                 }
             })
             .map_err(|e| BackendError::unavailable(e.to_string()))?;
@@ -684,6 +749,7 @@ impl NetworkBackend for NetworkManagerBackend {
             security.insert("key-mgmt", Value::from(key_mgmt));
             security.insert("psk", Value::from(secret));
             settings.insert("802-11-wireless-security", security);
+            self.replace_profiles_for(point.ssid.as_bytes())?;
         }
         self.manager()?
             .add_and_activate_connection(settings, &device, &path)
@@ -724,6 +790,7 @@ impl NetworkBackend for NetworkManagerBackend {
             wireless_security.insert("key-mgmt", Value::from(key_mgmt));
             wireless_security.insert("psk", Value::from(secret));
             settings.insert("802-11-wireless-security", wireless_security);
+            self.replace_profiles_for(ssid.as_bytes())?;
         }
         let root = ObjectPath::try_from(ROOT_PATH)
             .map_err(|e| BackendError::unavailable(e.to_string()))?;
