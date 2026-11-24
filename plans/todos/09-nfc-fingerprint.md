@@ -1,6 +1,9 @@
 # 09 — NFC and fingerprint (feasibility first)
 
-Status: open, not started · Issue: #29 · Depends on: 00, 12 (unlock policy
+Status: open; deliverables 1 and 3 inventoried (NFC GO-with-conditions for a
+kernel spike only, fingerprint NO-GO:
+[`nfc-fingerprint-source-evidence.md`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/nfc-fingerprint-source-evidence.md))
+· Issue: #29 · Depends on: 00, 12 (unlock policy
 for fingerprint) · Release: owner decides whether these are required
 
 ## Goal
