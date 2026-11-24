@@ -23,17 +23,23 @@
 //! daemon-private `launch` object and in the runtime's diagnostics; they are
 //! never returned over `ferrix-app-protocol`. See `docs/android-runtime.md`
 //! for the evaluation, the guest integration plan, and the known limitations
-//! (surface association in particular).
+//! (task-window association in particular).
 
 mod config;
 mod host;
+pub mod icon;
+mod installed;
 mod runtime;
 pub mod testing;
 mod waydroid;
 
 pub use config::{AndroidLaunch, ApkSource, validate_activity, validate_package};
-pub use host::{AndroidHost, HostError, LaunchedApp, RuntimeStatus};
+pub use host::{AndroidHost, HostError, InstalledPackage, LaunchedApp, RuntimeStatus};
+pub use installed::{
+    HIDDEN_PACKAGES, display_label, installed_app_id, installed_descriptor, is_hidden_package,
+};
 pub use runtime::{AndroidRuntime, AndroidRuntimeOptions, DEFAULT_SESSION_TIMEOUT};
 pub use waydroid::{
-    WaydroidCli, WaydroidOptions, WaydroidStatus, parse_app_list, parse_status, pid_from_cmdlines,
+    WaydroidCli, WaydroidOptions, WaydroidStatus, parse_app_entries, parse_app_list, parse_status,
+    pid_from_cmdlines,
 };

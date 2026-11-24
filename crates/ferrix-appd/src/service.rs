@@ -10,20 +10,21 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{
-    APP_ID_ENV, APP_INSTANCE_ENV, APP_INTENT_ENV, APPD_SOCKET_ENV, AppCapability, AppError,
-    AppEvent, AppId, AppIdentity, AppInstance, AppIntent, DEFAULT_APPD_SOCKET, ExitReason,
-    GrantsPolicy, IntentKind, LifecycleState, RuntimeKind, SCHEMA_VERSION, TELEPHONY_APN_ENV,
+    APP_ID_ENV, APP_INSTANCE_ENV, APP_INTENT_ENV, APPD_SOCKET_ENV, AppCapability, AppDescriptor,
+    AppError, AppEvent, AppId, AppIdentity, AppInstance, AppIntent, AppOrigin, DEFAULT_APPD_SOCKET,
+    ExitReason, GrantsPolicy, IntentKind, LifecycleState, RuntimeKind, SCHEMA_VERSION,
+    TELEPHONY_APN_ENV,
 };
 use ferrix_app_protocol::{ClientRole, Notification, Reply};
-use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
+use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime, SurfaceMatch};
 use serde::Serialize;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogEntry};
 use crate::lifecycle::{HomeRestartConfig, HomeRestartTracker, RestartDecision};
 use crate::process_tree::{self, ProcessTree};
 use crate::records::Recorder;
@@ -49,7 +50,26 @@ pub struct ServiceOptions {
     /// The authorization policy. The default is the **empty** policy: no
     /// application holds any effective capability until a row grants it.
     pub grants: GrantsPolicy,
+    /// How long a shared-host instance (an Android task window) may be
+    /// without any window before the instance ends as closed. A task that is
+    /// recreated within this time (configuration change) keeps the instance;
+    /// a process that dies within it is still classified as a crash.
+    pub task_close_settle: Duration,
+    /// How long the close gesture waits for a shared-host task window to go
+    /// away after `xdg_toplevel.close` before force-stopping the app.
+    pub task_close_grace: Duration,
+    /// How often the installed-app poller asks the runtimes for their
+    /// installed packages (`Runtime::installed_apps`). A runtime that is
+    /// absent is asked [`ABSENT_RUNTIME_BACKOFF`] times less often. Window
+    /// events and launch failures wake the poller early.
+    pub installed_refresh: Duration,
 }
+
+/// Poll-interval multiplier while no runtime reports installed apps.
+pub const ABSENT_RUNTIME_BACKOFF: u32 = 10;
+/// Upper bound for remembered window app ids that already triggered an
+/// early installed-app refresh.
+const MAX_REFRESH_HINTS: usize = 64;
 
 impl Default for ServiceOptions {
     fn default() -> Self {
@@ -60,8 +80,78 @@ impl Default for ServiceOptions {
             poll_interval: Duration::from_millis(20),
             restart: HomeRestartConfig::default(),
             grants: GrantsPolicy::empty(),
+            task_close_settle: Duration::from_secs(1),
+            task_close_grace: Duration::from_secs(5),
+            installed_refresh: Duration::from_secs(30),
         }
     }
+}
+
+/// One compositor toplevel: its client's kernel pid and the compositor's
+/// per-toplevel id (absent from older compositors, which report per pid).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SurfaceKey {
+    pub pid: u32,
+    pub surface: Option<u64>,
+}
+
+/// What appd knows about a mapped toplevel.
+#[derive(Clone, Debug, Default)]
+struct SurfaceRecord {
+    /// Untrusted xdg `app_id`; only meaningful together with a shared-host
+    /// pid (see [`SurfaceMatch::SharedHost`]).
+    app_id: Option<String>,
+    title: Option<String>,
+    owner: Option<AppId>,
+    /// A `Withhold` directive was sent for it.
+    withheld: bool,
+}
+
+/// Upper bound for remembered toplevels (unowned ones are dropped first).
+const MAX_SURFACES: usize = 256;
+
+/// Result of trying to adopt an unclaimed toplevel.
+enum Adoption {
+    /// A new instance of this app now owns the toplevel.
+    Adopted(AppId),
+    /// Drawn by a runtime's shared host, but adoptable by nobody.
+    Hosted,
+    /// Not from any runtime's shared host.
+    NotHosted,
+}
+
+/// Who a reported toplevel belongs to.
+enum SurfaceOwner {
+    App(AppId),
+    /// Drawn by a shared runtime host but claimed by no running instance:
+    /// another Android package, the setup wizard, the launcher, or the
+    /// runtime's full UI. Never shown as, or attached to, an application.
+    SharedUnclaimed,
+    Unknown,
+}
+
+/// How `launch_locked` starts an instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LaunchMode {
+    /// Ask the runtime to start the application.
+    Start,
+    /// The runtime already started it (an Android task opened by an intent
+    /// from another app): supervise it without starting it again. `raise`
+    /// says whether its first window is brought to the front.
+    Attach { raise: bool },
+}
+
+/// Outcome of one [`Service::refresh_installed`] pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InstalledRefresh {
+    /// The installed-app set changed (and `CatalogChanged` was published).
+    pub changed: bool,
+    /// Installed apps known after the pass.
+    pub apps: usize,
+    /// At least one runtime reports installed apps (present, listing or not).
+    pub supported: bool,
+    /// At least one runtime's listing was unavailable; its apps were kept.
+    pub unavailable: bool,
 }
 
 /// Result of `Launch`/`Home`: the instance and whether it already ran.
@@ -113,10 +203,15 @@ struct Tracked {
     instance: AppInstance,
     handle: Option<Handle>,
     terminate_requested: bool,
-    /// Kernel pid of the Wayland client that owns the mapped surface. The
-    /// runtime pid belongs to the sandbox supervisor and cannot be used by
-    /// the compositor to find the application's toplevel.
-    surface_pid: Option<u32>,
+    /// Mapped toplevels of this instance, oldest first; the last one is
+    /// what an activation raises. The client pid of a toplevel is the
+    /// Wayland client's, never the sandbox supervisor's.
+    surfaces: Vec<SurfaceKey>,
+    /// How compositor surfaces are matched to this instance (refreshed by
+    /// the waiter thread from the runtime handle).
+    matcher: SurfaceMatch,
+    /// When the last window of a shared-host instance went away.
+    window_closed_at: Option<Instant>,
     /// A launch/activation request that must be delivered once a surface pid
     /// is known. This closes the race where activation arrives before map.
     activation_pending: bool,
@@ -135,13 +230,33 @@ struct State {
     foreground: Option<AppId>,
     /// Last pid the compositor reported focus on, resolved or not.
     focused_pid: Option<u32>,
+    /// Last toplevel the compositor reported focus on.
+    focused_surface: Option<SurfaceKey>,
+    /// Every mapped toplevel the compositor reported, owned or not.
+    surfaces: BTreeMap<SurfaceKey, SurfaceRecord>,
     home_restart: HomeRestartTracker,
     pending_restart: Option<PendingRestart>,
     restart_tokens: u64,
+    /// Window app ids from a runtime host that matched no app and already
+    /// woke the installed-app poller (bounded by [`MAX_REFRESH_HINTS`]).
+    refresh_hints: BTreeSet<String>,
+    /// Bumped on every compositor Hello (see [`Service::compositor_connected`]).
+    compositor_generation: u64,
+}
+
+/// Installed apps reported by the runtimes, beside the checked-in catalog.
+#[derive(Default)]
+struct Installed {
+    entries: BTreeMap<AppId, CatalogEntry>,
+    /// The last pass found a listing unavailable (recorded once per change).
+    unavailable: bool,
 }
 
 pub struct Service {
     catalog: Catalog,
+    installed: Mutex<Installed>,
+    /// Wakes the installed-app poller before its interval ends.
+    refresh_wake: (Mutex<bool>, Condvar),
     runtimes: HashMap<RuntimeKind, Box<dyn Runtime>>,
     tree: Box<dyn ProcessTree>,
     recorder: Recorder,
@@ -165,6 +280,8 @@ impl Service {
             .collect();
         Self {
             catalog,
+            installed: Mutex::new(Installed::default()),
+            refresh_wake: (Mutex::new(false), Condvar::new()),
             runtimes,
             tree,
             recorder,
@@ -184,8 +301,71 @@ impl Service {
         self
     }
 
+    /// The checked-in catalog (descriptor files). Installed apps reported by
+    /// runtimes are separate: see [`Service::descriptors`].
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// Every app the service offers: the checked-in catalog, then the
+    /// installed apps runtimes report, each group by id.
+    pub fn descriptors(&self) -> Vec<AppDescriptor> {
+        let mut all = self.catalog.descriptors();
+        all.extend(
+            lock(&self.installed)
+                .entries
+                .values()
+                .map(|entry| entry.descriptor.clone()),
+        );
+        all
+    }
+
+    /// Installed apps currently known, by id.
+    pub fn installed_apps(&self) -> Vec<AppDescriptor> {
+        lock(&self.installed)
+            .entries
+            .values()
+            .map(|entry| entry.descriptor.clone())
+            .collect()
+    }
+
+    /// The catalog entry of `id`: a checked-in descriptor or an installed app.
+    fn entry(&self, id: &AppId) -> Option<CatalogEntry> {
+        if let Some(entry) = self.catalog.get(id) {
+            return Some(entry.clone());
+        }
+        lock(&self.installed).entries.get(id).cloned()
+    }
+
+    /// The launcher bitmap of an installed app, from its runtime
+    /// ([`Runtime::app_icon`], bounded and decoded by the adapter). `None`
+    /// for unknown ids and for checked-in descriptors: first-party tiles
+    /// keep their drawn glyphs. The runtime is asked outside every lock.
+    pub fn app_icon(&self, id: &AppId) -> Option<ferrix_app_api::AppIconBitmap> {
+        let entry = lock(&self.installed).entries.get(id).cloned()?;
+        if entry.descriptor.origin != AppOrigin::Installed {
+            return None;
+        }
+        let icon = self
+            .runtimes
+            .get(&entry.descriptor.runtime)?
+            .app_icon(&entry.launch);
+        self.recorder.emit(
+            "app-icon",
+            [
+                ("app", serde_json::json!(id)),
+                ("found", serde_json::json!(icon.is_some())),
+                (
+                    "size",
+                    serde_json::json!(icon.as_ref().map(|i| [i.width(), i.height()])),
+                ),
+            ],
+        );
+        icon
+    }
+
+    fn knows(&self, id: &AppId) -> bool {
+        self.catalog.contains(id) || lock(&self.installed).entries.contains_key(id)
     }
 
     pub fn recorder(&self) -> &Recorder {
@@ -222,7 +402,7 @@ impl Service {
         else {
             return AppIdentity::unknown();
         };
-        let Some(entry) = self.catalog.get(&app) else {
+        let Some(entry) = self.entry(&app) else {
             return AppIdentity::unknown();
         };
         AppIdentity {
@@ -269,7 +449,7 @@ impl Service {
     pub fn client_role_for_pid(&self, pid: u32) -> Option<ClientRole> {
         let mut state = self.lock_state();
         let app = self.resolve_pid(&mut state, pid)?;
-        let role = self.catalog.get(&app)?.descriptor.role;
+        let role = self.entry(&app)?.descriptor.role;
         Some(match role {
             ferrix_app_api::AppRole::Home => ClientRole::Home,
             ferrix_app_api::AppRole::Application => ClientRole::Application,
@@ -300,7 +480,9 @@ impl Service {
             state.home_restart.reset();
             state.pending_restart = None;
         }
-        let instance = self.launch_locked(&mut state, id, None)?;
+        let instance = self
+            .launch_locked(&mut state, id, None, LaunchMode::Start)
+            .inspect_err(|error| self.refresh_if_missing(error))?;
         Ok(LaunchOutcome {
             instance,
             activated_existing: false,
@@ -343,7 +525,8 @@ impl Service {
                 )
             }
             None => {
-                let instance = self.launch_locked(&mut state, &handler, Some(intent))?;
+                let instance =
+                    self.launch_locked(&mut state, &handler, Some(intent), LaunchMode::Start)?;
                 (
                     LaunchOutcome {
                         instance,
@@ -360,7 +543,7 @@ impl Service {
     /// Raises a running app; `NotRunning` otherwise.
     pub fn activate(&self, id: &AppId) -> Result<AppInstance, AppError> {
         let mut state = self.lock_state();
-        if !self.catalog.contains(id) {
+        if !self.knows(id) {
             return Err(AppError::UnknownApp { id: id.clone() });
         }
         self.activate_locked(&mut state, id)
@@ -372,7 +555,7 @@ impl Service {
     pub fn terminate(self: &Arc<Self>, id: &AppId) -> Result<AppInstance, AppError> {
         let (handle, number) = {
             let mut state = self.lock_state();
-            if !self.catalog.contains(id) {
+            if !self.knows(id) {
                 return Err(AppError::UnknownApp { id: id.clone() });
             }
             let tracked = state
@@ -410,12 +593,73 @@ impl Service {
     /// Terminates the foreground application after a trusted compositor
     /// dismiss gesture. Home is never dismissible and an empty foreground is
     /// a harmless no-op.
+    ///
+    /// A shared-host app (an Android task) is closed the way its runtime
+    /// expects: every task window gets `xdg_toplevel.close` (Android removes
+    /// the task) and the instance ends when the windows are gone; only a
+    /// task that ignores the close is force-stopped after
+    /// [`ServiceOptions::task_close_grace`].
     pub fn terminate_foreground(self: &Arc<Self>) -> Result<Option<AppInstance>, AppError> {
         let foreground = self.lock_state().foreground.clone();
         let Some(id) = foreground.filter(|id| !self.is_home(id)) else {
             return Ok(None);
         };
+        if let Some(instance) = self.close_windows(&id) {
+            return Ok(Some(instance));
+        }
         self.terminate(&id).map(Some)
+    }
+
+    /// Asks the compositor to close every window of a running shared-host
+    /// instance. `None` when the app is not such an instance (or has no
+    /// window), so the caller terminates it instead.
+    fn close_windows(self: &Arc<Self>, id: &AppId) -> Option<AppInstance> {
+        let (instance, surfaces) = {
+            let mut state = self.lock_state();
+            let tracked = state
+                .instances
+                .get_mut(id)
+                .filter(|t| t.instance.state.is_running() && t.matcher.is_shared_host())?;
+            if tracked.surfaces.iter().all(|key| key.surface.is_none()) {
+                return None;
+            }
+            tracked.terminate_requested = true;
+            (tracked.instance.clone(), tracked.surfaces.clone())
+        };
+        self.recorder.emit(
+            "app-closing",
+            [
+                ("app", id.as_str().into()),
+                ("instance", instance.instance.into()),
+                ("windows", surfaces.len().into()),
+            ],
+        );
+        for key in &surfaces {
+            if let Some(surface) = key.surface {
+                self.publish(&Notification::Close {
+                    pid: key.pid,
+                    surface,
+                });
+            }
+        }
+        let service = Arc::clone(self);
+        let id = id.clone();
+        let number = instance.instance;
+        let grace = self.options.task_close_grace;
+        let _ = thread::Builder::new()
+            .name("ferrix-appd-close".to_owned())
+            .spawn(move || {
+                thread::sleep(grace);
+                let stuck = service.lock_state().instances.get(&id).is_some_and(|t| {
+                    t.instance.instance == number
+                        && t.instance.state.is_running()
+                        && !t.surfaces.is_empty()
+                });
+                if stuck {
+                    let _ = service.terminate(&id);
+                }
+            });
+        Some(instance)
     }
 
     /// Starts the home surface, then every other `autostart` app. Failures
@@ -438,82 +682,331 @@ impl Service {
 
     // -- compositor reports -------------------------------------------------
 
-    /// A toplevel of `pid` committed its first buffer. Resolves the pid to an
-    /// instance (directly or through parents) and returns the app, if any.
+    /// A toplevel of `pid` committed its first buffer: the pid-only form of
+    /// [`Service::map_surface`] (older compositors, tests).
     pub fn surface_mapped(
-        &self,
+        self: &Arc<Self>,
         pid: u32,
         app_id: Option<&str>,
         title: Option<&str>,
     ) -> Option<AppId> {
+        self.map_surface(pid, None, app_id, title)
+    }
+
+    /// A toplevel committed its first buffer. Returns the app it now
+    /// belongs to, if any.
+    ///
+    /// Association policy:
+    ///
+    /// - A client pid that a running shared-host instance reports (the
+    ///   Android runtime's composer connections, [`SurfaceMatch::SharedHost`])
+    ///   is the trust anchor: the toplevel belongs to the running instance
+    ///   whose expected `app_id` it carries, and to nobody else. It is never
+    ///   resolved by pid or ancestry. A toplevel no running instance claims
+    ///   (another Android package, the setup wizard, the launcher, the
+    ///   runtime's full UI) is withheld from presentation (`Withhold`) and
+    ///   remembered, so a matching instance that starts later adopts it.
+    /// - Any other pid resolves through the launched process tree; its
+    ///   `app_id` is untrusted metadata and only recorded.
+    ///
+    /// A toplevel no running instance claims, from a pid the runtime itself
+    /// reports as its shared host ([`Runtime::shared_host_pids`]) and whose
+    /// `app_id` is the window id of a launchable catalog or installed app,
+    /// is **adopted**: the runtime attaches to the application it already
+    /// started (an Android task opened by an intent from another app) and
+    /// the window joins that new instance. It is raised when the app in
+    /// front is itself a shared-host app (the intent's origin); otherwise
+    /// it waits in the background until activated.
+    pub fn map_surface(
+        self: &Arc<Self>,
+        pid: u32,
+        surface: Option<u64>,
+        app_id: Option<&str>,
+        title: Option<&str>,
+    ) -> Option<AppId> {
         let mut state = self.lock_state();
-        let Some(app) = self.resolve_pid(&mut state, pid) else {
-            self.recorder.app_surface_unknown(pid, app_id);
-            return None;
+        let key = SurfaceKey { pid, surface };
+        remember_surface(&mut state, key, app_id, title);
+        match self.surface_owner(&mut state, pid, app_id) {
+            SurfaceOwner::App(app) => self.attach_surface(&mut state, &app, key).then_some(app),
+            SurfaceOwner::SharedUnclaimed => match self.adopt(&mut state, key, app_id) {
+                Adoption::Adopted(app) => Some(app),
+                Adoption::Hosted | Adoption::NotHosted => {
+                    self.withhold(&mut state, key);
+                    None
+                }
+            },
+            SurfaceOwner::Unknown => match self.adopt(&mut state, key, app_id) {
+                Adoption::Adopted(app) => Some(app),
+                Adoption::Hosted => {
+                    self.withhold(&mut state, key);
+                    None
+                }
+                Adoption::NotHosted => {
+                    self.recorder.app_surface_unknown(pid, app_id);
+                    None
+                }
+            },
+        }
+    }
+
+    /// The launchable app (catalog first, then installed) whose runtime
+    /// names its shared-host windows `app_id`.
+    fn window_owner(&self, app_id: &str) -> Option<(AppId, RuntimeKind)> {
+        let matches = |entry: &CatalogEntry| {
+            entry.descriptor.launchable
+                && self
+                    .runtimes
+                    .get(&entry.descriptor.runtime)
+                    .and_then(|runtime| runtime.window_app_id(&entry.launch))
+                    .is_some_and(|window| window == app_id)
         };
-        let (was_starting, activation_pending) = {
-            let tracked = state.instances.get_mut(&app)?;
-            if !tracked.instance.state.is_running() {
+        if let Some(entry) = self.catalog.entries().find(|entry| matches(entry)) {
+            return Some((entry.descriptor.id.clone(), entry.descriptor.runtime));
+        }
+        lock(&self.installed)
+            .entries
+            .values()
+            .find(|entry| matches(entry))
+            .map(|entry| (entry.descriptor.id.clone(), entry.descriptor.runtime))
+    }
+
+    /// Tries to adopt an unclaimed toplevel (see [`Service::map_surface`]).
+    fn adopt(
+        self: &Arc<Self>,
+        state: &mut State,
+        key: SurfaceKey,
+        app_id: Option<&str>,
+    ) -> Adoption {
+        let owner = app_id.and_then(|app_id| self.window_owner(app_id));
+        let hosted_by = |kind: RuntimeKind| {
+            self.runtimes
+                .get(&kind)
+                .is_some_and(|runtime| runtime.shared_host_pids().contains(&key.pid))
+        };
+        let Some((app, kind)) = owner else {
+            // Not an app we know. A runtime host's window: withhold it, and
+            // look for a newly installed package once per window id.
+            let host = self
+                .runtimes
+                .values()
+                .find(|runtime| runtime.shared_host_pids().contains(&key.pid));
+            if host.is_none() {
+                return Adoption::NotHosted;
+            }
+            if let Some(app_id) = app_id
+                && state.refresh_hints.len() < MAX_REFRESH_HINTS
+                && state.refresh_hints.insert(app_id.to_owned())
+            {
+                self.request_installed_refresh();
+            }
+            return Adoption::Hosted;
+        };
+        if !hosted_by(kind) {
+            return Adoption::NotHosted;
+        }
+        if state
+            .instances
+            .get(&app)
+            .is_some_and(|t| t.instance.state.is_running())
+        {
+            // Running but its matcher did not claim the window yet (pids
+            // being refreshed): the waiter's matcher update adopts it.
+            return Adoption::Hosted;
+        }
+        let raise = state.foreground.as_ref().is_some_and(|front| {
+            state
+                .instances
+                .get(front)
+                .is_some_and(|t| t.instance.state.is_running() && t.matcher.is_shared_host())
+        });
+        self.recorder.emit(
+            "app-adopting",
+            [
+                ("app", app.as_str().into()),
+                ("pid", key.pid.into()),
+                (
+                    "surface",
+                    key.surface.map_or(serde_json::Value::Null, Into::into),
+                ),
+                ("raise", raise.into()),
+            ],
+        );
+        if self
+            .launch_locked(state, &app, None, LaunchMode::Attach { raise })
+            .is_err()
+        {
+            return Adoption::Hosted;
+        }
+        match state.surfaces.get(&key).and_then(|r| r.owner.clone()) {
+            Some(owner) => Adoption::Adopted(owner),
+            None => Adoption::Hosted,
+        }
+    }
+
+    /// Every toplevel of `pid` went away: the pid-only form of
+    /// [`Service::unmap_surface`].
+    pub fn surface_unmapped(&self, pid: u32) -> Option<AppId> {
+        self.unmap_surface(pid, None)
+    }
+
+    /// A mapped toplevel went away (`surface`), or every toplevel of `pid`
+    /// (`None`). Returns the app that lost it. A shared-host instance whose
+    /// last window is gone ends as closed once
+    /// [`ServiceOptions::task_close_settle`] passes without a new window
+    /// (see [`Service::task_window_closed`]); it is not a crash.
+    pub fn unmap_surface(&self, pid: u32, surface: Option<u64>) -> Option<AppId> {
+        let mut state = self.lock_state();
+        let keys: Vec<SurfaceKey> = match surface {
+            Some(_) => vec![SurfaceKey { pid, surface }],
+            None => state
+                .surfaces
+                .keys()
+                .filter(|key| key.pid == pid)
+                .copied()
+                .collect(),
+        };
+        let mut known = false;
+        let mut owners: Vec<AppId> = Vec::new();
+        for key in &keys {
+            if let Some(record) = state.surfaces.remove(key) {
+                known = true;
+                if let Some(owner) = record.owner
+                    && !owners.contains(&owner)
+                {
+                    owners.push(owner);
+                }
+            }
+        }
+        if !known {
+            // Mapped before this appd started (no record): resolve the pid
+            // as before, but never a shared-host pid.
+            if self.is_shared_host_pid(&state, pid) {
                 return None;
             }
-            tracked.instance.surface_mapped = true;
-            tracked.surface_pid = Some(pid);
-            (
-                tracked.instance.state == LifecycleState::Starting,
-                std::mem::take(&mut tracked.activation_pending),
-            )
-        };
-        self.recorder.app_surface(&app, pid, app_id, title);
-        if let Some(reported) = app_id
-            && reported != app.as_str()
-        {
-            self.recorder.app_id_mismatch(&app, pid, reported);
+            owners.extend(self.resolve_pid(&mut state, pid));
         }
-        if was_starting {
-            let focused = state.focused_pid == Some(pid)
-                || state.foreground.as_ref() == Some(&app)
-                || state.foreground.is_none();
-            if focused {
-                self.set_foreground(&mut state, &app);
+        let gone = |key: &SurfaceKey| {
+            if known {
+                keys.contains(key)
             } else {
-                self.transition(&mut state, &app, LifecycleState::Background);
+                key.pid == pid
             }
-        } else {
-            self.publish_instance(&state, &app);
+        };
+        if state.focused_surface.is_some_and(|key| gone(&key)) {
+            state.focused_surface = None;
         }
-        if activation_pending {
-            self.publish(&Notification::Activate {
-                pid,
-                app_id: app.clone(),
-            });
+        let mut result = None;
+        for app in owners {
+            let Some(tracked) = state.instances.get_mut(&app) else {
+                continue;
+            };
+            tracked.surfaces.retain(|key| !gone(key));
+            result = Some(app.clone());
+            if !tracked.surfaces.is_empty() {
+                continue;
+            }
+            tracked.instance.surface_mapped = false;
+            if tracked.matcher.is_shared_host() && tracked.instance.state.is_running() {
+                tracked.window_closed_at = Some(Instant::now());
+            }
+            if state.foreground.as_ref() == Some(&app) {
+                state.foreground = None;
+                self.transition(&mut state, &app, LifecycleState::Background);
+            } else {
+                self.publish_instance(&state, &app);
+            }
         }
-        Some(app)
+        result
     }
 
-    /// The last toplevel of `pid` went away.
-    pub fn surface_unmapped(&self, pid: u32) -> Option<AppId> {
+    /// A compositor said Hello: it resyncs every toplevel it has right after
+    /// (`SurfaceMapped` for each), so every surface record is stale from
+    /// here on. Returns this compositor connection's generation for
+    /// [`Service::compositor_lost`].
+    pub fn compositor_connected(&self) -> u64 {
         let mut state = self.lock_state();
-        let app = self.resolve_pid(&mut state, pid)?;
-        let tracked = state.instances.get_mut(&app)?;
-        tracked.instance.surface_mapped = false;
-        if tracked.surface_pid == Some(pid) {
-            tracked.surface_pid = None;
-        }
-        if state.foreground.as_ref() == Some(&app) {
-            state.foreground = None;
-            self.transition(&mut state, &app, LifecycleState::Background);
-        } else {
-            self.publish_instance(&state, &app);
-        }
-        Some(app)
+        state.compositor_generation += 1;
+        let generation = state.compositor_generation;
+        self.forget_surfaces(&mut state, "compositor-connected");
+        generation
     }
 
-    /// Focus moved to `pid` (or to nothing). Returns the app now in front.
+    /// The compositor connection of `generation` ended: the shell restarted
+    /// or crashed and took every toplevel with it (surface ids restart with
+    /// the next shell). Windows are forgotten without ending anything: a
+    /// shared-host (Android) instance keeps running with no window, its task
+    /// windows come back when Android reconnects to the new compositor
+    /// (docs/android-runtime.md "Compositor restarts"), and activating it
+    /// meanwhile relaunches the task through the runtime. A compositor
+    /// restart is never recorded as an app crash. Ignored when a newer
+    /// compositor already connected.
+    pub fn compositor_lost(&self, generation: u64) {
+        let mut state = self.lock_state();
+        if state.compositor_generation != generation {
+            return;
+        }
+        self.forget_surfaces(&mut state, "compositor-lost");
+    }
+
+    fn forget_surfaces(&self, state: &mut State, reason: &str) {
+        let windows = state.surfaces.len();
+        state.surfaces.clear();
+        state.focused_surface = None;
+        state.focused_pid = None;
+        let mut affected = Vec::new();
+        for (app, tracked) in state.instances.iter_mut() {
+            if tracked.surfaces.is_empty() {
+                continue;
+            }
+            tracked.surfaces.clear();
+            tracked.instance.surface_mapped = false;
+            // No close settle: the window did not close, the compositor went.
+            tracked.window_closed_at = None;
+            affected.push(app.clone());
+        }
+        if windows == 0 && affected.is_empty() {
+            return;
+        }
+        self.recorder.emit(
+            "appd-surfaces-reset",
+            [
+                ("reason", reason.into()),
+                ("windows", windows.into()),
+                (
+                    "apps",
+                    serde_json::Value::from(
+                        affected.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+                    ),
+                ),
+            ],
+        );
+        for app in affected {
+            if state.foreground.as_ref() == Some(&app) {
+                state.foreground = None;
+                self.transition(state, &app, LifecycleState::Background);
+            } else {
+                self.publish_instance(state, &app);
+            }
+        }
+    }
+
+    /// Focus moved to `pid` (or to nothing): the pid-only form of
+    /// [`Service::focus_surface`].
     pub fn focus_changed(&self, pid: Option<u32>) -> Option<AppId> {
+        self.focus_surface(pid, None)
+    }
+
+    /// Focus moved to toplevel `surface` of `pid` (or to nothing). Returns
+    /// the app now in front. A shared-host pid only ever resolves through
+    /// the toplevel it names.
+    pub fn focus_surface(&self, pid: Option<u32>, surface: Option<u64>) -> Option<AppId> {
         let mut state = self.lock_state();
         state.focused_pid = pid;
-        let target = pid
-            .and_then(|pid| self.resolve_pid(&mut state, pid))
+        let key = pid.map(|pid| SurfaceKey { pid, surface });
+        state.focused_surface = key;
+        let target = key
+            .and_then(|key| self.surface_app(&mut state, key))
             .filter(|app| {
                 state
                     .instances
@@ -522,6 +1015,13 @@ impl Service {
             });
         match target {
             Some(app) => {
+                if let (Some(key), Some(tracked)) = (key, state.instances.get_mut(&app))
+                    && let Some(index) = tracked.surfaces.iter().position(|k| *k == key)
+                {
+                    // The focused window is what the next activation raises.
+                    let key = tracked.surfaces.remove(index);
+                    tracked.surfaces.push(key);
+                }
                 self.set_foreground(&mut state, &app);
                 Some(app)
             }
@@ -530,6 +1030,246 @@ impl Service {
                     self.transition(&mut state, &previous, LifecycleState::Background);
                 }
                 None
+            }
+        }
+    }
+
+    /// A client asked (xdg_activation_v1) to raise its toplevel `surface`.
+    /// Granted when the toplevel belongs to a running instance: appd raises
+    /// that window (and the compositor reports the focus). A withheld,
+    /// unclaimed toplevel is never raised. Returns the app raised.
+    pub fn activation_requested(&self, pid: u32, surface: u64) -> Option<AppId> {
+        let mut state = self.lock_state();
+        let key = SurfaceKey {
+            pid,
+            surface: Some(surface),
+        };
+        let app = self.surface_app(&mut state, key).filter(|app| {
+            state
+                .instances
+                .get(app)
+                .is_some_and(|t| t.instance.state.is_running())
+        });
+        self.recorder.emit(
+            "app-activation-requested",
+            [
+                ("pid", pid.into()),
+                ("surface", surface.into()),
+                (
+                    "app",
+                    app.as_ref()
+                        .map_or(serde_json::Value::Null, |app| app.as_str().into()),
+                ),
+                ("granted", app.is_some().into()),
+            ],
+        );
+        let app = app?;
+        if let Some(tracked) = state.instances.get_mut(&app) {
+            tracked.surfaces.retain(|k| *k != key);
+            tracked.surfaces.push(key);
+        }
+        self.activate_locked(&mut state, &app);
+        Some(app)
+    }
+
+    /// Records that the waiter saw the runtime's surface matcher change
+    /// (the Android composer pids became known or changed) and re-runs the
+    /// association of every unowned toplevel.
+    pub fn update_matcher(&self, id: &AppId, number: u32, matcher: SurfaceMatch) {
+        let mut state = self.lock_state();
+        let Some(tracked) = state
+            .instances
+            .get_mut(id)
+            .filter(|t| t.instance.instance == number && t.instance.state.is_running())
+        else {
+            return;
+        };
+        tracked.matcher = matcher;
+        self.reconcile_shared(&mut state);
+    }
+
+    /// Whether the shared-host instance `number` of `id` has been without
+    /// any window for at least [`ServiceOptions::task_close_settle`]. The
+    /// waiter then ends it as closed.
+    pub fn task_window_closed(&self, id: &AppId, number: u32) -> bool {
+        let state = self.lock_state();
+        state.instances.get(id).is_some_and(|t| {
+            t.instance.instance == number
+                && t.instance.state.is_running()
+                && t.surfaces.is_empty()
+                && t.window_closed_at
+                    .is_some_and(|at| at.elapsed() >= self.options.task_close_settle)
+        })
+    }
+
+    /// The owner of a known toplevel; for one appd has no record of, the
+    /// process tree (never for a shared-host pid).
+    fn surface_app(&self, state: &mut State, key: SurfaceKey) -> Option<AppId> {
+        if let Some(owner) = state.surfaces.get(&key).and_then(|r| r.owner.clone()) {
+            return Some(owner);
+        }
+        if self.is_shared_host_pid(state, key.pid) {
+            return None;
+        }
+        self.resolve_pid(state, key.pid)
+    }
+
+    /// Whether a running instance reports `pid` as a shared-host client.
+    fn is_shared_host_pid(&self, state: &State, pid: u32) -> bool {
+        state
+            .instances
+            .values()
+            .any(|t| t.instance.state.is_running() && t.matcher.hosts(pid))
+    }
+
+    fn surface_owner(&self, state: &mut State, pid: u32, app_id: Option<&str>) -> SurfaceOwner {
+        let mut hosted = false;
+        for (app, tracked) in &state.instances {
+            if !tracked.instance.state.is_running() {
+                continue;
+            }
+            if tracked.matcher.claims(pid, app_id) {
+                return SurfaceOwner::App(app.clone());
+            }
+            hosted |= tracked.matcher.hosts(pid);
+        }
+        if hosted {
+            return SurfaceOwner::SharedUnclaimed;
+        }
+        match self.resolve_pid(state, pid) {
+            Some(app) => SurfaceOwner::App(app),
+            None => SurfaceOwner::Unknown,
+        }
+    }
+
+    /// Attaches toplevel `key` to the running instance `app`, moves a
+    /// starting instance out of `Starting`, and delivers a pending
+    /// activation. Returns `false` when `app` is not running.
+    fn attach_surface(&self, state: &mut State, app: &AppId, key: SurfaceKey) -> bool {
+        let (was_starting, activation_pending, in_front, shared) = {
+            let Some(tracked) = state.instances.get_mut(app) else {
+                return false;
+            };
+            if !tracked.instance.state.is_running() {
+                return false;
+            }
+            tracked.surfaces.retain(|k| *k != key);
+            tracked.surfaces.push(key);
+            tracked.instance.surface_mapped = true;
+            tracked.window_closed_at = None;
+            (
+                tracked.instance.state == LifecycleState::Starting,
+                std::mem::take(&mut tracked.activation_pending),
+                tracked.instance.state == LifecycleState::Foreground,
+                tracked.matcher.is_shared_host(),
+            )
+        };
+        let (app_id, title) = match state.surfaces.get_mut(&key) {
+            Some(record) => {
+                record.owner = Some(app.clone());
+                record.withheld = false;
+                (record.app_id.clone(), record.title.clone())
+            }
+            None => (None, None),
+        };
+        self.recorder
+            .app_surface(app, key.pid, app_id.as_deref(), title.as_deref());
+        if !shared
+            && let Some(reported) = app_id.as_deref()
+            && reported != app.as_str()
+        {
+            self.recorder.app_id_mismatch(app, key.pid, reported);
+        }
+        if was_starting {
+            let focused = state.focused_surface == Some(key)
+                || (!shared && state.focused_pid == Some(key.pid))
+                || state.foreground.as_ref() == Some(app)
+                || state.foreground.is_none();
+            if focused {
+                self.set_foreground(state, app);
+            } else {
+                self.transition(state, app, LifecycleState::Background);
+            }
+        } else {
+            self.publish_instance(state, app);
+        }
+        // A shared-host window stays withheld by the compositor until an
+        // activation names it, so a new window of the app in front (a task
+        // Android recreated) is raised too.
+        if activation_pending || (shared && in_front) {
+            self.publish(&Notification::Activate {
+                pid: key.pid,
+                app_id: app.clone(),
+                surface: key.surface,
+            });
+        }
+        true
+    }
+
+    /// Tells the compositor not to present an unclaimed shared-host
+    /// toplevel. Once per toplevel.
+    fn withhold(&self, state: &mut State, key: SurfaceKey) {
+        let Some(record) = state.surfaces.get_mut(&key) else {
+            return;
+        };
+        if record.withheld {
+            return;
+        }
+        record.withheld = true;
+        self.recorder.emit(
+            "app-surface-withheld",
+            [
+                ("pid", key.pid.into()),
+                (
+                    "surface",
+                    key.surface.map_or(serde_json::Value::Null, Into::into),
+                ),
+                (
+                    "app_id",
+                    record
+                        .app_id
+                        .as_deref()
+                        .map_or(serde_json::Value::Null, Into::into),
+                ),
+            ],
+        );
+        if let Some(surface) = key.surface {
+            self.publish(&Notification::Withhold {
+                pid: key.pid,
+                surface,
+            });
+        }
+    }
+
+    /// Re-associates every unowned toplevel after a shared-host instance
+    /// started or learned its client pids: claimed ones attach, hosted but
+    /// unclaimed ones are withheld.
+    fn reconcile_shared(&self, state: &mut State) {
+        let unowned: Vec<(SurfaceKey, Option<String>)> = state
+            .surfaces
+            .iter()
+            .filter(|(_, record)| record.owner.is_none())
+            .map(|(key, record)| (*key, record.app_id.clone()))
+            .collect();
+        for (key, app_id) in unowned {
+            let mut owner = None;
+            let mut hosted = false;
+            for (app, tracked) in &state.instances {
+                if !tracked.instance.state.is_running() {
+                    continue;
+                }
+                if tracked.matcher.claims(key.pid, app_id.as_deref()) {
+                    owner = Some(app.clone());
+                    break;
+                }
+                hosted |= tracked.matcher.hosts(key.pid);
+            }
+            match owner {
+                Some(app) => {
+                    self.attach_surface(state, &app, key);
+                }
+                None if hosted => self.withhold(state, key),
+                None => {}
             }
         }
     }
@@ -588,7 +1328,7 @@ impl Service {
     pub fn announce_catalog(&self) {
         self.publish(&Notification::App {
             event: AppEvent::CatalogChanged {
-                apps: self.catalog.len(),
+                apps: self.catalog.len() + lock(&self.installed).entries.len(),
             },
         });
     }
@@ -601,7 +1341,12 @@ impl Service {
             self.publish_intent(app_id, intent);
             return;
         }
-        let compositor_only = matches!(notification, Notification::Activate { .. });
+        let compositor_only = matches!(
+            notification,
+            Notification::Activate { .. }
+                | Notification::Withhold { .. }
+                | Notification::Close { .. }
+        );
         let mut subscribers = lock(&self.subscribers);
         subscribers.retain_mut(|subscriber| {
             if compositor_only && subscriber.role != ClientRole::Compositor {
@@ -639,12 +1384,24 @@ impl Service {
         tracked.instance.state = final_state;
         tracked.instance.exit = Some(reason);
         tracked.instance.surface_mapped = false;
-        tracked.surface_pid = None;
+        let surfaces = std::mem::take(&mut tracked.surfaces);
+        let shared = tracked.matcher.is_shared_host();
+        tracked.window_closed_at = None;
         tracked.activation_pending = false;
         tracked.handle = None;
         state.pids.retain(|_, app| app != id);
         if state.foreground.as_ref() == Some(id) {
             state.foreground = None;
+        }
+        // A shared-host window that outlives its instance belongs to nobody
+        // now: it must not stay presented as this app.
+        for key in surfaces {
+            if let Some(record) = state.surfaces.get_mut(&key) {
+                record.owner = None;
+            }
+            if shared {
+                self.withhold(&mut state, key);
+            }
         }
         if final_state == LifecycleState::Crashed {
             self.recorder.app_crashed(id, number, reason);
@@ -663,13 +1420,208 @@ impl Service {
                 RestartDecision::Restart { attempt, delay } => {
                     self.recorder.home_restarting(attempt, delay);
                     if delay.is_zero() {
-                        let _ = self.launch_locked(&mut state, id, None);
+                        let _ = self.launch_locked(&mut state, id, None, LaunchMode::Start);
                     } else {
                         self.schedule_home_restart(&mut state, attempt, delay);
                     }
                 }
             }
         }
+    }
+
+    // -- installed apps -----------------------------------------------------
+
+    /// Asks every runtime for its installed apps and merges them beside the
+    /// checked-in catalog. A package a checked-in descriptor already covers
+    /// (same [`Runtime::app_key`]) is not listed twice; an entry whose
+    /// runtime listing is unavailable (an error or an empty listing), or
+    /// whose app still runs, is kept.
+    /// Publishes `CatalogChanged` when the set changed, then adopts any
+    /// withheld window the new apps own. Never call it with the state lock
+    /// held: listing may block (bounded) on the runtime.
+    pub fn refresh_installed(self: &Arc<Self>) -> InstalledRefresh {
+        let mut outcome = InstalledRefresh::default();
+        let mut fresh: BTreeMap<AppId, CatalogEntry> = BTreeMap::new();
+        let mut unavailable: Vec<RuntimeKind> = Vec::new();
+        let mut kinds: Vec<RuntimeKind> = self.runtimes.keys().copied().collect();
+        kinds.sort_by_key(|kind| kind.name());
+        for kind in kinds {
+            let runtime = &self.runtimes[&kind];
+            let apps = match runtime.installed_apps() {
+                None => continue,
+                Some(Err(AppError::RuntimeUnsupported { .. })) => continue,
+                // An empty listing is never "everything was uninstalled": a
+                // runtime that lists apps at all always has some while it is
+                // really up (a session restarting answered with none on the
+                // Pixel 9a). Keep its last entries, as for a failed listing.
+                Some(Err(_)) => {
+                    outcome.supported = true;
+                    unavailable.push(kind);
+                    continue;
+                }
+                Some(Ok(apps)) if apps.is_empty() => {
+                    outcome.supported = true;
+                    unavailable.push(kind);
+                    continue;
+                }
+                Some(Ok(apps)) => apps,
+            };
+            outcome.supported = true;
+            let covered: BTreeSet<String> = self
+                .catalog
+                .entries()
+                .filter(|entry| entry.descriptor.runtime == kind)
+                .filter_map(|entry| runtime.app_key(&entry.launch))
+                .collect();
+            for app in apps {
+                let descriptor = app.descriptor;
+                let valid = descriptor.runtime == kind
+                    && descriptor.origin == AppOrigin::Installed
+                    && descriptor.validate().is_ok()
+                    && !self.catalog.contains(&descriptor.id);
+                if !valid {
+                    self.recorder.emit(
+                        "installed-app-rejected",
+                        [("app", descriptor.id.as_str().into())],
+                    );
+                    continue;
+                }
+                if runtime
+                    .app_key(&app.launch)
+                    .is_some_and(|key| covered.contains(&key))
+                {
+                    continue;
+                }
+                fresh.insert(
+                    descriptor.id.clone(),
+                    CatalogEntry {
+                        descriptor,
+                        launch: app.launch,
+                    },
+                );
+            }
+        }
+        outcome.unavailable = !unavailable.is_empty();
+        let (added, removed, report_unavailable) = {
+            let state = self.lock_state();
+            let mut installed = lock(&self.installed);
+            for (id, entry) in &installed.entries {
+                let keep = unavailable.contains(&entry.descriptor.runtime)
+                    || state
+                        .instances
+                        .get(id)
+                        .is_some_and(|t| t.instance.state.is_running());
+                if keep && !fresh.contains_key(id) {
+                    fresh.insert(id.clone(), entry.clone());
+                }
+            }
+            let report_unavailable = installed.unavailable != outcome.unavailable;
+            installed.unavailable = outcome.unavailable;
+            outcome.apps = fresh.len();
+            if installed.entries == fresh {
+                (0, 0, report_unavailable)
+            } else {
+                let added = fresh
+                    .keys()
+                    .filter(|id| !installed.entries.contains_key(*id))
+                    .count();
+                let removed = installed
+                    .entries
+                    .keys()
+                    .filter(|id| !fresh.contains_key(*id))
+                    .count();
+                installed.entries = fresh;
+                outcome.changed = true;
+                (added, removed, report_unavailable)
+            }
+        };
+        if outcome.changed || report_unavailable {
+            self.recorder.emit(
+                "installed-apps",
+                [
+                    ("apps", outcome.apps.into()),
+                    ("added", added.into()),
+                    ("removed", removed.into()),
+                    ("changed", outcome.changed.into()),
+                    ("unavailable", outcome.unavailable.into()),
+                ],
+            );
+        }
+        if outcome.changed {
+            self.announce_catalog();
+            let mut state = self.lock_state();
+            state.refresh_hints.clear();
+            self.adopt_withheld(&mut state);
+        }
+        outcome
+    }
+
+    /// Re-runs adoption for every unowned toplevel (after new installed
+    /// apps appeared).
+    fn adopt_withheld(self: &Arc<Self>, state: &mut State) {
+        let unowned: Vec<(SurfaceKey, String)> = state
+            .surfaces
+            .iter()
+            .filter(|(_, record)| record.owner.is_none())
+            .filter_map(|(key, record)| Some((*key, record.app_id.clone()?)))
+            .collect();
+        for (key, app_id) in unowned {
+            let _ = self.adopt(state, key, Some(&app_id));
+        }
+    }
+
+    /// Wakes the installed-app poller now.
+    pub fn request_installed_refresh(&self) {
+        let (woken, wake) = &self.refresh_wake;
+        *lock(woken) = true;
+        wake.notify_all();
+    }
+
+    /// A launch that failed because the package is gone (or never was)
+    /// means the installed-app list may be stale.
+    fn refresh_if_missing(&self, error: &AppError) {
+        if matches!(error, AppError::LaunchFailed { reason, .. } if reason == "not-installed") {
+            self.request_installed_refresh();
+        }
+    }
+
+    /// Sleeps until `timeout` passes or a refresh is requested.
+    fn wait_for_refresh_request(&self, timeout: Duration) {
+        let (woken, wake) = &self.refresh_wake;
+        let guard = lock(woken);
+        let (mut guard, _) = wake
+            .wait_timeout_while(guard, timeout, |woken| !*woken)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = false;
+    }
+
+    /// Starts the installed-app poller: one refresh now, then every
+    /// [`ServiceOptions::installed_refresh`] (or earlier on request), and
+    /// [`ABSENT_RUNTIME_BACKOFF`] times less often while no runtime reports
+    /// installed apps (a third of the interval while a listing is
+    /// unavailable, so a runtime that is still booting shows its apps soon). Never busy-loops.
+    pub fn spawn_installed_poller(self: &Arc<Self>) {
+        let service = Arc::clone(self);
+        let interval = self
+            .options
+            .installed_refresh
+            .max(Duration::from_millis(10));
+        let _ = thread::Builder::new()
+            .name("ferrix-appd-installed".to_owned())
+            .spawn(move || {
+                loop {
+                    let outcome = service.refresh_installed();
+                    let wait = if outcome.unavailable {
+                        // The runtime is still starting: look again sooner.
+                        interval / 3
+                    } else if outcome.supported {
+                        interval
+                    } else {
+                        interval * ABSENT_RUNTIME_BACKOFF
+                    };
+                    service.wait_for_refresh_request(wait);
+                }
+            });
     }
 
     // -- internals ----------------------------------------------------------
@@ -687,10 +1639,10 @@ impl Service {
         state: &mut State,
         id: &AppId,
         intent: Option<&AppIntent>,
+        mode: LaunchMode,
     ) -> Result<AppInstance, AppError> {
         let entry = self
-            .catalog
-            .get(id)
+            .entry(id)
             .ok_or_else(|| AppError::UnknownApp { id: id.clone() })?;
         let descriptor = &entry.descriptor;
         if !descriptor.launchable {
@@ -743,11 +1695,17 @@ impl Service {
             evidence: self.recorder.evidence().to_owned(),
             granted: granted.clone(),
         };
-        let mut running = runtime
-            .launch(descriptor, &entry.launch, &context)
-            .inspect_err(|error| self.recorder.app_launch_failed(id, error))?;
+        let launched = match mode {
+            LaunchMode::Start => runtime.launch(descriptor, &entry.launch, &context),
+            LaunchMode::Attach { .. } => runtime.attach(descriptor, &entry.launch, &context),
+        };
+        let mut running =
+            launched.inspect_err(|error| self.recorder.app_launch_failed(id, error))?;
         let pid = running.pid();
-        if let Some(pid) = pid
+        let matcher = running.surface_match();
+        let shared = matcher.is_shared_host();
+        if !shared
+            && let Some(pid) = pid
             && let Some(owner) = state.pids.get(&pid)
             && owner != id
         {
@@ -757,10 +1715,10 @@ impl Service {
                     "runtime pid {pid} is already owned by {owner}; shared runtime surfaces are unsupported"
                 ),
             };
-            // A compatibility runtime may expose one compositor client pid
-            // for every contained app. Until appd has a trusted per-surface
-            // bridge, refuse a second owner instead of silently reassigning
-            // that surface and its authorization identity.
+            // A process-tree runtime that reports another app's pid would
+            // silently reassign that app's surfaces and authorization
+            // identity; refuse the second owner. Runtimes that really share
+            // a compositor client declare `SurfaceMatch::SharedHost`.
             let _ = running.terminate(self.options.terminate_grace);
             self.recorder.app_launch_failed(id, &error);
             return Err(error);
@@ -776,7 +1734,10 @@ impl Service {
             exit: None,
             surface_mapped: false,
         };
-        if let Some(pid) = pid {
+        // A shared-host instance is never resolved by pid: its windows are
+        // matched by (runtime-reported client pid, app_id) only, and its
+        // processes get no identity of their own.
+        if !shared && let Some(pid) = pid {
             state.pids.insert(pid, id.clone());
         }
         let handle: Handle = Arc::new(Mutex::new(running));
@@ -786,32 +1747,72 @@ impl Service {
                 instance: instance.clone(),
                 handle: Some(Arc::clone(&handle)),
                 terminate_requested: false,
-                surface_pid: None,
-                activation_pending: true,
+                surfaces: Vec::new(),
+                matcher: matcher.clone(),
+                window_closed_at: None,
+                activation_pending: !matches!(mode, LaunchMode::Attach { raise: false }),
                 granted: granted.clone(),
             },
         );
         self.recorder
             .app_started(id, number, pid, &granted, &denied, &diagnostics);
-        self.publish_instance(state, id);
-        self.spawn_waiter(id.clone(), number, handle);
+        if matches!(mode, LaunchMode::Attach { raise: false }) {
+            // Adopted without being asked for: it waits behind the app in
+            // front until activated.
+            self.transition(state, id, LifecycleState::Background);
+        } else {
+            self.publish_instance(state, id);
+        }
+        if shared {
+            // A task window may already exist (Android kept the task while
+            // no instance was running): adopt it now.
+            self.reconcile_shared(state);
+        }
+        self.spawn_waiter(id.clone(), number, handle, matcher);
         Ok(instance)
     }
 
-    /// Pushes `Activate` for a running app; `None` when it is not running.
+    /// Pushes `Activate` for a running app's most recent window; `None` when
+    /// it is not running. Without a live window the activation is retained
+    /// until one maps, and a shared-host app (an Android task that was
+    /// closed or never appeared) is relaunched through its runtime so a
+    /// window actually comes back.
     fn activate_locked(&self, state: &mut State, id: &AppId) -> Option<AppInstance> {
         let tracked = state.instances.get_mut(id)?;
         if !tracked.instance.state.is_running() {
             return None;
         }
         let instance = tracked.instance.clone();
-        if let Some(pid) = tracked.surface_pid {
+        if let Some(key) = tracked.surfaces.last().copied() {
             self.publish(&Notification::Activate {
-                pid,
+                pid: key.pid,
                 app_id: id.clone(),
+                surface: key.surface,
             });
-        } else {
-            tracked.activation_pending = true;
+            return Some(instance);
+        }
+        tracked.activation_pending = true;
+        if tracked.matcher.is_shared_host()
+            && let Some(handle) = tracked.handle.clone()
+        {
+            let result = lock(&handle).reopen();
+            let (status, reason) = match &result {
+                Ok(true) => ("relaunched", None),
+                Ok(false) => ("unsupported", None),
+                Err(error) => ("failed", Some(error.to_string())),
+            };
+            self.recorder.emit(
+                "app-reopen",
+                [
+                    ("app", id.as_str().into()),
+                    ("instance", instance.instance.into()),
+                    ("status", status.into()),
+                    (
+                        "reason",
+                        reason.map_or(serde_json::Value::Null, serde_json::Value::from),
+                    ),
+                ],
+            );
         }
         Some(instance)
     }
@@ -886,7 +1887,13 @@ impl Service {
     /// Polls the runtime handle until the instance ends, then posts the exit.
     /// Polling (rather than a blocking `wait`) keeps the handle available to
     /// `terminate` in between.
-    fn spawn_waiter(self: &Arc<Self>, id: AppId, number: u32, handle: Handle) {
+    fn spawn_waiter(
+        self: &Arc<Self>,
+        id: AppId,
+        number: u32,
+        handle: Handle,
+        mut matcher: SurfaceMatch,
+    ) {
         let service = Arc::clone(self);
         let poll = self.options.poll_interval;
         let name = format!("ferrix-appd-wait-{id}");
@@ -894,13 +1901,33 @@ impl Service {
         let spawned = thread::Builder::new().name(name).spawn(move || {
             let id = waited;
             loop {
-                let polled = lock(&handle).try_wait();
+                let (polled, current) = {
+                    let mut running = lock(&handle);
+                    let polled = running.try_wait();
+                    (polled, running.surface_match())
+                };
                 match polled {
                     Ok(Some(reason)) => {
                         service.post_exit(&id, number, reason, false);
                         return;
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        if current != matcher {
+                            matcher = current;
+                            service.update_matcher(&id, number, matcher.clone());
+                        }
+                        if service.task_window_closed(&id, number) {
+                            // The task window went away and stayed away while
+                            // the process lived on: the user (or Android)
+                            // closed the app. A clean end, not a crash.
+                            service.recorder.emit(
+                                "app-task-closed",
+                                [("app", id.as_str().into()), ("instance", number.into())],
+                            );
+                            service.post_exit(&id, number, ExitReason::Exited { code: 0 }, true);
+                            return;
+                        }
+                    }
                     Err(error) => {
                         service.recorder.app_wait_failed(&id, number, &error);
                         service.post_exit(&id, number, ExitReason::Exited { code: 255 }, false);
@@ -961,7 +1988,7 @@ impl Service {
         {
             return;
         }
-        let _ = self.launch_locked(&mut state, &home, None);
+        let _ = self.launch_locked(&mut state, &home, None, LaunchMode::Start);
     }
 }
 
@@ -969,6 +1996,25 @@ impl PendingRestart {
     /// Token identifying this schedule, for `run_pending_restart`.
     pub fn token(&self) -> u64 {
         self.token
+    }
+}
+
+/// Records (or refreshes) a mapped toplevel, keeping its owner. The registry
+/// is bounded: past [`MAX_SURFACES`], unowned entries are dropped first.
+fn remember_surface(state: &mut State, key: SurfaceKey, app_id: Option<&str>, title: Option<&str>) {
+    let record = state.surfaces.entry(key).or_default();
+    record.app_id = app_id.map(str::to_owned);
+    record.title = title.map(str::to_owned);
+    while state.surfaces.len() > MAX_SURFACES {
+        let Some(victim) = state
+            .surfaces
+            .iter()
+            .find(|(k, r)| r.owner.is_none() && **k != key)
+            .map(|(k, _)| *k)
+        else {
+            break;
+        };
+        state.surfaces.remove(&victim);
     }
 }
 
@@ -991,6 +2037,7 @@ mod tests {
     use crate::records::{Captured, captured_events};
     use crate::testing::{FakeProcessTree, FakeRuntime, channel_sink, wait_for};
     use ferrix_app_api::{AppDescriptor, AppRole, IconRef, RuntimeKind, TrustLevel};
+    use ferrix_app_runtime_api::ProvidedApp;
     use std::sync::mpsc::Receiver;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
@@ -1017,6 +2064,7 @@ mod tests {
             trust: TrustLevel::Untrusted,
             capabilities: Default::default(),
             intents: Default::default(),
+            origin: Default::default(),
         }
     }
 
@@ -1318,7 +2366,8 @@ mod tests {
         let compositor_notes = notifications(&compositor);
         assert!(compositor_notes.contains(&Notification::Activate {
             pid: client_pid,
-            app_id: terminal.clone()
+            app_id: terminal.clone(),
+            surface: None,
         }));
 
         let third = h.service.launch(&terminal).unwrap();
@@ -1326,7 +2375,8 @@ mod tests {
         assert!(
             notifications(&compositor).contains(&Notification::Activate {
                 pid: client_pid,
-                app_id: terminal.clone()
+                app_id: terminal.clone(),
+                surface: None,
             })
         );
         // The home surface sees lifecycle events but never compositor directives.
@@ -1446,7 +2496,8 @@ mod tests {
         assert!(
             notifications(&compositor).contains(&Notification::Activate {
                 pid: phone_client,
-                app_id: phone.clone()
+                app_id: phone.clone(),
+                surface: None,
             })
         );
 
@@ -1516,16 +2567,21 @@ mod tests {
         assert!(activations.contains(&Notification::Activate {
             pid: home_client,
             app_id: home,
+            surface: None,
         }));
         assert!(activations.contains(&Notification::Activate {
             pid: terminal_client,
             app_id: terminal,
+            surface: None,
         }));
         assert!(activations.iter().all(|notification| match notification {
             Notification::Activate { pid, .. } => {
                 *pid != home_supervisor && *pid != terminal_supervisor
             }
-            Notification::App { .. } | Notification::Intent { .. } => true,
+            Notification::App { .. }
+            | Notification::Intent { .. }
+            | Notification::Withhold { .. }
+            | Notification::Close { .. } => true,
         }));
     }
 
@@ -2040,5 +3096,907 @@ mod tests {
             started["denied_capabilities"],
             serde_json::json!(["core-state", "core-control"])
         );
+    }
+
+    // -- shared-host (Android task window) association ---------------------
+
+    /// Host pid of the container's Wayland client in these tests.
+    const COMPOSER: u32 = 4242;
+
+    struct AndroidHarness {
+        service: Arc<Service>,
+        native: FakeRuntime,
+        android: FakeRuntime,
+        tree: FakeProcessTree,
+        records: Captured,
+        compositor: Receiver<String>,
+    }
+
+    fn android_harness_with(pids: &[u32], settle: Duration) -> AndroidHarness {
+        let native = FakeRuntime::native();
+        let android = FakeRuntime::shared_host(RuntimeKind::Android, pids, "waydroid.");
+        let tree = FakeProcessTree::default();
+        let (recorder, records) = Recorder::capturing("mock");
+        let options = ServiceOptions {
+            poll_interval: Duration::from_millis(1),
+            task_close_settle: settle,
+            task_close_grace: Duration::from_millis(50),
+            ..ServiceOptions::default()
+        };
+        let service = Arc::new(Service::new(
+            catalog(),
+            vec![Box::new(native.clone()), Box::new(android.clone())],
+            Box::new(tree.clone()),
+            recorder,
+            options,
+        ));
+        let compositor = subscribe(&service, ClientRole::Compositor);
+        AndroidHarness {
+            service,
+            native,
+            android,
+            tree,
+            records,
+            compositor,
+        }
+    }
+
+    fn android_harness() -> AndroidHarness {
+        android_harness_with(&[COMPOSER], Duration::from_millis(20))
+    }
+
+    fn activate_note(pid: u32, app: &AppId, surface: u64) -> Notification {
+        Notification::Activate {
+            pid,
+            app_id: app.clone(),
+            surface: Some(surface),
+        }
+    }
+
+    #[test]
+    fn task_windows_of_one_runtime_pid_are_matched_by_app_id() {
+        let h = android_harness();
+        let first = id("org.example.android");
+        let second = id("org.example.android-two");
+        h.service.launch(&first).unwrap();
+        h.service.launch(&second).unwrap();
+        // Several toplevels (and Wayland connections) from the same pid.
+        assert_eq!(
+            h.service.map_surface(
+                COMPOSER,
+                Some(1),
+                Some("waydroid.org.example.android"),
+                Some("First")
+            ),
+            Some(first.clone())
+        );
+        assert_eq!(
+            h.service.map_surface(
+                COMPOSER,
+                Some(2),
+                Some("waydroid.org.example.android-two"),
+                Some("Second")
+            ),
+            Some(second.clone())
+        );
+        // Android's own windows belong to no Ferrix app and are withheld.
+        for (surface, app_id) in [
+            (3, Some("waydroid.org.lineageos.setupwizard")),
+            (4, Some("Waydroid")),
+            (5, None),
+        ] {
+            assert_eq!(
+                h.service.map_surface(COMPOSER, Some(surface), app_id, None),
+                None
+            );
+        }
+        let notes = notifications(&h.compositor);
+        assert!(notes.contains(&activate_note(COMPOSER, &first, 1)));
+        assert!(notes.contains(&activate_note(COMPOSER, &second, 2)));
+        for surface in [3, 4, 5] {
+            assert!(notes.contains(&Notification::Withhold {
+                pid: COMPOSER,
+                surface
+            }));
+            assert!(!notes.iter().any(|n| matches!(
+                n,
+                Notification::Activate { surface: Some(s), .. } if *s == surface
+            )));
+        }
+
+        // Activation raises each app's own task window.
+        h.service.activate(&first).unwrap();
+        h.service.activate(&second).unwrap();
+        let notes = notifications(&h.compositor);
+        assert_eq!(
+            notes
+                .iter()
+                .filter(|n| matches!(n, Notification::Activate { .. }))
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![
+                activate_note(COMPOSER, &first, 1),
+                activate_note(COMPOSER, &second, 2)
+            ]
+        );
+
+        // Keyboard focus on a task window brings exactly that app forward;
+        // focus on an unclaimed window brings nobody forward.
+        assert_eq!(
+            h.service.focus_surface(Some(COMPOSER), Some(2)),
+            Some(second.clone())
+        );
+        assert_eq!(h.service.foreground(), Some(second.clone()));
+        assert_eq!(h.service.focus_surface(Some(COMPOSER), Some(3)), None);
+        assert_eq!(h.service.foreground(), None);
+        // A pid-only focus report for the shared pid is ambiguous: nobody.
+        assert_eq!(h.service.focus_changed(Some(COMPOSER)), None);
+        // The shared pid never identifies an application.
+        assert_eq!(h.service.identify(COMPOSER), AppIdentity::unknown());
+        assert!(captured_events(&h.records).contains(&"app-surface-withheld".to_owned()));
+        assert!(!captured_events(&h.records).contains(&"app-id-mismatch".to_owned()));
+    }
+
+    #[test]
+    fn an_android_app_id_from_a_non_runtime_pid_is_never_trusted() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        let terminal = id("org.ferrix.terminal");
+        h.service.launch(&android).unwrap();
+        // Some other client claims the Android app's window app_id.
+        assert_eq!(
+            h.service
+                .map_surface(777, Some(9), Some("waydroid.org.example.android"), None),
+            None
+        );
+        assert!(!h.service.instance(&android).unwrap().surface_mapped);
+        // A native app's own window keeps belonging to the native app,
+        // whatever app_id it claims.
+        let supervisor = h.service.launch(&terminal).unwrap().instance.pid.unwrap();
+        h.tree.set_parent(supervisor + 1, supervisor);
+        assert_eq!(
+            h.service.map_surface(
+                supervisor + 1,
+                Some(10),
+                Some("waydroid.org.example.android"),
+                None
+            ),
+            Some(terminal.clone())
+        );
+        assert!(!h.service.instance(&android).unwrap().surface_mapped);
+        let notes = notifications(&h.compositor);
+        assert!(!notes.iter().any(|n| matches!(
+            n,
+            Notification::Activate { app_id, .. } if *app_id == android
+        )));
+        assert!(
+            !notes
+                .iter()
+                .any(|n| matches!(n, Notification::Withhold { .. })),
+            "non-runtime windows are never withheld: {notes:?}"
+        );
+        assert!(captured_events(&h.records).contains(&"app-surface-unknown".to_owned()));
+        assert_eq!(h.native.launch_count(), 1);
+    }
+
+    #[test]
+    fn a_window_seen_before_the_runtime_reports_its_pid_is_adopted_later() {
+        let h = android_harness_with(&[], Duration::from_millis(20));
+        let android = id("org.example.android");
+        h.service.launch(&android).unwrap();
+        assert_eq!(
+            h.service.map_surface(
+                COMPOSER,
+                Some(1),
+                Some("waydroid.org.example.android"),
+                None
+            ),
+            None
+        );
+        h.android.set_client_pids(&android, &[COMPOSER]);
+        assert!(wait_for(TIMEOUT, || h
+            .service
+            .instance(&android)
+            .is_some_and(|i| i.surface_mapped)));
+        assert!(notifications(&h.compositor).contains(&activate_note(COMPOSER, &android, 1)));
+    }
+
+    #[test]
+    fn a_withheld_task_window_is_adopted_when_its_app_launches() {
+        let h = android_harness();
+        let first = id("org.example.android");
+        let second = id("org.example.android-two");
+        h.service.launch(&second).unwrap();
+        // Android shows a task of `first` while only `second` runs.
+        assert_eq!(
+            h.service.map_surface(
+                COMPOSER,
+                Some(7),
+                Some("waydroid.org.example.android"),
+                None
+            ),
+            None
+        );
+        assert!(
+            notifications(&h.compositor).contains(&Notification::Withhold {
+                pid: COMPOSER,
+                surface: 7
+            })
+        );
+        let launched = h.service.launch(&first).unwrap();
+        assert!(!launched.activated_existing);
+        assert!(h.service.instance(&first).unwrap().surface_mapped);
+        assert!(notifications(&h.compositor).contains(&activate_note(COMPOSER, &first, 7)));
+    }
+
+    #[test]
+    fn closing_the_task_ends_the_instance_cleanly_and_the_next_launch_relaunches() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        h.service.launch(&android).unwrap();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.focus_surface(Some(COMPOSER), Some(1));
+        assert_eq!(h.service.foreground(), Some(android.clone()));
+
+        assert_eq!(
+            h.service.unmap_surface(COMPOSER, Some(1)),
+            Some(android.clone())
+        );
+        let ended = wait_state(&h.service, &android, LifecycleState::Terminated);
+        assert_eq!(ended.exit, Some(ExitReason::Exited { code: 0 }));
+        let events = captured_events(&h.records);
+        assert!(events.contains(&"app-task-closed".to_owned()));
+        assert!(!events.contains(&"app-crashed".to_owned()));
+        assert!(!h.android.last_terminated(&android), "no force-stop");
+
+        // Tapping the app again is a fresh runtime launch, not an
+        // activation of a window that no longer exists.
+        let again = h.service.launch(&android).unwrap();
+        assert!(!again.activated_existing);
+        assert_eq!(h.android.launch_count(), 2);
+    }
+
+    #[test]
+    fn a_compositor_restart_keeps_android_instances_and_readopts_their_windows() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        let generation = h.service.compositor_connected();
+        let number = h.service.launch(&android).unwrap().instance.instance;
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.focus_surface(Some(COMPOSER), Some(1));
+        assert_eq!(h.service.foreground(), Some(android.clone()));
+
+        // The shell dies: no SurfaceUnmapped ever arrives, its connection ends.
+        h.service.compositor_lost(generation);
+        // Well past the close settle: still running, not closed, not crashed.
+        std::thread::sleep(Duration::from_millis(150));
+        let instance = h.service.instance(&android).unwrap();
+        assert!(instance.state.is_running(), "{instance:?}");
+        assert_eq!(instance.instance, number);
+        assert!(!instance.surface_mapped);
+        assert_eq!(h.service.foreground(), None);
+        let events = captured_events(&h.records);
+        assert!(events.contains(&"appd-surfaces-reset".to_owned()));
+        assert!(!events.contains(&"app-task-closed".to_owned()));
+        assert!(!events.contains(&"app-crashed".to_owned()));
+
+        // Opening it before Android reconnects relaunches the task ...
+        h.service.activate(&android).unwrap();
+        assert_eq!(h.android.reopen_count(&android), 1);
+        // ... and the new shell's toplevel (surface ids restart) is claimed
+        // by the same instance and receives that activation.
+        h.service.compositor_connected();
+        let _ = notifications(&h.compositor);
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        assert!(notifications(&h.compositor).contains(&activate_note(COMPOSER, &android, 1)));
+        let instance = h.service.instance(&android).unwrap();
+        assert_eq!(instance.instance, number);
+        assert!(instance.surface_mapped);
+    }
+
+    #[test]
+    fn an_older_compositor_connection_ending_late_changes_nothing() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        let old = h.service.compositor_connected();
+        h.service.launch(&android).unwrap();
+        // The new shell connected (and resynced) before the old
+        // connection's end was processed.
+        h.service.compositor_connected();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.compositor_lost(old);
+        assert!(h.service.instance(&android).unwrap().surface_mapped);
+    }
+
+    #[test]
+    fn a_task_recreated_within_the_settle_time_keeps_its_instance() {
+        let h = android_harness_with(&[COMPOSER], Duration::from_millis(300));
+        let android = id("org.example.android");
+        let number = h.service.launch(&android).unwrap().instance.instance;
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.unmap_surface(COMPOSER, Some(1));
+        h.service.map_surface(
+            COMPOSER,
+            Some(2),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        std::thread::sleep(Duration::from_millis(400));
+        let instance = h.service.instance(&android).unwrap();
+        assert!(instance.state.is_running(), "{instance:?}");
+        assert_eq!(instance.instance, number);
+        assert!(instance.surface_mapped);
+    }
+
+    #[test]
+    fn a_crash_while_the_task_window_goes_away_is_still_a_crash() {
+        let h = android_harness_with(&[COMPOSER], Duration::from_millis(300));
+        let android = id("org.example.android");
+        h.service.launch(&android).unwrap();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.unmap_surface(COMPOSER, Some(1));
+        assert!(h.android.exit(&android, ExitReason::Exited { code: 1 }));
+        wait_state(&h.service, &android, LifecycleState::Crashed);
+    }
+
+    #[test]
+    fn activating_an_android_app_without_a_window_relaunches_it() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        let terminal = id("org.ferrix.terminal");
+        h.service.launch(&android).unwrap();
+        // Running, but no task window (it never appeared or was lost).
+        let outcome = h.service.launch(&android).unwrap();
+        assert!(outcome.activated_existing);
+        assert_eq!(h.android.reopen_count(&android), 1);
+        h.service.activate(&android).unwrap();
+        assert_eq!(h.android.reopen_count(&android), 2);
+        assert!(captured_events(&h.records).contains(&"app-reopen".to_owned()));
+        // The window that then maps receives the retained activation.
+        h.service.map_surface(
+            COMPOSER,
+            Some(3),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        assert!(notifications(&h.compositor).contains(&activate_note(COMPOSER, &android, 3)));
+        // With a live window, activation raises it and does not relaunch.
+        h.service.activate(&android).unwrap();
+        assert_eq!(h.android.reopen_count(&android), 2);
+
+        // Native apps own their windows: no relaunch while one is pending.
+        h.service.launch(&terminal).unwrap();
+        h.service.activate(&terminal).unwrap();
+        assert_eq!(h.native.reopen_count(&terminal), 0);
+    }
+
+    #[test]
+    fn the_close_gesture_closes_task_windows_instead_of_force_stopping() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        h.service.launch(&android).unwrap();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.focus_surface(Some(COMPOSER), Some(1));
+        let _ = notifications(&h.compositor);
+
+        let closing = h.service.terminate_foreground().unwrap().unwrap();
+        assert!(closing.state.is_running());
+        assert!(notifications(&h.compositor).contains(&Notification::Close {
+            pid: COMPOSER,
+            surface: 1
+        }));
+        assert!(!h.android.last_terminated(&android));
+        // Android removes the task: the window goes away, the instance ends.
+        h.service.unmap_surface(COMPOSER, Some(1));
+        let ended = wait_state(&h.service, &android, LifecycleState::Terminated);
+        assert_eq!(ended.exit, Some(ExitReason::Exited { code: 0 }));
+        assert!(!h.android.last_terminated(&android));
+    }
+
+    #[test]
+    fn a_task_that_ignores_close_is_force_stopped_after_the_grace() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        h.service.launch(&android).unwrap();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.focus_surface(Some(COMPOSER), Some(1));
+        h.service.terminate_foreground().unwrap();
+        wait_state(&h.service, &android, LifecycleState::Terminated);
+        assert!(h.android.last_terminated(&android));
+    }
+
+    #[test]
+    fn activation_requests_raise_only_claimed_task_windows() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        h.service.launch(&android).unwrap();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        h.service.map_surface(
+            COMPOSER,
+            Some(2),
+            Some("waydroid.org.lineageos.setupwizard"),
+            None,
+        );
+        let _ = notifications(&h.compositor);
+        assert_eq!(
+            h.service.activation_requested(COMPOSER, 1),
+            Some(android.clone())
+        );
+        assert_eq!(
+            notifications(&h.compositor),
+            vec![activate_note(COMPOSER, &android, 1)]
+        );
+        assert_eq!(h.service.activation_requested(COMPOSER, 2), None);
+        assert_eq!(h.service.activation_requested(COMPOSER, 99), None);
+        assert!(notifications(&h.compositor).is_empty());
+    }
+
+    #[test]
+    fn a_window_outliving_its_android_instance_is_withheld() {
+        let h = android_harness();
+        let android = id("org.example.android");
+        h.service.launch(&android).unwrap();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.example.android"),
+            None,
+        );
+        let _ = notifications(&h.compositor);
+        assert!(h.android.exit(&android, ExitReason::Exited { code: 1 }));
+        wait_state(&h.service, &android, LifecycleState::Crashed);
+        assert!(
+            notifications(&h.compositor).contains(&Notification::Withhold {
+                pid: COMPOSER,
+                surface: 1
+            })
+        );
+    }
+
+    // -- installed APKs (ADR-008 "Installed APKs") ---------------------------
+
+    const JELLY: &str = "org.lineageos.jelly";
+
+    fn launch_for(package: &str) -> serde_json::Value {
+        serde_json::json!({ "key": package, "window": format!("waydroid.{package}") })
+    }
+
+    /// An installed app as the Android adapter reports it.
+    fn provided(package: &str, name: &str) -> ProvidedApp {
+        let mut descriptor = descriptor(
+            &format!("apk.{package}"),
+            RuntimeKind::Android,
+            AppRole::Application,
+            true,
+        );
+        descriptor.name = name.to_owned();
+        descriptor.origin = AppOrigin::Installed;
+        ProvidedApp {
+            descriptor,
+            launch: launch_for(package),
+        }
+    }
+
+    /// Home, a native Terminal, and the Browser (Jelly) as checked in.
+    fn installed_harness() -> AndroidHarness {
+        let mut catalog = Catalog::from_descriptors([
+            descriptor("org.ferrix.home", RuntimeKind::Native, AppRole::Home, true),
+            descriptor(
+                "org.ferrix.terminal",
+                RuntimeKind::Native,
+                AppRole::Application,
+                true,
+            ),
+        ])
+        .unwrap();
+        catalog
+            .insert_entry(CatalogEntry {
+                descriptor: descriptor(
+                    "org.ferrix.browser",
+                    RuntimeKind::Android,
+                    AppRole::Application,
+                    true,
+                ),
+                launch: launch_for(JELLY),
+            })
+            .unwrap();
+        let native = FakeRuntime::native();
+        let android = FakeRuntime::shared_host(RuntimeKind::Android, &[COMPOSER], "waydroid.");
+        android.set_host_pids(&[COMPOSER]);
+        let tree = FakeProcessTree::default();
+        let (recorder, records) = Recorder::capturing("mock");
+        let options = ServiceOptions {
+            poll_interval: Duration::from_millis(1),
+            task_close_settle: Duration::from_millis(20),
+            task_close_grace: Duration::from_millis(50),
+            installed_refresh: Duration::from_millis(5),
+            ..ServiceOptions::default()
+        };
+        let service = Arc::new(Service::new(
+            catalog,
+            vec![Box::new(native.clone()), Box::new(android.clone())],
+            Box::new(tree.clone()),
+            recorder,
+            options,
+        ));
+        let compositor = subscribe(&service, ClientRole::Compositor);
+        AndroidHarness {
+            service,
+            native,
+            android,
+            tree,
+            records,
+            compositor,
+        }
+    }
+
+    fn catalog_changes(rx: &Receiver<String>) -> Vec<usize> {
+        notifications(rx)
+            .into_iter()
+            .filter_map(|n| match n {
+                Notification::App {
+                    event: AppEvent::CatalogChanged { apps },
+                } => Some(apps),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn installed_app_icons_come_from_their_runtime_and_first_party_apps_have_none() {
+        let h = installed_harness();
+        let icon = ferrix_app_api::AppIconBitmap::new(1, 1, vec![1, 2, 3, 255]).unwrap();
+        h.android.set_icon("org.example.notes", icon.clone());
+        // The checked-in Browser launches Jelly; its key has an icon too.
+        h.android.set_icon(JELLY, icon.clone());
+        h.android.set_installed(Some(Ok(vec![
+            provided("org.example.notes", "Notes"),
+            provided("org.example.plain", "Plain"),
+        ])));
+        assert!(h.service.refresh_installed().changed);
+        assert_eq!(h.service.app_icon(&id("apk.org.example.notes")), Some(icon));
+        assert_eq!(h.service.app_icon(&id("apk.org.example.plain")), None);
+        assert_eq!(h.service.app_icon(&id("org.ferrix.browser")), None);
+        assert_eq!(h.service.app_icon(&id("org.ferrix.terminal")), None);
+        assert_eq!(h.service.app_icon(&id("apk.org.example.absent")), None);
+        let events = captured_events(&h.records);
+        assert!(events.iter().filter(|e| *e == "app-icon").count() >= 2);
+    }
+
+    #[test]
+    fn installed_apps_join_the_catalog_once_and_never_duplicate_a_checked_in_one() {
+        let h = installed_harness();
+        let home = subscribe(&h.service, ClientRole::Home);
+        // The native runtime has no installed apps; the Android one has none
+        // listed yet (a runtime with no notion is never asked twice for it).
+        h.android.set_installed(Some(Ok(vec![
+            provided(JELLY, "Jelly"),
+            provided("org.example.notes", "Notes"),
+        ])));
+        let outcome = h.service.refresh_installed();
+        assert!(outcome.changed && outcome.supported && !outcome.unavailable);
+        assert_eq!(outcome.apps, 1, "Jelly is the checked-in Browser");
+        let ids: Vec<String> = h
+            .service
+            .descriptors()
+            .iter()
+            .map(|d| d.id.to_string())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "org.ferrix.browser",
+                "org.ferrix.home",
+                "org.ferrix.terminal",
+                "apk.org.example.notes"
+            ]
+        );
+        assert_eq!(catalog_changes(&home), vec![4]);
+        let notes = id("apk.org.example.notes");
+        let installed = h.service.installed_apps();
+        assert_eq!(installed[0].name, "Notes");
+        assert_eq!(installed[0].origin, AppOrigin::Installed);
+        // Installed apps get no grants row: nothing effective.
+        assert_eq!(h.service.grants().effective(&installed[0]).len(), 0);
+
+        // An unchanged listing publishes nothing.
+        assert!(!h.service.refresh_installed().changed);
+        assert!(catalog_changes(&home).is_empty());
+
+        // An unavailable listing (Android still booting) keeps what we had.
+        h.android.set_installed(Some(Err(AppError::Io {
+            reason: "session stopped".to_owned(),
+        })));
+        let outcome = h.service.refresh_installed();
+        assert!(outcome.unavailable && !outcome.changed);
+        assert!(h.service.instance(&notes).is_none());
+        assert_eq!(h.service.installed_apps().len(), 1);
+
+        // Launchable like any app; tracked as Android.
+        h.android
+            .set_installed(Some(Ok(vec![provided("org.example.notes", "Notes")])));
+        h.service.launch(&notes).unwrap();
+        assert_eq!(h.android.last_attached(&notes), Some(false));
+
+        // Uninstalled while running: kept until the instance ends.
+        h.android
+            .set_installed(Some(Ok(vec![provided(JELLY, "Jelly")])));
+        assert!(!h.service.refresh_installed().changed);
+        assert_eq!(h.service.installed_apps().len(), 1);
+        h.android.exit(&notes, ExitReason::Exited { code: 0 });
+        wait_state(&h.service, &notes, LifecycleState::Terminated);
+        let outcome = h.service.refresh_installed();
+        assert!(outcome.changed);
+        assert!(h.service.installed_apps().is_empty());
+        assert!(matches!(
+            h.service.launch(&notes),
+            Err(AppError::UnknownApp { .. })
+        ));
+        assert!(captured_events(&h.records).contains(&"installed-apps".to_owned()));
+    }
+
+    /// Pixel 9a: `installed-apps apps:0 removed:10` while the Waydroid
+    /// session restarted, then all ten re-added a refresh later. An empty
+    /// listing or an error between two good ones changes nothing.
+    #[test]
+    fn an_empty_or_failed_listing_during_a_session_restart_keeps_the_catalog() {
+        let h = installed_harness();
+        let home = subscribe(&h.service, ClientRole::Home);
+        let listing = || {
+            Some(Ok(vec![
+                provided(JELLY, "Jelly"),
+                provided("org.example.notes", "Notes"),
+                provided("org.example.maps", "Maps"),
+            ]))
+        };
+        h.android.set_installed(listing());
+        assert!(h.service.refresh_installed().changed);
+        assert_eq!(catalog_changes(&home).len(), 1);
+        for flap in [
+            Some(Ok(vec![])),
+            Some(Err(AppError::Io {
+                reason: "session stopped".to_owned(),
+            })),
+            Some(Ok(vec![])),
+        ] {
+            h.android.set_installed(flap);
+            let outcome = h.service.refresh_installed();
+            assert!(outcome.unavailable && !outcome.changed, "{outcome:?}");
+            assert_eq!(outcome.apps, 2);
+            assert_eq!(h.service.installed_apps().len(), 2);
+        }
+        h.android.set_installed(listing());
+        let outcome = h.service.refresh_installed();
+        assert!(!outcome.changed && !outcome.unavailable);
+        assert!(
+            catalog_changes(&home).is_empty(),
+            "no CatalogChanged for a flap"
+        );
+        // A real uninstall (a non-empty listing without the app) still
+        // removes it.
+        h.android
+            .set_installed(Some(Ok(vec![provided(JELLY, "Jelly")])));
+        let outcome = h.service.refresh_installed();
+        assert!(outcome.changed && outcome.apps == 0);
+    }
+
+    #[test]
+    fn malformed_installed_apps_are_rejected() {
+        let h = installed_harness();
+        let mut trusted = provided("org.example.trusted", "Trusted");
+        trusted.descriptor.trust = TrustLevel::Privileged;
+        let mut catalog_origin = provided("org.example.plain", "Plain");
+        catalog_origin.descriptor.origin = AppOrigin::Catalog;
+        let mut native = provided("org.example.native", "Native");
+        native.descriptor.runtime = RuntimeKind::Native;
+        h.android.set_installed(Some(Ok(vec![
+            trusted,
+            catalog_origin,
+            native,
+            provided("org.example.ok", "Ok"),
+        ])));
+        h.service.refresh_installed();
+        let ids: Vec<String> = h
+            .service
+            .installed_apps()
+            .iter()
+            .map(|d| d.id.to_string())
+            .collect();
+        assert_eq!(ids, vec!["apk.org.example.ok"]);
+        assert!(captured_events(&h.records).contains(&"installed-app-rejected".to_owned()));
+    }
+
+    #[test]
+    fn a_task_window_android_opened_for_an_installed_app_is_adopted() {
+        let h = installed_harness();
+        h.android
+            .set_installed(Some(Ok(vec![provided("org.example.notes", "Notes")])));
+        h.service.refresh_installed();
+        let notes = id("apk.org.example.notes");
+        // Nothing in front: adopted into the background, not raised.
+        assert_eq!(
+            h.service
+                .map_surface(COMPOSER, Some(7), Some("waydroid.org.example.notes"), None),
+            Some(notes.clone())
+        );
+        assert_eq!(h.android.last_attached(&notes), Some(true));
+        let instance = h.service.instance(&notes).unwrap();
+        assert_eq!(instance.state, LifecycleState::Background);
+        assert!(instance.surface_mapped);
+        let notes_seen = notifications(&h.compositor);
+        assert!(
+            !notes_seen
+                .iter()
+                .any(|n| matches!(n, Notification::Activate { .. })),
+            "{notes_seen:?}"
+        );
+        // Activating it raises exactly that window.
+        h.service.launch(&notes).unwrap();
+        assert!(notifications(&h.compositor).contains(&activate_note(COMPOSER, &notes, 7)));
+        assert_eq!(h.android.launch_count(), 1, "no second instance");
+        assert!(captured_events(&h.records).contains(&"app-adopting".to_owned()));
+    }
+
+    #[test]
+    fn an_intent_from_the_android_app_in_front_raises_the_adopted_app() {
+        let h = installed_harness();
+        h.android
+            .set_installed(Some(Ok(vec![provided("org.example.maps", "Maps")])));
+        h.service.refresh_installed();
+        let browser = id("org.ferrix.browser");
+        let maps = id("apk.org.example.maps");
+        h.service.launch(&browser).unwrap();
+        h.service.map_surface(
+            COMPOSER,
+            Some(1),
+            Some("waydroid.org.lineageos.jelly"),
+            None,
+        );
+        h.service.focus_surface(Some(COMPOSER), Some(1));
+        assert_eq!(h.service.foreground(), Some(browser.clone()));
+        let _ = notifications(&h.compositor);
+        // Jelly opens a maps link: Android starts a task for the other app.
+        assert_eq!(
+            h.service
+                .map_surface(COMPOSER, Some(2), Some("waydroid.org.example.maps"), None),
+            Some(maps.clone())
+        );
+        assert!(notifications(&h.compositor).contains(&activate_note(COMPOSER, &maps, 2)));
+        h.service.focus_surface(Some(COMPOSER), Some(2));
+        assert_eq!(h.service.foreground(), Some(maps));
+    }
+
+    #[test]
+    fn a_checked_in_android_app_is_adopted_too() {
+        let h = installed_harness();
+        let browser = id("org.ferrix.browser");
+        assert_eq!(
+            h.service.map_surface(
+                COMPOSER,
+                Some(3),
+                Some("waydroid.org.lineageos.jelly"),
+                None
+            ),
+            Some(browser.clone())
+        );
+        assert_eq!(h.android.last_attached(&browser), Some(true));
+    }
+
+    #[test]
+    fn system_and_unknown_task_windows_stay_withheld_and_foreign_pids_are_never_adopted() {
+        let h = installed_harness();
+        h.android
+            .set_installed(Some(Ok(vec![provided("org.example.notes", "Notes")])));
+        h.service.refresh_installed();
+        // Android's shell and unknown packages from the runtime host.
+        for (surface, app_id) in [
+            (4, Some("waydroid.com.android.settings")),
+            (5, Some("waydroid.com.android.launcher3")),
+            (6, Some("Waydroid")),
+            (8, None),
+        ] {
+            assert_eq!(
+                h.service.map_surface(COMPOSER, Some(surface), app_id, None),
+                None
+            );
+        }
+        let seen = notifications(&h.compositor);
+        for surface in [4, 5, 6, 8] {
+            assert!(
+                seen.contains(&Notification::Withhold {
+                    pid: COMPOSER,
+                    surface
+                }),
+                "{surface}: {seen:?}"
+            );
+        }
+        // The same app_id from any other client is never adopted.
+        assert_eq!(
+            h.service
+                .map_surface(777, Some(9), Some("waydroid.org.example.notes"), None),
+            None
+        );
+        assert!(h.service.instance(&id("apk.org.example.notes")).is_none());
+        assert_eq!(h.android.launch_count(), 0);
+    }
+
+    #[test]
+    fn a_window_of_a_newly_installed_package_is_adopted_after_the_refresh() {
+        let h = installed_harness();
+        h.android.set_installed(Some(Ok(vec![])));
+        h.service.refresh_installed();
+        // Installed a moment ago; the listing has not caught up yet.
+        assert_eq!(
+            h.service
+                .map_surface(COMPOSER, Some(11), Some("waydroid.org.example.new"), None),
+            None
+        );
+        h.android
+            .set_installed(Some(Ok(vec![provided("org.example.new", "New")])));
+        assert!(h.service.refresh_installed().changed);
+        let new = id("apk.org.example.new");
+        let instance = h.service.instance(&new).expect("adopted after refresh");
+        assert!(instance.surface_mapped);
+    }
+
+    #[test]
+    fn the_poller_refreshes_on_its_interval_and_on_request() {
+        let h = installed_harness();
+        h.android
+            .set_installed(Some(Ok(vec![provided("org.example.notes", "Notes")])));
+        h.service.spawn_installed_poller();
+        assert!(wait_for(TIMEOUT, || h.service.installed_apps().len() == 1));
+        assert!(wait_for(TIMEOUT, || h.android.listings() >= 3));
+        h.android.set_installed(Some(Ok(vec![
+            provided("org.example.notes", "Notes"),
+            provided("org.example.more", "More"),
+        ])));
+        h.service.request_installed_refresh();
+        assert!(wait_for(TIMEOUT, || h.service.installed_apps().len() == 2));
     }
 }

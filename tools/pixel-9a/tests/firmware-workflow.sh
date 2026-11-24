@@ -26,11 +26,13 @@ grep -q '^kernel_driver = "bcmdhd4383"$' "$policy"
 grep -q '^kernel_driver = "nitrous"$' "$policy"
 grep -q '^kernel_driver = "cpif"$' "$policy"
 grep -q '^kernel_driver = "mali_kbase"$' "$policy"
+grep -q '^kernel_driver = "exynos_mfc"$' "$policy"
 grep -q '^kernel_driver = "aoc_core"$' "$policy"
 grep -q '^id = "audio-aoc"$' "$policy"
 grep -q '^kernel_driver = "snd-soc-tas25xx"$' "$policy"
 grep -q '^id = "audio-tas25xx"$' "$policy"
-awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 15 ? 0 : 1) }' "$allowlist"
+grep -q '^kernel_driver = "cs40l26-core"$' "$policy"
+awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 4 { count++ } END { exit(count == 21 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && NF == 5 && $5 == "bundle" { count++ } END { exit(count == 2 ? 0 : 1) }' "$allowlist"
 awk -F '\t' '$0 !~ /^[[:space:]]*#/ && (NF == 4 || (NF == 5 && $5 == "bundle")) { if (seen[$4]++) bad=1 } END { exit(bad ? 1 : 0) }' "$allowlist"
 awk -F '\t' '$1 == "bluetooth-broadcom" && $2 == "vendor.img" && $3 == "/firmware/brcm/BCM.hcd" && $4 == "lib/firmware/brcm/BCM.hcd" { found=1 } END { exit(found ? 0 : 1) }' \
@@ -53,9 +55,11 @@ awk -F '\t' '/^[[:space:]]*#/ { next } /tismartpa|tas25/ && $1 != "audio-tas25xx
   echo 'firmware stage allowlist names TAS25xx data outside the audio-tas25xx row' >&2
   exit 1
 }
-# Per-unit calibration, the Android HAL's TAS tuning, and CS40L26 haptics
-# firmware are never staged here.
-if grep -Eq 'speaker\.cal|calib|/persist|ti_sp_tuning|cs40l26' "$allowlist"; then
+awk -F '\t' '$1 == "haptics-cs40l26" && $2 == "vendor.img" && $3 == "/firmware/cs40l26.wmfw" && $4 == "lib/firmware/cs40l26.wmfw" { found=1 } END { exit(found ? 0 : 1) }' \
+  "$allowlist" >/dev/null
+# Per-unit calibration (including the CS40L26 calibration firmware) and the
+# Android HAL's TAS tuning are never staged here.
+if grep -Eq 'speaker\.cal|calib|/persist|ti_sp_tuning' "$allowlist"; then
   echo 'firmware stage allowlist names calibration or out-of-scope audio data' >&2
   exit 1
 fi

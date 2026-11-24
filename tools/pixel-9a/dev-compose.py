@@ -19,9 +19,10 @@ manifest:
 
 With --android (FERRIX_PIXEL9A_DEV_ANDROID=1; owner request 2026-10-09) the
 rootfs is grown (default 8 GiB) and carries the OPT-IN Waydroid runtime: the
-pinned LineageOS system/vendor images and Fulguris APK verified against
-tools/android/*.pins, the shared guest bootstrap, and the ferrix-android
-service. The base rootfs must come from rootfs.sh with FERRIX_PIXEL9A_ANDROID=1.
+pinned (or locally built) LineageOS system/vendor images verified against
+tools/android/waydroid.pins or their build manifest, the shared guest
+bootstrap, and the ferrix-android service. The Browser is LineageOS Jelly,
+part of the Android image (ADR-008); no APK is staged. The base rootfs must come from rootfs.sh with FERRIX_PIXEL9A_ANDROID=1.
 
 Only partitions the stock factory image rewrites are produced. vendor_dlkm and
 system_dlkm live inside super, which dev-flash never writes, so their modules
@@ -434,6 +435,18 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
             editor.put(descriptor.read_bytes(), f"/usr/share/ferrix/apps/{descriptor.name}", 0o644)
         written += ["/etc/ferrix/colors.toml", "/usr/share/ferrix/apps/*.json"]
     editor.put(profile.read_bytes(), "/etc/ferrix/profile.toml", 0o644)
+    # Third-party notices for material compiled into the ferrix-ui binaries,
+    # the same set targets/qemu-aarch64/scripts/qemu-build.sh installs.
+    repo = Path(__file__).resolve().parents[2]
+    assets = repo / "crates/ferrix-ui/assets"
+    for name, notice in (("material-symbols", assets / "icons/material-symbols/LICENSE"),
+                         ("material-symbols", assets / "icons/material-symbols/README.md"),
+                         ("jetbrains-mono", assets / "OFL.txt")):
+        if not notice.is_file():
+            die(f"missing third-party notice {notice}")
+        dest = f"/usr/share/licenses/ferrix/{name}/{notice.name}"
+        editor.put(notice.read_bytes(), dest, 0o644)
+        written.append(dest)
     # Device-package files, at the paths the APKBUILD installs them to.
     editor.put((package / "ferrix-openrc.sh").read_bytes(), "/usr/lib/ferrix/openrc.sh", 0o644)
     editor.put((package / "networkmanager-ferrix.conf").read_bytes(),
@@ -475,10 +488,11 @@ def integrate_rootfs(image, work, package, profile, product, reboot_helper):
 
 
 # --- OPT-IN Android compatibility runtime (owner request 2026-10-09) --------
-# Waydroid + Fulguris per ADR-005/ADR-007. The base rootfs must have been built
-# with FERRIX_PIXEL9A_ANDROID=1 (tools/pixel-9a/rootfs.sh installs the package
-# set in pmos/android/packages). This composer only stages the pinned images
-# and APK the QEMU route already pins (tools/android/*.pins), the shared guest
+# Waydroid per ADR-005/ADR-008 (the Browser is Jelly, inside the Android
+# image). The base rootfs must have been built with FERRIX_PIXEL9A_ANDROID=1
+# (tools/pixel-9a/rootfs.sh installs the package set in pmos/android/packages).
+# This composer only stages the pinned images the QEMU route already pins
+# (tools/android/waydroid.pins) or a verified local build, the shared guest
 # bootstrap (tools/android/guest/ferrix-waydroid.sh), the target's renderer
 # properties, and the ferrix-android runlevel link.
 ANDROID_SERVICE = "ferrix-android"
@@ -487,6 +501,49 @@ ANDROID_SERVICE = "ferrix-android"
 # ruleset package is refused.
 ANDROID_FORBIDDEN_PACKAGES = ("waydroid-nftrules",)
 DEFAULT_ANDROID_ROOTFS_MIB = 8192
+
+
+def install_firmware(image, work, firmware_dir, allowlist, gate_allowlist):
+    """Copy the verified firmware stage (tools/pixel-9a/firmware.sh output) into
+    the rootfs, so allow-list additions reach an image without rebuilding the
+    base rootfs. Every row is size- and hash-checked against the stage manifest
+    and must name a runtime path the target allowlist permits."""
+    manifest = firmware_dir / "firmware-manifest.tsv"
+    if manifest.is_symlink() or not manifest.is_file():
+        die(f"firmware stage manifest missing: {manifest}")
+    allowed = set()
+    for line in allowlist.read_text().splitlines():
+        fields = line.split("\t")
+        if line.strip() and not line.lstrip().startswith("#") and len(fields) >= 4:
+            allowed.add(fields[3])
+    firmware_work = work / "firmware"
+    firmware_work.mkdir()
+    editor = RootfsEditor(image, firmware_work)
+    rows = []
+    for line in manifest.read_text().splitlines():
+        fields = line.split("\t")
+        if fields[0] != "firmware":
+            continue
+        if len(fields) != 7:
+            die(f"malformed firmware manifest row: {line}")
+        _, controller, _, _, runtime, size, digest = fields
+        if runtime.startswith("/") or ".." in runtime.split("/") or not runtime.startswith("lib/firmware/"):
+            die(f"unsafe firmware runtime path: {runtime}")
+        if runtime not in allowed and not any(runtime.startswith(base + "/") for base in allowed):
+            die(f"firmware runtime path is not allow-listed: {runtime}")
+        source = firmware_dir / runtime
+        if source.is_symlink() or not source.is_file():
+            die(f"staged firmware file missing: {source}")
+        if str(source.stat().st_size) != size or sha256(source) != digest:
+            die(f"staged firmware does not match its manifest: {source}")
+        editor.put_file(source, "/" + runtime, 0o644)
+        rows.append(f"firmware\t{controller}\t{runtime}\t{digest}")
+    editor.put_file(manifest, "/usr/share/ferrix/pixel-9a/firmware-manifest.tsv", 0o644)
+    # ferrix-radio-firmware rejects manifest rows whose runtime path is not in
+    # its reviewed allowlist, so the two files must ship together.
+    editor.put_file(gate_allowlist, "/usr/share/ferrix/pixel-9a/firmware-allowlist.tsv", 0o644)
+    editor.commit()
+    return rows
 
 
 def read_pins(path):
@@ -514,10 +571,9 @@ def android_package_set(target_dir):
     return [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
 
 
-def verify_android_inputs(repo, images_dir, apk):
+def verify_android_inputs(repo, images_dir):
     """Check the staged inputs against the shared pins; returns manifest facts."""
     wpins = read_pins(repo / "tools/android/waydroid.pins")
-    fpins = read_pins(repo / "tools/android/fulguris.pins")
     images_dir = images_dir.resolve()
     if images_dir.name != wpins["WAYDROID_BUILD"]:
         die(f"Waydroid images dir is not the pinned build {wpins['WAYDROID_BUILD']}: {images_dir}")
@@ -540,12 +596,73 @@ def verify_android_inputs(repo, images_dir, apk):
         if image.is_symlink() or not image.is_file() or sha256(image) != entry.get("img_sha256"):
             die(f"Waydroid {kind}.img differs from the image unpacked from the pinned zip: {image}")
         images[kind] = image
-    verify_pinned_file(apk, fpins["FULGURIS_SIZE"], fpins["FULGURIS_SHA256"], "Fulguris APK")
-    if apk.name != fpins["FULGURIS_ASSET"]:
-        die(f"Fulguris APK is not the pinned asset {fpins['FULGURIS_ASSET']}: {apk}")
     return {"build": wpins["WAYDROID_BUILD"], "channel": wpins["WAYDROID_CHANNEL"],
-            "images": images, "meta": meta_path, "apk": apk,
-            "fulguris_version": fpins["FULGURIS_VERSION"]}
+            "images": images, "meta": meta_path}
+
+
+
+def read_manifest_rows(path, kind):
+    if path.is_symlink() or not path.is_file():
+        die(f"manifest missing: {path}")
+    return [line.split("\t") for line in path.read_text().splitlines() if line.startswith(kind + "\t")]
+
+
+def verify_built_waydroid(built_dir):
+    """A tools/android/waydroid-lineage-build.sh output: system/vendor images
+    whose sizes and hashes match its manifest.tsv."""
+    manifest = built_dir / "manifest.tsv"
+    rows = {row[1]: row for row in read_manifest_rows(manifest, "artifact")}
+    images = {}
+    for kind in ("system", "vendor"):
+        row = rows.get(f"{kind}.img")
+        if row is None or len(row) != 4:
+            die(f"built Waydroid manifest lacks {kind}.img: {manifest}")
+        verify_pinned_file(built_dir / f"{kind}.img", row[2], row[3], f"built Waydroid {kind}.img")
+        images[kind] = built_dir / f"{kind}.img"
+    combo = next((line.split("\t")[1] for line in manifest.read_text().splitlines()
+                  if line.startswith("combo\t")), "unknown")
+    return images, manifest, combo
+
+
+def verify_vendor_overlay(overlay_dir, kind, label):
+    """A tools/pixel-9a/waydroid-<kind>-overlay.sh output: every overlay file
+    and the property file match its manifest.tsv; returns (source, dest)
+    pairs under /usr/share/ferrix/android/<kind>/ (ferrix-waydroid.sh)."""
+    manifest = overlay_dir / "manifest.tsv"
+    share = f"/usr/share/ferrix/android/{kind}"
+    files = []
+    for row in read_manifest_rows(manifest, "file"):
+        if len(row) != 4 or not row[1].startswith("vendor/") or ".." in row[1].split("/"):
+            die(f"malformed {label} overlay row: {row}")
+        verify_pinned_file(overlay_dir / "overlay" / row[1], row[2], row[3], f"{label} overlay {row[1]}")
+        files.append((overlay_dir / "overlay" / row[1], f"{share}/overlay/{row[1]}"))
+    prop = overlay_dir / f"waydroid-{kind}.prop"
+    prop_rows = read_manifest_rows(manifest, "prop")
+    if len(prop_rows) != 1 or prop_rows[0][1] != prop.name or not prop.is_file() \
+            or sha256(prop) != prop_rows[0][2]:
+        die(f"{label} overlay property file differs from its manifest: {prop}")
+    files.append((prop, f"{share}/{prop.name}"))
+    files.append((manifest, f"{share}/manifest.tsv"))
+    if not files[:-2]:
+        die(f"{label} overlay is empty: {overlay_dir}")
+    return files
+
+
+def verify_mali_overlay(overlay_dir):
+    """A tools/pixel-9a/waydroid-mali-overlay.sh output."""
+    return verify_vendor_overlay(overlay_dir, "mali", "Mali")
+
+
+def verify_codec2_overlay(overlay_dir):
+    """A tools/pixel-9a/waydroid-codec2-overlay.sh output."""
+    return verify_vendor_overlay(overlay_dir, "codec2", "Codec2")
+
+def check_codecs(codecs, renderer, staged):
+    """Hardware Codec2 needs its overlay and the Mali renderer (gchips buffers)."""
+    if codecs == "hardware" and not staged:
+        die("--codecs hardware needs --codec2-overlay")
+    if codecs == "hardware" and renderer != "mali":
+        die("--codecs hardware needs --renderer mali")
 
 
 def installed_packages(image, work):
@@ -593,6 +710,22 @@ def grow_rootfs(image, size_mib):
     run("e2fsck", "-fn", image, capture=True)
 
 
+# Android 15/16 changed the service manager interface (getService2); host
+# calls such as `waydroid app install` only reach waydroidplatform when
+# Waydroid selects aidl5/aidl6 for those images. That is Waydroid 1.6.3+,
+# which the base rootfs gets from the target-local backport
+# (targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/pmos/waydroid).
+WAYDROID_PROTOCOL_PY = "/usr/lib/waydroid/tools/helpers/protocol.py"
+
+
+def check_waydroid_protocol(editor):
+    """Refuse to stage a built Android 15+ image onto a Waydroid without aidl6."""
+    if '"aidl6"' not in editor.read(WAYDROID_PROTOCOL_PY):
+        die("the base rootfs Waydroid predates 1.6.3 (no aidl6 service manager for Android 16); "
+            "rebuild it with the target-local Waydroid backport")
+    return "android_waydroid_protocol\taidl6"
+
+
 def stage_android(image, work, repo, target_dir, inputs, size_mib):
     """Grow the rootfs and stage the Waydroid runtime; returns manifest rows."""
     check_android_rootfs(installed_packages(image, work), android_package_set(target_dir))
@@ -602,11 +735,13 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
     staged = [
         (inputs["images"]["system"], "/etc/waydroid-extra/images/system.img", 0o644),
         (inputs["images"]["vendor"], "/etc/waydroid-extra/images/vendor.img", 0o644),
-        (inputs["meta"], "/etc/waydroid-extra/images.json", 0o644),
-        (inputs["apk"], "/usr/share/ferrix/android/fulguris.apk", 0o644),
+        (inputs["meta"], "/etc/waydroid-extra/images.json"
+         if inputs["meta"].name == "images.json" else "/etc/waydroid-extra/ferrix-build-manifest.tsv", 0o644),
         (props, "/etc/ferrix/waydroid-properties.ini", 0o644),
         (helper, "/usr/lib/ferrix/ferrix-waydroid.sh", 0o755),
     ]
+    staged += [(source, dest, 0o755 if "/bin/" in dest else 0o644)
+               for source, dest in inputs.get("mali", []) + inputs.get("codec2", [])]
     needed = sum(source.stat().st_size for source, _, _ in staged)
     # Keep at least 1 GiB for Android /data, logs, and the dalvik cache.
     if free_bytes(image) < needed + (1 << 30):
@@ -616,9 +751,13 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
     for source, dest, mode in staged:
         editor.put_file(source, dest, mode)
     editor.mkdir_p("/var/lib/waydroid")
+    editor.put(f"{inputs.get('renderer', 'swiftshader')}\n".encode(), "/etc/ferrix/waydroid-renderer", 0o644)
+    editor.put(f"{inputs.get('codecs', 'software')}\n".encode(), "/etc/ferrix/waydroid-codecs", 0o644)
     if debugfs_type(image, f"/etc/init.d/{ANDROID_SERVICE}") != "regular":
         die(f"/etc/init.d/{ANDROID_SERVICE} is missing from the integrated rootfs")
     editor.symlink(f"/etc/runlevels/default/{ANDROID_SERVICE}", f"/etc/init.d/{ANDROID_SERVICE}")
+    # Only built (Android 15+) images need the newer protocols.
+    protocol_row = check_waydroid_protocol(editor) if inputs.get("built") else None
     editor.commit()
     for source, dest, _ in staged:
         info = run("debugfs", "-R", f"stat {dest}", image, capture=True)
@@ -628,10 +767,14 @@ def stage_android(image, work, repo, target_dir, inputs, size_mib):
         die("ferrix-android runlevel link did not land in the rootfs")
     run("e2fsck", "-fn", image, capture=True)
     rows = [f"android\twaydroid\t{inputs['channel']}\t{inputs['build']}",
+            f"android_renderer\t{inputs.get('renderer', 'swiftshader')}",
+            f"android_codecs\t{inputs.get('codecs', 'software')}",
             f"rootfs_size_mib\t{size_mib}"]
     for source, dest, _ in staged:
         rows.append(f"android_file\t{dest}\t{source.stat().st_size}\t{sha256(source)}")
     rows.append(f"android_service\t/etc/runlevels/default/{ANDROID_SERVICE}")
+    if protocol_row:
+        rows.append(protocol_row)
     return rows
 
 
@@ -665,20 +808,31 @@ def main():
                         help="comma-separated module names /init must not load (bisection)")
     parser.add_argument("--product-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_PRODUCT_DIR"),
                         help="pixel-9a product build to install over the base rootfs")
-    fulguris = read_pins(repo / "tools/android/fulguris.pins")
     parser.add_argument("--android", action="store_true",
                         default=env("FERRIX_PIXEL9A_DEV_ANDROID", "") == "1",
-                        help="stage the opt-in Waydroid runtime and Fulguris (base rootfs built "
+                        help="stage the opt-in Waydroid runtime (base rootfs built "
                              "with FERRIX_PIXEL9A_ANDROID=1)")
     parser.add_argument("--waydroid-images", type=Path,
                         default=Path(env("FERRIX_PIXEL9A_DEV_WAYDROID_IMAGES",
                                          repo / "out/android/waydroid/current")),
                         help="verified tools/android/waydroid-images-fetch.sh output")
-    parser.add_argument("--fulguris-apk", type=Path,
-                        default=Path(env("FERRIX_PIXEL9A_DEV_FULGURIS_APK",
-                                         repo / "out/android/fulguris" / fulguris["FULGURIS_VERSION"]
-                                         / fulguris["FULGURIS_ASSET"])),
-                        help="verified tools/android/fulguris-fetch.sh output")
+    parser.add_argument("--firmware-dir", type=Path, default=env("FERRIX_PIXEL9A_DEV_FIRMWARE_DIR"),
+                        help="verified firmware stage (firmware.sh stage output) to install "
+                             "over the base rootfs firmware")
+    parser.add_argument("--waydroid-built", type=Path, default=env("FERRIX_PIXEL9A_DEV_WAYDROID_BUILT_DIR"),
+                        help="tools/android/waydroid-lineage-build.sh output to use instead of the "
+                             "pinned Waydroid images")
+    parser.add_argument("--mali-overlay", type=Path, default=env("FERRIX_PIXEL9A_DEV_MALI_OVERLAY_DIR"),
+                        help="tools/pixel-9a/waydroid-mali-overlay.sh output to stage")
+    parser.add_argument("--renderer", choices=["swiftshader", "mali"],
+                        default=env("FERRIX_PIXEL9A_DEV_RENDERER", "swiftshader"),
+                        help="Waydroid renderer written to /etc/ferrix/waydroid-renderer")
+    parser.add_argument("--codec2-overlay", type=Path, default=env("FERRIX_PIXEL9A_DEV_CODEC2_OVERLAY_DIR"),
+                        help="tools/pixel-9a/waydroid-codec2-overlay.sh output to stage")
+    parser.add_argument("--codecs", choices=["software", "hardware"],
+                        default=env("FERRIX_PIXEL9A_DEV_CODECS", "software"),
+                        help="Android video codecs written to /etc/ferrix/waydroid-codecs "
+                             "(hardware needs --renderer mali)")
     parser.add_argument("--rootfs-size-mib", type=int,
                         default=int(env("FERRIX_PIXEL9A_DEV_ROOTFS_SIZE_MIB", "0") or 0),
                         help=f"grow the rootfs image to this size (--android default "
@@ -729,7 +883,21 @@ def main():
         for tool in ("dumpe2fs", "resize2fs"):
             if shutil.which(tool) is None:
                 die(f"host tool missing: {tool}")
-        android_inputs = verify_android_inputs(repo, args.waydroid_images, args.fulguris_apk)
+        if args.waydroid_built is not None:
+            images, built_manifest, combo = verify_built_waydroid(args.waydroid_built)
+            android_inputs = {"build": args.waydroid_built.name, "channel": combo, "images": images,
+                              "built": True, "meta": built_manifest}
+        else:
+            android_inputs = verify_android_inputs(repo, args.waydroid_images)
+        if args.mali_overlay is not None:
+            android_inputs["mali"] = verify_mali_overlay(args.mali_overlay)
+        if args.renderer == "mali" and "mali" not in android_inputs:
+            die("--renderer mali needs --mali-overlay")
+        if args.codec2_overlay is not None:
+            android_inputs["codec2"] = verify_codec2_overlay(args.codec2_overlay)
+        check_codecs(args.codecs, args.renderer, "codec2" in android_inputs)
+        android_inputs["renderer"] = args.renderer
+        android_inputs["codecs"] = args.codecs
     args.out.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".tegu-dev.", dir=args.out.parent))
     try:
@@ -786,6 +954,11 @@ def main():
         install_modules(rootfs, modules, release)
         integrated = integrate_rootfs(rootfs, work, package, args.target_dir / "dev/profile.toml",
                                       args.product_dir, reboot_helper)
+        firmware_rows = ["firmware\tbase-rootfs"]
+        if args.firmware_dir is not None:
+            firmware_rows = install_firmware(rootfs, work, args.firmware_dir,
+                                             args.target_dir / "firmware-stage-allowlist.tsv",
+                                             package / "firmware-allowlist.tsv")
         if android_inputs is not None:
             android_rows = stage_android(rootfs, work, repo, args.target_dir, android_inputs,
                                          args.rootfs_size_mib)
@@ -819,7 +992,7 @@ def main():
             f"rootfs_integrated\t{len(integrated)}",
             f"input\tvendor_cmdline\t{cmdline}",
             f"input\tvendor_bootconfig\t{bootconfig}\t{sha256(bootconfig)}",
-        ] + android_rows
+        ] + firmware_rows + android_rows
         for partition, name in partitions.items():
             path = stage / name
             lines.append(f"artifact\t{partition}\t{name}\t{path.stat().st_size}\t{sha256(path)}")

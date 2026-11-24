@@ -1,0 +1,12 @@
+diff --git a/src/Android.bp b/src/Android.bp
+--- a/src/Android.bp
++++ b/src/Android.bp
+@@ -184,7 +184,7 @@ cc_library_shared {
+     shared_libs: [
+         "libjson",
+         "libasound",
+-        "libsndfile12",
++        "libsndfile_linux",
+     ],
+ 
+ }

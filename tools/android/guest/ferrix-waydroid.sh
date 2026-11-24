@@ -5,13 +5,18 @@
 #
 #   ferrix-waydroid.sh prepare    root, before the compositor: offline
 #                                 `waydroid init`, renderer properties,
-#                                 container start, APK staging record.
+#                                 container start.
 #   ferrix-waydroid.sh provision  root, after the compositor's Wayland socket
 #                                 exists: session bus, pulse socket, session
-#                                 start, idempotent Fulguris install, default
-#                                 browser role.
+#                                 start, Android setup (wizard and home
+#                                 launcher disabled), default browser role
+#                                 for the built-in Browser (LineageOS Jelly,
+#                                 part of the image; nothing is installed).
 #   ferrix-waydroid.sh run        prepare, wait for the Wayland socket, then
 #                                 provision (for a backgrounded service).
+#   ferrix-waydroid.sh link-wayland  root, running session: (re)point
+#                                 Android's Wayland socket at the bound
+#                                 compositor directory (provision does this).
 #
 # Installed as /usr/lib/ferrix/ferrix-waydroid.sh by
 # targets/qemu-aarch64/pmos/finalize-in-container.sh (QEMU, run from local.d
@@ -26,23 +31,47 @@
 #                                  runs session commands as the caller
 #   FERRIX_ANDROID_XDG_RUNTIME_DIR session runtime dir ($XDG_RUNTIME_DIR, /run/user/0)
 #   FERRIX_ANDROID_WAYLAND_DISPLAY compositor socket name (wayland-0)
+#   FERRIX_ANDROID_WAYLAND_DIR     directory under the runtime dir holding the
+#                                  compositor's extra socket wayland-0
+#                                  (ferrix-shell --extra-socket
+#                                  ferrix-android-wayland/wayland-0); bound
+#                                  into the container so Android reconnects
+#                                  after a compositor restart
 #   FERRIX_ANDROID_SESSION_BUS     session D-Bus address (unix:path=<xdg>/ferrix-android-bus)
 #   FERRIX_ANDROID_PULSE           system | pipewire (falls back to null) | null | none (system)
-#   FERRIX_ANDROID_PROPS, _IMAGES, _CONFIG, _BASE_PROPS, _FULGURIS_APK,
+#   FERRIX_ANDROID_PACKAGE         Browser package (org.lineageos.jelly)
+#   FERRIX_ANDROID_PROPS, _IMAGES, _CONFIG, _BASE_PROPS,
 #   _CONSOLE, _RUN_DIR, _LXC_PATH, _BOOT_TICKS, _WAYLAND_TICKS  paths/bounds
+#   FERRIX_ANDROID_RENDERER        swiftshader (default) | mali; else read from
+#                                  /etc/ferrix/waydroid-renderer
+#   FERRIX_ANDROID_MALI_DIR        extracted stock Mali overlay
+#                                  (tools/pixel-9a/waydroid-mali-overlay.sh):
+#                                  overlay/vendor/... and waydroid-mali.prop
+#   FERRIX_ANDROID_CODECS          software (default) | hardware; else read from
+#                                  /etc/ferrix/waydroid-codecs. Hardware needs
+#                                  the Mali renderer (gchips buffers)
+#   FERRIX_ANDROID_CODEC2_DIR      extracted stock Codec2 overlay
+#                                  (tools/pixel-9a/waydroid-codec2-overlay.sh):
+#                                  overlay/vendor/... and waydroid-codec2.prop
+#   FERRIX_ANDROID_OVERLAY         Waydroid vendor overlay (/var/lib/waydroid/overlay/vendor)
+#   FERRIX_ANDROID_DEV_ROOT        prefix for host device nodes (tests only)
 set -u
 evidence=${FERRIX_ANDROID_EVIDENCE:-QEMU}
 props=${FERRIX_ANDROID_PROPS:-/etc/ferrix/waydroid-properties.ini}
 images=${FERRIX_ANDROID_IMAGES:-/etc/waydroid-extra/images}
 cfg=${FERRIX_ANDROID_CONFIG:-/var/lib/waydroid/waydroid.cfg}
 base_props=${FERRIX_ANDROID_BASE_PROPS:-${cfg%/*}/waydroid_base.prop}
-fulguris_apk=${FERRIX_ANDROID_FULGURIS_APK:-/usr/share/ferrix/android/fulguris.apk}
-package=${FERRIX_ANDROID_PACKAGE:-net.slions.fulguris.full.fdroid}
+package=${FERRIX_ANDROID_PACKAGE:-org.lineageos.jelly}
 console=${FERRIX_ANDROID_CONSOLE:-/dev/console}
 run_dir=${FERRIX_ANDROID_RUN_DIR:-/run/ferrix}
 session_user=${FERRIX_ANDROID_SESSION_USER:-}
 xdg=${FERRIX_ANDROID_XDG_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/0}}
 wayland=${FERRIX_ANDROID_WAYLAND_DISPLAY:-wayland-0}
+wayland_dir=${FERRIX_ANDROID_WAYLAND_DIR:-ferrix-android-wayland}
+# Container side of that directory bind, and the socket path Android's
+# hwcomposer connects to (Waydroid: XDG_RUNTIME_DIR=/run/xdg, wayland-0).
+container_wayland_dir=/run/ferrix-wayland
+container_wayland_socket=/run/xdg/wayland-0
 bus=${FERRIX_ANDROID_SESSION_BUS:-unix:path=$xdg/ferrix-android-bus}
 pulse=${FERRIX_ANDROID_PULSE:-system}
 lxc_path=${FERRIX_ANDROID_LXC_PATH:-/var/lib/waydroid/lxc}
@@ -52,6 +81,91 @@ wayland_ticks=${FERRIX_ANDROID_WAYLAND_TICKS:-3000}
 # properties file; the default matches the QEMU route.
 density_dpi=$(sed -n 's/^ro\.sf\.lcd_density=\([0-9][0-9]*\)$/\1/p' "$props" 2>/dev/null | head -n 1)
 [ -n "$density_dpi" ] || density_dpi=400
+mali_dir=${FERRIX_ANDROID_MALI_DIR:-/usr/share/ferrix/android/mali}
+codec2_dir=${FERRIX_ANDROID_CODEC2_DIR:-/usr/share/ferrix/android/codec2}
+vendor_overlay=${FERRIX_ANDROID_OVERLAY:-/var/lib/waydroid/overlay/vendor}
+dev_root=${FERRIX_ANDROID_DEV_ROOT:-}
+renderer=${FERRIX_ANDROID_RENDERER:-$(cat /etc/ferrix/waydroid-renderer 2>/dev/null || echo swiftshader)}
+codecs=${FERRIX_ANDROID_CODECS:-$(cat /etc/ferrix/waydroid-codecs 2>/dev/null || echo software)}
+# Host nodes the stock Codec2 services open besides /dev/video* (MFC) and
+# /dev/dma_heap/*, which Waydroid itself binds and opens up (chmod 777) on
+# every container start. Waydroid's container is not user-namespaced (no
+# lxc.idmap), so Android's mediacodec UID 1046 is host UID 1046.
+codec2_nodes="bigwave g2d fimg2d m2m1shot_scaler0"
+mediacodec_uid=1046
+# Keys removed from the configuration this run (stale in waydroid_base.prop).
+dropped=
+
+# overlay_ready DIR PROP: an extracted overlay with its property file.
+overlay_ready() { [ -d "$1/overlay/vendor" ] && [ -f "$1/$2" ]; }
+# overlay_remove NAME: delete exactly the files a previous install recorded.
+overlay_remove() {
+  record="$vendor_overlay/.ferrix-$1-files"
+  [ -f "$record" ] || return 0
+  while IFS= read -r f; do rm -f "$vendor_overlay/${f#./}"; done < "$record"
+  rm -f "$record"
+}
+# overlay_install NAME DIR PROP: copy the overlay, record its files, and
+# layer its properties over the effective ones.
+overlay_install() {
+  record="$vendor_overlay/.ferrix-$1-files"
+  mkdir -p "$vendor_overlay"
+  (cd "$2/overlay/vendor" && find . -type f) > "$record.new"
+  cp -a "$2/overlay/vendor/." "$vendor_overlay/"
+  mv "$record.new" "$record"
+  layered="$run_dir/waydroid-properties.$1.ini"
+  awk -v over="$2/$3" '
+    BEGIN { while ((getline line < over) > 0) if (line ~ /=/) { k = line; sub(/=.*/, "", k); o[k] = 1 } }
+    /=/ { k = $0; sub(/=.*/, "", k); if (k in o) next } { print }
+  ' "$props" > "$layered"
+  grep '=' "$2/$3" >> "$layered"
+  props=$layered
+}
+# overlay_drop_keys PROP: remove from the config the keys an inactive
+# overlay's property file sets and the effective properties do not.
+overlay_drop_keys() {
+  [ -f "$cfg" ] && [ -f "$1" ] || return 0
+  for k in $(grep '=' "$1" | sed 's/=.*//'); do
+    grep -q "^$k=" "$props" || ! grep -Eq "^$k[[:space:]]*=" "$cfg" || dropped="$dropped $k"
+  done
+  awk -v over="$1" -v keep="$props" '
+    BEGIN { while ((getline l < over) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); o[k] = 1 }
+            while ((getline l < keep) > 0) if (l ~ /=/) { k = l; sub(/=.*/, "", k); delete o[k] } }
+    { k = $0; sub(/[ \t]*=.*/, "", k); if (!($0 ~ /=/ && k in o)) print }
+  ' "$cfg" > "$cfg.ferrix" && mv "$cfg.ferrix" "$cfg"
+}
+
+# select_renderer: for `mali`, install the stock Mali overlay and layer its
+# properties over the target's; with `hardware` codecs on top of Mali, also
+# the stock Codec2 overlay. Anything not selected (or whose overlay is
+# absent) falls back to software, and its previously installed files and
+# keys are removed. Every recorded overlay is removed before the selected
+# ones are copied, so a library both overlays ship never disappears with the
+# one turned off.
+select_renderer() {
+  requested_codecs=$codecs
+  overlay_ready "$mali_dir" waydroid-mali.prop && [ "$renderer" = mali ] || renderer=swiftshader
+  overlay_ready "$codec2_dir" waydroid-codec2.prop && [ "$codecs" = hardware ] && [ "$renderer" = mali ] ||
+    codecs=software
+  overlay_remove mali
+  overlay_remove codec2
+  mkdir -p "$run_dir"
+  [ "$renderer" != mali ] || overlay_install mali "$mali_dir" waydroid-mali.prop
+  [ "$codecs" != hardware ] || overlay_install codec2 "$codec2_dir" waydroid-codec2.prop
+  [ "$renderer" = mali ] || overlay_drop_keys "$mali_dir/waydroid-mali.prop"
+  [ "$codecs" = hardware ] || overlay_drop_keys "$codec2_dir/waydroid-codec2.prop"
+  egl=$(sed -n 's/^ro\.hardware\.egl=//p' "$props" | head -n 1)
+  gralloc=$(sed -n 's/^ro\.hardware\.gralloc=//p' "$props" | head -n 1)
+  ev waydroid-renderer ",\"renderer\":\"$renderer\",\"egl\":\"${egl:-unset}\",\"gralloc\":\"${gralloc:-unset}\""
+  ev waydroid-codecs ",\"codecs\":\"$codecs\",\"requested\":\"$requested_codecs\""
+}
+
+# base_props_dropped: waydroid_base.prop still carries a key an inactive
+# overlay's properties set (dropped from the config this run).
+base_props_dropped() {
+  for k in $dropped; do grep -q "^$k=" "$base_props" 2>/dev/null && return 0; done
+  return 1
+}
 
 # props_applied: every managed property appears in the config exactly once
 # with its value, ignoring Waydroid's `key = value` spacing.
@@ -62,6 +176,17 @@ props_applied() {
       grep -Eq "^${key}[[:space:]]*=[[:space:]]*${value}[[:space:]]*$" "$cfg" ||
       { echo missing; break; }
   done | grep -q missing && return 1
+  return 0
+}
+# base_props_current: every managed property is in waydroid_base.prop with
+# its value. `waydroid upgrade -o` copies waydroid.cfg [properties] there and
+# the container reads only that file, so a cfg change (for example
+# persist.waydroid.multi_windows) has no effect until it is regenerated.
+base_props_current() {
+  [ -f "$base_props" ] || return 1
+  grep -v '^\[' "$props" | grep '=' | while IFS= read -r line; do
+    grep -qxF "$line" "$base_props" || { echo stale; break; }
+  done | grep -q stale && return 1
   return 0
 }
 rec() { printf '%s\n' "$1" >> "$console"; logger -t ferrix "$1" 2>/dev/null || true; }
@@ -90,6 +215,72 @@ session_log() {
   printf '%s' "$run_dir/$1"
 }
 
+# ensure_lxc_extras: Android 14+ init and aconfigd write flag storage under
+# /metadata (`mkdir /metadata/aconfig`), which is read-only in the Waydroid
+# rootfs; without it every aconfig flag reads false and system_server dies
+# on flag-gated permissions (android.permission.RANGING). Waydroid 1.6
+# mounts nothing there, and rewrites `config` on init/upgrade, so keep the
+# mount in a Ferrix-owned include and re-add the include before each start.
+# `optional` keeps images without a /metadata mountpoint (LineageOS 20)
+# starting.
+ensure_lxc_extras() {
+  conf_dir="$lxc_path/waydroid"
+  [ -f "$conf_dir/config" ] || return 0
+  extras="$conf_dir/config_ferrix"
+  printf '%s\n' '# Managed by ferrix-waydroid.sh' \
+    'lxc.mount.entry = tmpfs metadata tmpfs nodev,nosuid,mode=0755,optional 0 0' >"$extras"
+  # The compositor's extra-socket directory (see link_wayland). A directory
+  # bind follows the socket a restarted compositor recreates; Waydroid's own
+  # bind of the socket file keeps the first compositor's inode forever.
+  # `optional`: a shell without --extra-socket leaves Waydroid's bind alone.
+  printf 'lxc.mount.entry = %s %s none bind,create=dir,optional 0 0\n' \
+    "$xdg/$wayland_dir" "${container_wayland_dir#/}" >>"$extras"
+  # Hardware codecs: bind the extra stock Codec2 nodes the host has (always
+  # `optional`) and hand them to the container's mediacodec UID.
+  bound=
+  if [ "$codecs" = hardware ]; then
+    for node in $codec2_nodes; do
+      [ -e "$dev_root/dev/$node" ] || continue
+      chown "$mediacodec_uid" "$dev_root/dev/$node" 2>/dev/null || true
+      chmod 0660 "$dev_root/dev/$node" 2>/dev/null || true
+      printf 'lxc.mount.entry = %s dev/%s none bind,create=file,optional 0 0\n' "$dev_root/dev/$node" "$node" >>"$extras"
+      bound="$bound${bound:+,}\"$node\""
+    done
+  fi
+  grep -qxF "lxc.include = $extras" "$conf_dir/config" ||
+    printf 'lxc.include = %s\n' "$extras" >>"$conf_dir/config"
+  ev waydroid-lxc-extras ",\"status\":\"ok\",\"metadata\":\"tmpfs\",\"codec2_nodes\":[${bound}],\"path\":\"$extras\""
+}
+
+# link_wayland: point Android's Wayland socket path at the bound directory.
+# Waydroid bind-mounts the host socket *file* at /run/xdg/wayland-0 when the
+# session starts. ferrix-shell recreates its socket on every start (new
+# inode), so after a compositor restart that bind names a dead socket and
+# the hwcomposer's reconnect loop (hardware/waydroid wl_conn_reconnect,
+# task_conn_for) can never succeed; only a new Waydroid session used to
+# recover. Replacing the bind with a symlink into the directory bind makes
+# every reconnect resolve to the live socket. Established connections are
+# untouched, and the step is idempotent; it must run again after every
+# session start (Waydroid regenerates its session mounts).
+# The in-container script prints one word: linked | already | no-socket | failed.
+link_wayland_script="s=$container_wayland_socket t=$container_wayland_dir/wayland-0
+i=0
+while [ ! -S \$t ] && [ \$i -lt 50 ]; do sleep 0.1; i=\$((i + 1)); done
+[ -S \$t ] || { echo no-socket; exit 0; }
+[ \"\$(readlink \$s)\" = \$t ] && { echo already; exit 0; }
+for _ in 1 2 3; do umount \$s 2>/dev/null || break; done
+rm -f \$s && ln -s \$t \$s && [ \"\$(readlink \$s)\" = \$t ] && echo linked || echo failed"
+link_wayland() {
+  waydroid container unfreeze >/dev/null 2>&1 || true
+  status=$(lxc-attach -P "$lxc_path" -n waydroid --clear-env -- /system/bin/sh -c "$link_wayland_script" 2>/dev/null | tail -n 1 | tr -d '\r')
+  case $status in
+    linked|already) ;;
+    no-socket) status=unavailable ;;
+    *) status=failed ;;
+  esac
+  ev android-wayland-link ",\"status\":\"$status\",\"host_dir\":\"$xdg/$wayland_dir\",\"socket\":\"$container_wayland_socket\",\"target\":\"$container_wayland_dir/wayland-0\""
+}
+
 prepare() {
   mkdir -p "$run_dir"
   binderfs=absent
@@ -113,9 +304,11 @@ prepare() {
   else
     ev waydroid-init ',"status":"failed","reason":"images-missing"'
   fi
-  # Software-rendering properties. waydroid init rewrites the file without
+  select_renderer
+  # Renderer properties. waydroid init rewrites the file without
   # them, and Waydroid itself rewrites it as `key = value`; merge by key so a
   # rerun never leaves a duplicate option (configparser refuses those).
+  props_changed=0
   if [ -f "$cfg" ] && [ -f "$props" ] && ! props_applied; then
     merged="$cfg.ferrix"
     awk -v props="$props" '
@@ -125,28 +318,35 @@ prepare() {
     ' "$cfg" > "$merged"
     { grep -q '^\[properties\]' "$merged" || printf '\n[properties]\n'; grep -v '^\[' "$props"; } >> "$merged"
     mv "$merged" "$cfg"
+    props_changed=1
     ev waydroid-properties ",\"status\":\"applied\",\"density_dpi\":${density_dpi},\"path\":\"$cfg\""
   fi
   # `waydroid init` creates waydroid_base.prop before the overrides above
-  # exist. A plain container start reuses that file and may select a GPU
-  # renderer the target cannot provide; regenerate the offline container
-  # configuration whenever its effective renderer differs.
-  if [ -f "$cfg" ] && { ! grep -q '^ro.hardware.gralloc=default$' "$base_props" 2>/dev/null \
-    || ! grep -q '^ro.hardware.egl=swiftshader$' "$base_props" 2>/dev/null \
-    || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null; }; then
+  # exist, and the container reads only that file. A plain container start
+  # reuses it: a stale renderer may select a GPU the target cannot provide,
+  # and a stale persist.waydroid.multi_windows keeps the single-window
+  # surface. Regenerate the offline container configuration whenever the
+  # properties were just applied or any managed value is missing there.
+  if [ -f "$cfg" ] && { [ "$props_changed" = 1 ] || ! base_props_current \
+    || ! grep -q "^ro.hardware.gralloc=${gralloc:-default}$" "$base_props" 2>/dev/null \
+    || ! grep -q "^ro.hardware.egl=${egl:-swiftshader}$" "$base_props" 2>/dev/null \
+    || ! grep -q "^ro.sf.lcd_density=${density_dpi}$" "$base_props" 2>/dev/null \
+    || base_props_dropped; }; then
+    trigger=stale
+    [ "$props_changed" = 0 ] || trigger=properties-applied
     if timeout 300 waydroid upgrade -o >"$run_dir/waydroid-upgrade.log" 2>&1; then
-      ev waydroid-properties ",\"status\":\"materialized\",\"renderer\":\"swiftshader\",\"density_dpi\":${density_dpi}"
+      ev waydroid-properties ",\"status\":\"materialized\",\"trigger\":\"$trigger\",\"renderer\":\"$renderer\",\"codecs\":\"$codecs\",\"density_dpi\":${density_dpi}"
     else
       ev waydroid-properties ",\"status\":\"failed\",\"reason\":\"offline-upgrade-exit-$?\",\"log\":\"$run_dir/waydroid-upgrade.log\""
     fi
   fi
+  ensure_lxc_extras
   if [ -f "$cfg" ] && rc-service waydroid-container start >"$run_dir/waydroid-container.log" 2>&1; then
     ev waydroid-container ',"status":"started"'
   else
     ev waydroid-container ",\"status\":\"failed\",\"log\":\"$run_dir/waydroid-container.log\""
     tail -n 20 "$run_dir/waydroid-container.log" >> "$console" 2>/dev/null || true
   fi
-  [ ! -f "$fulguris_apk" ] || ev android-app-staged ",\"app\":\"org.ferrix.browser\",\"path\":\"$fulguris_apk\""
   return 0
 }
 
@@ -205,8 +405,40 @@ package_present() {
   grep -q '^package:' "$run_dir/waydroid-app-list.log" 2>/dev/null
 }
 
+# Android's first-run wizard must never show: Ferrix owns setup, and until
+# user_setup_complete is set ActivityTaskManager skips app launches ("user
+# setup not complete"). Mark setup done and disable any wizard package.
+complete_android_setup() {
+  : > "$run_dir/waydroid-setup.log"
+  waydroid shell -- settings put global device_provisioned 1 >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  waydroid shell -- settings put secure user_setup_complete 1 >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  for wizard in org.lineageos.setupwizard com.google.android.setupwizard com.android.provision; do
+    waydroid shell -- pm path "$wizard" 2>/dev/null | grep -q '^package:' || continue
+    waydroid shell -- pm disable "$wizard" >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  done
+  # Android's home launcher never gets a window under Ferrix and costs
+  # ~62 MB PSS. Disabled, HOME resolves to Settings' FallbackHome and apps
+  # still launch as task windows (physical Pixel 9a, 2026-10-10).
+  launcher=absent
+  for home in com.android.launcher3 org.lineageos.trebuchet; do
+    waydroid shell -- pm path "$home" 2>/dev/null | grep -q '^package:' || continue
+    waydroid shell -- pm disable "$home" >>"$run_dir/waydroid-setup.log" 2>&1 || true
+    launcher=disabled
+  done
+  # Ferrix owns display power. Android never sees the shell's user activity,
+  # so its own screen timeout puts it to sleep; asleep, a newly launched task
+  # never draws and (in task-streams mode) never gets a window.
+  waydroid shell -- settings put system screen_off_timeout 2147483647 >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  waydroid shell -- svc power stayon true >>"$run_dir/waydroid-setup.log" 2>&1 || true
+  done_flag=$(waydroid shell -- settings get secure user_setup_complete 2>/dev/null | tr -d '\r')
+  if [ "$done_flag" = 1 ]; then
+    ev android-setup ",\"status\":\"complete\",\"launcher\":\"$launcher\""
+  else
+    ev android-setup ",\"status\":\"failed\",\"launcher\":\"$launcher\",\"log\":\"$run_dir/waydroid-setup.log\""
+  fi
+}
+
 provision() {
-  [ -f "$fulguris_apk" ] || return 0
   if ! command -v waydroid >/dev/null 2>&1; then
     ev android-app-provision ',"app":"org.ferrix.browser","status":"failed","reason":"waydroid-not-installed"'
     return 0
@@ -214,6 +446,12 @@ provision() {
   mkdir -p "$run_dir"
   start_session_bus
   start_pulse
+  # The directory the container binds (ensure_lxc_extras) must exist when the
+  # session starts the container; ferrix-shell creates it too.
+  if [ ! -d "$xdg/$wayland_dir" ]; then
+    mkdir -p -m 0755 "$xdg/$wayland_dir"
+    [ -z "$session_user" ] || chown "$session_user" "$xdg/$wayland_dir" 2>/dev/null || true
+  fi
   session=$(session_log waydroid-session.log)
   as_session "waydroid session start >>$session 2>&1 &"
   # RUNNING only means the LXC/session processes exist. Package operations
@@ -227,13 +465,11 @@ provision() {
     sleep 0.1
   done
   ev android-boot ",\"boot_completed\":$booted,\"session_user\":\"${session_user:-$(id -un 2>/dev/null)}\""
-  provision_status=present
-  if ! package_present; then
-    provision_status=installed
-    install_log=$(session_log waydroid-fulguris-install.log)
-    as_session "waydroid app install $fulguris_apk >>$install_log 2>&1" || true
-  fi
-  for _ in $(seq 1 600); do
+  link_wayland
+  [ "$booted" != true ] || complete_android_setup
+  # The Browser is built into the Android image (ADR-008): nothing is
+  # installed here, only verified present and made the default browser.
+  for _ in $(seq 1 100); do
     package_present && break
     sleep 0.1
   done
@@ -242,12 +478,12 @@ provision() {
     # the UID 0 used by `waydroid shell`. Run it in the existing container as
     # that UID, then verify the effective HTTPS resolver rather than trusting
     # the command's asynchronous, output-free success response.
-    : > "$run_dir/waydroid-fulguris-role.log"
+    : > "$run_dir/waydroid-browser-role.log"
     : > "$run_dir/waydroid-browser-resolver.log"
-    waydroid container unfreeze >>"$run_dir/waydroid-fulguris-role.log" 2>&1 || true
+    waydroid container unfreeze >>"$run_dir/waydroid-browser-role.log" 2>&1 || true
     lxc-attach -P "$lxc_path" -n waydroid --uid 2000 -- \
       /system/bin/cmd role add-role-holder android.app.role.BROWSER "$package" \
-      >>"$run_dir/waydroid-fulguris-role.log" 2>&1 || true
+      >>"$run_dir/waydroid-browser-role.log" 2>&1 || true
     for _ in $(seq 1 100); do
       waydroid shell -- cmd package resolve-activity --brief \
         -a android.intent.action.VIEW -c android.intent.category.BROWSABLE \
@@ -256,16 +492,16 @@ provision() {
       sleep 0.1
     done
     if grep -q "^$package/" "$run_dir/waydroid-browser-resolver.log" 2>/dev/null; then
-      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"$provision_status\",\"package\":\"$package\",\"browser_role\":\"default\""
+      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"present\",\"package\":\"$package\",\"browser_role\":\"default\""
     else
-      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"default-browser-role\",\"role_log\":\"$run_dir/waydroid-fulguris-role.log\",\"resolver_log\":\"$run_dir/waydroid-browser-resolver.log\""
-      cat "$run_dir/waydroid-fulguris-role.log" "$run_dir/waydroid-browser-resolver.log" >> "$console" 2>/dev/null || true
+      ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"default-browser-role\",\"role_log\":\"$run_dir/waydroid-browser-role.log\",\"resolver_log\":\"$run_dir/waydroid-browser-resolver.log\""
+      cat "$run_dir/waydroid-browser-role.log" "$run_dir/waydroid-browser-resolver.log" >> "$console" 2>/dev/null || true
     fi
   else
-    ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"session_log\":\"$session\",\"install_log\":\"$run_dir/waydroid-fulguris-install.log\""
+    ev android-app-provision ",\"app\":\"org.ferrix.browser\",\"status\":\"failed\",\"reason\":\"browser-package-missing\",\"package\":\"$package\",\"session_log\":\"$session\""
     printf '%s\n' 'android provisioning diagnostics:' >> "$console"
     waydroid status >> "$console" 2>&1 || true
-    for log in "$session" "$run_dir/waydroid-fulguris-install.log" "$run_dir/android-pulse.log" "$run_dir/android-dbus.log"; do
+    for log in "$session" "$run_dir/waydroid-app-list.log" "$run_dir/android-pulse.log" "$run_dir/android-dbus.log"; do
       [ ! -s "$log" ] || { printf '%s\n' "--- $log" >> "$console"; tail -n 40 "$log" >> "$console"; }
     done
   fi
@@ -285,6 +521,7 @@ case ${1:-} in
   prepare) prepare ;;
   provision) provision ;;
   run) prepare; wait_for_wayland && provision ;;
-  *) printf 'usage: %s prepare|provision|run\n' "$0" >&2; exit 2 ;;
+  link-wayland) link_wayland ;;
+  *) printf 'usage: %s prepare|provision|run|link-wayland\n' "$0" >&2; exit 2 ;;
 esac
 exit 0

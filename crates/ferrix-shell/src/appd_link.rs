@@ -61,7 +61,7 @@ pub struct AppdLink {
     socket: PathBuf,
     events: Receiver<(LinkEvent, Option<Reporter>)>,
     reporter: Option<Reporter>,
-    last_focus: Option<Option<u32>>,
+    last_focus: Option<(Option<u32>, Option<u64>)>,
 }
 
 impl AppdLink {
@@ -139,13 +139,14 @@ impl AppdLink {
         }
     }
 
-    /// Report a focus change, suppressing repeats of the last reported pid.
-    pub fn report_focus(&mut self, pid: Option<u32>) -> bool {
-        if self.last_focus == Some(pid) {
+    /// Report a focus change (client pid and the focused toplevel's surface
+    /// id), suppressing repeats of the last reported focus.
+    pub fn report_focus(&mut self, pid: Option<u32>, surface: Option<u64>) -> bool {
+        if self.last_focus == Some((pid, surface)) {
             return false;
         }
-        if self.report(&Report::FocusChanged { pid }) {
-            self.last_focus = Some(pid);
+        if self.report(&Report::FocusChanged { pid, surface }) {
+            self.last_focus = Some((pid, surface));
             true
         } else {
             false
@@ -336,13 +337,18 @@ mod tests {
             pid: 42,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: Some("Terminal".to_owned()),
+            surface: Some(1),
         }));
-        assert!(link.report_focus(Some(42)));
+        assert!(link.report_focus(Some(42), Some(1)));
         assert!(
-            !link.report_focus(Some(42)),
+            !link.report_focus(Some(42), Some(1)),
             "identical focus is not repeated"
         );
-        assert!(link.report_focus(None));
+        assert!(
+            link.report_focus(Some(42), Some(2)),
+            "another toplevel of the same client is a focus change"
+        );
+        assert!(link.report_focus(None, None));
         assert!(link.report(&Report::HomeGesture));
         assert_eq!(
             ferrix_appd.read(),
@@ -350,15 +356,29 @@ mod tests {
                 pid: 42,
                 app_id: Some("org.ferrix.terminal".to_owned()),
                 title: Some("Terminal".to_owned()),
+                surface: Some(1),
             })
         );
         assert_eq!(
             ferrix_appd.read(),
-            Inbound::Report(Report::FocusChanged { pid: Some(42) })
+            Inbound::Report(Report::FocusChanged {
+                pid: Some(42),
+                surface: Some(1)
+            })
         );
         assert_eq!(
             ferrix_appd.read(),
-            Inbound::Report(Report::FocusChanged { pid: None })
+            Inbound::Report(Report::FocusChanged {
+                pid: Some(42),
+                surface: Some(2)
+            })
+        );
+        assert_eq!(
+            ferrix_appd.read(),
+            Inbound::Report(Report::FocusChanged {
+                pid: None,
+                surface: None
+            })
         );
         assert_eq!(ferrix_appd.read(), Inbound::Report(Report::HomeGesture));
 
@@ -366,6 +386,7 @@ mod tests {
         let activate = Notification::Activate {
             pid: 7,
             app_id: AppId::new("org.ferrix.home").unwrap(),
+            surface: Some(3),
         };
         let wakes_before_activate = wake_count.load(Ordering::SeqCst);
         ferrix_appd.push(&activate);
@@ -417,10 +438,16 @@ mod tests {
             .filter(|e| matches!(e, LinkEvent::Retrying { .. }))
             .count();
         assert_eq!(extra_retrying, 0, "retrying is recorded once per outage");
-        assert!(link.report_focus(None), "focus repeats after a reconnect");
+        assert!(
+            link.report_focus(None, None),
+            "focus repeats after a reconnect"
+        );
         assert_eq!(
             ferrix_appd.read(),
-            Inbound::Report(Report::FocusChanged { pid: None })
+            Inbound::Report(Report::FocusChanged {
+                pid: None,
+                surface: None
+            })
         );
 
         drop(link);
@@ -449,7 +476,7 @@ mod tests {
         }
         assert!(!link.connected());
         assert!(link.drain().is_empty());
-        assert!(!link.report_focus(Some(1)));
+        assert!(!link.report_focus(Some(1), None));
         drop(link);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

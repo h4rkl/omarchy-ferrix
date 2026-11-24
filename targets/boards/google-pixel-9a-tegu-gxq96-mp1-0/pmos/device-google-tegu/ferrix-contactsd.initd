@@ -21,6 +21,9 @@ depend() {
 start_pre() {
 	checkpath -d -m 0755 /run/ferrix /var/log
 	checkpath -d -m 0700 /var/lib/ferrix/contacts
+	# A socket left by the previous instance would be granted before the new
+	# daemon replaces it with a root-only one (restart race).
+	rm -f /run/ferrix/contactsd.sock
 }
 
 start_post() {

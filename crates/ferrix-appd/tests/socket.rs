@@ -62,7 +62,10 @@ fn next_app_event(rx: &Receiver<Notification>) -> AppEvent {
     loop {
         match rx.recv_timeout(TIMEOUT).expect("notification") {
             Notification::App { event } => return event,
-            Notification::Activate { .. } | Notification::Intent { .. } => continue,
+            Notification::Activate { .. }
+            | Notification::Withhold { .. }
+            | Notification::Close { .. }
+            | Notification::Intent { .. } => continue,
         }
     }
 }
@@ -80,6 +83,9 @@ fn hello_catalog_and_typed_errors_over_the_socket() {
     assert!(apps.iter().any(|d| d.id.as_str() == "org.ferrix.home"));
     assert!(apps.iter().any(|d| d.id.as_str() == "org.ferrix.terminal"));
     assert!(home.instances().unwrap().is_empty());
+    // First-party apps never carry a bitmap icon; the request is public.
+    assert_eq!(home.app_icon(&id("org.ferrix.terminal")), Ok(None));
+    assert_eq!(home.app_icon(&id("apk.org.example.absent")), Ok(None));
 
     // A reference entry is not launchable: typed error, not a protocol error.
     // Which entries are illustrative changes as apps land, so pick one from
@@ -149,6 +155,7 @@ fn compositor_role_is_gated_and_associates_surfaces() {
         pid: sandbox_pid + 2,
         app_id: Some("org.ferrix.terminal".to_owned()),
         title: None,
+        surface: None,
     })
     .unwrap();
     // Reports are fire-and-forget; a request afterwards proves the stream is fine.
@@ -165,11 +172,13 @@ fn compositor_role_is_gated_and_associates_surfaces() {
             pid: sandbox_pid + 2,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: Some("Terminal".to_owned()),
+            surface: None,
         })
         .unwrap();
     compositor
         .report(&Report::FocusChanged {
             pid: Some(sandbox_pid + 2),
+            surface: None,
         })
         .unwrap();
     assert!(ferrix_appd::testing::wait_for(TIMEOUT, || {
@@ -319,6 +328,7 @@ fn subscribers_receive_catalog_and_lifecycle_notifications() {
             pid: client_pid,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: Some("Terminal".to_owned()),
+            surface: None,
         })
         .unwrap();
     let compositor = compositor.subscribe().unwrap();
@@ -330,6 +340,7 @@ fn subscribers_receive_catalog_and_lifecycle_notifications() {
         Notification::Activate {
             pid: client_pid,
             app_id: terminal.clone(),
+            surface: None,
         }
     );
 

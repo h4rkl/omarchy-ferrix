@@ -1,0 +1,41 @@
+# Exact revisions for every project Waydroid's local manifests add to the
+# LineageOS 23.2 tree (they track moving branches, e.g. external/mesa3d on
+# lineage-18.1 and prebuilts/mesa-tools on main, which drifted apart once).
+# tools/android/waydroid-lineage-build.sh writes these as repo
+# extend-project overrides at sync and checks them before a build. Taken
+# from the manifest snapshot of the build that passed on 2026-10-10
+# (20261010T070700Z). Moving them means re-running sync, patch and build.
+# path	name	revision	tracked-branch
+device/waydroid/waydroid	waydroid/android_device_waydroid_waydroid	afa3da5d4de033bfde357939463fdb59f1f6b9f3	refs/heads/dev/lineage-23.2
+external/alsa-lib	WayDroid-ATV/android_external_alsa-lib	ca11262cf42c60611635c66253bbf1b41a52c77f	refs/heads/lineage-20
+external/alsa-plugins	WayDroid-ATV/android_external_alsa-plugins	6d2ebe3cf5b48bc6cc2027b1f60711fabce7d426	refs/heads/lineage-20
+external/drm_hwcomposer	android-generic/external_drm_hwcomposer	5875f8b4e36b0497b385a314276571a5f182426e	refs/heads/main
+external/ffmpeg	waydroid/android_external_ffmpeg	c5b53ceda3390c614bc10095d31f7be6b29337eb	refs/heads/dev/lineage-23.2
+external/libdrm	WayDroid-ATV/android_external_libdrm	f17f1cfe94096d49b56f37d7015d0aeb2cae84e6	refs/heads/lineage-20
+external/libsndfile	WayDroid-ATV/android_external_libsndfile	52a8dee7e36ee12d4004f9f8c0b9905cb8f9d615	refs/heads/lineage-20
+external/libva	WayDroid-ATV/android_external_libva	e575c67c1d3e9502be39d41a54d4da1b91477e63	refs/heads/14-x86
+external/libva-utils	intel/libva-utils	d3db8f7b2a14a36cfa7083553282094424377cf2	refs/tags/2.23.0
+external/llvm-project	android-generic/external_llvm-project	5aa9e145268dfad5522a7c17bfe95362c19249ab	refs/heads/release_22.x
+external/mesa3d	WayDroid-ATV/android_external_mesa3d	3053d023e511968da63245d780aa2b4f9937811a	refs/heads/lineage-18.1
+external/minigbm	WayDroid-ATV/android_external_minigbm	9b85c0b9fd28abfb5f801cb8032621eee9ed3e42	refs/heads/lineage-23.2
+external/pulseaudio	WayDroid-ATV/android_external_pulseaudio	4f8b94631ef6cdf053a430152258336d4565958c	refs/heads/lineage-20
+external/redroid-prebuilts	WayDroid-ATV/android_external_redroid-prebuilts	048531b1934af0e5785e93556c740005d3f7e7cb	refs/heads/master
+external/rust/android-crates-io	WayDroid-ATV/android_external_rust_android-crates-io	a0fe673b5f877fb0caff27afc014ed89a010cb0d	refs/heads/android16-qpr2-release
+external/rust/hbm	WayDroid-ATV/android_external_rust_hbm	92ad93a4d9418b065bf986d77460ef089cda7cdf	refs/heads/main
+external/rust/ninja-to-soong	WayDroid-ATV/android_external_rust_ninja-to-soong	10730924347d153e96c0a1ecc81796899df6770d	refs/heads/main
+external/stagefright-plugins	WayDroid-ATV/android_external_stagefright-plugins	1bc14018bd637bdd7f0869edf72cfaec6de10c76	refs/heads/14-x86/ffmpeg-7.1
+frameworks/waydroid	WayDroid-ATV/android_frameworks_waydroid	b18c6f83c0f97d3c77c73086dfd4e86d62825024	refs/heads/lineage-20
+hardware/waydroid	waydroid/android_hardware_waydroid	e584b71ba4c9e52ec1b22deadeddc5645c73bcb7	refs/heads/dev/lineage-23.2
+packages/apps/TvSettings	WayDroid-ATV/android_packages_apps_TvSettings	01f7b09b05ccad13213a3bc46502b3af87799332	refs/heads/lineage-23.2
+packages/apps/WaydroidUpdater	WayDroid-ATV/android_packages_apps_WaydroidUpdater	e61d1230459830d1421f2bb330c7a8c4f49d597e	refs/heads/lineage-20
+prebuilts/mesa-tools	WayDroid/android_prebuilts_mesa-tools	b5de4e0af2f1e76b53b000fb70c18f1757c7e28f	refs/heads/main
+prebuilts/vndk/v34	waydroid/android_prebuilts_vndk_v34	abe57d2399e143ca59692d2ca47f1e26d6e9802d	refs/heads/dev/lineage-23.2
+vendor/extra	waydroid/android_vendor_waydroid	2bfe8853e88181d65c28a76d5da291e3cbc32e4c	refs/heads/dev/lineage-23.2
+vendor/extra/init	waydroid/android_vendor_waydroid_init	8d1d42cf42c567c6944f68970faab7a578e9c0ad	refs/heads/dev/lineage-23.2
+vendor/gapps	WayDroid-ATV/android_vendor_gapps	ec0a1d74e0d8f6e23786282c22836d4396f13f03	refs/heads/baklava
+vendor/gapps_tv	WayDroid-ATV/android_vendor_gapps_tv	2b59efa766bb8d1ae8943caf2626df0344109cf0	refs/heads/baklava
+vendor/google/proprietary/ndk_translation-prebuilt	WayDroid-ATV/vendor_google_proprietary_ndk_translation-prebuilt	c5d945cd18afedbff11f972961afc7c8ccb13873	refs/heads/16arm64_qpr2
+vendor/google/proprietary/widevine-prebuilt	supremegamers/vendor_google_proprietary_widevine-prebuilt	47992c25673ed766155fc52d0e6ae81d9769a06c	refs/heads/celadon
+vendor/intel/gmmlib	intel/gmmlib	cb1cec0e9369224e65edc07d8fa613769214b15f	refs/tags/intel-gmmlib-22.10.0
+vendor/intel/media-driver	intel/media-driver	98ecac9746fb1213276f6f83065060624e667598	refs/tags/intel-media-26.1.5
+vendor/intel/vaapi-driver	WayDroid-ATV/android_vendor_intel_vaapi-driver	8dd6659c53e66f787e92d38852393c28ba4e0360	refs/heads/14-x86

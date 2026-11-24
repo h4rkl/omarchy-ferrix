@@ -26,6 +26,9 @@ pub struct Connection {
     /// Pids this connection already identified; the `appd-identify` record
     /// is emitted once per pid per connection.
     pub identified: BTreeSet<u32>,
+    /// Set for a compositor connection: its generation, so its end can reset
+    /// the surfaces it reported ([`Service::compositor_lost`]).
+    pub compositor_generation: Option<u64>,
 }
 
 /// What the connection thread does with a parsed line.
@@ -55,6 +58,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
         Inbound::Request(Request::Identify { .. }) => "identify",
         Inbound::Request(Request::Catalog) => "catalog",
         Inbound::Request(Request::Instances) => "instances",
+        Inbound::Request(Request::AppIcon { .. }) => "app-icon",
         Inbound::Request(Request::Launch { .. }) => "launch",
         Inbound::Request(Request::Activate { .. }) => "activate",
         Inbound::Request(Request::Terminate { .. }) => "terminate",
@@ -64,6 +68,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
         Inbound::Report(Report::SurfaceMapped { .. }) => "surface-mapped",
         Inbound::Report(Report::SurfaceUnmapped { .. }) => "surface-unmapped",
         Inbound::Report(Report::FocusChanged { .. }) => "focus-changed",
+        Inbound::Report(Report::ActivationRequested { .. }) => "activation-requested",
         Inbound::Report(Report::HomeGesture) => "home-gesture",
         Inbound::Report(Report::CloseGesture) => "close-gesture",
         Inbound::Report(Report::YieldForeground) => "yield-foreground",
@@ -74,7 +79,7 @@ pub fn message_name(inbound: &Inbound) -> &'static str {
 ///
 /// | message | roles |
 /// |---|---|
-/// | `Catalog`, `Instances`, `Subscribe` | any |
+/// | `Catalog`, `Instances`, `AppIcon`, `Subscribe` | any |
 /// | `Home` | `compositor`, `home`, `application`, `tool` |
 /// | `Identify` | `service`, `tool` |
 /// | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
@@ -90,7 +95,9 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
     use ClientRole::*;
     match inbound {
         Inbound::Request(Request::Hello { .. }) => true,
-        Inbound::Request(Request::Catalog | Request::Instances | Request::Subscribe) => true,
+        Inbound::Request(
+            Request::Catalog | Request::Instances | Request::AppIcon { .. } | Request::Subscribe,
+        ) => true,
         Inbound::Request(Request::Home) => role != Service,
         Inbound::Request(Request::Identify { .. }) => matches!(role, Service | Tool),
         Inbound::Request(
@@ -102,6 +109,7 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
             Report::SurfaceMapped { .. }
             | Report::SurfaceUnmapped { .. }
             | Report::FocusChanged { .. }
+            | Report::ActivationRequested { .. }
             | Report::HomeGesture
             | Report::CloseGesture,
         ) => role == Compositor,
@@ -139,6 +147,9 @@ pub fn dispatch(service: &Arc<Service>, connection: &mut Connection, inbound: In
             return protocol_error(&reason);
         }
         connection.role = Some(role);
+        if role == ClientRole::Compositor {
+            connection.compositor_generation = Some(service.compositor_connected());
+        }
         return Outcome::Reply(service.hello_reply());
     }
     let Some(role) = connection.role else {
@@ -192,11 +203,16 @@ fn handle_request(
         }
         Request::Catalog => Reply::Catalog {
             schema_version: SCHEMA_VERSION,
-            apps: service.catalog().descriptors(),
+            apps: service.descriptors(),
         },
         Request::Instances => Reply::Instances {
             schema_version: SCHEMA_VERSION,
             instances: service.instances(),
+        },
+        Request::AppIcon { id } => Reply::AppIcon {
+            schema_version: SCHEMA_VERSION,
+            icon: service.app_icon(&id),
+            id,
         },
         Request::Launch { id } => match service.launch(&id) {
             Ok(outcome) => Reply::Instance {
@@ -251,14 +267,22 @@ fn handle_request(
 
 fn handle_report(service: &Arc<Service>, report: Report) {
     match report {
-        Report::SurfaceMapped { pid, app_id, title } => {
-            service.surface_mapped(pid, app_id.as_deref(), title.as_deref());
+        Report::SurfaceMapped {
+            pid,
+            app_id,
+            title,
+            surface,
+        } => {
+            service.map_surface(pid, surface, app_id.as_deref(), title.as_deref());
         }
-        Report::SurfaceUnmapped { pid } => {
-            service.surface_unmapped(pid);
+        Report::SurfaceUnmapped { pid, surface } => {
+            service.unmap_surface(pid, surface);
         }
-        Report::FocusChanged { pid } => {
-            service.focus_changed(pid);
+        Report::FocusChanged { pid, surface } => {
+            service.focus_surface(pid, surface);
+        }
+        Report::ActivationRequested { pid, surface } => {
+            service.activation_requested(pid, surface);
         }
         Report::HomeGesture | Report::YieldForeground => {
             // Activation is best effort: a failure here (no home in the
@@ -347,24 +371,27 @@ impl Server {
             match outcome {
                 Outcome::Reply(reply) => {
                     if write_json(&mut writer, &reply).is_err() {
-                        return;
+                        break;
                     }
                 }
                 Outcome::Subscribe => {
                     let role = connection.role.unwrap_or(ClientRole::Application);
                     let Ok(sink) = writer.try_clone() else {
-                        return;
+                        break;
                     };
                     if self
                         .service
                         .subscribe_peer(role, connection.peer_pid, Box::new(sink))
                         .is_err()
                     {
-                        return;
+                        break;
                     }
                 }
                 Outcome::Silent => {}
             }
+        }
+        if let Some(generation) = connection.compositor_generation {
+            self.service.compositor_lost(generation);
         }
     }
 }
@@ -550,7 +577,8 @@ mod tests {
                 Inbound::Report(Report::SurfaceMapped {
                     pid,
                     app_id: None,
-                    title: None
+                    title: None,
+                    surface: None,
                 })
             ),
             Outcome::Silent
@@ -586,7 +614,10 @@ mod tests {
             dispatch(
                 &service,
                 &mut conn,
-                Inbound::Report(Report::FocusChanged { pid: None })
+                Inbound::Report(Report::FocusChanged {
+                    pid: None,
+                    surface: None
+                })
             ),
             Outcome::Silent
         );
@@ -597,6 +628,20 @@ mod tests {
         );
         assert_eq!(runtime.launch_count(), 1);
         assert_eq!(runtime.launches()[0].0.as_str(), "org.ferrix.home");
+    }
+
+    #[test]
+    fn only_compositor_connections_carry_a_generation() {
+        let (service, _, _) = service();
+        let mut first = Connection::default();
+        hello(&service, &mut first, ClientRole::Compositor);
+        let mut second = Connection::default();
+        hello(&service, &mut second, ClientRole::Compositor);
+        assert!(first.compositor_generation < second.compositor_generation);
+        assert!(first.compositor_generation.is_some());
+        let mut home = Connection::default();
+        hello(&service, &mut home, ClientRole::Home);
+        assert_eq!(home.compositor_generation, None);
     }
 
     #[test]
@@ -921,6 +966,7 @@ mod tests {
             pid: 1,
             app_id: None,
             title: None,
+            surface: None,
         });
         let yield_fg = Inbound::Report(Report::YieldForeground);
         assert!(allowed(ClientRole::Home, &launch));

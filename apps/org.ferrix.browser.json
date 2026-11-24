@@ -13,10 +13,7 @@
     "background"
   ],
   "launch": {
-    "package": "net.slions.fulguris.full.fdroid",
-    "activity": null,
-    "apk": {
-      "pins": "tools/android/fulguris.pins"
-    }
+    "package": "org.lineageos.jelly",
+    "activity": null
   }
 }

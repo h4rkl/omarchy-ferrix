@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ferrix <ferrix@invalid>
+Date: Sat, 10 Oct 2026 19:58:57 +1300
+Subject: [PATCH] libui: optional extra usage for RGB allocations
+ (ro.ferrix.gralloc.extra_rgb_usage)
+
+Software Wayland compositors and the hwcomposer's CPU copy cannot read
+AFBC buffers, which the Pixel 9a gralloc picks for GPU-rendered app
+windows. Let the target name the vendor's no-compression usage bit (gchips:
+MALI_GRALLOC_USAGE_NO_AFBC, GRALLOC_USAGE_PRIVATE_1) for RGB formats.
+---
+ libs/ui/GraphicBufferAllocator.cpp | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/libs/ui/GraphicBufferAllocator.cpp b/libs/ui/GraphicBufferAllocator.cpp
+index 0eb67e2..6f816da 100644
+--- a/libs/ui/GraphicBufferAllocator.cpp
++++ b/libs/ui/GraphicBufferAllocator.cpp
+@@ -27,6 +27,7 @@
+ 
+ #include <grallocusage/GrallocUsageConversion.h>
+ 
++#include <android-base/properties.h>
+ #include <android-base/stringprintf.h>
+ #include <log/log.h>
+ #include <utils/Singleton.h>
+@@ -223,6 +224,28 @@ status_t GraphicBufferAllocator::allocateHelper(uint32_t width, uint32_t height,
+     // TODO(b/72323293, b/72703005): Remove these invalid bits from callers
+     usage &= ~static_cast<uint64_t>((1 << 10) | (1 << 13));
+ 
++    // Ferrix (Waydroid on a vendor gralloc): software Wayland compositors and
++    // CPU copies cannot read compressed (e.g. AFBC) buffers. A target can name
++    // the vendor's private "no compression" usage bit(s) here; they apply to
++    // RGB formats only, since vendor grallocs may reject them for YUV.
++    static const uint64_t kExtraRgbUsage =
++            base::GetUintProperty<uint64_t>("ro.ferrix.gralloc.extra_rgb_usage", 0);
++    if (kExtraRgbUsage) {
++        switch (format) {
++            case PIXEL_FORMAT_RGBA_8888:
++            case PIXEL_FORMAT_RGBX_8888:
++            case PIXEL_FORMAT_RGB_888:
++            case PIXEL_FORMAT_RGB_565:
++            case PIXEL_FORMAT_BGRA_8888:
++            case PIXEL_FORMAT_RGBA_FP16:
++            case PIXEL_FORMAT_RGBA_1010102:
++                usage |= kExtraRgbUsage;
++                break;
++            default:
++                break;
++        }
++    }
++
+     status_t error = mAllocator->allocate(requestorName, width, height, format, layerCount, usage,
+                                           stride, handle, importBuffer);
+     if (error != NO_ERROR) {

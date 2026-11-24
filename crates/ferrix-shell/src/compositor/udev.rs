@@ -15,7 +15,7 @@ use smithay::{
             compositor::{DrmCompositor, FrameFlags},
         },
         libinput::{LibinputInputBackend, LibinputSessionInterface},
-        renderer::{ImportMemWl, pixman::PixmanRenderer},
+        renderer::{ImportDma, ImportMemWl, pixman::PixmanRenderer},
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, primary_gpu},
     },
@@ -250,6 +250,7 @@ pub fn run(
 
     let mut renderer = PixmanRenderer::new().map_err(|e| ("renderer", format!("pixman: {e}")))?;
     shell.shm_state.update_formats(renderer.shm_formats());
+    shell.enable_dmabuf(renderer.dmabuf_formats());
 
     // Software composition only: no overlay/cursor planes, everything is drawn
     // by pixman into the primary-plane dumb buffer.

@@ -1,0 +1,33 @@
+diff --git a/device.mk b/device.mk
+--- a/device.mk
++++ b/device.mk
+@@ -75,8 +75,9 @@ PRODUCT_PACKAGES += \
+ # Camera
+ USE_CAMERA_V4L2_HAL := true
+ 
++# Ferrix: LineageOS 23.2 no longer ships the HIDL external camera provider;
++# Ferrix has no camera path through Waydroid, so the provider is not built.
+ PRODUCT_PACKAGES += \
+-    android.hardware.camera.provider@2.7-external-service \
+     camera.v4l2
+ 
+ PRODUCT_COPY_FILES += \
+diff --git a/manifest.xml b/manifest.xml
+--- a/manifest.xml
++++ b/manifest.xml
+@@ -53,15 +53,6 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+             <instance>default</instance>
+         </interface>
+     </hal>
+-    <hal format="hidl">
+-        <name>android.hardware.camera.provider</name>
+-        <transport>hwbinder</transport>
+-        <version>2.7</version>
+-        <interface>
+-            <name>ICameraProvider</name>
+-            <instance>external/0</instance>
+-        </interface>
+-    </hal>
+     <hal format="hidl">
+         <name>android.hardware.configstore</name>
+         <transport>hwbinder</transport>
