@@ -666,7 +666,7 @@ pub fn tile_parts(r: Rect, size: (u32, u32)) -> TileParts {
     let icon_cy = r.y + s(if landscape { 105 } else { 118 });
     let label_px = s(if landscape { 28 } else { 30 });
     let label_baseline = r.y + r.h - s(if landscape { 38 } else { 44 });
-    // Ascent and descent of JetBrains Mono at `label_px` (generous).
+    // Ascent and descent of IBM Plex Sans Condensed at `label_px` (generous).
     let ascent = label_px * 3 / 4;
     let descent = label_px / 4;
     TileParts {

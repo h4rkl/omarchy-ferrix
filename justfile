@@ -28,6 +28,18 @@ icons-fetch:
 icons-verify:
     @sh "{{root}}/tools/icons/material-symbols-fetch.sh" --verify
 
+# Re-derive the vendored IBM Plex faces (SIL OFL 1.1) from the commit pinned in
+# tools/fonts/ibm-plex.pins (network). `fonts-fetch` rewrites
+# crates/ferrix-ui/assets/fonts/ibm-plex/ for review; `fonts-verify` only
+# compares. The build itself never downloads anything.
+[group('host-dev')]
+fonts-fetch:
+    @sh "{{root}}/tools/fonts/ibm-plex-fetch.sh"
+
+[group('host-dev')]
+fonts-verify:
+    @sh "{{root}}/tools/fonts/ibm-plex-fetch.sh" --verify
+
 # Explicit, opt-in host package installation. See AGENT_INSTALL.md.
 [group('host-dev')]
 dev-setup:
