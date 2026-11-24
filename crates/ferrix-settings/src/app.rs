@@ -61,6 +61,8 @@ struct Settings {
     telephony_socket: PathBuf,
     telephony_client: Option<TeleClient>,
     core: Receiver<ferrix_protocol::Feed>,
+    /// The core's screen policy (Display > Screen timeout).
+    policy: Receiver<ferrix_protocol::PolicyFeed>,
     core_socket: PathBuf,
     appd_socket: Option<PathBuf>,
     appd: Option<AppdClient>,
@@ -105,6 +107,12 @@ pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
             Duration::from_secs(1),
             Arc::clone(&wake),
         );
+        let policy = ferrix_protocol::watch_screen_policy(
+            core_socket.clone(),
+            TIMEOUT,
+            Duration::from_secs(1),
+            Arc::clone(&wake),
+        );
         let countdown = Arc::new(AtomicBool::new(false));
         spawn_countdown_ticker(Arc::clone(&countdown), Arc::clone(&wake));
         let appd_socket = std::env::var_os(ferrix_app_api::APPD_SOCKET_ENV)
@@ -132,6 +140,7 @@ pub fn run(initial_size: (u32, u32), target: String) -> Result<(), String> {
             telephony_socket,
             telephony_client: None,
             core,
+            policy,
             core_socket,
             appd_socket,
             appd: None,
@@ -263,6 +272,27 @@ impl Settings {
         ));
     }
 
+    /// The screen timeout through the core's screen policy; the reply is the
+    /// new policy (the watch delivers it too).
+    fn set_idle_timeout(&mut self, secs: Option<u32>) {
+        let (status, error) =
+            match ferrix_protocol::set_idle_timeout(&self.core_socket, secs, TIMEOUT) {
+                Ok(policy) => {
+                    self.model.screen_policy = Some(policy);
+                    ("ok", None)
+                }
+                Err(error) => {
+                    self.model.last_error = Some(format!("screen timeout \u{b7} {error}"));
+                    ("error", Some(error))
+                }
+            };
+        emit(format!(
+            "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"settings-action\",\"action\":\"set-idle-timeout\",\"service\":\"core\",\"idle_timeout_secs\":{},\"status\":\"{status}\",\"error\":{}}}",
+            secs.map_or("null".to_owned(), |s| s.to_string()),
+            json_opt_str(error.as_deref())
+        ));
+    }
+
     /// Re-queries the Bluetooth session; an adapter without one (no
     /// discovery or pairing) falls back to its plain device list.
     fn refresh_devices(&mut self) {
@@ -331,6 +361,7 @@ impl Settings {
                 "set-rotation-lock",
                 HardwareCommand::SetRotationLock { locked },
             ),
+            Action::SetIdleTimeout(secs) => self.set_idle_timeout(secs),
             Action::SetVolume(percent) => self.core_action(
                 "set-audio-volume",
                 HardwareCommand::SetAudioVolume { percent },
@@ -577,6 +608,9 @@ impl ClientHandler for Settings {
         }
         while let Ok(feed) = self.core.try_recv() {
             changed |= self.model.apply_core(feed);
+        }
+        while let Ok(feed) = self.policy.try_recv() {
+            changed |= self.model.apply_policy(feed);
         }
         let model = &mut self.model;
         changed |= self

@@ -61,6 +61,17 @@ channel, waits for the `power-changed` event the core emits, then sends
 `check-failed` record; there is no fallback that prints success. Inspect the
 captured serial output at `out/qemu-aarch64/serial.log`.
 `FERRIX_QEMU_CHECK_TIMEOUT` (seconds, default 90) bounds the whole check.
+
+**Time budget (#14).** Image growth must keep the `qemu-check` wall-time
+median (five runs, TCG, Apple Silicon host) within **+1.0 s** of the
+previous image, and always far inside the 90 s timeout. Measured on
+2026-11-24 when the Noto fallback fonts joined the initramfs (+24.8 MB
+compressed): 5.84 s before, 6.17 s after (+0.33 s); the graphical agent start
+under TCG 8.63 s before, 8.94 s after; the first committed Contacts frame
+(which scans the guest fonts and shapes Arabic names) 0.96 s before, 0.95 s
+after. The check is headless and draws no text, so its cost is the larger
+initramfs; shaping cost shows in the agent-session numbers.
+
 `FERRIX_QEMU_REQUIRE_SERVICES=0` drops the two daemon assertions (the
 `check-passed` record then says `"services":"optional"`); it exists for
 integration work while a daemon is still a skeleton and is not the CI setting.
@@ -283,7 +294,7 @@ name = "incoming-call-answer-route-remote-hangup"
 description = "..."
 
 [[step]]
-service = "telephony"                    # telephony | network | core
+service = "telephony"                    # telephony | network | core | input
 command = { cmd = "incoming-call", number = "+15550100042" }
 expect = [ { event = "telephony-event", event_name = "call-changed", state = "ringing" } ]
 timeout_ms = 5000                        # bound only; default 5000; never asserted
@@ -291,6 +302,29 @@ ack = { status = "ok" }                  # optional JSON subset of the ack
 expect_ack_error = false                 # true when the command must be rejected
 note = "free text carried into result.json"
 ```
+
+`service = "input"` steps (guest agent sessions only) inject through QEMU's
+QMP socket, so the event takes the real virtio-input -> kernel -> libinput ->
+`ferrix-shell` path: `{ cmd = "key", key = "power", hold_ms = 1200 }` (a
+QEMU qcode, optional hold) and `{ cmd = "tap", x = 540, y = 2115 }` (display
+pixels of the session profile). They have no ack; only `expect` is checked.
+`display-power-key-blank-wake-menu` uses them for the power key, a dropped
+tap while the screen is off, and the power menu's Cancel button.
+
+Power key by hand: `just qemu-key power` is a short press (screen off/on);
+`just qemu-key-hold power 1000` holds it past the 600 ms long press and opens
+the power menu. QEMU's virtio-keyboard reports the `power` qcode as evdev
+`KEY_POWER` (116), the same code a phone's PMIC or gpio-keys button sends.
+While the screen is off QEMU's display shows its "Display output is not
+active" placeholder (the CRTC is disabled), and every contact is dropped
+(`input-dropped`). The QEMU profile never blanks on idle
+(`[display] idle_timeout_secs = 0`); set a timeout with
+`just qemu-mock set-idle-timeout idle_timeout_secs=15` (no argument: never),
+`just qemu-mock inhibit-blank reason=call holder=me` /
+`release-inhibit holder=me`, or in
+Settings > Display. Power off/Restart from the menu really power off or
+reboot the guest (ferrix-core hands the accepted action to init through
+`/run/ferrix/power-action`).
 
 Each step sends the command, requires a `"status":"ok"` ack (or an error when
 `expect_ack_error = true`, or the `ack` subset), then waits at most
@@ -516,7 +550,7 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders the Omarchy Ferrix launcher — the black/amber/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
+The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `cosmic-text` with the embedded IBM Plex faces and the guest Noto fallback in `/usr/share/fonts`) that software-renders the Omarchy Ferrix launcher — the black/amber/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
 
 ```sh
 cargo run -p ferrix-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm

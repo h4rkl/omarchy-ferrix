@@ -201,6 +201,21 @@ isolation in the private runtime diagnostics attached to the `app-started`
 evidence record; it never hides it or exposes Linux-specific fields as public
 application state.
 
+### Keeping the screen on
+
+An application that must keep the screen on (an active call, video
+playback, turn-by-turn navigation) asks `ferrix-core`, never the compositor:
+`ferrix_protocol::inhibit_blank(socket, InhibitReason::Call, "org.ferrix.phone",
+timeout)` returns a `BlankInhibitor`. While any inhibitor is held the idle
+timeout (Settings > Display > Screen timeout) does not blank the screen; the
+power key still does. The inhibitor lives on its own connection to
+`core.sock`: dropping the handle, calling `release`, or the process dying
+closes it and the core releases it, so a crashed app can never hold the
+screen on. `InhibitReason` is a closed set (`call`, `video`, `navigation`);
+the holder string is a label for evidence and the Settings caption, never an
+identity. The app needs a `core-*` grant to see `core.sock`. Policy changes
+reach the shell and Settings through `watch_screen_policy`.
+
 ### Socket visibility
 
 Platform daemons listen under one directory, `/run/ferrix` (`FERRIX_RUN_DIR`

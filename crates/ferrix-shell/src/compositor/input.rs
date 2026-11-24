@@ -106,6 +106,24 @@ impl Shell {
         self.request_redraw();
     }
 
+    /// Pointer motion the shell keeps: dropped while the screen is off,
+    /// driving the power menu while it is open. Returns `true` when the
+    /// motion must not reach clients.
+    fn trusted_pointer_motion(&mut self, location: Point<f64, Logical>) -> bool {
+        if self.life.screen_off() {
+            return true;
+        }
+        if self.menu_open() {
+            let location = self.clamp(location);
+            self.pointer_location = location;
+            self.menu_motion((location.x, location.y));
+            self.request_redraw();
+            return true;
+        }
+        self.user_activity();
+        false
+    }
+
     /// Pointer movement while the pointer owns the home gesture: the cursor
     /// follows, the recogniser is fed, clients see nothing.
     fn gesture_pointer_motion(&mut self, location: Point<f64, Logical>) {
@@ -138,16 +156,35 @@ impl Shell {
                 );
             }
             InputEvent::DeviceRemoved { .. } => {
-                // The grabbed contact can never lift now; forget it.
+                // The grabbed contact (or a held power key) can never lift
+                // now; forget it.
                 self.cancel_gesture();
+                self.life.screen.cancel_key();
             }
             InputEvent::Keyboard { event } => {
+                let pressed = event.state() == KeyState::Pressed;
+                // The power key is a trusted system key: taken out before
+                // xkb or any client sees it, press and release alike.
+                if crate::power::is_power_key(event.key_code().raw()) {
+                    self.power_key(pressed);
+                    return;
+                }
+                // Screen off or power menu open: no key press reaches a
+                // client. Releases pass so no client is left with a stuck key.
+                if pressed && (self.life.screen_off() || self.menu_open()) {
+                    if self.life.screen_off() {
+                        self.input_dropped("key");
+                    }
+                    return;
+                }
+                if pressed {
+                    self.user_activity();
+                }
                 let Some(keyboard) = self.seat.get_keyboard() else {
                     return;
                 };
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = Event::time_msec(&event);
-                let pressed = event.state() == KeyState::Pressed;
                 let rotate = keyboard.input::<(), _>(
                     self,
                     event.key_code(),
@@ -169,6 +206,9 @@ impl Shell {
             InputEvent::PointerMotion { event } => {
                 let delta = event.delta();
                 let location = self.pointer_location + delta;
+                if self.trusted_pointer_motion(location) {
+                    return;
+                }
                 if self.gesture_source == Some(GestureSource::Pointer) {
                     self.gesture_pointer_motion(location);
                     return;
@@ -190,6 +230,9 @@ impl Shell {
             }
             InputEvent::PointerMotionAbsolute { event } => {
                 let location = self.absolute_position::<B, _>(&event);
+                if self.trusted_pointer_motion(location) {
+                    return;
+                }
                 if self.gesture_source == Some(GestureSource::Pointer) {
                     self.gesture_pointer_motion(location);
                     return;
@@ -200,6 +243,34 @@ impl Shell {
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };
+                let code = event.button_code();
+                let pressed = event.state() == ButtonState::Pressed;
+                if self.life.screen_off() {
+                    if pressed {
+                        self.input_dropped("pointer");
+                    }
+                    return;
+                }
+                if self.menu_open() {
+                    if event.button() == Some(MouseButton::Left) {
+                        let at = (self.pointer_location.x, self.pointer_location.y);
+                        if pressed {
+                            self.menu_press(at);
+                        } else {
+                            self.menu_release(at);
+                        }
+                    }
+                    return;
+                }
+                // A release whose press never reached a client (it went down
+                // while the screen was off or the menu was open) stays here.
+                if !pressed
+                    && self.gesture_source != Some(GestureSource::Pointer)
+                    && !self.life.button_is_live(code)
+                {
+                    return;
+                }
+                self.user_activity();
                 if event.button() == Some(MouseButton::Left) {
                     match event.state() {
                         ButtonState::Pressed => {
@@ -220,10 +291,15 @@ impl Shell {
                         ButtonState::Released => {}
                     }
                 }
+                if pressed {
+                    self.life.button_pressed(code);
+                } else {
+                    self.life.button_released(code);
+                }
                 pointer.button(
                     self,
                     &ButtonEvent {
-                        button: event.button_code(),
+                        button: code,
                         state: event.state(),
                         serial: SERIAL_COUNTER.next_serial(),
                         time: event.time_msec(),
@@ -235,6 +311,10 @@ impl Shell {
                 let Some(pointer) = self.seat.get_pointer() else {
                     return;
                 };
+                if self.life.screen_off() || self.menu_open() {
+                    return;
+                }
+                self.user_activity();
                 let source = event.source();
                 let horizontal = event.amount(Axis::Horizontal).unwrap_or_else(|| {
                     event.amount_v120(Axis::Horizontal).unwrap_or(0.0) * 15.0 / 120.0
@@ -271,9 +351,23 @@ impl Shell {
                     return;
                 };
                 let location = self.clamp(self.absolute_position::<B, _>(&event));
+                if self.life.screen_off() {
+                    self.input_dropped("touch");
+                    return;
+                }
+                if self.menu_open() {
+                    // One contact drives the menu; others are ignored.
+                    if self.life.menu_touch.is_none() {
+                        self.life.menu_touch = Some((event.slot(), (location.x, location.y)));
+                        self.menu_press((location.x, location.y));
+                    }
+                    return;
+                }
+                self.user_activity();
                 if self.try_grab_gesture(location, GestureSource::Touch(event.slot())) {
                     return;
                 }
+                self.life.touch_went_down(event.slot());
                 let under = self.surface_under(location);
                 touch.down(
                     self,
@@ -291,10 +385,27 @@ impl Shell {
                     return;
                 };
                 let location = self.clamp(self.absolute_position::<B, _>(&event));
+                if self.life.screen_off() {
+                    return;
+                }
+                if let Some((slot, at)) = self.life.menu_touch.as_mut() {
+                    if *slot == event.slot() {
+                        *at = (location.x, location.y);
+                        self.menu_motion((location.x, location.y));
+                    }
+                    return;
+                }
                 if self.gesture_source == Some(GestureSource::Touch(event.slot())) {
+                    self.user_activity();
                     self.gesture.update((location.x, location.y));
                     return;
                 }
+                // A contact that went down while the screen was off (or on
+                // the menu) never reached a client; neither does its motion.
+                if !self.life.touch_is_live(event.slot()) {
+                    return;
+                }
+                self.user_activity();
                 let under = self.surface_under(location);
                 touch.motion(
                     self,
@@ -310,10 +421,21 @@ impl Shell {
                 let Some(touch) = self.seat.get_touch() else {
                     return;
                 };
+                if let Some((slot, at)) = self.life.menu_touch
+                    && slot == event.slot()
+                {
+                    self.life.menu_touch = None;
+                    self.menu_release(at);
+                    return;
+                }
                 if self.gesture_source == Some(GestureSource::Touch(event.slot())) {
                     self.finish_gesture();
                     return;
                 }
+                if !self.life.touch_is_live(event.slot()) {
+                    return;
+                }
+                self.life.touch_lifted(event.slot());
                 touch.up(
                     self,
                     &UpEvent {
@@ -334,6 +456,7 @@ impl Shell {
                 if matches!(self.gesture_source, Some(GestureSource::Touch(_))) {
                     self.cancel_gesture();
                 }
+                self.life.touches_cancelled();
                 if let Some(touch) = self.seat.get_touch() {
                     touch.cancel(self);
                 }

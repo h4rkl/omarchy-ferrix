@@ -1,7 +1,9 @@
 //! Omarchy Ferrix's shared software-rendering toolkit for the reference surfaces.
 //!
-//! - [`draw`]: a thin `tiny-skia` + `fontdue` canvas with the embedded
-//!   JetBrains Mono faces.
+//! - [`draw`]: a thin `tiny-skia` canvas.
+//! - [`text`]: the shared text path: embedded IBM Plex Sans Condensed and
+//!   Plex Mono, Noto fallback from the guest fonts, `cosmic-text` shaping
+//!   and bidi, `swash` rasterisation.
 //! - [`theme`]: the Ferrix palette (black surfaces, amber type, rust accent)
 //!   and the `colors.toml` loader behind [`theme::get`].
 //! - [`osk`] and [`keymap`]: the touch keyboard geometry and the evdev keymap
@@ -35,6 +37,7 @@ pub mod icons;
 pub mod keyboard;
 pub mod keymap;
 pub mod osk;
+pub mod text;
 pub mod theme;
 pub mod widgets;
 

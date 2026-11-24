@@ -116,6 +116,8 @@ def main():
     swipe.add_argument("--height", type=int, required=True)
     key = action.add_parser("key")
     key.add_argument("key")
+    key.add_argument("--hold-ms", type=int, default=None,
+                     help="hold the key this long before release (QEMU send-key hold-time; default 100)")
     typed = action.add_parser("type", help="type ASCII text on the virtual keyboard; \\n sends Enter")
     typed.add_argument("text")
     action.add_parser("quit")
@@ -172,7 +174,15 @@ def main():
             {"type": "btn", "data": {"button": "left", "down": False}}
         ]})
     elif args.action == "key":
-        request(args.socket, "send-key", {"keys": [{"type": "qcode", "data": args.key}]})
+        arguments = {"keys": [{"type": "qcode", "data": args.key}]}
+        if args.hold_ms is not None:
+            if not 1 <= args.hold_ms <= 10000:
+                raise ValueError("--hold-ms must be 1..10000")
+            arguments["hold-time"] = args.hold_ms
+        request(args.socket, "send-key", arguments)
+        # send-key returns at once; QEMU releases the key after hold-time.
+        # Return only after the release so callers can sequence presses.
+        time.sleep((args.hold_ms if args.hold_ms is not None else 100) / 1000 + 0.05)
     elif args.action == "type":
         for keys in text_to_qcodes(args.text):
             request(args.socket, "send-key", {"keys": [{"type": "qcode", "data": key} for key in keys]})
