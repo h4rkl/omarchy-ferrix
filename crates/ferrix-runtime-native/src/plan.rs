@@ -37,12 +37,13 @@ pub struct NamespaceSet {
     pub mount: bool,
     pub ipc: bool,
     pub uts: bool,
+    pub net: bool,
     pub user: bool,
 }
 
 impl NamespaceSet {
     pub fn any(self) -> bool {
-        self.pid || self.mount || self.ipc || self.uts || self.user
+        self.pid || self.mount || self.ipc || self.uts || self.net || self.user
     }
 
     /// Names of the namespaces in `wanted` that are missing here.
@@ -59,6 +60,9 @@ impl NamespaceSet {
         }
         if wanted.uts && !self.uts {
             missing.push("uts");
+        }
+        if wanted.net && !self.net {
+            missing.push("net");
         }
         if wanted.user && !self.user {
             missing.push("user");
@@ -78,10 +82,16 @@ impl NamespaceSet {
             mount_namespace: self.mount,
             ipc_namespace: self.ipc,
             uts_namespace: self.uts,
+            net_namespace: self.net,
             user_namespace: self.user,
             private_tmp,
             no_new_privs,
             run_dir,
+            cgroup: Default::default(),
+            network: Default::default(),
+            fs_view: Default::default(),
+            seccomp: Default::default(),
+            identity: Default::default(),
         }
     }
 }
@@ -101,10 +111,14 @@ pub fn select_namespaces(policy: &IsolationPolicy, is_root: bool) -> NamespaceSe
         mount: policy.mount_namespace,
         ipc: policy.ipc_namespace,
         uts: policy.uts_namespace,
+        net: policy.net_namespace,
         // A user namespace on its own buys nothing for the application; it
-        // is only the key to the others (or explicitly demanded).
-        user: user
-            && (policy.requests_any_namespace() || policy.user_namespace == UserNamespace::Always),
+        // is only the key to the others (or explicitly demanded). A per-app
+        // uid always needs one: its map is what gives the subuid meaning.
+        user: policy.uid == crate::UidMode::PerApp
+            || (user
+                && (policy.requests_any_namespace()
+                    || policy.user_namespace == UserNamespace::Always)),
     }
 }
 
@@ -115,6 +129,9 @@ pub fn needs_sandbox(policy: &IsolationPolicy) -> bool {
         || policy.private_tmp
         || policy.no_new_privs
         || policy.run_dir.is_private()
+        || policy.resources.cgroup
+        || policy.fs_view.is_minimal()
+        || policy.seccomp.is_confined()
 }
 
 /// Serializes a policy for the `--policy` argument.
@@ -190,6 +207,10 @@ pub enum SandboxMode {
     Probe,
     /// Internal one-shot procfs mount helper for stage 2.
     MountProc,
+    /// Internal helper for a per-app uid: started by stage 1 before it
+    /// unshares, it writes stage 1's `uid_map`/`gid_map` (which needs the
+    /// parent namespace's `CAP_SETUID`) once told to on stdin.
+    MapIds,
 }
 
 /// Parsed `ferrix-sandbox` command line.
@@ -203,6 +224,8 @@ pub struct SandboxArgs {
     pub report: Option<String>,
     /// Stage 2 only: the namespaces stage 1 established.
     pub applied: Option<NamespaceSet>,
+    /// `--map-ids PID ID`: whose maps to write and the application's id.
+    pub map_ids: Option<(u32, u32)>,
     pub exec: Vec<String>,
 }
 
@@ -222,6 +245,7 @@ impl SandboxArgs {
             evidence: "QEMU".to_owned(),
             report: None,
             applied: None,
+            map_ids: None,
             exec: Vec::new(),
         };
         let mut it = args.into_iter().map(Into::into);
@@ -230,6 +254,17 @@ impl SandboxArgs {
                 "--init" => parsed.mode = SandboxMode::Init,
                 "--probe" => parsed.mode = SandboxMode::Probe,
                 "--mount-proc" => parsed.mode = SandboxMode::MountProc,
+                "--map-ids" => {
+                    let mut number = |what: &str| -> Result<u32, String> {
+                        it.next()
+                            .and_then(|v| v.parse().ok())
+                            .ok_or_else(|| format!("--map-ids needs {what}"))
+                    };
+                    let pid = number("a pid")?;
+                    let id = number("an id")?;
+                    parsed.mode = SandboxMode::MapIds;
+                    parsed.map_ids = Some((pid, id));
+                }
                 "--policy" => {
                     let text = it.next().ok_or("--policy needs JSON")?;
                     parsed.policy =
@@ -339,6 +374,19 @@ mod tests {
             })
         );
 
+        let map = SandboxArgs::parse(["--map-ids", "41", "1610612736"]).unwrap();
+        assert_eq!(map.mode, SandboxMode::MapIds);
+        assert_eq!(map.map_ids, Some((41, 1_610_612_736)));
+        assert!(SandboxArgs::parse(["--map-ids", "41"]).is_err());
+        assert!(SandboxArgs::parse(["--map-ids", "x", "1"]).is_err());
+
+        // A per-app uid always gets a user namespace, even for root.
+        let per_app = IsolationPolicy {
+            uid: crate::UidMode::PerApp,
+            ..IsolationPolicy::default()
+        };
+        assert!(select_namespaces(&per_app, true).user);
+
         assert!(SandboxArgs::parse(["--policy", "{"]).is_err());
         assert!(SandboxArgs::parse(["--app-id", "x.y"]).is_err(), "no exec");
         assert!(SandboxArgs::parse(["--bogus", "--", "true"]).is_err());
@@ -355,6 +403,7 @@ mod tests {
                 mount: true,
                 ipc: true,
                 uts: true,
+                net: true,
                 user: false
             }
         );
@@ -391,9 +440,10 @@ mod tests {
             mount: false,
             ipc: true,
             uts: true,
+            net: false,
             user: false,
         };
-        assert_eq!(got.missing_from(wanted), vec!["mount", "user"]);
+        assert_eq!(got.missing_from(wanted), vec!["mount", "net", "user"]);
         assert!(wanted.missing_from(wanted).is_empty());
         let applied = got.applied(false, true, RunDirOutcome::default());
         assert!(applied.pid_namespace && !applied.mount_namespace);

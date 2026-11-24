@@ -103,10 +103,35 @@ mod tests {
                     !capabilities.contains(&AppCapability::Shell),
                     "{id} must not be granted shell"
                 );
+                // Every other native app gets a loopback-only network
+                // namespace (issue #10); the Terminal is a user shell.
+                assert!(
+                    !capabilities.contains(&AppCapability::Network),
+                    "{id} must not be granted network"
+                );
             }
         }
         let terminal = AppId::new("org.ferrix.terminal").unwrap();
         assert!(policy.granted(&terminal).contains(&AppCapability::Shell));
+        assert!(policy.granted(&terminal).contains(&AppCapability::Network));
+        // The home folder is visible only to Files, the Terminal, Contacts
+        // (its export writes to ~/Documents) and Camera (stills go to
+        // ~/Pictures) until a document portal exists (#11); everyone else
+        // sees only its data directory.
+        for (id, capabilities) in &policy.grants {
+            let expected = matches!(
+                id.as_str(),
+                "org.ferrix.files"
+                    | "org.ferrix.terminal"
+                    | "org.ferrix.contacts"
+                    | "org.ferrix.camera"
+            );
+            assert_eq!(
+                capabilities.contains(&AppCapability::FilesHome),
+                expected,
+                "{id} files-home"
+            );
+        }
         let home = AppId::new("org.ferrix.home").unwrap();
         assert!(policy.granted(&home).contains(&AppCapability::CoreControl));
         assert!(

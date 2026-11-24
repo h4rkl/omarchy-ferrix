@@ -811,8 +811,8 @@ mod tests {
         let mut conn = Connection::default();
         hello(&service, &mut conn, ClientRole::Service);
 
-        // The repository grants give the Terminal `shell` and `background`,
-        // which its descriptor also declares.
+        // The repository grants give the Terminal `shell`, `background`,
+        // `network` and `files-home`, which its descriptor also declares.
         let Outcome::Reply(Reply::Identity { identity, .. }) =
             identify(&service, &mut conn, sandbox_pid)
         else {
@@ -824,7 +824,9 @@ mod tests {
             identity.granted,
             [
                 ferrix_app_api::AppCapability::Shell,
-                ferrix_app_api::AppCapability::Background
+                ferrix_app_api::AppCapability::Background,
+                ferrix_app_api::AppCapability::Network,
+                ferrix_app_api::AppCapability::FilesHome
             ]
             .into_iter()
             .collect()
@@ -844,7 +846,7 @@ mod tests {
         assert_eq!(identify_records.len(), 2, "{identify_records:?}");
         assert_eq!(identify_records[0]["pid"], sandbox_pid);
         assert_eq!(identify_records[0]["app"], "org.ferrix.terminal");
-        assert_eq!(identify_records[0]["granted_count"], 2);
+        assert_eq!(identify_records[0]["granted_count"], 4);
         assert_eq!(identify_records[1]["pid"], 4242);
         assert!(identify_records[1]["app"].is_null());
         assert_eq!(identify_records[1]["granted_count"], 0);

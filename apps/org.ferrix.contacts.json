@@ -10,7 +10,8 @@
   "launchable": true,
   "capabilities": [
     "contacts-read",
-    "contacts-write"
+    "contacts-write",
+    "files-home"
   ],
   "launch": {
     "exec": [
