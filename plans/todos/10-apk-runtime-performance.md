@@ -1,6 +1,6 @@
 # 10 — APK runtime performance
 
-Status: open · Issues: #19 (APK/browser path), #4 (Mali) · Authority:
+Status: open, deliverable 1 done 2026-11-24 (`just pixel-9a-apk-bench`, baseline in docs/status-log/2026-11.md) · Issues: #19 (APK/browser path), #4 (Mali) · Authority:
 ADR-008 (on `origin/pixel-9a-gpu` until spec 00 lands it) · Depends on: 00
 
 ## Goal

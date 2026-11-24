@@ -309,6 +309,13 @@ pixel-9a-boot-test:
 pixel-9a-dev-compose *args:
     @python3 "{{root}}/tools/pixel-9a/dev-compose.py" "$@"
 
+# Fixed APK benchmark on the attached Pixel 9a (Ferrix running, devtest
+# injector staged): launch-to-first-frame, scroll jank/percentiles, CPU, PSS.
+# Records land in ignored out/pixel-9a/bench/. Spec 10 deliverable 1.
+[group('devices')]
+pixel-9a-apk-bench label="":
+    @sh "{{root}}/tools/pixel-9a/devtest/apk-bench.sh" {{label}}
+
 # Offline contract for dev-compose's opt-in Android (Waydroid; the Browser is
 # LineageOS Jelly, built into the Android image) staging; on a host with
 # e2fsprogs it also stages into a scratch ext4 image.
