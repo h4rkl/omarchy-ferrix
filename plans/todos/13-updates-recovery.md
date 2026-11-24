@@ -1,7 +1,8 @@
 # 13 — Updates, rollback and user-data recovery
 
-Status: open, not started · Issue: #30 · Depends on: 00, 12 (encryption
-layout) · Feeds: 14
+Status: open, not started · ADR:
+[012](../../docs/adr/012-updates-rollback-and-data-layout.md) (proposed)
+· Issue: #30 · Depends on: 00, 12 (encryption layout) · Feeds: 14
 
 ## Goal
 

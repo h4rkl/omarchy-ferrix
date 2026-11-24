@@ -1,9 +1,11 @@
 # 11 — Product shell completeness
 
-Status: open · Issues: #12 (recents, gestures, chrome, supervision), #21
-(All apps drawer), #22 (notifications), #23 (global header/footer across
-native and Android), #14 (typography), #20 (icons; reconcile) · Depends
-on: 00 (the branch's Apps list and ADR-008 shell changes) · Read
+Status: open · ADR:
+[010](../../docs/adr/010-shell-chrome-and-geometry.md) (proposed) ·
+Issues: #12 (recents, gestures, chrome, supervision), #21 (All apps
+drawer), #22 (notifications), #23 (global header/footer across native
+and Android), #14 (typography), #20 (icons; reconcile) · Depends on: 00
+(the branch's Apps list and ADR-008 shell changes) · Read
 `plans/baseline.md` Phase 3 and `plan.md` before starting
 
 ## Goal

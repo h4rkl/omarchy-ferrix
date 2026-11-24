@@ -16,6 +16,9 @@ the boundary it creates, and what evidence may claim. Evidence is `QEMU` or
 | [007](007-fulguris-browser-input.md) | Fulguris browser APK input (supersedes the browser choice in ADR-005; superseded by ADR-008) |
 | [008](008-apks-as-ferrix-apps.md) | APKs as first-class Ferrix apps: per-task windows, one warm container, LineageOS apps (Jelly browser) |
 | [009](009-camera-contract-and-linux-boundary.md) | Camera contract, mock, camera socket, and the libcamera/PipeWire adapter boundary |
+| [010](010-shell-chrome-and-geometry.md) | Shell chrome, geometry contract and anti-spoofing (proposed) |
+| [011](011-lock-screen-threat-model-and-encryption.md) | Lock screen, threat model and at-rest encryption (proposed) |
+| [012](012-updates-rollback-and-data-layout.md) | Updates, rollback and the user-data layout (proposed) |
 
 ## Conventions shared by every new service (normative)
 
