@@ -9,7 +9,8 @@
   },
   "launchable": true,
   "capabilities": [
-    "camera"
+    "camera",
+    "files-home"
   ],
   "launch": {
     "exec": [

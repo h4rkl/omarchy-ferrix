@@ -1,6 +1,8 @@
 # 07 — Camera
 
-Status: open, not started · Issue: #3 · Depends on: 00 · Release: required
+Status: open; deliverable 3 Pixel research done (NO-GO:
+[`camera-source-evidence.md`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/camera-source-evidence.md))
+· Issue: #3 · Depends on: 00 · Release: required
 unless the owner narrows the release scope
 
 ## Goal

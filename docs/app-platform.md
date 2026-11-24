@@ -150,8 +150,12 @@ has zero effective capabilities**; a missing file is recorded
 Capability names (`AppCapability`, kebab-case on the wire): `core-state`,
 `core-control`, `shell`, `background`, `telephony-state`, `telephony-call`,
 `telephony-sms`, `telephony-data`, `telephony-radio`, `contacts-read`,
-`contacts-write`, `network-state`, `network-control`, `camera` (enumerate,
-preview, and stills over `camera.sock`; ADR-009). Read-only `*-state`
+`contacts-write`, `network-state`, `network-control`, `network` (sockets beyond
+the application's own loopback; without it the native sandbox gives the
+application a loopback-only network namespace), `files-home` (the user's home
+folder; without it the sandbox's minimal filesystem view shows only the
+application's data directory), `camera` (enumerate, preview, and stills over
+`camera.sock`; ADR-009). Read-only `*-state`
 grants and privileged `*-control`/
 `*-call`/`*-sms`/`*-write` grants are distinct so a state grant can never
 reach a control verb.
@@ -257,10 +261,23 @@ private `/proc` and `/tmp`, its own IPC and hostname namespaces, and cannot
 gain privileges; with `run_dir.mode = private-run` it can reach exactly the
 daemon sockets its grants imply, and every daemon additionally enforces
 capabilities per request after resolving the caller through `Identify`.
-What it does not provide yet: a different uid (every application runs as the
-launcher's uid), seccomp filters, cgroup resource limits, a network
-namespace, or a restricted view of the filesystem beyond `/proc`, `/tmp`, and
-the socket directory. With `mode: private` the rest of `/run` is unchanged,
+Since issue #10 (each part in `crates/ferrix-runtime-native/README.md`): a
+per-application cgroup under `ferrix.slice` with `memory.max` (OOM kills
+the whole application), `pids.max` and `cpu.weight`, whose path the runtime
+exposes for scheduling policy; a loopback-only network namespace unless the
+application holds `network`; a minimal root filesystem (read-only system
+directories and `/sys`, a minimal `/dev`, a writable per-application data
+directory in `FERRIX_APP_DATA_DIR`, and `$HOME` only with `files-home`); and
+a default-deny-dangerous seccomp filter (no `mount`, `unshare`, `setns`,
+`ptrace`, `bpf`, module or `kexec` calls, `chroot`, keyring, and more). An
+opt-in `uid: per-app` runs the application as its own subuid through the
+user namespace, with its data directory owned by that id.
+What it does not provide yet: a different uid by default (every checked-in
+application still runs as the launcher's uid: a per-app subuid cannot reach
+the root-owned Wayland and daemon sockets yet), capability dropping beyond
+`no_new_privs` and the seccomp filter, per-application network routing (an
+application with `network` shares the launcher's network), and cgroup
+freezing. With `mode: private` the rest of `/run` is unchanged,
 so the D-Bus system bus socket remains visible (though only the daemons
 speak D-Bus; applications have no grant that reaches ModemManager or
 NetworkManager directly); `mode: private-run` hides it. Every checked-in
@@ -269,17 +286,16 @@ only as a documented compatibility mode for manifests that deliberately need
 other `/run` facilities.
 
 Files (`org.ferrix.files`) depends on exactly that boundary. It talks to no
-platform daemon, so its descriptor declares no capabilities and
-`apps/grants.json` has no row for it (zero effective capabilities; its
-`private-run` view holds only `ferrix-appd.sock` for Back). The mount
-namespace replaces only `/proc`, `/tmp`, and `/run`, so the inherited `$HOME`
-stays the shared, durable home directory Files reads and writes (and where
-Contacts writes its vCard export). Keeping Files inside `$HOME` is the
-app's job, not the sandbox's: every folder path is canonicalized and must stay
-under the canonical home, entry names are single components, and symlinks that
-leave home are listed but never followed. A sandbox-enforced filesystem view
-(bind-mounting only `$HOME`) is future isolation work, not something this
-release provides.
+platform daemon; its only capability is `files-home` (its `private-run`
+view holds only `ferrix-appd.sock` for Back). The sandbox's minimal root
+binds `$HOME` read-write only for applications granted `files-home`: Files,
+the Terminal, and Contacts (whose vCard export writes to `~/Documents` until
+a document portal exists, #11). Every other application sees an empty,
+ephemeral stand-in at `$HOME` plus its own data directory. Within the
+exposed home, keeping Files inside `$HOME` remains the app's job as well:
+every folder path is canonicalized and must stay under the canonical home,
+entry names are single components, and symlinks that leave home are listed
+but never followed.
 
 ## Surface association and focus
 
@@ -439,9 +455,10 @@ evidence for this slice is recorded in `docs/status.md`.
 ## Remaining platform work
 
 Portals and user-facing permission prompts (grants are a checked-in policy,
-not a runtime consent flow), a different uid per application, seccomp, cgroup
-limits, a network namespace, a filesystem view restricted beyond `/proc`,
-`/tmp`, and the socket directory, authenticated (rather than bootstrap-trusted)
+not a runtime consent flow), a per-application uid by default (the opt-in
+`uid: per-app` needs socket permissions and an id-mapped home first),
+per-application network routing, a document portal narrower than
+`files-home`, authenticated (rather than bootstrap-trusted)
 compositor/tool/service endpoints, the Rust SDK beyond the launch environment
 constants, the TypeScript/web runtime, per-application logs, and any device
 target. The Android compatibility runtime is documented separately (ADR-005

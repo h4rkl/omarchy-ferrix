@@ -45,8 +45,8 @@ pub fn run_dir() -> PathBuf {
     }
 }
 
-/// The daemon socket a capability is served through, if any (`shell` and
-/// `background` need none).
+/// The daemon socket a capability is served through, if any (`shell`,
+/// `background`, `network` and `files-home` need none).
 pub fn socket_file_for(capability: AppCapability) -> Option<&'static str> {
     match capability {
         AppCapability::CoreState | AppCapability::CoreControl => Some(CORE_SOCKET_FILE),
@@ -58,7 +58,10 @@ pub fn socket_file_for(capability: AppCapability) -> Option<&'static str> {
         AppCapability::NetworkState | AppCapability::NetworkControl => Some(NETWORKD_SOCKET_FILE),
         AppCapability::ContactsRead | AppCapability::ContactsWrite => Some(CONTACTSD_SOCKET_FILE),
         AppCapability::Camera => Some(CAMERA_SOCKET_FILE),
-        AppCapability::Shell | AppCapability::Background => None,
+        AppCapability::Shell
+        | AppCapability::Background
+        | AppCapability::Network
+        | AppCapability::FilesHome => None,
     }
 }
 

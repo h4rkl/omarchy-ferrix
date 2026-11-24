@@ -10,7 +10,9 @@
   "launchable": true,
   "capabilities": [
     "shell",
-    "background"
+    "background",
+    "network",
+    "files-home"
   ],
   "launch": {
     "exec": [

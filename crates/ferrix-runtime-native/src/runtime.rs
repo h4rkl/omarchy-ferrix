@@ -5,7 +5,9 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
-use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind, TELEPHONY_APN_ENV};
+use ferrix_app_api::{
+    AppCapability, AppDescriptor, AppError, AppId, ExitReason, RuntimeKind, TELEPHONY_APN_ENV,
+};
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 
 #[cfg(not(target_os = "linux"))]
@@ -22,6 +24,9 @@ use crate::{
 pub const READY_TIMEOUT: Duration = Duration::from_secs(12);
 /// Polling interval for `terminate` and readiness waits.
 const POLL: Duration = Duration::from_millis(50);
+/// How long removing an instance's cgroup may wait for the kernel to finish
+/// tearing down its last processes.
+const CGROUP_REMOVE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Options for [`NativeRuntime`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -74,11 +79,14 @@ pub fn expected_isolation(policy: &IsolationPolicy) -> IsolationReport {
         } else {
             crate::RunDirOutcome::default()
         };
-        let applied = namespaces.applied(
+        let mut applied = namespaces.applied(
             policy.private_tmp && namespaces.mount,
             policy.no_new_privs,
             run_dir,
         );
+        if namespaces.mount {
+            applied.fs_view.mode = policy.fs_view.mode;
+        }
         IsolationReport {
             requested: policy.clone(),
             applied,
@@ -166,6 +174,9 @@ impl NativeRuntime {
             sandboxed: false,
             confirmed: false,
             finished: None,
+            cgroup: None,
+            cgroup_cleanup: None,
+            evidence: context.evidence.clone(),
         }))
     }
 
@@ -196,6 +207,12 @@ impl NativeRuntime {
             reason: format!("cannot start sandbox {}: {e}", bin.display()),
         })?;
 
+        // Stage 1 names its group after its own pid, which is this child's
+        // pid (stage 1 stays in the launcher's PID namespace), so the group
+        // is known, and removed after the exit, even without a report.
+        let cgroup_cleanup = launch.isolation.resources.cgroup.then(|| {
+            crate::app_cgroup_path(&crate::cgroup_slice(), &app.id.to_string(), child.id())
+        });
         let mut isolation = expected_isolation(&launch.isolation);
         let mut confirmed = false;
         let mut finished = None;
@@ -240,14 +257,26 @@ impl NativeRuntime {
                     Some("unverified: readiness channel could not be created".to_owned());
             }
         }
-        Ok(Box::new(NativeApp {
+        let cgroup = if confirmed {
+            isolation.applied.cgroup.path.as_ref().map(PathBuf::from)
+        } else {
+            cgroup_cleanup.clone().filter(|group| group.is_dir())
+        };
+        let mut running = NativeApp {
             id: app.id.clone(),
             child,
             isolation,
             sandboxed: true,
             confirmed,
-            finished,
-        }))
+            finished: None,
+            cgroup,
+            cgroup_cleanup,
+            evidence,
+        };
+        if let Some(finished) = finished {
+            running.finish(finished);
+        }
+        Ok(Box::new(running))
     }
 }
 
@@ -288,11 +317,31 @@ impl Runtime for NativeRuntime {
                 reason: "run_dir.mode private requires mount_namespace".to_owned(),
             });
         }
-        // Socket visibility follows the effective grants `ferrix_appd`
-        // computed, never a list written into the manifest.
+        if let Err(reason) = crate::seccomp::validate_allow(&launch.isolation.seccomp) {
+            return Err(AppError::InvalidDescriptor {
+                id: Some(app.id.clone()),
+                reason,
+            });
+        }
+        if launch.isolation.uid == crate::UidMode::PerApp {
+            per_app_uid_constraints(&launch.isolation, context).map_err(|reason| {
+                AppError::InvalidDescriptor {
+                    id: Some(app.id.clone()),
+                    reason,
+                }
+            })?;
+        }
+        if launch.isolation.fs_view.is_minimal() && !launch.isolation.mount_namespace {
+            return Err(AppError::InvalidDescriptor {
+                id: Some(app.id.clone()),
+                reason: "fs_view.mode minimal requires mount_namespace".to_owned(),
+            });
+        }
+        // Socket visibility and network access follow the effective grants
+        // `ferrix_appd` computed, never values written into the manifest.
         let launch = NativeLaunch {
             exec: launch.exec,
-            isolation: with_granted_sockets(launch.isolation, context),
+            isolation: with_grants(launch.isolation, context),
         };
         if !needs_sandbox(&launch.isolation) {
             return self.spawn_direct(app, &launch, context, "not requested");
@@ -314,20 +363,54 @@ impl Runtime for NativeRuntime {
     }
 }
 
-/// The policy the sandbox actually receives: with a private socket
-/// directory, the visible sockets are exactly those the effective grants
-/// imply ([`sockets_for_grants`]); under `inherit` the list is irrelevant and
-/// cleared so the record never suggests a filter that was not applied.
-pub fn with_granted_sockets(
-    mut policy: IsolationPolicy,
-    context: &LaunchContext,
-) -> IsolationPolicy {
+/// The policy the sandbox actually receives, derived from the effective
+/// grants rather than from manifest values:
+///
+/// - with a private socket directory, the visible sockets are exactly those
+///   the grants imply ([`sockets_for_grants`]); under `inherit` the list is
+///   irrelevant and cleared so the record never suggests a filter that was
+///   not applied;
+/// - a sandboxed application gets a loopback-only network namespace unless
+///   it holds `network`. A policy that requests no isolation at all (the
+///   explicit unsandboxed opt-out, [`IsolationPolicy::none`]) is left alone;
+/// - in a minimal filesystem view the home folder is bound only with
+///   `files-home`.
+pub fn with_grants(mut policy: IsolationPolicy, context: &LaunchContext) -> IsolationPolicy {
     policy.run_dir.sockets = if policy.run_dir.is_private() {
         sockets_for_grants(&context.granted)
     } else {
         Vec::new()
     };
+    if needs_sandbox(&policy) {
+        policy.net_namespace = !context.granted.contains(&AppCapability::Network);
+    }
+    policy.fs_view.home =
+        policy.fs_view.is_minimal() && context.granted.contains(&AppCapability::FilesHome);
     policy
+}
+
+/// What a per-application uid needs today: the minimal filesystem view (the
+/// subuid can traverse only the view's own directories to its data
+/// directory), `no_new_privs` (the namespace maps root, which a set-uid
+/// binary must never reach), and no `files-home` (the home folder belongs
+/// to the session user; exposing it needs an id-mapped mount).
+pub fn per_app_uid_constraints(
+    policy: &IsolationPolicy,
+    context: &LaunchContext,
+) -> Result<(), String> {
+    if !policy.fs_view.is_minimal() {
+        return Err("uid per-app requires fs_view.mode minimal".to_owned());
+    }
+    if !policy.no_new_privs {
+        return Err("uid per-app requires no_new_privs".to_owned());
+    }
+    if context.granted.contains(&AppCapability::FilesHome) {
+        return Err(
+            "uid per-app cannot be combined with files-home yet (needs an id-mapped home)"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 /// Spawns with the launch environment, its own process group, and inherited
@@ -391,6 +474,12 @@ struct NativeApp {
     /// 126 belongs to the application, not to the sandbox.
     confirmed: bool,
     finished: Option<Result<ExitReason, AppError>>,
+    /// The instance's cgroup as reported by the sandbox (exposed through
+    /// [`RunningApp::cgroup_path`]).
+    cgroup: Option<PathBuf>,
+    /// The group to remove once the supervisor has been reaped.
+    cgroup_cleanup: Option<PathBuf>,
+    evidence: String,
 }
 
 impl NativeApp {
@@ -409,8 +498,25 @@ impl NativeApp {
 
     fn record(&mut self, status: ExitStatus) -> Result<ExitReason, AppError> {
         let result = self.classify(status);
-        self.finished = Some(result.clone());
+        self.finish(result.clone());
         result
+    }
+
+    /// Stores the final result and removes the instance's cgroup: every
+    /// process in it is gone once stage 1 has been reaped (stage 2 dies with
+    /// it, and with stage 2 the whole PID namespace).
+    fn finish(&mut self, result: Result<ExitReason, AppError>) {
+        self.finished = Some(result);
+        self.cgroup = None;
+        if let Some(group) = self.cgroup_cleanup.take()
+            && let Err(error) = crate::cgroup::remove_app_cgroup(&group, CGROUP_REMOVE_TIMEOUT)
+        {
+            crate::emit(&crate::record(
+                &self.evidence,
+                "sandbox-cgroup-cleanup-failed",
+                serde_json::json!({ "app": self.id.to_string(), "error": error }),
+            ));
+        }
     }
 
     fn signal(&self, signal: i32) {
@@ -435,6 +541,10 @@ impl NativeApp {
 impl RunningApp for NativeApp {
     fn pid(&self) -> Option<u32> {
         Some(self.child.id())
+    }
+
+    fn cgroup_path(&self) -> Option<PathBuf> {
+        self.cgroup.clone()
     }
 
     fn diagnostics(&self) -> serde_json::Value {
@@ -533,23 +643,134 @@ mod tests {
             },
             ..IsolationPolicy::default()
         };
-        let none = with_granted_sockets(manifest.clone(), &context());
+        let none = with_grants(manifest.clone(), &context());
         assert_eq!(none.run_dir.sockets, ["ferrix-appd.sock"]);
 
         let mut granted = context();
         granted.granted = [AppCapability::NetworkState, AppCapability::CoreState]
             .into_iter()
             .collect();
-        let some = with_granted_sockets(manifest, &granted);
+        let some = with_grants(manifest, &granted);
         assert_eq!(
             some.run_dir.sockets,
             ["ferrix-appd.sock", "core.sock", "networkd.sock"]
         );
 
         // Inherit: nothing is filtered, so nothing is listed.
-        let inherit = with_granted_sockets(IsolationPolicy::default(), &granted);
+        let inherit = with_grants(IsolationPolicy::default(), &granted);
         assert!(inherit.run_dir.sockets.is_empty());
         assert_eq!(inherit.run_dir.mode, RunDirMode::Inherit);
+    }
+
+    #[test]
+    fn network_namespace_follows_the_network_grant_and_cannot_be_widened() {
+        use ferrix_app_api::AppCapability;
+        // A manifest trying to keep the host network without the grant.
+        let manifest = IsolationPolicy {
+            net_namespace: false,
+            ..IsolationPolicy::default()
+        };
+        assert!(with_grants(manifest.clone(), &context()).net_namespace);
+
+        let mut granted = context();
+        granted.granted = [AppCapability::Network].into_iter().collect();
+        assert!(!with_grants(IsolationPolicy::default(), &granted).net_namespace);
+        assert!(!with_grants(manifest, &granted).net_namespace);
+        // `network-state`/`network-control` reach networkd, not the network.
+        granted.granted = [AppCapability::NetworkState, AppCapability::NetworkControl]
+            .into_iter()
+            .collect();
+        assert!(with_grants(IsolationPolicy::default(), &granted).net_namespace);
+
+        // The explicit unsandboxed opt-out stays unsandboxed.
+        let none = with_grants(IsolationPolicy::none(), &context());
+        assert!(!none.net_namespace && !needs_sandbox(&none));
+    }
+
+    #[test]
+    fn home_folder_follows_the_files_home_grant_and_cannot_be_widened() {
+        use crate::FsViewPolicy;
+        use ferrix_app_api::AppCapability;
+        let manifest = IsolationPolicy {
+            fs_view: FsViewPolicy {
+                home: true,
+                ..FsViewPolicy::default()
+            },
+            ..IsolationPolicy::default()
+        };
+        assert!(!with_grants(manifest.clone(), &context()).fs_view.home);
+        let mut files = context();
+        files.granted = [AppCapability::FilesHome].into_iter().collect();
+        assert!(with_grants(manifest, &files).fs_view.home);
+        // Inherit already shows everything; nothing extra is bound.
+        let inherit = IsolationPolicy {
+            fs_view: FsViewPolicy::inherit(),
+            ..IsolationPolicy::default()
+        };
+        assert!(!with_grants(inherit, &files).fs_view.home);
+    }
+
+    #[test]
+    fn an_unknown_seccomp_relaxation_is_an_invalid_descriptor() {
+        let app = descriptor();
+        let policy = IsolationPolicy {
+            seccomp: crate::SeccompPolicy {
+                allow: vec!["not_a_syscall".to_owned()],
+                ..crate::SeccompPolicy::default()
+            },
+            ..IsolationPolicy::default()
+        };
+        let config = launch_value(&["sh", "-c", "exit 0"], policy);
+        assert!(matches!(
+            runtime().launch(&app, &config, &context()),
+            Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("not_a_syscall")
+        ));
+    }
+
+    #[test]
+    fn per_app_uid_needs_the_minimal_view_no_new_privs_and_no_home() {
+        use crate::{FsViewPolicy, UidMode};
+        use ferrix_app_api::AppCapability;
+        let per_app = IsolationPolicy {
+            uid: UidMode::PerApp,
+            ..IsolationPolicy::default()
+        };
+        assert!(per_app_uid_constraints(&per_app, &context()).is_ok());
+        let inherit = IsolationPolicy {
+            fs_view: FsViewPolicy::inherit(),
+            ..per_app.clone()
+        };
+        assert!(per_app_uid_constraints(&inherit, &context()).is_err());
+        let privs = IsolationPolicy {
+            no_new_privs: false,
+            ..per_app.clone()
+        };
+        assert!(per_app_uid_constraints(&privs, &context()).is_err());
+        let mut files = context();
+        files.granted = [AppCapability::FilesHome].into_iter().collect();
+        assert!(per_app_uid_constraints(&per_app, &files).is_err());
+
+        let app = descriptor();
+        let config = launch_value(&["sh", "-c", "exit 0"], inherit);
+        assert!(matches!(
+            runtime().launch(&app, &config, &context()),
+            Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("per-app")
+        ));
+    }
+
+    #[test]
+    fn minimal_filesystem_view_requires_the_mount_namespace() {
+        let app = descriptor();
+        let policy = IsolationPolicy {
+            mount_namespace: false,
+            private_tmp: false,
+            ..IsolationPolicy::default()
+        };
+        let config = launch_value(&["sh", "-c", "exit 0"], policy);
+        assert!(matches!(
+            runtime().launch(&app, &config, &context()),
+            Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("fs_view")
+        ));
     }
 
     #[test]

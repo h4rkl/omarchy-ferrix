@@ -35,6 +35,11 @@ pub const APP_ID_ENV: &str = "FERRIX_APP_ID";
 pub const APP_INSTANCE_ENV: &str = "FERRIX_APP_INSTANCE";
 /// Environment variable carrying the path of the `ferrix_appd` socket.
 pub const APPD_SOCKET_ENV: &str = "FERRIX_APPD_SOCKET";
+/// Environment variable carrying the application's private, persistent data
+/// directory (`$XDG_DATA_HOME/ferrix/<app-id>`, else
+/// `$HOME/.local/share/ferrix/<app-id>`), set by the native runtime. It is
+/// writable and visible inside the sandbox's minimal filesystem view.
+pub const APP_DATA_DIR_ENV: &str = "FERRIX_APP_DATA_DIR";
 /// Optional non-secret carrier APN passed only to applications granted
 /// `telephony-data`. The application service never records this value.
 pub const TELEPHONY_APN_ENV: &str = "FERRIX_TELEPHONY_APN";
@@ -239,13 +244,22 @@ pub enum AppCapability {
     NetworkState,
     /// Control radios, scan, and manage connections and profiles.
     NetworkControl,
+    /// Open sockets beyond the application's own loopback (internet and
+    /// local network). Without it the native sandbox gives the application
+    /// a network namespace holding only `lo`. Distinct from `network-state`
+    /// and `network-control`, which reach `ferrix-networkd`, not the network.
+    Network,
+    /// Read and write the user's home folder (documents, downloads). Without
+    /// it the native sandbox's minimal filesystem view shows the application
+    /// only its own data directory ([`APP_DATA_DIR_ENV`]).
+    FilesHome,
     /// Enumerate cameras, stream a preview, and take stills (ADR-009).
     Camera,
 }
 
 impl AppCapability {
     /// Every capability, in declaration order.
-    pub const ALL: [AppCapability; 14] = [
+    pub const ALL: [AppCapability; 16] = [
         AppCapability::CoreState,
         AppCapability::CoreControl,
         AppCapability::Shell,
@@ -259,6 +273,8 @@ impl AppCapability {
         AppCapability::ContactsWrite,
         AppCapability::NetworkState,
         AppCapability::NetworkControl,
+        AppCapability::Network,
+        AppCapability::FilesHome,
         AppCapability::Camera,
     ];
 
@@ -278,6 +294,8 @@ impl AppCapability {
             AppCapability::ContactsWrite => "contacts-write",
             AppCapability::NetworkState => "network-state",
             AppCapability::NetworkControl => "network-control",
+            AppCapability::Network => "network",
+            AppCapability::FilesHome => "files-home",
             AppCapability::Camera => "camera",
         }
     }
@@ -1199,6 +1217,8 @@ mod tests {
             "contacts-write",
             "network-state",
             "network-control",
+            "network",
+            "files-home",
             "camera",
         ];
         assert_eq!(AppCapability::ALL.len(), expected.len());

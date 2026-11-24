@@ -121,6 +121,20 @@ See also [`docs/pixel-9a-bt-wpa3-research.md`](../../../docs/pixel-9a-bt-wpa3-re
 | This README, [S5300 source partition inventory](#s5300-source-partition-inventory-issue-34) to [NV metadata preflight](#s5300-nv-metadata-preflight-issue-79) | Partition inventory, E1 inventory, service integration pointer, source mount proof and NV metadata workflows | live |
 | [`pmos/README.md#s5300-native-linux-package-boundary`](pmos/README.md#s5300-native-linux-package-boundary) | S5300 package boundary | live |
 
+### Sensors, power and thermal, camera, location, NFC and fingerprint
+
+These are read-only feasibility records (physical inventory plus offline
+source). Each ends in a GO/NO-GO decision. None of them changes
+`capabilities.toml`.
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`sensors-source-evidence.md`](sensors-source-evidence.md) | Spec 04.5: accelerometer, proximity and ALS sit behind the AoC sensor hub, with no IIO device. NO-GO for each. | reference |
+| [`power-thermal-source-evidence.md`](power-thermal-source-evidence.md) | Spec 05.1: `power_supply`, thermal zones, cooling devices and owners, compared with the stock thermal HAL. GO-with-conditions for attended sessions, NO-GO unattended. | reference |
+| [`camera-source-evidence.md`](camera-source-evidence.md) | Spec 07.3: LWIS-only CSIS/ISP, no V4L2 capture. NO-GO. | reference |
+| [`gnss-source-evidence.md`](gnss-source-evidence.md) | Spec 08.1: Samsung KEPLER over SPI plus CPIF boot, BETP and closed `gnssd`. NO-GO. | reference |
+| [`nfc-fingerprint-source-evidence.md`](nfc-fingerprint-source-evidence.md) | Spec 09: ST54L NFC (GO-with-conditions, kernel spike only) and Goodix UDFPS in Trusty (NO-GO) | reference |
+
 ### Firmware
 
 | Document | Purpose | Status |

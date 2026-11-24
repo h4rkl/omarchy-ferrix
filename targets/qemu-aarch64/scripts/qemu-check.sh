@@ -4,7 +4,9 @@
 #   1. boot the generic AArch64 virt guest with serial captured to a file;
 #   2. wait for the persistent ferrix-core's `boot-health` record and the
 #      init-emitted QEMU `boot-health` that follows it (no fallbacks exist),
-#      then for `telephonyd-ready` and `networkd-ready` (ADR-006; the mock
+#      then for init's `sandbox-selftest` record with status ok (issue #10:
+#      forbidden path, forbidden syscalls, no network without the grant,
+#      pids/memory limits, per-app uid), then for `telephonyd-ready` and `networkd-ready` (ADR-006; the mock
 #      telephony/network daemons; FERRIX_QEMU_REQUIRE_SERVICES=0 skips these);
 #   3. assert the mock is still *unplugged*, then send the unplugged->charging
 #      command over the REAL host->guest mock-control channel;
@@ -66,6 +68,10 @@ qemu_pid=$!
 # QEMU-labelled one, which init may only emit after the core reported.
 wait_for '"evidence":"mock","event":"boot-health","status":"ok"' core-boot-health
 wait_for '"evidence":"QEMU","event":"boot-health","status":"ok"' guest-boot-health
+# Issue #10: init's sandbox negative proof (sandbox-selftest.sh) runs before
+# the services; every check must report ok.
+wait_for '"evidence":"QEMU","event":"sandbox-selftest","status":"' sandbox-selftest
+grep -q '"evidence":"QEMU","event":"sandbox-selftest","status":"ok"' "$log" || fail sandbox-selftest-failed
 wait_for '"event":"mock-control","status":"ready"' mock-control-ready
 # ADR-006: the telephony and network daemons run with mock backends in the
 # smoke guest and must report ready. FERRIX_QEMU_REQUIRE_SERVICES=0 turns the
@@ -113,4 +119,4 @@ status=0
 wait "$qemu_pid" || status=$?
 cat "$log"
 [ "$status" -eq 0 ] || fail "qemu-exit-$status"
-printf '{"evidence":"QEMU","event":"check-passed","transition":"unplugged-to-charging","channel":"virtio-serial ferrix.control","services":"%s","seconds":%s}\n' "$services" "$((tick / 10))"
+printf '{"evidence":"QEMU","event":"check-passed","transition":"unplugged-to-charging","channel":"virtio-serial ferrix.control","services":"%s","sandbox_selftest":"ok","seconds":%s}\n' "$services" "$((tick / 10))"
