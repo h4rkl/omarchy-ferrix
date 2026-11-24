@@ -37,12 +37,13 @@ pub struct NamespaceSet {
     pub mount: bool,
     pub ipc: bool,
     pub uts: bool,
+    pub net: bool,
     pub user: bool,
 }
 
 impl NamespaceSet {
     pub fn any(self) -> bool {
-        self.pid || self.mount || self.ipc || self.uts || self.user
+        self.pid || self.mount || self.ipc || self.uts || self.net || self.user
     }
 
     /// Names of the namespaces in `wanted` that are missing here.
@@ -59,6 +60,9 @@ impl NamespaceSet {
         }
         if wanted.uts && !self.uts {
             missing.push("uts");
+        }
+        if wanted.net && !self.net {
+            missing.push("net");
         }
         if wanted.user && !self.user {
             missing.push("user");
@@ -78,11 +82,13 @@ impl NamespaceSet {
             mount_namespace: self.mount,
             ipc_namespace: self.ipc,
             uts_namespace: self.uts,
+            net_namespace: self.net,
             user_namespace: self.user,
             private_tmp,
             no_new_privs,
             run_dir,
             cgroup: Default::default(),
+            network: Default::default(),
         }
     }
 }
@@ -102,6 +108,7 @@ pub fn select_namespaces(policy: &IsolationPolicy, is_root: bool) -> NamespaceSe
         mount: policy.mount_namespace,
         ipc: policy.ipc_namespace,
         uts: policy.uts_namespace,
+        net: policy.net_namespace,
         // A user namespace on its own buys nothing for the application; it
         // is only the key to the others (or explicitly demanded).
         user: user
@@ -357,6 +364,7 @@ mod tests {
                 mount: true,
                 ipc: true,
                 uts: true,
+                net: true,
                 user: false
             }
         );
@@ -393,9 +401,10 @@ mod tests {
             mount: false,
             ipc: true,
             uts: true,
+            net: false,
             user: false,
         };
-        assert_eq!(got.missing_from(wanted), vec!["mount", "user"]);
+        assert_eq!(got.missing_from(wanted), vec!["mount", "net", "user"]);
         assert!(wanted.missing_from(wanted).is_empty());
         let applied = got.applied(false, true, RunDirOutcome::default());
         assert!(applied.pid_namespace && !applied.mount_namespace);

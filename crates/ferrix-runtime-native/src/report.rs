@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    AppliedIsolation, CgroupOutcome, IsolationPolicy, IsolationReport, NamespaceSet, RunDirOutcome,
+    AppliedIsolation, CgroupOutcome, IsolationPolicy, IsolationReport, NamespaceSet,
+    NetworkOutcome, RunDirOutcome,
 };
 
 /// Builds one record: `evidence` first, then `event`, then the fields.
@@ -52,6 +53,8 @@ pub struct SandboxReady {
     /// The application's cgroup: `{path, memory_max, pids_max, cpu_weight}`
     /// (`{}` when none was created).
     pub cgroup: CgroupOutcome,
+    /// Inside a private network namespace: `{interfaces, loopback_up}`.
+    pub network: NetworkOutcome,
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -61,6 +64,7 @@ impl SandboxReady {
     pub fn applied(&self) -> AppliedIsolation {
         AppliedIsolation {
             cgroup: self.cgroup.clone(),
+            network: self.network.clone(),
             ..self
                 .namespaces
                 .applied(self.private_tmp, self.no_new_privs, self.run_dir.clone())
@@ -155,11 +159,13 @@ pub fn skipped_record(evidence: &str, reason: &str) -> Value {
     )
 }
 
-/// Line-oriented readiness reports over an abstract Unix socket. Abstract
-/// names live in the network namespace, which the sandbox does not change,
-/// so both stages and the runtime can reach each other without touching the
+/// Line-oriented readiness reports over an abstract Unix socket, so both
+/// stages and the runtime can reach each other without touching the
 /// filesystem (which the mount namespace and private `/tmp` would change) or
-/// the application's stdio.
+/// the application's stdio. Abstract names belong to a network namespace:
+/// stage 2 shares stage 1's (both are inside the private one), and stage 1
+/// reaches the runtime's listener through a [`ReportSender`] connected
+/// before it unshares.
 #[cfg(target_os = "linux")]
 pub mod channel {
     use std::io::{self, Read as _, Write as _};
@@ -184,6 +190,16 @@ pub mod channel {
         listener: UnixListener,
     }
 
+    /// The accepted report connection while its line is still arriving.
+    /// A sender may connect long before it writes ([`ReportSender`]).
+    enum Pending {
+        Waiting,
+        Reading(UnixStream, Vec<u8>),
+        /// The sender closed without writing anything (it failed before
+        /// readiness); only the child's exit can end the wait now.
+        Closed,
+    }
+
     impl ReportListener {
         /// Binds a fresh abstract name derived from `prefix`.
         pub fn bind(prefix: &str) -> io::Result<Self> {
@@ -202,17 +218,39 @@ pub mod channel {
             &self.name
         }
 
-        fn try_accept_line(&self) -> io::Result<Option<String>> {
-            match self.listener.accept() {
-                Ok((mut stream, _)) => {
-                    stream.set_nonblocking(false)?;
-                    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-                    let mut text = String::new();
-                    stream.read_to_string(&mut text)?;
-                    Ok(Some(text.trim().to_owned()))
+        /// Accepts the connection and reads whatever has arrived, without
+        /// blocking; `Some` once the sender has closed after a line.
+        fn poll_line(&self, pending: &mut Pending) -> io::Result<Option<String>> {
+            if let Pending::Waiting = pending {
+                match self.listener.accept() {
+                    Ok((stream, _)) => {
+                        stream.set_nonblocking(true)?;
+                        *pending = Pending::Reading(stream, Vec::new());
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                    Err(e) => return Err(e),
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
-                Err(e) => Err(e),
+            }
+            let Pending::Reading(stream, buffer) = pending else {
+                return Ok(None);
+            };
+            let mut chunk = [0u8; 4096];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) if buffer.is_empty() => {
+                        *pending = Pending::Closed;
+                        return Ok(None);
+                    }
+                    Ok(0) => {
+                        let line = String::from_utf8_lossy(buffer).trim().to_owned();
+                        *pending = Pending::Closed;
+                        return Ok(Some(line));
+                    }
+                    Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e),
+                }
             }
         }
 
@@ -227,16 +265,17 @@ pub mod channel {
             on_tick: &mut dyn FnMut(),
         ) -> Result<String, WaitOutcome> {
             let deadline = Instant::now() + timeout;
+            let mut pending = Pending::Waiting;
             loop {
                 on_tick();
-                match self.try_accept_line() {
+                match self.poll_line(&mut pending) {
                     Ok(Some(line)) => return Ok(line),
                     Ok(None) => {}
                     Err(e) => return Err(WaitOutcome::Io(e.to_string())),
                 }
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        return match self.try_accept_line() {
+                        return match self.poll_line(&mut pending) {
                             Ok(Some(line)) => Ok(line),
                             _ => Err(WaitOutcome::ChildExited(status)),
                         };
@@ -252,14 +291,32 @@ pub mod channel {
         }
     }
 
+    /// A connection to a [`ReportListener`], opened before the line is
+    /// known. Abstract socket names belong to a network namespace: stage 1
+    /// connects to the runtime's listener **before** it unshares a private
+    /// network namespace and writes the readiness line afterwards over the
+    /// already-connected stream.
+    pub struct ReportSender(UnixStream);
+
+    impl ReportSender {
+        pub fn connect(name: &str) -> io::Result<Self> {
+            let addr = SocketAddr::from_abstract_name(name.as_bytes())?;
+            let stream = UnixStream::connect_addr(&addr)?;
+            stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+            Ok(Self(stream))
+        }
+
+        /// Writes the line and closes the connection.
+        pub fn send(mut self, line: &str) -> io::Result<()> {
+            self.0.write_all(line.as_bytes())?;
+            self.0.write_all(b"\n")?;
+            self.0.shutdown(Shutdown::Write)
+        }
+    }
+
     /// Sends one report line to the abstract socket `name` and closes.
     pub fn send_line(name: &str, line: &str) -> io::Result<()> {
-        let addr = SocketAddr::from_abstract_name(name.as_bytes())?;
-        let mut stream = UnixStream::connect_addr(&addr)?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        stream.write_all(line.as_bytes())?;
-        stream.write_all(b"\n")?;
-        stream.shutdown(Shutdown::Write)
+        ReportSender::connect(name)?.send(line)
     }
 }
 
@@ -328,6 +385,7 @@ mod tests {
                 mount: true,
                 ipc: true,
                 uts: true,
+                net: true,
                 user: false,
             },
             private_tmp: true,
@@ -342,6 +400,10 @@ mod tests {
                 memory_max: Some(1 << 30),
                 pids_max: Some(1024),
                 cpu_weight: Some(100),
+            },
+            network: NetworkOutcome {
+                interfaces: vec!["lo".to_owned()],
+                loopback_up: true,
             },
             degraded: false,
             reason: None,
@@ -364,6 +426,11 @@ mod tests {
         assert!(report.applied.mount_namespace && report.applied.private_tmp);
         assert_eq!(report.applied.run_dir, ready.run_dir);
         assert_eq!(report.applied.cgroup, ready.cgroup);
+        assert!(report.applied.net_namespace && report.applied.network.loopback_up);
+        assert!(
+            text.contains(r#""network":{"interfaces":["lo"],"loopback_up":true}"#),
+            "{text}"
+        );
         assert_eq!(report.requested, IsolationPolicy::default());
 
         // A report from a sandbox without the field reads as `inherit`.

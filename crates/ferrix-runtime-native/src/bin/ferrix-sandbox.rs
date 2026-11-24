@@ -85,12 +85,12 @@ mod linux {
 
     use ferrix_app_api::ExitReason;
     use ferrix_runtime_native::cgroup::{join_cgroup, remove_app_cgroup, setup_app_cgroup};
-    use ferrix_runtime_native::channel::{ReportListener, WaitOutcome, send_line};
+    use ferrix_runtime_native::channel::{ReportListener, ReportSender, WaitOutcome, send_line};
     use ferrix_runtime_native::{
         AppliedIsolation, EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport,
-        IsolationMode, IsolationPolicy, NamespaceSet, ProbeReport, RUN_ROOT, RunDirMode,
-        RunDirOutcome, RunDirPolicy, SANDBOX_INTERNAL_STATUS, SandboxArgs, SandboxReady,
-        USER_RUN_DIR, UserNamespace, emit, is_valid_socket_name, record, run_dir,
+        IsolationMode, IsolationPolicy, NamespaceSet, NetworkOutcome, ProbeReport, RUN_ROOT,
+        RunDirMode, RunDirOutcome, RunDirPolicy, SANDBOX_INTERNAL_STATUS, SandboxArgs,
+        SandboxReady, USER_RUN_DIR, UserNamespace, emit, is_valid_socket_name, record, run_dir,
         select_namespaces, shell_status_of,
     };
     use ferrix_runtime_native::{CgroupError, CgroupOutcome, app_cgroup_name, cgroup_slice};
@@ -137,6 +137,7 @@ mod linux {
         mnt: Option<PathBuf>,
         ipc: Option<PathBuf>,
         uts: Option<PathBuf>,
+        net: Option<PathBuf>,
         user: Option<PathBuf>,
     }
 
@@ -148,6 +149,7 @@ mod linux {
                 mnt: link("mnt"),
                 ipc: link("ipc"),
                 uts: link("uts"),
+                net: link("net"),
                 user: link("user"),
             }
         }
@@ -159,6 +161,7 @@ mod linux {
                 mount: link_differs(&self.mnt, &before.mnt),
                 ipc: link_differs(&self.ipc, &before.ipc),
                 uts: link_differs(&self.uts, &before.uts),
+                net: link_differs(&self.net, &before.net),
                 user: link_differs(&self.user, &before.user),
             }
         }
@@ -224,6 +227,9 @@ mod linux {
         if wanted.uts {
             flags |= UnshareFlags::NEWUTS;
         }
+        if wanted.net {
+            flags |= UnshareFlags::NEWNET;
+        }
         flags
     }
 
@@ -231,19 +237,23 @@ mod linux {
     /// note for anything dropped. `CONFIG_IPC_NS` exists only with SysV IPC or
     /// POSIX mqueue; a kernel without it (Android GKI) has no IPC objects to
     /// share, and asking for `CLONE_NEWIPC` fails the whole unshare (EINVAL).
+    /// A kernel without `CONFIG_NET_NS` likewise cannot give the application
+    /// a loopback-only view; that is reported, never hidden.
     fn kernel_namespaces(
         policy: &IsolationPolicy,
         is_root: bool,
-    ) -> (NamespaceSet, Option<&'static str>) {
+    ) -> (NamespaceSet, Vec<&'static str>) {
         let mut wanted = select_namespaces(policy, is_root);
+        let mut notes = Vec::new();
         if wanted.ipc && !Path::new("/proc/self/ns/ipc").exists() {
             wanted.ipc = false;
-            return (
-                wanted,
-                Some("kernel has no IPC namespace (no SysV IPC or POSIX mqueue to isolate)"),
-            );
+            notes.push("kernel has no IPC namespace (no SysV IPC or POSIX mqueue to isolate)");
         }
-        (wanted, None)
+        if wanted.net && !Path::new("/proc/self/ns/net").exists() {
+            wanted.net = false;
+            notes.push("kernel has no network namespace (CONFIG_NET_NS): network not isolated");
+        }
+        (wanted, notes)
     }
 
     /// Outcome of the namespace step.
@@ -263,8 +273,8 @@ mod linux {
     /// gets one retry with a user namespace.
     fn unshare_for(policy: &IsolationPolicy) -> Result<Unshared, (NamespaceSet, String)> {
         let identity = Identity::current();
-        let (mut wanted, kernel_note) = kernel_namespaces(policy, identity.uid == 0);
-        let mut notes: Vec<String> = kernel_note.into_iter().map(str::to_owned).collect();
+        let (mut wanted, kernel_notes) = kernel_namespaces(policy, identity.uid == 0);
+        let mut notes: Vec<String> = kernel_notes.into_iter().map(str::to_owned).collect();
         let before = NsLinks::read();
         if !wanted.any() {
             return Ok(Unshared {
@@ -358,6 +368,107 @@ mod linux {
         }
     }
 
+    /// Brings `lo` up in the fresh network namespace (it starts down) with
+    /// one rtnetlink `RTM_NEWLINK` request and checks the kernel's ack.
+    ///
+    /// Hand-rolled on purpose: the request is a fixed 32-byte message
+    /// (`nlmsghdr` + `ifinfomsg`), the safe alternatives are spawning `ip`
+    /// (a host tool the guest may lack) or a netlink crate stack for one
+    /// constant message, and the `SIOCSIFFLAGS` ioctl needs `unsafe`. The
+    /// kernel always registers loopback first in a new namespace, with the
+    /// fixed index `LOOPBACK_IFINDEX` (1).
+    fn bring_up_loopback() -> Result<(), String> {
+        use rustix::net::netlink::SocketAddrNetlink;
+        use rustix::net::{
+            AddressFamily, RecvFlags, SendFlags, SocketFlags, SocketType, recv, sendto, socket_with,
+        };
+        const RTM_NEWLINK: u16 = 16;
+        const NLM_F_REQUEST: u16 = 0x1;
+        const NLM_F_ACK: u16 = 0x4;
+        const NLMSG_ERROR: u16 = 2;
+        const IFF_UP: u32 = 0x1;
+        const LOOPBACK_IFINDEX: i32 = 1;
+        const LEN: u32 = 32;
+
+        let fd = socket_with(
+            AddressFamily::NETLINK,
+            SocketType::RAW,
+            SocketFlags::CLOEXEC,
+            None, // NETLINK_ROUTE
+        )
+        .map_err(|e| format!("netlink socket: {e}"))?;
+        let mut msg = Vec::with_capacity(LEN as usize);
+        // struct nlmsghdr
+        msg.extend_from_slice(&LEN.to_ne_bytes());
+        msg.extend_from_slice(&RTM_NEWLINK.to_ne_bytes());
+        msg.extend_from_slice(&(NLM_F_REQUEST | NLM_F_ACK).to_ne_bytes());
+        msg.extend_from_slice(&1u32.to_ne_bytes()); // seq
+        msg.extend_from_slice(&0u32.to_ne_bytes()); // pid: the kernel
+        // struct ifinfomsg
+        msg.extend_from_slice(&[0, 0]); // AF_UNSPEC, padding
+        msg.extend_from_slice(&0u16.to_ne_bytes()); // device type
+        msg.extend_from_slice(&LOOPBACK_IFINDEX.to_ne_bytes());
+        msg.extend_from_slice(&IFF_UP.to_ne_bytes()); // flags
+        msg.extend_from_slice(&IFF_UP.to_ne_bytes()); // change mask
+        sendto(&fd, &msg, SendFlags::empty(), &SocketAddrNetlink::new(0, 0))
+            .map_err(|e| format!("netlink send: {e}"))?;
+        let mut reply = [0u8; 256];
+        let (len, _) = recv(&fd, &mut reply[..], RecvFlags::empty())
+            .map_err(|e| format!("netlink recv: {e}"))?;
+        if len < 20 {
+            return Err(format!("netlink reply of {len} bytes"));
+        }
+        let kind = u16::from_ne_bytes([reply[4], reply[5]]);
+        if kind != NLMSG_ERROR {
+            return Err(format!("unexpected netlink reply type {kind}"));
+        }
+        match i32::from_ne_bytes([reply[16], reply[17], reply[18], reply[19]]) {
+            0 => Ok(()),
+            error => Err(format!(
+                "RTM_NEWLINK lo up: {}",
+                Errno::from_raw_os_error(-error)
+            )),
+        }
+    }
+
+    /// Interfaces of the caller's network namespace (`/proc/self/net/dev`
+    /// is per task, so this is the view the application will have).
+    fn network_interfaces() -> Vec<String> {
+        std::fs::read_to_string("/proc/self/net/dev")
+            .unwrap_or_default()
+            .lines()
+            .skip(2)
+            .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim().to_owned()))
+            .collect()
+    }
+
+    /// The loopback-only view after a private network namespace was made.
+    fn setup_network(evidence: &str, app: &str, notes: &mut Vec<String>) -> NetworkOutcome {
+        let loopback_up = match bring_up_loopback() {
+            Ok(()) => true,
+            Err(error) => {
+                emit(&record(
+                    evidence,
+                    "sandbox-degraded",
+                    json!({ "app": app, "feature": "loopback", "error": error }),
+                ));
+                notes.push(format!("loopback: {error}"));
+                false
+            }
+        };
+        let interfaces = network_interfaces();
+        if interfaces.iter().any(|name| name != "lo") {
+            notes.push(format!(
+                "network namespace lists more than loopback: {}",
+                interfaces.join(",")
+            ));
+        }
+        NetworkOutcome {
+            interfaces,
+            loopback_up,
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Stage 1
     // -----------------------------------------------------------------------
@@ -381,6 +492,19 @@ mod linux {
         };
 
         let mut notes = Vec::new();
+        // Connect the readiness report now: the runtime's abstract listener
+        // lives in the launcher's network namespace, which a private
+        // network namespace would otherwise put out of reach.
+        let report = args
+            .report
+            .as_deref()
+            .and_then(|name| match ReportSender::connect(name) {
+                Ok(sender) => Some(sender),
+                Err(e) => {
+                    notes.push(format!("readiness report channel: {e}"));
+                    None
+                }
+            });
         // The group is joined before anything is unshared: the launcher's
         // credentials can still write the hierarchy, and stage 2 plus every
         // application process inherit it from here on.
@@ -428,6 +552,11 @@ mod linux {
                 notes.push(format!("mount capability: {e}"));
             }
         }
+        let network = if applied.net {
+            setup_network(evidence, app, &mut notes)
+        } else {
+            NetworkOutcome::default()
+        };
         if applied.uts
             && let Err(e) = rustix::system::sethostname(app.as_bytes())
         {
@@ -544,6 +673,7 @@ mod linux {
             || (args.policy.run_dir.is_private()
                 && run_dir_outcome.mode != args.policy.run_dir.mode)
             || (args.policy.resources.cgroup && !cgroup.applied())
+            || (applied.net && !network.loopback_up)
             || !notes.is_empty();
         let ready = SandboxReady {
             app: app.to_owned(),
@@ -553,6 +683,7 @@ mod linux {
             no_new_privs,
             run_dir: run_dir_outcome,
             cgroup,
+            network,
             degraded,
             reason: (!notes.is_empty()).then(|| notes.join("; ")),
         };
@@ -561,8 +692,8 @@ mod linux {
             "sandbox-ready",
             serde_json::to_value(&ready).unwrap_or_default(),
         ));
-        if let Some(name) = &args.report {
-            let _ = send_line(name, &serde_json::to_string(&ready).unwrap_or_default());
+        if let Some(sender) = report {
+            let _ = sender.send(&serde_json::to_string(&ready).unwrap_or_default());
         }
 
         // Forward until stage 2 ends; SIGCHLD (registered before the spawn,
@@ -1143,6 +1274,11 @@ mod linux {
                     .map(|e| format!("uid_map: {e}")),
             );
         }
+        let network = if applied.net {
+            setup_network(evidence, "probe", &mut reasons)
+        } else {
+            NetworkOutcome::default()
+        };
         let private_tmp = if applied.mount {
             setup_mounts(evidence, "probe", policy, &mut reasons)
         } else {
@@ -1163,6 +1299,7 @@ mod linux {
                 || (policy.resources.cgroup && !cgroup.applied()),
             applied: AppliedIsolation {
                 cgroup,
+                network,
                 ..applied.applied(private_tmp, no_new_privs, run_dir_outcome)
             },
             reason: (!reasons.is_empty()).then(|| reasons.join("; ")),

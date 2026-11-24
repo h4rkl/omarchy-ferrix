@@ -103,10 +103,17 @@ mod tests {
                     !capabilities.contains(&AppCapability::Shell),
                     "{id} must not be granted shell"
                 );
+                // Every other native app gets a loopback-only network
+                // namespace (issue #10); the Terminal is a user shell.
+                assert!(
+                    !capabilities.contains(&AppCapability::Network),
+                    "{id} must not be granted network"
+                );
             }
         }
         let terminal = AppId::new("org.ferrix.terminal").unwrap();
         assert!(policy.granted(&terminal).contains(&AppCapability::Shell));
+        assert!(policy.granted(&terminal).contains(&AppCapability::Network));
         let home = AppId::new("org.ferrix.home").unwrap();
         assert!(policy.granted(&home).contains(&AppCapability::CoreControl));
         assert!(

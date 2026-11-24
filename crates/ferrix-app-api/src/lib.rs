@@ -239,11 +239,16 @@ pub enum AppCapability {
     NetworkState,
     /// Control radios, scan, and manage connections and profiles.
     NetworkControl,
+    /// Open sockets beyond the application's own loopback (internet and
+    /// local network). Without it the native sandbox gives the application
+    /// a network namespace holding only `lo`. Distinct from `network-state`
+    /// and `network-control`, which reach `ferrix-networkd`, not the network.
+    Network,
 }
 
 impl AppCapability {
     /// Every capability, in declaration order.
-    pub const ALL: [AppCapability; 13] = [
+    pub const ALL: [AppCapability; 14] = [
         AppCapability::CoreState,
         AppCapability::CoreControl,
         AppCapability::Shell,
@@ -257,6 +262,7 @@ impl AppCapability {
         AppCapability::ContactsWrite,
         AppCapability::NetworkState,
         AppCapability::NetworkControl,
+        AppCapability::Network,
     ];
 
     /// The kebab-case wire name (`telephony-call`).
@@ -275,6 +281,7 @@ impl AppCapability {
             AppCapability::ContactsWrite => "contacts-write",
             AppCapability::NetworkState => "network-state",
             AppCapability::NetworkControl => "network-control",
+            AppCapability::Network => "network",
         }
     }
 }
@@ -1189,6 +1196,7 @@ mod tests {
             "contacts-write",
             "network-state",
             "network-control",
+            "network",
         ];
         assert_eq!(AppCapability::ALL.len(), expected.len());
         for (capability, name) in AppCapability::ALL.into_iter().zip(expected) {

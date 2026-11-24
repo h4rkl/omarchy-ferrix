@@ -112,6 +112,11 @@ pub struct IsolationPolicy {
     pub mount_namespace: bool,
     pub ipc_namespace: bool,
     pub uts_namespace: bool,
+    /// A private network namespace holding only `lo`. Under `ferrix_appd`
+    /// the runtime derives it from the effective grants: on unless the
+    /// application holds `network` (`crate::with_grants`); a manifest
+    /// value is replaced, so a descriptor cannot widen its own access.
+    pub net_namespace: bool,
     pub user_namespace: UserNamespace,
     pub private_tmp: bool,
     pub no_new_privs: bool,
@@ -129,6 +134,7 @@ impl Default for IsolationPolicy {
             mount_namespace: true,
             ipc_namespace: true,
             uts_namespace: true,
+            net_namespace: true,
             user_namespace: UserNamespace::Auto,
             private_tmp: true,
             no_new_privs: true,
@@ -146,6 +152,7 @@ impl IsolationPolicy {
             mount_namespace: false,
             ipc_namespace: false,
             uts_namespace: false,
+            net_namespace: false,
             user_namespace: UserNamespace::Never,
             private_tmp: false,
             no_new_privs: false,
@@ -160,6 +167,7 @@ impl IsolationPolicy {
             || self.mount_namespace
             || self.ipc_namespace
             || self.uts_namespace
+            || self.net_namespace
             || self.user_namespace == UserNamespace::Always
     }
 }
@@ -177,6 +185,17 @@ pub struct RunDirOutcome {
     pub missing: Vec<String>,
 }
 
+/// The network view inside a private network namespace: the interfaces
+/// the kernel lists there (`["lo"]`) and whether loopback was brought up.
+/// Empty when the application shares the launcher's network.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkOutcome {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<String>,
+    pub loopback_up: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppliedIsolation {
@@ -184,10 +203,13 @@ pub struct AppliedIsolation {
     pub mount_namespace: bool,
     pub ipc_namespace: bool,
     pub uts_namespace: bool,
+    pub net_namespace: bool,
     pub user_namespace: bool,
     pub private_tmp: bool,
     pub no_new_privs: bool,
     pub run_dir: RunDirOutcome,
+    /// Loopback-only network view (`{}` unless `net_namespace`).
+    pub network: NetworkOutcome,
     /// The application's cgroup (`{}` when none was created).
     pub cgroup: CgroupOutcome,
 }

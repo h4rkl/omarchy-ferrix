@@ -5,7 +5,9 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
-use ferrix_app_api::{AppDescriptor, AppError, AppId, ExitReason, RuntimeKind, TELEPHONY_APN_ENV};
+use ferrix_app_api::{
+    AppCapability, AppDescriptor, AppError, AppId, ExitReason, RuntimeKind, TELEPHONY_APN_ENV,
+};
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 
 #[cfg(not(target_os = "linux"))]
@@ -312,11 +314,11 @@ impl Runtime for NativeRuntime {
                 reason: "run_dir.mode private requires mount_namespace".to_owned(),
             });
         }
-        // Socket visibility follows the effective grants `ferrix_appd`
-        // computed, never a list written into the manifest.
+        // Socket visibility and network access follow the effective grants
+        // `ferrix_appd` computed, never values written into the manifest.
         let launch = NativeLaunch {
             exec: launch.exec,
-            isolation: with_granted_sockets(launch.isolation, context),
+            isolation: with_grants(launch.isolation, context),
         };
         if !needs_sandbox(&launch.isolation) {
             return self.spawn_direct(app, &launch, context, "not requested");
@@ -338,19 +340,25 @@ impl Runtime for NativeRuntime {
     }
 }
 
-/// The policy the sandbox actually receives: with a private socket
-/// directory, the visible sockets are exactly those the effective grants
-/// imply ([`sockets_for_grants`]); under `inherit` the list is irrelevant and
-/// cleared so the record never suggests a filter that was not applied.
-pub fn with_granted_sockets(
-    mut policy: IsolationPolicy,
-    context: &LaunchContext,
-) -> IsolationPolicy {
+/// The policy the sandbox actually receives, derived from the effective
+/// grants rather than from manifest values:
+///
+/// - with a private socket directory, the visible sockets are exactly those
+///   the grants imply ([`sockets_for_grants`]); under `inherit` the list is
+///   irrelevant and cleared so the record never suggests a filter that was
+///   not applied;
+/// - a sandboxed application gets a loopback-only network namespace unless
+///   it holds `network`. A policy that requests no isolation at all (the
+///   explicit unsandboxed opt-out, [`IsolationPolicy::none`]) is left alone.
+pub fn with_grants(mut policy: IsolationPolicy, context: &LaunchContext) -> IsolationPolicy {
     policy.run_dir.sockets = if policy.run_dir.is_private() {
         sockets_for_grants(&context.granted)
     } else {
         Vec::new()
     };
+    if needs_sandbox(&policy) {
+        policy.net_namespace = !context.granted.contains(&AppCapability::Network);
+    }
     policy
 }
 
@@ -584,23 +592,48 @@ mod tests {
             },
             ..IsolationPolicy::default()
         };
-        let none = with_granted_sockets(manifest.clone(), &context());
+        let none = with_grants(manifest.clone(), &context());
         assert_eq!(none.run_dir.sockets, ["ferrix-appd.sock"]);
 
         let mut granted = context();
         granted.granted = [AppCapability::NetworkState, AppCapability::CoreState]
             .into_iter()
             .collect();
-        let some = with_granted_sockets(manifest, &granted);
+        let some = with_grants(manifest, &granted);
         assert_eq!(
             some.run_dir.sockets,
             ["ferrix-appd.sock", "core.sock", "networkd.sock"]
         );
 
         // Inherit: nothing is filtered, so nothing is listed.
-        let inherit = with_granted_sockets(IsolationPolicy::default(), &granted);
+        let inherit = with_grants(IsolationPolicy::default(), &granted);
         assert!(inherit.run_dir.sockets.is_empty());
         assert_eq!(inherit.run_dir.mode, RunDirMode::Inherit);
+    }
+
+    #[test]
+    fn network_namespace_follows_the_network_grant_and_cannot_be_widened() {
+        use ferrix_app_api::AppCapability;
+        // A manifest trying to keep the host network without the grant.
+        let manifest = IsolationPolicy {
+            net_namespace: false,
+            ..IsolationPolicy::default()
+        };
+        assert!(with_grants(manifest.clone(), &context()).net_namespace);
+
+        let mut granted = context();
+        granted.granted = [AppCapability::Network].into_iter().collect();
+        assert!(!with_grants(IsolationPolicy::default(), &granted).net_namespace);
+        assert!(!with_grants(manifest, &granted).net_namespace);
+        // `network-state`/`network-control` reach networkd, not the network.
+        granted.granted = [AppCapability::NetworkState, AppCapability::NetworkControl]
+            .into_iter()
+            .collect();
+        assert!(with_grants(IsolationPolicy::default(), &granted).net_namespace);
+
+        // The explicit unsandboxed opt-out stays unsandboxed.
+        let none = with_grants(IsolationPolicy::none(), &context());
+        assert!(!none.net_namespace && !needs_sandbox(&none));
     }
 
     #[test]

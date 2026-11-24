@@ -8,8 +8,11 @@
 //! into a failure so the gate cannot pass without exercising the sandbox.
 #![cfg(target_os = "linux")]
 
+use std::io::Write as _;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -278,6 +281,10 @@ fn sandbox_ready_record_proves_namespaces() {
     assert!(ready.init_pid > 0);
     assert!(ready.namespaces.pid && ready.namespaces.mount, "{ready:?}");
     assert!(ready.namespaces.ipc && ready.namespaces.uts, "{ready:?}");
+    assert!(
+        ready.namespaces.net && ready.network.loopback_up,
+        "{ready:?}"
+    );
     assert!(
         ready.private_tmp && ready.no_new_privs && !ready.degraded,
         "{ready:?}"
@@ -782,6 +789,133 @@ fn cgroup_disabled_creates_no_group() {
         serde_json::from_value(running.diagnostics()).unwrap();
     assert!(
         !report.applied.cgroup.applied() && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Network namespace (issue #10, increment 2)
+// ---------------------------------------------------------------------------
+
+fn granted(capabilities: &[AppCapability]) -> LaunchContext {
+    let mut context = context();
+    context.granted = capabilities.iter().copied().collect();
+    context
+}
+
+/// A TCP service on 127.0.0.1 in the test's own (launcher) network
+/// namespace that counts the connections it accepts.
+struct HostService {
+    url: String,
+    accepted: Arc<AtomicU32>,
+}
+
+fn host_service() -> HostService {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind host service");
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let accepted = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&accepted);
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        }
+    });
+    HostService { url, accepted }
+}
+
+/// The app's own view: exactly `lo` in its network namespace, and that
+/// loopback is up (ICMP to 127.0.0.1 answers).
+const ONLY_LOOPBACK: &str = r#"[ "$(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ')" = lo ] || exit 10; ping -c 1 -W 2 127.0.0.1 >/dev/null 2>&1 || exit 11"#;
+
+#[test]
+fn without_the_network_grant_the_application_has_only_loopback() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let service = host_service();
+    // Reaching a service on the launcher's loopback must fail.
+    let script = format!(r#"{ONLY_LOOPBACK}; wget -q -T 3 -O /dev/null "$1" && exit 12; exit 0"#);
+    let mut running = launch_with(
+        &["sh", "-c", &script, "sh", &service.url],
+        policy,
+        &granted(&[AppCapability::NetworkState]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(report.applied.net_namespace, "{report:?}");
+    assert_eq!(report.applied.network.interfaces, ["lo"], "{report:?}");
+    assert!(
+        report.applied.network.loopback_up && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    assert_eq!(service.accepted.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn the_network_grant_keeps_the_launcher_network() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let service = host_service();
+    let mut running = launch_with(
+        &[
+            "sh",
+            "-c",
+            r#"wget -q -T 5 -O /dev/null "$1""#,
+            "sh",
+            &service.url,
+        ],
+        policy,
+        &granted(&[AppCapability::Network]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(
+        !report.applied.net_namespace && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    assert_eq!(service.accepted.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_manifest_cannot_opt_out_of_the_network_namespace() {
+    let policy = IsolationPolicy {
+        net_namespace: false,
+        ..IsolationPolicy::default()
+    };
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", ONLY_LOOPBACK], policy);
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+#[test]
+fn readiness_still_arrives_from_inside_a_network_namespace() {
+    // The runtime's listener is an abstract socket in the launcher's network
+    // namespace; stage 1 connects before it unshares. Without that the
+    // report would be lost and the launch reported `unverified`.
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", "exit 0"], IsolationPolicy::default());
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(
+        report
+            .reason
+            .as_deref()
+            .is_none_or(|r| !r.contains("unverified")),
+        "{report:?}"
+    );
+    assert!(
+        report.applied.net_namespace && !report.degraded,
         "{report:?}"
     );
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });

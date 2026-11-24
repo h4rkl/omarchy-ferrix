@@ -129,6 +129,34 @@ cpu_weight}` (`{}` when none). The QEMU initramfs mounts cgroup2 on
 `/etc/rc.conf` explicitly and records it in `image-facts.json`
 (`cgroup.rc_cgroup_mode`).
 
+## Network namespace (`net_namespace`, issue #10)
+
+`IsolationPolicy.net_namespace` (default `true`) gives the application a
+private network namespace holding only `lo`, brought up by stage 1 with one
+rtnetlink `RTM_NEWLINK` request (a fixed 32-byte message; hand-rolled
+because the `SIOCSIFFLAGS` ioctl needs `unsafe` and spawning `ip` depends on
+a host tool). Under `ferrix-appd` the value is **derived from the effective
+grants** by `with_grants`: on unless the application holds the `network`
+capability (`network-state`/`network-control` reach `ferrix-networkd` and do
+not count); a manifest value is replaced, so a descriptor cannot keep the
+host network without the grant. Only `IsolationPolicy::none()` (no
+isolation at all) stays unsandboxed. Applications with `network` share the
+launcher's network namespace (per-application veth and nftables are later
+work). Pathname sockets (Wayland, `/run/ferrix/*.sock`) are not scoped to a
+network namespace and keep working.
+
+`sandbox-ready` adds `namespaces.net` (proven from `/proc/self/ns/net`) and
+`network: {interfaces, loopback_up}` read from `/proc/self/net/dev` inside
+the namespace. A kernel without `CONFIG_NET_NS` is a degraded launch with a
+note (as for IPC); a loopback that cannot be brought up is a
+`sandbox-degraded{feature:"loopback"}` record and `degraded: true` (the
+application still has no route out). Abstract socket names are per network
+namespace, so stage 1 connects its readiness report to the runtime's
+listener **before** `unshare` (`channel::ReportSender`) and writes it
+afterwards; the runtime's listener reads a connection that arrives early and
+writes late, and a sender that closes without writing still ends as the
+child's exit status (`IsolationUnavailable` for 126).
+
 ## Readiness and records
 
 Readiness is observable: stage 2 reports to stage 1 and stage 1 reports to the
@@ -176,8 +204,8 @@ unless `FERRIX_SANDBOX_TESTS=required`, which turns every skip into a failure.
 ## Not provided yet
 
 No uid change (the application keeps the launcher's identity, mapped 1:1 in a
-user namespace), no seccomp filter, no cgroup freezing (limits only, see above), no
-network namespace, no filesystem view restriction beyond
+user namespace), no seccomp filter, no cgroup freezing (limits only, see above),
+no per-application network routing (granted apps share the launcher network), no filesystem view restriction beyond
 `/proc`, `/tmp`, and the socket directory (with `run_dir: private` the rest of
 `/run`, including the D-Bus system bus socket, stays visible; `private-run`
 hides it), and no capability dropping beyond `no_new_privs`. Socket
@@ -210,4 +238,9 @@ loop under `pids_max: 16` is refused (`pids.events max > 0`,
 `SIGKILL` of the whole application; `cgroup: false` creates no group.
 `linux-check.sh` first moves the container's processes into a leaf group so
 the container's cgroup-namespace root can delegate controllers, as the guest
-root does.
+root does. The network tests cover: without the `network` grant (with
+`network-state`) the application lists only `lo`, pings `127.0.0.1`, and a
+`wget` to a TCP service on the launcher's loopback fails while that service
+accepts nothing; with `network` the same `wget` succeeds; a manifest with
+`net_namespace: false` still gets the namespace; the readiness report still
+arrives (not `unverified`) from inside the namespace.

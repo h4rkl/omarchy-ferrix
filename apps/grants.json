@@ -11,7 +11,8 @@
     ],
     "org.ferrix.terminal": [
       "shell",
-      "background"
+      "background",
+      "network"
     ],
     "org.ferrix.phone": [
       "telephony-state",

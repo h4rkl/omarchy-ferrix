@@ -149,7 +149,9 @@ has zero effective capabilities**; a missing file is recorded
 Capability names (`AppCapability`, kebab-case on the wire): `core-state`,
 `core-control`, `shell`, `background`, `telephony-state`, `telephony-call`,
 `telephony-sms`, `telephony-data`, `telephony-radio`, `contacts-read`,
-`contacts-write`, `network-state`, `network-control`. Read-only `*-state`
+`contacts-write`, `network-state`, `network-control`, `network` (sockets beyond
+the application's own loopback; without it the native sandbox gives the
+application a loopback-only network namespace). Read-only `*-state`
 grants and privileged `*-control`/
 `*-call`/`*-sms`/`*-write` grants are distinct so a state grant can never
 reach a control verb.

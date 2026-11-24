@@ -21,7 +21,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 rustix = { version = "1", features = ["process"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-rustix = { version = "1", features = ["process", "thread", "mount", "system", "fs"] }
+rustix = { version = "1", features = ["process", "thread", "mount", "system", "fs", "net"] }
 signal-hook = "0.4"
 
 [[bin]]

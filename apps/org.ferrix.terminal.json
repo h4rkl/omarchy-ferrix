@@ -10,7 +10,8 @@
   "launchable": true,
   "capabilities": [
     "shell",
-    "background"
+    "background",
+    "network"
   ],
   "launch": {
     "exec": [
