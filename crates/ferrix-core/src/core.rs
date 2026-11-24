@@ -150,6 +150,12 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             // A process action, not hardware state: the control handler in
             // main.rs performs it (see daemon_kill.rs) and never calls here.
             ControlCommand::KillDaemon { .. } => {}
+            // Camera client verbs produce records, not hardware events: the
+            // control handler in main.rs runs them through camera::control.
+            ControlCommand::CameraList
+            | ControlCommand::CameraCapture { .. }
+            | ControlCommand::CameraPreview { .. }
+            | ControlCommand::CameraVideo { .. } => {}
         }
         Ok(())
     })();

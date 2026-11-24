@@ -4,11 +4,14 @@
   "runtime": "native",
   "name": "Files",
   "icon": {
-    "glyph": "▤",
+    "glyph": "\u25a4",
     "tone": "neutral"
   },
   "launchable": true,
   "capabilities": [],
+  "intents": [
+    "show-pictures"
+  ],
   "launch": {
     "exec": [
       "ferrix-files"

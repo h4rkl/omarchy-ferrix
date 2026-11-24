@@ -836,24 +836,15 @@ fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiStat
     let name = tile.map_or("Unknown", |t| t.name.as_str());
     widgets::page_header(c, ty, name, None, state.pressed == Some(Target::Back));
     let fallback_title = format!("{name} \u{b7} not installed");
-    // Phone, Messages, Contacts, Settings, and Files are real applications
-    // launched by `ferrix-appd`; only camera keeps an illustrative page. The
-    // hardware API defines no camera capability, so the page says that about
-    // whichever target is connected.
-    let (accent, eyebrow, title, detail) = match tile.map_or("", Tile::kind) {
-        "camera" => (
-            t.fg_dim,
-            "CAMERA",
-            "No camera capability",
-            "The hardware API defines no camera capability on any target yet.",
-        ),
-        _ => (
-            tile.map_or(t.fg_dim, |t| tone_color(t.icon.tone)),
-            "APP",
-            fallback_title.as_str(),
-            "No runtime provides this application. The catalog entry is a placeholder.",
-        ),
-    };
+    // Every checked-in first-party entry (Camera included, ADR-009) is a
+    // real application launched by `ferrix-appd`; a non-launchable entry
+    // gets this generic placeholder page.
+    let (accent, eyebrow, title, detail) = (
+        tile.map_or(t.fg_dim, |t| tone_color(t.icon.tone)),
+        "APP",
+        fallback_title.as_str(),
+        "No runtime provides this application. The catalog entry is a placeholder.",
+    );
     let panel = Rect {
         x: s(72),
         y: s(360),
@@ -1264,7 +1255,7 @@ mod tests {
         let state = state();
         assert!(
             state.tiles.len() >= 7,
-            "phone, messages, contacts, settings, terminal, camera, files"
+            "phone, messages, contacts, settings, terminal, files, placeholder"
         );
         let c = compose(
             &p,

@@ -12,8 +12,9 @@ use std::fmt;
 use std::path::Path;
 
 use ferrix_hardware_api::{
-    AudioRoute, BluetoothDeviceKind, MockPairingMethod, MockPairingOutcome, ModemRegistration,
-    Orientation, SimState, WifiState,
+    AudioRoute, BluetoothDeviceKind, CAMERA_PREVIEW_FPS_MAX, CameraFacing, CameraRotation,
+    FrameSize, MockPairingMethod, MockPairingOutcome, ModemRegistration, Orientation, SimState,
+    WifiState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +43,78 @@ pub struct Profile {
     /// means none; only meaningful with `connectivity.bluetooth_present`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bluetooth: Option<BluetoothSection>,
+    /// Synthetic cameras (ADR-009). Absent means the mock exposes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<CameraSection>,
+}
+
+/// Which deterministic test pattern a mock camera draws.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileCameraPattern {
+    /// Vertical colour bars with a moving sweep line.
+    #[default]
+    Bars,
+    /// A checkerboard whose phase follows the frame sequence.
+    Grid,
+}
+
+/// One synthetic camera (`[[camera.devices]]`). Frames are generated, never
+/// captured; sizes are sensor-oriented.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileCamera {
+    pub facing: CameraFacing,
+    #[serde(default)]
+    pub rotation: CameraRotation,
+    #[serde(default)]
+    pub pattern: ProfileCameraPattern,
+    pub preview: FrameSize,
+    pub still: FrameSize,
+}
+
+/// Optional `[camera]` section: the mock's synthetic cameras.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CameraSection {
+    /// Upper bound on the mock preview rate (`1..=30`); clients may ask
+    /// for less.
+    #[serde(default = "default_camera_fps")]
+    pub preview_fps: u8,
+    #[serde(default)]
+    pub devices: Vec<ProfileCamera>,
+}
+
+fn default_camera_fps() -> u8 {
+    8
+}
+
+impl CameraSection {
+    fn validate(&self) -> Result<(), ProfileError> {
+        if !(1..=CAMERA_PREVIEW_FPS_MAX).contains(&self.preview_fps) {
+            return Err(ProfileError::Invalid(format!(
+                "camera.preview_fps must be 1..={CAMERA_PREVIEW_FPS_MAX} (got {})",
+                self.preview_fps
+            )));
+        }
+        if self.devices.len() > 4 {
+            return Err(ProfileError::Invalid(format!(
+                "camera.devices lists {} cameras (at most 4)",
+                self.devices.len()
+            )));
+        }
+        for device in &self.devices {
+            for (what, size) in [("preview", device.preview), ("still", device.still)] {
+                size.validate().map_err(|e| {
+                    ProfileError::Invalid(format!(
+                        "camera.devices[] {} {what}: {e}",
+                        device.facing.name()
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One synthetic remembered Bluetooth device (`[[bluetooth.devices]]`).
@@ -622,6 +695,9 @@ impl Profile {
         if let Some(bluetooth) = &self.bluetooth {
             bluetooth.validate()?;
         }
+        if let Some(camera) = &self.camera {
+            camera.validate()?;
+        }
         Ok(())
     }
 
@@ -691,6 +767,31 @@ route = "speaker"
         assert_eq!(p.audio.route, AudioRoute::Speaker);
         assert_eq!(p.audio.volume_percent, None);
         assert!(!p.audio.muted);
+    }
+
+    #[test]
+    fn camera_section_is_optional_and_validated() {
+        assert_eq!(Profile::parse(FIXTURE).unwrap().camera, None);
+        let with = |body: &str| Profile::parse(&format!("{FIXTURE}\n[camera]\n{body}"));
+        let p = with(
+            "[[camera.devices]]\nfacing = \"back\"\nrotation = 90\npreview = { width = 480, height = 360 }\nstill = { width = 1280, height = 960 }\n",
+        )
+        .unwrap();
+        let camera = p.camera.unwrap();
+        assert_eq!(camera.preview_fps, 8);
+        assert_eq!(camera.devices[0].facing, CameraFacing::Back);
+        assert_eq!(camera.devices[0].rotation, CameraRotation::Deg90);
+        assert_eq!(camera.devices[0].pattern, ProfileCameraPattern::Bars);
+        for bad in [
+            "preview_fps = 0\n",
+            "preview_fps = 31\n",
+            "[[camera.devices]]\nfacing = \"back\"\nrotation = 45\npreview = { width = 4, height = 3 }\nstill = { width = 4, height = 3 }\n",
+            "[[camera.devices]]\nfacing = \"back\"\npreview = { width = 0, height = 3 }\nstill = { width = 4, height = 3 }\n",
+            "[[camera.devices]]\nfacing = \"side\"\npreview = { width = 4, height = 3 }\nstill = { width = 4, height = 3 }\n",
+            "[[camera.devices]]\nfacing = \"back\"\nserial = \"x\"\npreview = { width = 4, height = 3 }\nstill = { width = 4, height = 3 }\n",
+        ] {
+            assert!(with(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

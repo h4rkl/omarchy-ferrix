@@ -346,12 +346,15 @@ mod tests {
         }
         let launchable: Vec<&str> = tiles[..first_reference].iter().map(Tile::kind).collect();
         for kind in [
-            "contacts", "files", "messages", "phone", "settings", "terminal",
+            "camera", "contacts", "files", "messages", "phone", "settings", "terminal",
         ] {
             assert!(launchable.contains(&kind), "{kind} is a launchable app");
         }
         let reference: Vec<&str> = tiles[first_reference..].iter().map(Tile::kind).collect();
-        assert_eq!(reference, ["camera"]);
+        assert!(
+            reference.is_empty(),
+            "every checked-in entry launches: {reference:?}"
+        );
         assert!(
             !launchable.contains(&"dialer"),
             "the illustrative dialer entry is gone"

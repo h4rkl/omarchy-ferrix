@@ -1,0 +1,43 @@
+schema_version = 1
+name = "camera-mock-preview-capture"
+description = "The profile's two synthetic cameras enumerate back-first with their facing and rotation; a back preview delivers distinct, in-order frames at the preview size; stills from both cameras use the still size; video stays a typed feature-unsupported error (ADR-009). Mock frames only: nothing is captured."
+
+[[step]]
+service = "core"
+command = { cmd = "camera-list" }
+ack = { status = "ok", ack = "camera-list", events = ["camera-list"] }
+expect = [ { event = "camera-list", count = 2, facings = ["back", "front"], rotations = [90, 270] } ]
+note = "client verb: the portable Camera::cameras through the session's adapter"
+
+[[step]]
+service = "core"
+command = { cmd = "camera-preview", facing = "back", frames = 4 }
+ack = { status = "ok", ack = "camera-preview" }
+expect = [ { event = "camera-preview", status = "sampled", facing = "back", frames = 4, width = 480, height = 360, monotonic = true, distinct = 4 } ]
+note = "a preview stream: sequence numbers rise and every frame differs (the sweep moves)"
+
+[[step]]
+service = "core"
+command = { cmd = "camera-capture", facing = "back" }
+ack = { status = "ok", ack = "camera-capture", events = ["camera-still"] }
+expect = [ { event = "camera-still", facing = "back", width = 1280, height = 960, rotation = 90, via = "control" } ]
+
+[[step]]
+service = "core"
+command = { cmd = "camera-capture", facing = "front" }
+expect = [ { event = "camera-still", facing = "front", width = 960, height = 720, rotation = 270 } ]
+note = "front/back switch: the other camera answers with its own still size"
+
+[[step]]
+service = "core"
+command = { cmd = "camera-video", facing = "back" }
+expect_ack_error = true
+expect = [ { event = "camera-error", request = "camera-video", error = { kind = "feature-unsupported", capability = "camera", feature = "video" } } ]
+note = "video is reserved: a typed error, never an imitation"
+
+[[step]]
+service = "core"
+command = { cmd = "camera-capture", facing = "external" }
+expect_ack_error = true
+expect = [ { event = "camera-error", request = "camera-capture", error = { kind = "invalid-value", capability = "camera" } } ]
+note = "no external camera in the profile"

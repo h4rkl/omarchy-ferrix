@@ -15,6 +15,7 @@ the boundary it creates, and what evidence may claim. Evidence is `QEMU` or
 | [006](006-evidence-mock-control-and-scenarios.md) | Evidence labels, mock-control channels, scenario files |
 | [007](007-fulguris-browser-input.md) | Fulguris browser APK input (supersedes the browser choice in ADR-005; superseded by ADR-008) |
 | [008](008-apks-as-ferrix-apps.md) | APKs as first-class Ferrix apps: per-task windows, one warm container, LineageOS apps (Jelly browser) |
+| [009](009-camera-contract-and-linux-boundary.md) | Camera contract, mock, camera socket, and the libcamera/PipeWire adapter boundary |
 
 ## Conventions shared by every new service (normative)
 

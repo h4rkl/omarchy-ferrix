@@ -37,6 +37,7 @@ body:
         - audio
         - telephony
         - lifecycle
+        - camera
         - mock-control
         - other (describe below)
     validations:

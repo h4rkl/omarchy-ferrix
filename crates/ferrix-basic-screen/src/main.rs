@@ -27,7 +27,7 @@
 //! `PAGE` is `launcher` (default), `apps` (the app list), `apps-end` (the
 //! app list scrolled to its end), `quick-settings`, `notifications`,
 //! `notifications-empty`, or the kind of a non-launchable catalog entry
-//! (`camera`) for its reference page. `--sample-apks` appends the ten
+//! for its reference page (none is checked in today). `--sample-apks` appends the ten
 //! installed-APK labels seen on the Pixel 9a as mock installed entries, so a
 //! host preview shows a catalog with APKs (mock evidence, no Android); all
 //! but Calculator carry a synthetic launcher bitmap standing in for
@@ -91,6 +91,19 @@ pub(crate) fn test_tiles() -> Vec<catalog::Tile> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
     let (apps, errors) = catalog::load_descriptor_dir(&dir).expect("apps dir");
     assert!(errors.is_empty(), "{errors:?}");
+    // Every checked-in entry is launchable; a synthetic placeholder in
+    // Camera's slot keeps the reference-page path covered at the same tile
+    // count (the grid tests depend on it).
+    let mut apps: Vec<_> = apps
+        .into_iter()
+        .filter(|d| d.id.as_str() != "org.ferrix.camera")
+        .collect();
+    apps.push(
+        ferrix_app_api::AppDescriptor::from_json(
+            r#"{"schema_version":1,"id":"org.ferrix.placeholder","runtime":"native","name":"Placeholder","icon":{"glyph":"?","tone":"neutral"},"launchable":false}"#,
+        )
+        .expect("placeholder descriptor"),
+    );
     catalog::tiles_from_catalog(&apps, &[])
 }
 
@@ -346,15 +359,17 @@ mod tests {
             Ok(Page::Notifications)
         );
         assert!(!state.notification_visible);
-        let camera = state.tile_index(&ferrix_app_api::AppId::new("org.ferrix.camera").unwrap());
+        let placeholder =
+            state.tile_index(&ferrix_app_api::AppId::new("org.ferrix.placeholder").unwrap());
+        assert!(placeholder.is_some());
         assert_eq!(
-            preview_page("camera", &mut state).ok(),
-            camera.map(Page::Reference)
+            preview_page("placeholder", &mut state).ok(),
+            placeholder.map(Page::Reference)
         );
         for launchable in ["terminal", "settings", "phone"] {
             let error = preview_page(launchable, &mut state).unwrap_err();
             assert!(
-                error.contains("camera"),
+                error.contains("placeholder"),
                 "launchable kinds are not pages: {error}"
             );
         }

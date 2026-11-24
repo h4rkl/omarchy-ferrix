@@ -130,3 +130,23 @@ kind = "audio"
 rssi = -88
 pairing = "just-works"
 outcome = "timeout"
+
+# Synthetic cameras (ADR-009). Mock only: the frames are generated test
+# patterns, never captured. Sizes are sensor-oriented; `rotation` is the
+# clockwise turn that brings a frame upright on the portrait display.
+[camera]
+preview_fps = 8
+
+[[camera.devices]]
+facing = "back"
+rotation = 90
+pattern = "bars"
+preview = { width = 480, height = 360 }
+still = { width = 1280, height = 960 }
+
+[[camera.devices]]
+facing = "front"
+rotation = 270
+pattern = "grid"
+preview = { width = 480, height = 360 }
+still = { width = 960, height = 720 }
