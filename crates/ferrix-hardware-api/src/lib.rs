@@ -246,6 +246,16 @@ pub struct DisplayState {
     pub rotation_locked: bool,
 }
 
+/// The lowest backlight level product code may request while the screen is
+/// on. Zero would leave a lit-but-black panel that looks like a dead phone;
+/// screen-off is the shell's DPMS blank, never brightness 0.
+pub const MIN_BRIGHTNESS_PERCENT: u8 = 5;
+
+/// Clamps a requested brightness into `MIN_BRIGHTNESS_PERCENT..=100`.
+pub fn clamp_brightness(percent: u8) -> u8 {
+    percent.clamp(MIN_BRIGHTNESS_PERCENT, 100)
+}
+
 pub trait Display: Send + Sync {
     fn display_state(&self) -> DisplayState;
     fn set_brightness(&self, percent: u8) -> Result<DisplayState, HardwareError>;
@@ -1029,9 +1039,149 @@ pub struct LifecycleState {
     pub last_suspend: Option<SuspendOutcome>,
 }
 
+/// A user-requested whole-system power transition (the shell's trusted
+/// power menu). Distinct from suspend: neither returns to the session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PowerAction {
+    PowerOff,
+    Restart,
+}
+
+impl PowerAction {
+    pub fn name(self) -> &'static str {
+        match self {
+            PowerAction::PowerOff => "power-off",
+            PowerAction::Restart => "restart",
+        }
+    }
+}
+
 pub trait Lifecycle: Send + Sync {
     fn lifecycle_state(&self) -> LifecycleState;
     fn suspend(&self) -> Result<SuspendOutcome, HardwareError>;
+    /// Starts an orderly power-off or restart. `Ok` means the target accepted
+    /// the request and the transition is under way (the call may return
+    /// before the system goes down). Targets that cannot do it report
+    /// [`HardwareError::Unsupported`]; nothing is imitated.
+    fn power_action(&self, _action: PowerAction) -> Result<(), HardwareError> {
+        Err(HardwareError::unsupported(Capability::Lifecycle))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Screen policy (owned by ferrix-core, enforced by the shell)
+// ---------------------------------------------------------------------------
+//
+// Not an adapter capability: no target implements these. `ferrix-core` owns
+// the policy (the idle timeout setting and the live inhibitors) and serves
+// it over `ferrix-protocol`; the shell blanks the output when the user has
+// been idle for the timeout and nothing inhibits it. The types live here so
+// the profile parser, the core, the shell, and applications share one
+// definition.
+
+/// Shortest idle timeout the policy accepts, in seconds.
+pub const MIN_IDLE_TIMEOUT_SECS: u32 = 5;
+/// Longest idle timeout the policy accepts, in seconds (one hour).
+pub const MAX_IDLE_TIMEOUT_SECS: u32 = 3600;
+/// Idle timeout when neither the user nor the target profile chose one.
+pub const DEFAULT_IDLE_TIMEOUT_SECS: u32 = 60;
+/// The choices Settings > Display offers, in order (`None` is "Never").
+pub const IDLE_TIMEOUT_CHOICES: [Option<u32>; 7] = [
+    Some(15),
+    Some(30),
+    Some(60),
+    Some(120),
+    Some(300),
+    Some(600),
+    None,
+];
+
+/// Validates an idle timeout (`None` = never blank on idle).
+pub fn validate_idle_timeout(secs: Option<u32>) -> Result<Option<u32>, HardwareError> {
+    match secs {
+        Some(s) if !(MIN_IDLE_TIMEOUT_SECS..=MAX_IDLE_TIMEOUT_SECS).contains(&s) => {
+            Err(HardwareError::invalid(
+                Capability::Lifecycle,
+                format!(
+                    "idle timeout must be {MIN_IDLE_TIMEOUT_SECS}..={MAX_IDLE_TIMEOUT_SECS} s or never (got {s})"
+                ),
+            ))
+        }
+        other => Ok(other),
+    }
+}
+
+/// Why something keeps the screen on. Calls, video playback, and turn-by-turn
+/// navigation are the product reasons; nothing else may hold the screen.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InhibitReason {
+    Call,
+    Video,
+    Navigation,
+}
+
+impl InhibitReason {
+    pub fn name(self) -> &'static str {
+        match self {
+            InhibitReason::Call => "call",
+            InhibitReason::Video => "video",
+            InhibitReason::Navigation => "navigation",
+        }
+    }
+}
+
+/// One live inhibitor. `holder` is the requester's self-description for
+/// evidence and the Settings caption, never an identity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScreenInhibitor {
+    pub id: u64,
+    pub reason: InhibitReason,
+    pub holder: String,
+}
+
+/// The policy the shell enforces.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScreenPolicy {
+    /// Seconds without input before the shell blanks the screen; `None`
+    /// means never on idle (the power key still blanks).
+    pub idle_timeout_secs: Option<u32>,
+    /// Live inhibitors; any one keeps the idle timeout from blanking.
+    #[serde(default)]
+    pub inhibitors: Vec<ScreenInhibitor>,
+}
+
+impl Default for ScreenPolicy {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: Some(DEFAULT_IDLE_TIMEOUT_SECS),
+            inhibitors: Vec::new(),
+        }
+    }
+}
+
+impl ScreenPolicy {
+    pub fn inhibited(&self) -> bool {
+        !self.inhibitors.is_empty()
+    }
+
+    /// The distinct reasons currently held, sorted.
+    pub fn reasons(&self) -> Vec<InhibitReason> {
+        let mut reasons: Vec<_> = self.inhibitors.iter().map(|i| i.reason).collect();
+        reasons.sort();
+        reasons.dedup();
+        reasons
+    }
+
+    /// The idle timeout the shell should run: none while inhibited.
+    pub fn effective_idle_timeout_secs(&self) -> Option<u32> {
+        if self.inhibited() {
+            None
+        } else {
+            self.idle_timeout_secs
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1246,6 +1396,10 @@ pub enum HardwareCommand {
         muted: bool,
     },
     Suspend,
+    /// Orderly power-off or restart (the shell's power menu).
+    PowerAction {
+        action: PowerAction,
+    },
 }
 
 #[cfg(test)]
@@ -1266,6 +1420,59 @@ mod tests {
         let back: HardwareEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, event);
         assert_eq!(event.name(), "power-changed");
+    }
+
+    #[test]
+    fn power_action_wire_form_and_brightness_floor() {
+        let command = HardwareCommand::PowerAction {
+            action: PowerAction::Restart,
+        };
+        assert_eq!(
+            serde_json::to_string(&command).unwrap(),
+            r#"{"command":"power-action","action":"restart"}"#
+        );
+        assert_eq!(clamp_brightness(0), MIN_BRIGHTNESS_PERCENT);
+        assert_eq!(clamp_brightness(40), 40);
+        assert_eq!(clamp_brightness(200), 100);
+        const { assert!(MIN_BRIGHTNESS_PERCENT > 0, "never fully dark while on") };
+    }
+
+    #[test]
+    fn screen_policy_inhibitors_suspend_the_idle_timeout() {
+        let mut policy = ScreenPolicy::default();
+        assert_eq!(policy.effective_idle_timeout_secs(), Some(60));
+        policy.inhibitors.push(ScreenInhibitor {
+            id: 1,
+            reason: InhibitReason::Video,
+            holder: "org.ferrix.browser".into(),
+        });
+        policy.inhibitors.push(ScreenInhibitor {
+            id: 2,
+            reason: InhibitReason::Call,
+            holder: "org.ferrix.phone".into(),
+        });
+        policy.inhibitors.push(ScreenInhibitor {
+            id: 3,
+            reason: InhibitReason::Call,
+            holder: "scenario".into(),
+        });
+        assert!(policy.inhibited());
+        assert_eq!(policy.effective_idle_timeout_secs(), None);
+        assert_eq!(
+            policy.reasons(),
+            [InhibitReason::Call, InhibitReason::Video]
+        );
+        let json = serde_json::to_value(&policy).unwrap();
+        assert_eq!(json["inhibitors"][1]["reason"], "call");
+        assert_eq!(validate_idle_timeout(None), Ok(None));
+        assert_eq!(validate_idle_timeout(Some(30)), Ok(Some(30)));
+        assert!(validate_idle_timeout(Some(1)).is_err());
+        assert!(validate_idle_timeout(Some(MAX_IDLE_TIMEOUT_SECS + 1)).is_err());
+        assert!(
+            IDLE_TIMEOUT_CHOICES
+                .iter()
+                .all(|c| validate_idle_timeout(*c).is_ok())
+        );
     }
 
     #[test]

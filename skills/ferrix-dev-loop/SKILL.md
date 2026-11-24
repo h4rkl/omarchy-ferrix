@@ -97,7 +97,9 @@ You cannot trust a process log for graphical claims (AGENTS.md). Capture,
 then open the image with your file-reading tool and look at it.
 
 - **QEMU**: `just qemu-agent-start`, then `scripts/qemu-shot.sh NAME`.
-  Input: `just qemu-tap X Y`, `qemu-swipe`, `qemu-type`, `qemu-key`. Mock
+  Input: `just qemu-tap X Y`, `qemu-swipe`, `qemu-type`, `qemu-key`
+  (`qemu-key power` blanks/wakes; `qemu-key-hold power 1000` opens the power
+  menu; taps are dropped while the screen is off). Mock
   hardware state: `just qemu-mock …`. Serial log:
   `out/qemu-aarch64/agent/serial.log` (apps print `ui-state` JSON lines,
   which are good for asserting state without pixels).

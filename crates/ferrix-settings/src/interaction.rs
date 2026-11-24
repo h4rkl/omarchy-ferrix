@@ -76,6 +76,8 @@ pub enum Target {
     /// The brightness rail (dragged, committed on release).
     Brightness,
     AutoRotate,
+    /// Steps the screen idle timeout to the next choice.
+    ScreenTimeout,
     /// The output volume rail (dragged, committed on release).
     Volume,
     /// Output (playback) mute.
@@ -252,6 +254,10 @@ impl Layout {
 
     pub fn auto_rotate_rect(&self) -> Rect {
         self.row_rect(700)
+    }
+
+    pub fn screen_timeout_rect(&self) -> Rect {
+        self.row_rect(870)
     }
 
     /// The visible volume track (the brightness rail's geometry).
@@ -462,6 +468,9 @@ pub fn hit_test(model: &Model, position: (f64, f64), size: (u32, u32)) -> Option
             if contains(l.brightness_hit_rect(), position) {
                 return Some(Target::Brightness);
             }
+            if contains(l.screen_timeout_rect(), position) {
+                return Some(Target::ScreenTimeout);
+            }
             contains(l.auto_rotate_rect(), position).then_some(Target::AutoRotate)
         }
         Page::Sound => {
@@ -670,6 +679,7 @@ pub fn activate(model: &mut Model, target: Target) {
         // The rail acts on drag and release (see `Input`), a tap included.
         Target::Brightness => model.commit_brightness(),
         Target::AutoRotate => model.toggle_auto_rotate(),
+        Target::ScreenTimeout => model.cycle_screen_timeout(),
         Target::Volume => model.commit_volume(),
         Target::Mute => model.toggle_mute(),
         Target::KbdLayout(i) => model.select_keyboard_layout(i),

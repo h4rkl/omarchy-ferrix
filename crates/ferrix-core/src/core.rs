@@ -5,6 +5,7 @@
 
 use ferrix_hardware_api::{
     Capability, HardwareCommand, HardwareError, HardwareEvent, MockCommand, SuspendOutcome,
+    clamp_brightness,
 };
 use ferrix_session::HardwareServices;
 
@@ -94,8 +95,8 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             )?,
             ControlCommand::SetBrightness { percent } => {
                 // A real capability call, not a mock mutation: the adapter
-                // emits display-changed itself.
-                services.display.set_brightness(percent)?;
+                // emits display-changed itself. Same floor as the product path.
+                services.display.set_brightness(clamp_brightness(percent))?;
                 events.push(HardwareEvent::DisplayChanged(
                     services.display.display_state(),
                 ));
@@ -147,6 +148,11 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             | ControlCommand::BluetoothDisconnect { .. }
             | ControlCommand::BluetoothForget { .. } => {}
             ControlCommand::Shutdown => shutdown = true,
+            // Screen policy verbs: the control handler in main.rs applies
+            // them to the policy store and never calls here.
+            ControlCommand::SetIdleTimeout { .. }
+            | ControlCommand::InhibitBlank { .. }
+            | ControlCommand::ReleaseInhibit { .. } => {}
             // A process action, not hardware state: the control handler in
             // main.rs performs it (see daemon_kill.rs) and never calls here.
             ControlCommand::KillDaemon { .. } => {}
@@ -190,7 +196,15 @@ pub fn apply_product(
             services.bluetooth.set_bluetooth_enabled(enabled)?;
         }
         HardwareCommand::SetBrightness { percent } => {
-            services.display.set_brightness(percent)?;
+            // Never fully dark while the screen is on; the shell's DPMS
+            // blank is the only way to turn the panel off.
+            if percent > 100 {
+                return Err(HardwareError::invalid(
+                    Capability::Display,
+                    format!("brightness must be 0..=100 (got {percent})"),
+                ));
+            }
+            services.display.set_brightness(clamp_brightness(percent))?;
         }
         HardwareCommand::SetRotationLock { locked } => {
             services.display.set_rotation_lock(locked)?;
@@ -206,6 +220,9 @@ pub fn apply_product(
         }
         HardwareCommand::Suspend => {
             services.lifecycle.suspend()?;
+        }
+        HardwareCommand::PowerAction { action } => {
+            services.lifecycle.power_action(action)?;
         }
     }
     Ok(())
@@ -342,6 +359,27 @@ mod tests {
         assert_eq!(display.orientation, Orientation::Portrait, "lock holds");
         apply_product(&s, HardwareCommand::SetRotationLock { locked: false }).unwrap();
         assert_eq!(s.snapshot().display.orientation, Orientation::Landscape);
+    }
+
+    #[test]
+    fn brightness_never_goes_fully_dark_and_power_actions_reach_lifecycle() {
+        use ferrix_hardware_api::{MIN_BRIGHTNESS_PERCENT, PowerAction};
+        let s = services();
+        apply_product(&s, HardwareCommand::SetBrightness { percent: 0 }).unwrap();
+        assert_eq!(
+            s.snapshot().display.brightness_percent,
+            MIN_BRIGHTNESS_PERCENT
+        );
+        apply(&s, &ControlCommand::SetBrightness { percent: 1 }).unwrap();
+        assert_eq!(
+            s.snapshot().display.brightness_percent,
+            MIN_BRIGHTNESS_PERCENT
+        );
+        assert!(apply_product(&s, HardwareCommand::SetBrightness { percent: 101 }).is_err());
+        for action in [PowerAction::PowerOff, PowerAction::Restart] {
+            apply_product(&s, HardwareCommand::PowerAction { action })
+                .expect("the virtual phone accepts and hands off to init");
+        }
     }
 
     #[test]

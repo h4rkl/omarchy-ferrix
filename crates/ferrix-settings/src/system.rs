@@ -20,6 +20,15 @@ use ferrix_telephony_api::{
 use crate::bluetooth::DeviceList;
 use crate::model::{Action, Link, Model};
 
+/// A screen timeout as Settings shows it: `30 s`, `2 min`, `Never`.
+pub fn idle_timeout_label(secs: Option<u32>) -> String {
+    match secs {
+        None => "Never".to_owned(),
+        Some(s) if s >= 60 && s % 60 == 0 => format!("{} min", s / 60),
+        Some(s) => format!("{s} s"),
+    }
+}
+
 /// Why the Bluetooth power toggle cannot act, in the order checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BluetoothBlock {
@@ -185,9 +194,63 @@ impl Model {
             .or_else(|| self.hw.as_ref().map(|hw| hw.display.brightness_percent))
     }
 
+    /// The rail stops at the floor: the screen is never fully dark while
+    /// on (screen-off is the power key or the idle timeout).
     pub fn drag_brightness(&mut self, percent: u8) {
         if self.display_block().is_ok() {
-            self.brightness_drag = Some(percent.min(100));
+            self.brightness_drag = Some(ferrix_hardware_api::clamp_brightness(percent));
+        }
+    }
+
+    /// The screen timeout row's value: `None` while the policy is unknown.
+    pub fn screen_timeout_value(&self) -> Option<String> {
+        self.screen_policy
+            .as_ref()
+            .map(|p| idle_timeout_label(p.idle_timeout_secs))
+    }
+
+    /// The screen timeout row's subtitle: what happens, or what holds it.
+    pub fn screen_timeout_sub(&self) -> String {
+        match self.screen_policy.as_ref() {
+            None => self.core_label(),
+            Some(policy) if policy.inhibited() => {
+                let reasons: Vec<&str> = policy.reasons().iter().map(|r| r.name()).collect();
+                format!("kept on \u{b7} {}", reasons.join(", "))
+            }
+            Some(policy) => match policy.idle_timeout_secs {
+                None => "stays on until the power key".to_owned(),
+                Some(secs) => format!(
+                    "turns off after {} without input",
+                    idle_timeout_label(Some(secs))
+                ),
+            },
+        }
+    }
+
+    /// Steps to the next offered timeout (wrapping after Never).
+    pub fn cycle_screen_timeout(&mut self) {
+        let Some(policy) = self.screen_policy.as_ref() else {
+            self.last_error = Some("screen timeout \u{b7} core unavailable".to_owned());
+            return;
+        };
+        let choices = ferrix_hardware_api::IDLE_TIMEOUT_CHOICES;
+        let next = choices
+            .iter()
+            .position(|c| *c == policy.idle_timeout_secs)
+            .map_or(choices[0], |i| choices[(i + 1) % choices.len()]);
+        self.last_error = None;
+        self.pending.push(Action::SetIdleTimeout(next));
+    }
+
+    /// Follows the core's screen policy watch.
+    pub fn apply_policy(&mut self, feed: ferrix_protocol::PolicyFeed) -> bool {
+        match feed {
+            ferrix_protocol::PolicyFeed::Policy(policy) => {
+                self.screen_policy = Some(policy);
+                true
+            }
+            // Keep showing the last policy; the core link says it is stale.
+            ferrix_protocol::PolicyFeed::Disconnected { .. } => false,
         }
     }
 
@@ -242,9 +305,16 @@ impl Model {
     }
 
     pub fn display_state_name(&self) -> String {
+        let timeout = match self.screen_policy.as_ref() {
+            Some(policy) => match policy.idle_timeout_secs {
+                Some(secs) => format!("-timeout-{secs}"),
+                None => "-timeout-never".to_owned(),
+            },
+            None => String::new(),
+        };
         match (self.display_block(), self.hw.as_ref()) {
             (Ok(()), Some(hw)) => format!(
-                "brightness-{}-rotation-{}",
+                "brightness-{}-rotation-{}{timeout}",
                 hw.display.brightness_percent,
                 if hw.display.rotation_locked {
                     "locked"
@@ -752,6 +822,75 @@ mod tests {
         });
         assert_eq!(m.sound_block(), Err("core \u{b7} unavailable"));
         assert_eq!(m.sound_state_name(), "unavailable");
+    }
+
+    #[test]
+    fn brightness_rail_stops_at_the_floor() {
+        let mut m = with_core();
+        m.drag_brightness(0);
+        assert_eq!(
+            m.brightness(),
+            Some(ferrix_hardware_api::MIN_BRIGHTNESS_PERCENT),
+            "never fully dark while on"
+        );
+        m.commit_brightness();
+        assert_eq!(
+            m.pending,
+            vec![Action::SetBrightness(
+                ferrix_hardware_api::MIN_BRIGHTNESS_PERCENT
+            )]
+        );
+    }
+
+    #[test]
+    fn screen_timeout_cycles_the_offered_choices_and_names_inhibitors() {
+        use ferrix_hardware_api::{InhibitReason, ScreenInhibitor, ScreenPolicy};
+        use ferrix_protocol::PolicyFeed;
+        let mut m = with_core();
+        assert_eq!(m.screen_timeout_value(), None, "unknown until the watch");
+        m.cycle_screen_timeout();
+        assert!(m.pending.is_empty());
+        assert!(m.last_error.is_some());
+        let policy = |secs, inhibitors| ScreenPolicy {
+            idle_timeout_secs: secs,
+            inhibitors,
+        };
+        assert!(m.apply_policy(PolicyFeed::Policy(policy(Some(60), vec![]))));
+        assert_eq!(m.screen_timeout_value().as_deref(), Some("1 min"));
+        assert_eq!(
+            m.screen_timeout_sub(),
+            "turns off after 1 min without input"
+        );
+        assert_eq!(
+            m.display_state_name(),
+            "brightness-72-rotation-auto-timeout-60"
+        );
+        m.cycle_screen_timeout();
+        assert_eq!(m.pending, vec![Action::SetIdleTimeout(Some(120))]);
+        m.pending.clear();
+        m.apply_policy(PolicyFeed::Policy(policy(None, vec![])));
+        assert_eq!(m.screen_timeout_value().as_deref(), Some("Never"));
+        m.cycle_screen_timeout();
+        assert_eq!(m.pending, vec![Action::SetIdleTimeout(Some(15))], "wraps");
+        m.pending.clear();
+        // A value Settings does not offer (a scenario's 5 s) steps to the first.
+        m.apply_policy(PolicyFeed::Policy(policy(Some(5), vec![])));
+        assert_eq!(m.screen_timeout_value().as_deref(), Some("5 s"));
+        m.cycle_screen_timeout();
+        assert_eq!(m.pending, vec![Action::SetIdleTimeout(Some(15))]);
+        let call = ScreenInhibitor {
+            id: 1,
+            reason: InhibitReason::Call,
+            holder: "org.ferrix.phone".into(),
+        };
+        m.apply_policy(PolicyFeed::Policy(policy(Some(30), vec![call])));
+        assert_eq!(m.screen_timeout_sub(), "kept on \u{b7} call");
+        assert!(!m.apply_policy(PolicyFeed::Disconnected {
+            reason: "gone".into()
+        }));
+        assert_eq!(m.screen_timeout_value().as_deref(), Some("30 s"), "kept");
+        assert_eq!(idle_timeout_label(Some(600)), "10 min");
+        assert_eq!(idle_timeout_label(Some(90)), "90 s");
     }
 
     #[test]

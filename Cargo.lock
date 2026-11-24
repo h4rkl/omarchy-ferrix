@@ -1136,6 +1136,7 @@ name = "ferrix-scenario"
 version = "0.1.0"
 dependencies = [
  "ferrix-mock-control",
+ "ferrix-target-profile",
  "serde",
  "serde_json",
  "toml",
