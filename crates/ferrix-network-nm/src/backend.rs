@@ -356,6 +356,31 @@ impl NetworkManagerBackend {
         })
     }
 
+    /// Deletes saved Wi-Fi profiles for `ssid` before a join that brings
+    /// its own secret, so a Retry after a wrong passphrase replaces the
+    /// failed profile instead of leaving a stale duplicate beside it.
+    fn replace_profiles_for(&self, ssid: &[u8]) -> Result<(), BackendError> {
+        let settings = SettingsProxyBlocking::new(&self.connection).map_err(bus_error)?;
+        for path in settings.list_connections().map_err(bus_error)? {
+            let proxy = SettingsConnectionProxyBlocking::builder(&self.connection)
+                .path(path.clone())
+                .map_err(bus_error)?
+                .build()
+                .map_err(bus_error)?;
+            let Ok(all) = proxy.get_settings() else {
+                continue;
+            };
+            let Some(wireless) = all.get("802-11-wireless") else {
+                continue;
+            };
+            let saved: Vec<u8> = field(wireless, "ssid").unwrap_or_default();
+            if saved == ssid {
+                proxy.delete().map_err(bus_error)?;
+            }
+        }
+        Ok(())
+    }
+
     fn profiles(&self) -> Result<Vec<SavedProfile>, BackendError> {
         let settings = SettingsProxyBlocking::new(&self.connection).map_err(bus_error)?;
         let mut profiles = Vec::new();
@@ -724,6 +749,7 @@ impl NetworkBackend for NetworkManagerBackend {
             security.insert("key-mgmt", Value::from(key_mgmt));
             security.insert("psk", Value::from(secret));
             settings.insert("802-11-wireless-security", security);
+            self.replace_profiles_for(point.ssid.as_bytes())?;
         }
         self.manager()?
             .add_and_activate_connection(settings, &device, &path)
@@ -764,6 +790,7 @@ impl NetworkBackend for NetworkManagerBackend {
             wireless_security.insert("key-mgmt", Value::from(key_mgmt));
             wireless_security.insert("psk", Value::from(secret));
             settings.insert("802-11-wireless-security", wireless_security);
+            self.replace_profiles_for(ssid.as_bytes())?;
         }
         let root = ObjectPath::try_from(ROOT_PATH)
             .map_err(|e| BackendError::unavailable(e.to_string()))?;
