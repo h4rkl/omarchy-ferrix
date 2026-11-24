@@ -60,6 +60,10 @@ docker stop "$container" >/dev/null
 docker rm "$container" >/dev/null
 cp "$stage/boot/vmlinuz-virt" "$out/Image"
 cp "$root/targets/qemu-aarch64/initramfs/init" "$stage/init"
+# The sandbox negative proof init runs in check mode (issue #10).
+mkdir -p "$stage/usr/lib/ferrix"
+cp "$root/targets/qemu-aarch64/initramfs/sandbox-selftest.sh" "$stage/usr/lib/ferrix/sandbox-selftest.sh"
+chmod 0755 "$stage/usr/lib/ferrix/sandbox-selftest.sh"
 for bin in $static_bins; do
   cp "$cache/guest-target/release/$bin" "$stage/usr/bin/$bin"
   cp "$cache/guest-target/release/$bin" "$out/product/$bin"
@@ -109,7 +113,12 @@ notices_hash=$(cd "$out/product/licenses" && find . -type f | LC_ALL=C sort | wh
 cp "$cache/guest-target/ferrix-shell/release/ferrix-shell" "$out/product/ferrix-shell"
 cp "${FERRIX_QEMU_PROFILE:-$root/targets/qemu-aarch64/profile.toml}" "$out/product/profile.toml"
 cp "${FERRIX_QEMU_COLORS:-$root/themes/ferrix/colors.toml}" "$out/product/colors.toml"
-(cd "$stage" && find . -print | cpio -o -H newc 2>/dev/null | gzip -9) > "$initramfs_tmp"
+# The guest root is owned by root and traversable: mktemp -d makes the stage
+# 0700 and the files carry the builder's uid. Root's capabilities hid that
+# until a user namespace (the per-app uid sandbox, issue #10) made the
+# builder's unmapped uid and the 0700 root visible as EACCES.
+chmod 0755 "$stage"
+(cd "$stage" && find . -print | cpio -o -H newc -R 0:0 2>/dev/null | gzip -9) > "$initramfs_tmp"
 gzip -t "$initramfs_tmp" || { echo "generated initramfs failed gzip integrity check" >&2; exit 1; }
 mv "$initramfs_tmp" "$out/initramfs.cpio.gz"
 image_hash=$(shasum -a 256 "$out/Image" | awk '{print $1}')
@@ -119,6 +128,7 @@ core_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-core" | awk '{prin
 shell_hash=$(shasum -a 256 "$cache/guest-target/ferrix-shell/release/ferrix-shell" | awk '{print $1}')
 appd_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-appd" | awk '{print $1}')
 sandbox_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-sandbox" | awk '{print $1}')
+selftest_hash=$(shasum -a 256 "$root/targets/qemu-aarch64/initramfs/sandbox-selftest.sh" | awk '{print $1}')
 terminal_hash=$(shasum -a 256 "$cache/guest-target/release/ferrix-terminal" | awk '{print $1}')
 # Service daemons and apps: "<name with _>_sha256" for each, from one list.
 service_hashes=""
@@ -133,5 +143,5 @@ grants_hash=$(shasum -a 256 "$root/apps/grants.json" | awk '{print $1}')
 apps_hash=$(cd "$root/apps" && for f in $(ls *.json | sort); do printf '%s\n' "$f"; cat "$f"; done | shasum -a 256 | awk '{print $1}')
 # Theme hash: the exact colors.toml shipped as /etc/ferrix/colors.toml.
 colors_hash=$(shasum -a 256 "$out/product/colors.toml" | awk '{print $1}')
-printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","ferrix_terminal_sha256":"%s",%s"apps_sha256":"%s","grants_sha256":"%s","contacts_fixtures_sha256":"%s","colors_sha256":"%s","third_party_notices_sha256":"%s","profile":"%s","colors":"%s","mock_control_ports":["ferrix.control","ferrix.telephony","ferrix.network"]}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$terminal_hash" "$service_hashes" "$apps_hash" "$grants_hash" "$contacts_fixtures_hash" "$colors_hash" "$notices_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
+printf '{"evidence":"QEMU","ship":"Omarchy Ferrix","runtime_namespace":"ferrix","target":"qemu-aarch64","builder_image":"%s","rust_builder_image":"%s","rust_toolchain":"%s","kernel":"Alpine linux-virt aarch64","image_sha256":"%s","initramfs_sha256":"%s","ferrix_basic_screen_sha256":"%s","ferrix_core_sha256":"%s","ferrix_shell_sha256":"%s","ferrix_appd_sha256":"%s","ferrix_sandbox_sha256":"%s","sandbox_selftest_sha256":"%s","ferrix_terminal_sha256":"%s",%s"apps_sha256":"%s","grants_sha256":"%s","contacts_fixtures_sha256":"%s","colors_sha256":"%s","third_party_notices_sha256":"%s","profile":"%s","colors":"%s","mock_control_ports":["ferrix.control","ferrix.telephony","ferrix.network"]}\n' "$image" "$rust_image" "$rust_toolchain" "$image_hash" "$initramfs_hash" "$screen_hash" "$core_hash" "$shell_hash" "$appd_hash" "$sandbox_hash" "$selftest_hash" "$terminal_hash" "$service_hashes" "$apps_hash" "$grants_hash" "$contacts_fixtures_hash" "$colors_hash" "$notices_hash" "${FERRIX_QEMU_PROFILE:-targets/qemu-aarch64/profile.toml}" "${FERRIX_QEMU_COLORS:-themes/ferrix/colors.toml}" > "$out/manifest.json"
 printf 'built: %s/Image and %s/initramfs.cpio.gz\n' "$out" "$out"

@@ -61,6 +61,17 @@ if [ "$core_ready" != true ]; then
 fi
 # Only now is the guest healthy: the core actually reported.
 printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok","core":"ferrix-core","socket":"/run/ferrix/core.sock"}'
+# Sandbox negative proof (issue #10): forbidden path, forbidden system calls,
+# no network without the grant, pids/memory limits, per-app uid. Check mode
+# only; qemu-check requires its sandbox-selftest record. HOME as the
+# graphical session sets it, so the data directory lands under /root.
+if [ "$check_mode" = true ]; then
+  if [ -x /usr/lib/ferrix/sandbox-selftest.sh ]; then
+    HOME=/root /usr/lib/ferrix/sandbox-selftest.sh || true
+  else
+    printf '%s\n' '{"evidence":"QEMU","event":"sandbox-selftest","status":"failed","reason":"selftest-missing"}'
+  fi
+fi
 # --- Service daemons (ADR-001, 002, 003, 006) ------------------------------
 # ferrix-telephonyd and ferrix-networkd run their mock backends; each owns
 # one host mock-control channel (virtio-serial ports ferrix.telephony and

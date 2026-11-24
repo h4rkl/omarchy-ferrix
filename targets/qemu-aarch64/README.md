@@ -52,7 +52,13 @@ just qemu-check
 `qemu-check` uses portable TCG and is the CI contract (`.github/workflows/ci.yml`
 runs it unchanged on a Linux arm64 runner). It waits for the persistent
 `ferrix-core` daemon's `boot-health` record and init's `QEMU`-labelled
-`boot-health` that may only follow it, then for the `telephonyd-ready` and
+`boot-health` that may only follow it, then for init's sandbox negative
+proof (`initramfs/sandbox-selftest.sh`, issue #10: one
+`sandbox-denied{check,status,exit}` record per forbidden path, forbidden
+system calls, no network without the grant, `pids.max`, `memory.max`, and
+per-app uid, then a `sandbox-selftest` summary that must say `ok`; init
+also prints `cgroup-ready` once cgroup2 is mounted with `memory`, `pids`
+and `cpu` delegated), then for the `telephonyd-ready` and
 `networkd-ready` records of the two mock-backed service daemons (ADR-006),
 asserts the mock is still unplugged,
 sends `set-power charging=true` over the real host-to-guest mock-control

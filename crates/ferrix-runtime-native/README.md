@@ -389,3 +389,8 @@ gid are `S`, it has no supplementary groups and `CapEff` 0, the root-only
 `/etc/shadow` (which the launcher can read) is refused, it can write its
 data directory and stand-in `$HOME`, and on the host the data directory is
 `S:S` mode 0700 and the written file is `S`'s.
+The QEMU guest runs the same classes of negative check in check mode
+(`targets/qemu-aarch64/initramfs/sandbox-selftest.sh`: forbidden path,
+forbidden system calls, no network, pids and memory limits, per-app uid),
+each a `sandbox-denied{check,status}` record; `just qemu-check` requires
+the `sandbox-selftest` summary with `status: ok`.
