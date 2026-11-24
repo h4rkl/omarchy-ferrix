@@ -29,6 +29,8 @@ pub enum Mode {
         serial_log: PathBuf,
         /// Capture the framebuffer through this QMP helper after the last step.
         frame: Option<FrameCapture>,
+        /// QMP socket and helper for `input` steps (agent sessions).
+        input: Option<QmpInput>,
     },
     Nested {
         sockets: PathBuf,
@@ -40,6 +42,16 @@ pub enum Mode {
 pub struct FrameCapture {
     pub qmp_socket: PathBuf,
     pub qmp_helper: PathBuf,
+}
+
+/// Where `input` steps go: the QMP helper and the display geometry its
+/// absolute tap coordinates are scaled against (the session's profile).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QmpInput {
+    pub qmp_socket: PathBuf,
+    pub qmp_helper: PathBuf,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Mode {
@@ -190,33 +202,11 @@ fn run_step(
     let timeout = Duration::from_millis(step.timeout_ms);
     // Records before the command was sent never count.
     tail.new_lines()?;
-    let socket = mode.socket_for(step.service);
-    let ack = send_with_retry(&socket, &step.command, timeout)
-        .map_err(|e| format!("step {index} ({}): {e}", step.cmd()))?;
-    let ack_value = serde_json::to_value(&ack).unwrap_or(Value::Null);
-    match (&ack, step.expect_ack_error) {
-        (Ack::Ok { .. }, true) => {
-            return Err(format!(
-                "step {index} ({}): ack-expected-error, got {ack_value}",
-                step.cmd()
-            ));
-        }
-        (Ack::Error { reason, .. }, false) => {
-            return Err(format!(
-                "step {index} ({}): ack-error: {reason}",
-                step.cmd()
-            ));
-        }
-        _ => {}
-    }
-    if let Some(expected) = &step.ack
-        && !is_subset(expected, &ack_value)
-    {
-        return Err(format!(
-            "step {index} ({}): ack-mismatch, expected subset {expected}, got {ack_value}",
-            step.cmd()
-        ));
-    }
+    let ack_value = if step.service == Service::Input {
+        input_step(mode, index, step)?
+    } else {
+        control_step(mode, index, step, timeout)?
+    };
     let mut records: Vec<Value> = Vec::new();
     // Tolerant of console noise and of a record split by another writer's
     // line (see records.rs); fresh per step, like the records themselves.
@@ -246,6 +236,97 @@ fn run_step(
             Err(_) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
+}
+
+/// An `input` step: one QMP key press or tap through the helper script,
+/// so the event enters the guest as a real virtio-input event.
+fn input_step(mode: &Mode, index: usize, step: &Step) -> Result<Value, String> {
+    let Mode::Guest {
+        input: Some(qmp), ..
+    } = mode
+    else {
+        return Err(format!(
+            "step {index} ({}): input steps need a guest agent session with a QMP socket and --qmp-helper",
+            step.cmd()
+        ));
+    };
+    let mut command = Command::new("python3");
+    command
+        .arg(&qmp.qmp_helper)
+        .arg("--socket")
+        .arg(&qmp.qmp_socket);
+    let text = |key: &str| {
+        step.command
+            .get(key)
+            .map(|v| v.to_string().trim_matches('"').to_owned())
+    };
+    match step.cmd() {
+        "key" => {
+            command.arg("key").arg(text("key").unwrap_or_default());
+            if let Some(ms) = text("hold_ms") {
+                command.arg("--hold-ms").arg(ms);
+            }
+        }
+        "tap" => {
+            command
+                .arg("tap")
+                .arg(text("x").unwrap_or_default())
+                .arg(text("y").unwrap_or_default())
+                .arg("--width")
+                .arg(qmp.width.to_string())
+                .arg("--height")
+                .arg(qmp.height.to_string());
+        }
+        other => return Err(format!("step {index}: unknown input command {other}")),
+    }
+    let output = command
+        .output()
+        .map_err(|e| format!("step {index} ({}): cannot run qmp helper: {e}", step.cmd()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "step {index} ({}): qmp helper failed: {}",
+            step.cmd(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(json!({"status": "ok", "ack": step.cmd(), "service": "input"}))
+}
+
+/// A mock-control step: send the command and check its ack.
+fn control_step(
+    mode: &Mode,
+    index: usize,
+    step: &Step,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let socket = mode.socket_for(step.service);
+    let ack = send_with_retry(&socket, &step.command, timeout)
+        .map_err(|e| format!("step {index} ({}): {e}", step.cmd()))?;
+    let ack_value = serde_json::to_value(&ack).unwrap_or(Value::Null);
+    match (&ack, step.expect_ack_error) {
+        (Ack::Ok { .. }, true) => {
+            return Err(format!(
+                "step {index} ({}): ack-expected-error, got {ack_value}",
+                step.cmd()
+            ));
+        }
+        (Ack::Error { reason, .. }, false) => {
+            return Err(format!(
+                "step {index} ({}): ack-error: {reason}",
+                step.cmd()
+            ));
+        }
+        _ => {}
+    }
+    if let Some(expected) = &step.ack
+        && !is_subset(expected, &ack_value)
+    {
+        return Err(format!(
+            "step {index} ({}): ack-mismatch, expected subset {expected}, got {ack_value}",
+            step.cmd()
+        ));
+    }
+    Ok(ack_value)
 }
 
 fn capture_frame(capture: &FrameCapture, dir: &Path) -> Value {

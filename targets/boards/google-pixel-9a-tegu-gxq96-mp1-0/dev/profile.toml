@@ -25,6 +25,11 @@ scanout_byte_order = "reversed"
 # zone (bottom 3%), so no client control sits under the system gesture and
 # the compositor's home indicator has its own strip.
 safe_area = { top = 137, bottom = 72 }
+# Default screen idle timeout (seconds; 0 = never) until a choice is saved
+# in Settings > Display. Never for now: blanking drops touch input, and the
+# devtest inject/fbgrab loop must not find a dark panel. Pick a timeout in
+# Settings to exercise it; the power key blanks either way.
+idle_timeout_secs = 0
 
 [input]
 touch = true

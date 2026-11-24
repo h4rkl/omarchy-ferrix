@@ -26,10 +26,29 @@ struct Fixture {
 }
 
 fn fixture(name: &str) -> Fixture {
+    fixture_with(name, false)
+}
+
+/// `placeholder` adds a synthetic non-launchable catalog entry beside the
+/// checked-in descriptors (every checked-in app is launchable now).
+fn fixture_with(name: &str, placeholder: bool) -> Fixture {
     let dir = std::env::temp_dir().join(format!("ferrix-appd-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let socket = dir.join("ferrix-appd.sock");
-    let apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
+    let mut apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
+    if placeholder {
+        let catalog = dir.join("apps");
+        std::fs::create_dir_all(&catalog).unwrap();
+        for entry in std::fs::read_dir(&apps).unwrap().flatten() {
+            std::fs::copy(entry.path(), catalog.join(entry.file_name())).unwrap();
+        }
+        std::fs::write(
+            catalog.join("org.ferrix.placeholder.json"),
+            r#"{"schema_version":1,"id":"org.ferrix.placeholder","runtime":"native","name":"Placeholder","icon":{"glyph":"?","tone":"neutral"},"launchable":false}"#,
+        )
+        .unwrap();
+        apps = catalog;
+    }
     let runtime = FakeRuntime::native();
     let tree = FakeProcessTree::default();
     let (recorder, _records) = Recorder::capturing("mock");
@@ -76,7 +95,7 @@ fn id(text: &str) -> AppId {
 
 #[test]
 fn hello_catalog_and_typed_errors_over_the_socket() {
-    let f = fixture("catalog");
+    let f = fixture_with("catalog", true);
     let mut home = Client::connect(&f.socket, ClientRole::Home, TIMEOUT).unwrap();
     let apps = home.catalog().unwrap();
     assert!(apps.len() >= 2);
@@ -88,8 +107,8 @@ fn hello_catalog_and_typed_errors_over_the_socket() {
     assert_eq!(home.app_icon(&id("apk.org.example.absent")), Ok(None));
 
     // A reference entry is not launchable: typed error, not a protocol error.
-    // Which entries are illustrative changes as apps land, so pick one from
-    // the catalog instead of naming it.
+    // Which entries are illustrative changes as apps land, so the fixture
+    // adds one and the test picks it from the catalog.
     let reference = apps
         .iter()
         .find(|d| !d.launchable)

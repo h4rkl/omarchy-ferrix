@@ -36,6 +36,10 @@ evidence = "No Ferrix adapter or physical Linux evidence."
 status = "unsupported"
 evidence = "No Ferrix adapter or physical Linux evidence."
 
+[camera]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
 [mock-control]
 status = "unsupported"
 evidence = "Physical target; no mock control is claimed."

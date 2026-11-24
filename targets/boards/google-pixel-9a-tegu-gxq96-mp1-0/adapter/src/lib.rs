@@ -121,6 +121,7 @@ fn capability_key(capability: Capability) -> &'static str {
         Capability::Audio => "audio",
         Capability::Telephony => "telephony",
         Capability::Lifecycle => "lifecycle",
+        Capability::Camera => "camera",
         Capability::MockControl => "mock-control",
     }
 }
@@ -148,8 +149,8 @@ mod linux {
         Audio, AudioRoute, AudioRouteAvailability, AudioState, Bluetooth, BluetoothState,
         Capability, Display, DisplayState, EventSource, HardwareError, HardwareEvent, Input,
         InputState, Lifecycle, LifecycleState, ModemRegistration, Network,
-        NetworkState as HardwareNetworkState, Orientation, Power, SimState, SuspendOutcome,
-        Telephony, TelephonyState, WifiState,
+        NetworkState as HardwareNetworkState, Orientation, Power, PowerAction, SimState,
+        SuspendOutcome, Telephony, TelephonyState, WifiState,
     };
     use ferrix_network_adapter_api::NetworkBackend;
     use ferrix_network_api::{
@@ -576,9 +577,10 @@ mod linux {
             let Some(backlight) = self.backlight.as_ref() else {
                 return Err(HardwareError::unsupported(Capability::Display));
             };
-            let value =
-                u32::try_from(u64::from(percent) * u64::from(backlight.max) / u64::from(100_u8))
-                    .unwrap_or(backlight.max);
+            // Never fully dark while on: screen-off is the shell's DPMS
+            // blank, so a lit panel always keeps a visible level.
+            let percent = ferrix_hardware_api::clamp_brightness(percent);
+            let value = backlight_raw(percent, backlight.max);
             fs::write(&backlight.brightness, value.to_string()).map_err(|error| {
                 HardwareError::failed(
                     Capability::Display,
@@ -665,6 +667,16 @@ mod linux {
             let max = fs::read_to_string(maximum).ok()?.trim().parse().ok()?;
             (max > 0 && brightness.is_file()).then_some(Backlight { brightness, max })
         })
+    }
+
+    /// Raw `brightness` value for a percentage of `max`: proportional, but
+    /// never 0 for a non-zero request (a coarse `max` would otherwise round
+    /// the floor level to an unlit panel).
+    fn backlight_raw(percent: u8, max: u32) -> u32 {
+        let value = u32::try_from(u64::from(percent.min(100)) * u64::from(max) / 100)
+            .unwrap_or(max)
+            .min(max);
+        if percent > 0 { value.max(1) } else { value }
     }
 
     fn read_brightness_percent(backlight: &Backlight) -> Option<u8> {
@@ -821,6 +833,32 @@ mod linux {
                 .publish(HardwareEvent::Suspended { outcome, lifecycle });
             Ok(outcome)
         }
+
+        /// Orderly OpenRC transition: `poweroff`/`reboot` without `-f` ask
+        /// init to run the shutdown runlevel (services, Waydroid, unmounts)
+        /// before the kernel call. They return once init has the request.
+        fn power_action(&self, action: PowerAction) -> Result<(), HardwareError> {
+            let program = match action {
+                PowerAction::PowerOff => "/sbin/poweroff",
+                PowerAction::Restart => "/sbin/reboot",
+            };
+            let status = std::process::Command::new(program)
+                .status()
+                .map_err(|error| {
+                    HardwareError::failed(
+                        Capability::Lifecycle,
+                        format!("could not run {program}: {error}"),
+                    )
+                })?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(HardwareError::failed(
+                    Capability::Lifecycle,
+                    format!("{program} exited with {status}"),
+                ))
+            }
+        }
     }
 
     pub(super) fn connect() -> Result<HardwareBundle, ConnectError> {
@@ -935,6 +973,16 @@ mod linux {
         }
 
         #[test]
+        fn backlight_floor_never_rounds_a_lit_panel_to_zero() {
+            assert_eq!(backlight_raw(100, 4095), 4095);
+            assert_eq!(backlight_raw(50, 4095), 2047);
+            assert_eq!(backlight_raw(5, 10), 1, "5% of a coarse rail is still lit");
+            assert_eq!(backlight_raw(1, 255), 2);
+            assert_eq!(backlight_raw(200, 255), 255);
+            assert_eq!(backlight_raw(0, 255), 0);
+        }
+
+        #[test]
         fn modes_with_refresh_suffixes_parse() {
             assert_eq!(parse_mode("1080x2424@60:60"), Some((1080, 2424)));
             assert_eq!(parse_mode("4096x2160"), Some((4096, 2160)));
@@ -1023,6 +1071,11 @@ mod tests {
         assert_eq!(m.status(Capability::Power), CapabilityStatus::Supported);
         assert_eq!(m.status(Capability::Audio), CapabilityStatus::Unsupported);
         assert_eq!(m.status(Capability::Display), CapabilityStatus::Unsupported);
+        // No camera adapter or physical Linux evidence yet.
+        assert_eq!(
+            capability_matrix().status(Capability::Camera),
+            CapabilityStatus::Unsupported
+        );
         // A physical target never claims the mock test seam.
         assert_eq!(
             capability_matrix().status(Capability::MockControl),

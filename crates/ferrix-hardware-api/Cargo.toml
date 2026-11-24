@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Wire form of camera frame pixels (src/camera.rs).
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

@@ -6,6 +6,11 @@ width = 1080
 height = 2340
 scale = 1.0
 orientation = "portrait"
+# Default screen idle timeout (seconds; 0 = never). The virtual phone never
+# blanks on its own so agent sessions, CI captures, and scenarios see a lit
+# framebuffer; the display-power-key-blank-wake-menu scenario sets a short
+# timeout through ferrix-core and restores this one.
+idle_timeout_secs = 0
 
 [input]
 touch = true
@@ -130,3 +135,23 @@ kind = "audio"
 rssi = -88
 pairing = "just-works"
 outcome = "timeout"
+
+# Synthetic cameras (ADR-009). Mock only: the frames are generated test
+# patterns, never captured. Sizes are sensor-oriented; `rotation` is the
+# clockwise turn that brings a frame upright on the portrait display.
+[camera]
+preview_fps = 8
+
+[[camera.devices]]
+facing = "back"
+rotation = 90
+pattern = "bars"
+preview = { width = 480, height = 360 }
+still = { width = 1280, height = 960 }
+
+[[camera.devices]]
+facing = "front"
+rotation = 270
+pattern = "grid"
+preview = { width = 480, height = 360 }
+still = { width = 960, height = 720 }

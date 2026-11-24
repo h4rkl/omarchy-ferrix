@@ -10,15 +10,18 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod bluetooth;
+mod camera;
 
 pub use bluetooth::{MOCK_PAIR_STEP_MS, MOCK_REMOTE_TIMEOUT_MS, MOCK_REMOTE_TYPING_MS};
+pub use camera::{MockCamera, render as render_camera_pattern};
 
 use ferrix_hardware_api::{
     Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothPin, BluetoothSession, BluetoothState,
     Capability, CapabilityMatrix, CapabilityStatus, Display, DisplayState, EventSource,
     HardwareError, HardwareEvent, HardwareState, Input, InputState, Lifecycle, LifecycleState,
     MockCommand, MockControl, MockPairingOutcome, ModemRegistration, Network, NetworkState,
-    Orientation, Power, PowerState, SimState, SuspendOutcome, Telephony, TelephonyState, WifiState,
+    Orientation, Power, PowerAction, PowerState, SimState, SuspendOutcome, Telephony,
+    TelephonyState, WifiState,
 };
 use ferrix_target_profile::Profile;
 
@@ -478,6 +481,13 @@ impl Lifecycle for Emulator {
             )),
             other => Ok(other),
         }
+    }
+
+    /// Accepted: the virtual phone has no power rail of its own. The core
+    /// hands the accepted action to the QEMU init (its `--power-marker`),
+    /// which really powers the guest off or reboots it.
+    fn power_action(&self, _action: PowerAction) -> Result<(), HardwareError> {
+        Ok(())
     }
 }
 

@@ -41,6 +41,7 @@ use crate::{
     config::ShellConfig,
     evidence::{self, Evidence, Value},
     layout::OutputLayout,
+    power::Screen,
 };
 
 type ShellCompositor = DrmCompositor<DumbAllocator, ScanoutExporter, (), DrmDeviceFd>;
@@ -345,11 +346,49 @@ pub fn run(
             .map_err(|e| ("event-loop", e.to_string()))?;
         shell.dispatch_clients(&mut display)?;
         shell.cleanup();
+        // Long-press and idle deadlines (the loop wakes at least every 16 ms).
+        shell.lifecycle_tick();
+
+        match shell.take_display_power() {
+            Some(Screen::Off) => {
+                // DPMS off: the CRTC goes inactive and every plane is
+                // disabled; the next commit re-enables it. Nothing renders
+                // (and no client gets a frame callback) until then.
+                let result = compositor.clear();
+                frame_pending = false;
+                let (status, reason) = match &result {
+                    Ok(()) => ("ok", None),
+                    Err(e) => ("failed", Some(e.to_string())),
+                };
+                shell.emit(
+                    "drm-dpms",
+                    &[
+                        ("state", "off".into()),
+                        ("status", status.into()),
+                        ("reason", reason.map_or(Value::Null, Value::from)),
+                    ],
+                );
+            }
+            Some(Screen::On) => {
+                // The next queued frame re-enables the CRTC (a modeset);
+                // repaint everything, not just the damage since the blank.
+                compositor.reset_buffer_ages();
+                shell.request_redraw();
+            }
+            None => {}
+        }
 
         if vblank.replace(false) {
             match compositor.frame_submitted() {
                 Ok(_) => {
                     frames_presented += 1;
+                    if shell.life.wake_frame_pending {
+                        shell.life.wake_frame_pending = false;
+                        shell.emit(
+                            "drm-dpms",
+                            &[("state", "on".into()), ("status", "presented".into())],
+                        );
+                    }
                     if !first_frame_reported {
                         first_frame_reported = true;
                         shell.emit(
@@ -368,7 +407,7 @@ pub fn run(
             shell.request_redraw();
         }
 
-        if !frame_pending && shell.take_redraw() {
+        if !frame_pending && !shell.life.screen_off() && shell.take_redraw() {
             let full_redraw = shell.take_full_redraw();
             let focused_pid = shell.focused_pid();
             if full_redraw {
@@ -377,6 +416,7 @@ pub fn run(
                 // its surface damage/element id resembles the old one.
                 compositor.reset_buffer_ages();
             }
+            shell.prepare_menu();
             let elements = render::collect_elements(&shell, &mut renderer);
             match compositor.render_frame(
                 &mut renderer,

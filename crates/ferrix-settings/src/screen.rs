@@ -798,14 +798,28 @@ fn display(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
             pressed,
         );
     }
-    error_notice(c, ty, l, model, 900);
+    let value = model.screen_timeout_value();
+    list_row(
+        c,
+        ty,
+        l.screen_timeout_rect(),
+        "Screen timeout",
+        &model.screen_timeout_sub(),
+        Some(match value.as_deref() {
+            Some(label) => (label, Tone::Neutral),
+            None => ("unknown", Tone::Warn),
+        }),
+        input.pressed == Some(Target::ScreenTimeout),
+    );
+    error_notice(c, ty, l, model, 1060);
     caption(
         c,
         ty,
         l,
-        "Brightness and rotation go through ferrix-core; off pins portrait, on follows \
-         the rotation sensor.",
-        1060,
+        "Brightness, rotation, and the screen timeout go through ferrix-core; off pins \
+         portrait, on follows the rotation sensor. Calls and video keep the screen on; the \
+         power key turns it off.",
+        1220,
     );
 }
 
