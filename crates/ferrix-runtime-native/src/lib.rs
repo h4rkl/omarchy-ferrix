@@ -21,12 +21,17 @@
 //! Nothing here depends on QEMU, kernels, or boards; `ferrix_appd` composes this
 //! runtime in its bootstrap code only.
 
+pub mod cgroup;
 mod plan;
 mod policy;
 mod report;
 mod runtime;
 mod sockets;
 
+pub use cgroup::{
+    CGROUP_FS, CGROUP_SLICE_ENV, CgroupError, CgroupOutcome, FERRIX_SLICE, app_cgroup_name,
+    app_cgroup_path, cgroup_slice,
+};
 pub use plan::*;
 pub use policy::*;
 pub use report::*;

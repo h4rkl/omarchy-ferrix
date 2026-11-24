@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::CgroupOutcome;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UserNamespace {
@@ -60,6 +62,49 @@ impl RunDirPolicy {
     }
 }
 
+/// Default `memory.max` of an application group: 1 GiB.
+pub const DEFAULT_MEMORY_MAX: u64 = 1 << 30;
+/// Default `pids.max` of an application group.
+pub const DEFAULT_PIDS_MAX: u64 = 1024;
+/// Default `cpu.weight` (the kernel's own default, so applications share the
+/// CPU evenly until a policy or a boost says otherwise).
+pub const DEFAULT_CPU_WEIGHT: u16 = 100;
+
+/// Per-application cgroup v2 limits ([`crate::cgroup`]). Each `None` limit
+/// leaves that controller alone; `cgroup: false` creates no group at all.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ResourcePolicy {
+    pub cgroup: bool,
+    /// `memory.max` in bytes (`memory.oom.group` is set with it).
+    pub memory_max: Option<u64>,
+    pub pids_max: Option<u64>,
+    /// `cpu.weight`, 1..=10000.
+    pub cpu_weight: Option<u16>,
+}
+
+impl Default for ResourcePolicy {
+    fn default() -> Self {
+        Self {
+            cgroup: true,
+            memory_max: Some(DEFAULT_MEMORY_MAX),
+            pids_max: Some(DEFAULT_PIDS_MAX),
+            cpu_weight: Some(DEFAULT_CPU_WEIGHT),
+        }
+    }
+}
+
+impl ResourcePolicy {
+    pub fn none() -> Self {
+        Self {
+            cgroup: false,
+            memory_max: None,
+            pids_max: None,
+            cpu_weight: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IsolationPolicy {
@@ -73,6 +118,8 @@ pub struct IsolationPolicy {
     pub mode: IsolationMode,
     /// Socket-directory visibility; `inherit` unless the manifest opts in.
     pub run_dir: RunDirPolicy,
+    /// Per-application cgroup and its limits.
+    pub resources: ResourcePolicy,
 }
 
 impl Default for IsolationPolicy {
@@ -87,6 +134,7 @@ impl Default for IsolationPolicy {
             no_new_privs: true,
             mode: IsolationMode::Required,
             run_dir: RunDirPolicy::default(),
+            resources: ResourcePolicy::default(),
         }
     }
 }
@@ -103,6 +151,7 @@ impl IsolationPolicy {
             no_new_privs: false,
             mode: IsolationMode::BestEffort,
             run_dir: RunDirPolicy::default(),
+            resources: ResourcePolicy::none(),
         }
     }
 
@@ -139,6 +188,8 @@ pub struct AppliedIsolation {
     pub private_tmp: bool,
     pub no_new_privs: bool,
     pub run_dir: RunDirOutcome,
+    /// The application's cgroup (`{}` when none was created).
+    pub cgroup: CgroupOutcome,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,7 +206,8 @@ impl IsolationReport {
         let degraded = requested.requests_any_namespace()
             || requested.private_tmp
             || requested.no_new_privs
-            || requested.run_dir.is_private();
+            || requested.run_dir.is_private()
+            || requested.resources.cgroup;
         Self {
             requested,
             applied: AppliedIsolation::default(),

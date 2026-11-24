@@ -167,6 +167,35 @@ if [ ! -L "$mnt/etc/runlevels/default/local" ] && [ ! -e "$mnt/etc/runlevels/def
   log "enabled OpenRC local service in default runlevel"
 fi
 
+# cgroup v2 for the per-application groups ferrix-sandbox creates under
+# /sys/fs/cgroup/ferrix.slice (issue #10). OpenRC's cgroups service mounts
+# the unified hierarchy at /sys/fs/cgroup only with rc_cgroup_mode="unified"
+# (hybrid puts cgroup2 at /sys/fs/cgroup/unified with the controllers on v1).
+# Set it explicitly, whatever the packaged default, and record the result.
+rc_conf="$mnt/etc/rc.conf"
+[ -f "$rc_conf" ] || fail "no-rc-conf" "OpenRC /etc/rc.conf missing in rootfs"
+if grep -Eq '^[[:space:]]*#?[[:space:]]*rc_cgroup_mode=' "$rc_conf"; then
+  sed -i -E 's/^[[:space:]]*#?[[:space:]]*rc_cgroup_mode=.*/rc_cgroup_mode="unified"/' "$rc_conf"
+else
+  printf 'rc_cgroup_mode="unified"\n' >>"$rc_conf"
+fi
+cgroup_mode=$(sed -n 's/^rc_cgroup_mode="\([^"]*\)".*/\1/p' "$rc_conf" | tail -n 1)
+[ "$cgroup_mode" = unified ] || fail "cgroup-mode" "rc_cgroup_mode is '$cgroup_mode', expected unified"
+cgroup_runlevel=""
+for level in sysinit boot default; do
+  if [ -L "$mnt/etc/runlevels/$level/cgroups" ]; then
+    cgroup_runlevel=$level
+    break
+  fi
+done
+if [ -z "$cgroup_runlevel" ]; then
+  [ -x "$mnt/etc/init.d/cgroups" ] || fail "no-openrc-cgroups" "OpenRC cgroups service missing in rootfs"
+  ln -s /etc/init.d/cgroups "$mnt/etc/runlevels/boot/cgroups"
+  cgroup_runlevel=boot
+  log "enabled OpenRC cgroups service in boot runlevel"
+fi
+log "rc_cgroup_mode=$cgroup_mode (cgroups service in $cgroup_runlevel)"
+
 # Boot files: boot-deploy places them on the boot partition.
 mkdir -p "$out"
 exported=""
@@ -248,6 +277,7 @@ cat > "$out/image-facts.json" <<JSON
   "readiness_marker": {"path": "$marker_dst", "sha256": "$marker_sha", "service": "openrc local", "local_service_was_enabled": $local_enabled},
   "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "ferrix_core_sha256": "$core_sha", "ferrix_shell_sha256": "$shell_sha", "ferrix_basic_screen_sha256": "$screen_sha", "ferrix_appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrix_terminal_sha256": "$terminal_sha"$service_shas, "grants_sha256": "$grants_sha", "contacts_fixtures_sha256": "$contacts_fixtures_sha", "colors_path": "/etc/ferrix/colors.toml", "colors_sha256": "$colors_sha", "telephony_backend_default": "mock", "network_backend_default": "mock", "networkmanager_installed": $nm_installed, "modemmanager_installed": $mm_installed},
   "android": {$android_facts},
+  "cgroup": {"rc_cgroup_mode": "$cgroup_mode", "service_runlevel": "$cgroup_runlevel"},
   "exported": [$exported,"qemu-aarch64.img"]
 }
 JSON

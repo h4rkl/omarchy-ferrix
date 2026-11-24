@@ -82,6 +82,7 @@ impl NamespaceSet {
             private_tmp,
             no_new_privs,
             run_dir,
+            cgroup: Default::default(),
         }
     }
 }
@@ -115,6 +116,7 @@ pub fn needs_sandbox(policy: &IsolationPolicy) -> bool {
         || policy.private_tmp
         || policy.no_new_privs
         || policy.run_dir.is_private()
+        || policy.resources.cgroup
 }
 
 /// Serializes a policy for the `--policy` argument.

@@ -93,6 +93,14 @@ pub trait RunningApp: Send {
     fn reopen(&mut self) -> Result<bool, AppError> {
         Ok(false)
     }
+    /// The instance's own cgroup v2 directory when the runtime created one
+    /// (the native sandbox's `ferrix.slice/app-<id>-<pid>`). This is the
+    /// handle for per-application scheduling and resource policy (for
+    /// example a `cpu.uclamp.min` boost of the focused application). `None`
+    /// when the runtime has no per-instance group.
+    fn cgroup_path(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 /// An application a runtime reports by itself: a package the user installed

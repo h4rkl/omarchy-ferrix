@@ -7,7 +7,9 @@ use std::io::Write as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{AppliedIsolation, IsolationPolicy, IsolationReport, NamespaceSet, RunDirOutcome};
+use crate::{
+    AppliedIsolation, CgroupOutcome, IsolationPolicy, IsolationReport, NamespaceSet, RunDirOutcome,
+};
 
 /// Builds one record: `evidence` first, then `event`, then the fields.
 pub fn record(evidence: &str, event: &str, fields: Value) -> Value {
@@ -47,6 +49,9 @@ pub struct SandboxReady {
     /// Socket-directory outcome: `{mode, sockets: [names]}` (plus `missing`
     /// when a listed socket did not exist at launch).
     pub run_dir: RunDirOutcome,
+    /// The application's cgroup: `{path, memory_max, pids_max, cpu_weight}`
+    /// (`{}` when none was created).
+    pub cgroup: CgroupOutcome,
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -54,8 +59,12 @@ pub struct SandboxReady {
 
 impl SandboxReady {
     pub fn applied(&self) -> AppliedIsolation {
-        self.namespaces
-            .applied(self.private_tmp, self.no_new_privs, self.run_dir.clone())
+        AppliedIsolation {
+            cgroup: self.cgroup.clone(),
+            ..self
+                .namespaces
+                .applied(self.private_tmp, self.no_new_privs, self.run_dir.clone())
+        }
     }
 
     pub fn isolation_report(&self, requested: IsolationPolicy) -> IsolationReport {
@@ -328,10 +337,20 @@ mod tests {
                 sockets: vec!["ferrix-appd.sock".to_owned(), "core.sock".to_owned()],
                 missing: Vec::new(),
             },
+            cgroup: CgroupOutcome {
+                path: Some("/sys/fs/cgroup/ferrix.slice/app-org.ferrix.terminal-41".to_owned()),
+                memory_max: Some(1 << 30),
+                pids_max: Some(1024),
+                cpu_weight: Some(100),
+            },
             degraded: false,
             reason: None,
         };
         let text = serde_json::to_string(&ready).unwrap();
+        assert!(
+            text.contains(r#""cgroup":{"path":"/sys/fs/cgroup/ferrix.slice/app-org.ferrix.terminal-41","memory_max":1073741824,"pids_max":1024,"cpu_weight":100}"#),
+            "{text}"
+        );
         assert!(
             text.contains(
                 r#""run_dir":{"mode":"private","sockets":["ferrix-appd.sock","core.sock"]}"#
@@ -344,6 +363,7 @@ mod tests {
         assert!(!report.degraded);
         assert!(report.applied.mount_namespace && report.applied.private_tmp);
         assert_eq!(report.applied.run_dir, ready.run_dir);
+        assert_eq!(report.applied.cgroup, ready.cgroup);
         assert_eq!(report.requested, IsolationPolicy::default());
 
         // A report from a sandbox without the field reads as `inherit`.

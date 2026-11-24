@@ -20,9 +20,9 @@ use ferrix_app_api::{
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use ferrix_runtime_native::{
     APPD_SOCKET_FILE, ISOLATION_UNAVAILABLE_STATUS, IsolationMode, IsolationPolicy, NativeLaunch,
-    NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV, RunDirMode, RunDirPolicy, SandboxReady,
-    TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan,
-    skipped_record,
+    NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV, ResourcePolicy, RunDirMode, RunDirPolicy,
+    SandboxReady, TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with,
+    sandbox_plan, skipped_record,
 };
 
 const SANDBOX: &str = env!("CARGO_BIN_EXE_ferrix-sandbox");
@@ -240,6 +240,11 @@ fn readiness_report_confirms_the_default_policy() {
     assert!(report.applied.pid_namespace && report.applied.mount_namespace);
     assert!(report.applied.ipc_namespace && report.applied.uts_namespace);
     assert!(report.applied.private_tmp && report.applied.no_new_privs);
+    assert!(report.applied.cgroup.applied(), "{report:?}");
+    assert_eq!(
+        running.cgroup_path(),
+        report.applied.cgroup.path.map(PathBuf::from)
+    );
     assert_eq!(report.requested, IsolationPolicy::default());
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
 }
@@ -614,4 +619,170 @@ impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// cgroups v2 (issue #10, increment 1)
+// ---------------------------------------------------------------------------
+
+/// Waits until `path` exists (the application signals a phase with a file).
+fn wait_for_file(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    path.exists()
+}
+
+fn cgroup_value(group: &Path, file: &str) -> String {
+    std::fs::read_to_string(group.join(file))
+        .unwrap_or_else(|e| panic!("read {}/{file}: {e}", group.display()))
+        .trim()
+        .to_owned()
+}
+
+/// The `key value` counter from a cgroup `*.events` file.
+fn cgroup_event(group: &Path, file: &str, key: &str) -> u64 {
+    cgroup_value(group, file)
+        .lines()
+        .find_map(|line| line.strip_prefix(key)?.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn limited(memory_max: Option<u64>, pids_max: Option<u64>) -> IsolationPolicy {
+    IsolationPolicy {
+        resources: ResourcePolicy {
+            cgroup: true,
+            memory_max,
+            pids_max,
+            cpu_weight: Some(50),
+        },
+        ..IsolationPolicy::default()
+    }
+}
+
+#[test]
+fn cgroup_limits_are_written_and_the_group_is_removed_after_exit() {
+    let policy = limited(Some(64 << 20), Some(64));
+    if !available(&policy) {
+        return;
+    }
+    let ready = scratch("ferrix-cgroup-ready");
+    let mut running = launch(
+        &[
+            "sh",
+            "-c",
+            "touch \"$1\"; sleep 30",
+            "sh",
+            ready.to_str().unwrap(),
+        ],
+        policy,
+    );
+    let group = running
+        .cgroup_path()
+        .expect("the sandbox reports its cgroup");
+    assert!(
+        group.starts_with(ferrix_runtime_native::cgroup_slice()),
+        "{}",
+        group.display()
+    );
+    assert!(wait_for_file(&ready, Duration::from_secs(10)));
+    assert_eq!(
+        cgroup_value(&group, "memory.max"),
+        (64u64 << 20).to_string()
+    );
+    assert_eq!(cgroup_value(&group, "pids.max"), "64");
+    assert_eq!(cgroup_value(&group, "cpu.weight"), "50");
+    // Stage 1, stage 2 and the application are all in the group.
+    let procs = cgroup_value(&group, "cgroup.procs");
+    assert!(procs.lines().count() >= 3, "{procs}");
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.cgroup.path.as_deref(),
+        group.to_str(),
+        "{report:?}"
+    );
+    assert!(!report.degraded, "{report:?}");
+    running.terminate(Duration::from_secs(5)).unwrap();
+    assert!(!group.exists(), "{} survived the exit", group.display());
+    assert!(running.cgroup_path().is_none());
+    let _ = std::fs::remove_file(ready);
+}
+
+#[test]
+fn pids_limit_stops_a_fork_bomb() {
+    let policy = limited(None, Some(16));
+    if !available(&policy) {
+        return;
+    }
+    let ready = scratch("ferrix-pids-ready");
+    // A child shell tries to start 64 background sleeps and dies at the
+    // first refused fork (ash treats that as fatal); the parent then signals
+    // and parks without forking, since no pid is left.
+    let script = r#"sh -c 'i=0; while [ $i -lt 64 ]; do sleep 30 & i=$((i+1)); done' 2>/dev/null; : >"$1"; exec sleep 30"#;
+    let mut running = launch(&["sh", "-c", script, "sh", ready.to_str().unwrap()], policy);
+    let group = running.cgroup_path().expect("cgroup");
+    assert!(wait_for_file(&ready, Duration::from_secs(20)));
+    let current: u64 = cgroup_value(&group, "pids.current").parse().unwrap();
+    assert!(current <= 16, "pids.current {current} above pids.max 16");
+    assert!(
+        cgroup_event(&group, "pids.events", "max") > 0,
+        "no fork was refused: {}",
+        cgroup_value(&group, "pids.events")
+    );
+    running.terminate(Duration::from_secs(5)).unwrap();
+    let _ = std::fs::remove_file(ready);
+}
+
+#[test]
+fn memory_limit_kills_the_whole_application_group() {
+    let policy = limited(Some(24 << 20), None);
+    if !available(&policy) {
+        return;
+    }
+    let go = scratch("ferrix-memory-go");
+    // tmpfs pages are charged to the writer's group and cannot be reclaimed
+    // without swap; 48 MiB in a 64 MiB private /tmp passes the 24 MiB limit.
+    let script = r#"while [ ! -e "$1" ]; do sleep 0.05; done; exec dd if=/dev/zero of=/tmp/fill bs=1M count=48"#;
+    let mut running = launch(&["sh", "-c", script, "sh", go.to_str().unwrap()], policy);
+    let group = running.cgroup_path().expect("cgroup");
+    // A host with swap would page the tmpfs out instead of killing; the
+    // test is about the limit, so take swap away from this group only.
+    let swap = group.join("memory.swap.max");
+    if swap.exists() {
+        std::fs::write(&swap, "0").unwrap();
+    }
+    std::fs::write(&go, "").unwrap();
+    let reason = running.wait().unwrap();
+    assert_eq!(
+        reason,
+        ExitReason::Signaled { signal: 9 },
+        "OOM kill expected"
+    );
+    assert!(!group.exists());
+    let _ = std::fs::remove_file(go);
+}
+
+#[test]
+fn cgroup_disabled_creates_no_group() {
+    let policy = IsolationPolicy {
+        resources: ResourcePolicy::none(),
+        ..IsolationPolicy::default()
+    };
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", "exit 0"], policy);
+    assert!(running.cgroup_path().is_none());
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(
+        !report.applied.cgroup.applied() && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
 }

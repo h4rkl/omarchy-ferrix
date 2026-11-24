@@ -84,14 +84,16 @@ mod linux {
     use std::time::Duration;
 
     use ferrix_app_api::ExitReason;
+    use ferrix_runtime_native::cgroup::{join_cgroup, remove_app_cgroup, setup_app_cgroup};
     use ferrix_runtime_native::channel::{ReportListener, WaitOutcome, send_line};
     use ferrix_runtime_native::{
-        EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport, IsolationMode,
-        IsolationPolicy, NamespaceSet, ProbeReport, RUN_ROOT, RunDirMode, RunDirOutcome,
-        RunDirPolicy, SANDBOX_INTERNAL_STATUS, SandboxArgs, SandboxReady, USER_RUN_DIR,
-        UserNamespace, emit, is_valid_socket_name, record, run_dir, select_namespaces,
-        shell_status_of,
+        AppliedIsolation, EXEC_FAILED_STATUS, ISOLATION_UNAVAILABLE_STATUS, InitReport,
+        IsolationMode, IsolationPolicy, NamespaceSet, ProbeReport, RUN_ROOT, RunDirMode,
+        RunDirOutcome, RunDirPolicy, SANDBOX_INTERNAL_STATUS, SandboxArgs, SandboxReady,
+        USER_RUN_DIR, UserNamespace, emit, is_valid_socket_name, record, run_dir,
+        select_namespaces, shell_status_of,
     };
+    use ferrix_runtime_native::{CgroupError, CgroupOutcome, app_cgroup_name, cgroup_slice};
     use rustix::io::Errno;
     use rustix::mount::{
         MountFlags, MountPropagationFlags, UnmountFlags, mount, mount_bind, mount_bind_recursive,
@@ -379,6 +381,13 @@ mod linux {
         };
 
         let mut notes = Vec::new();
+        // The group is joined before anything is unshared: the launcher's
+        // credentials can still write the hierarchy, and stage 2 plus every
+        // application process inherit it from here on.
+        let cgroup = match apply_cgroup(evidence, app, &args.policy, &mut notes) {
+            Ok(outcome) => outcome,
+            Err(reason) => return fail(evidence, app, reason, ISOLATION_UNAVAILABLE_STATUS),
+        };
         let unshared = match unshare_for(&args.policy) {
             Ok(unshared) => unshared,
             Err((wanted, reason)) => {
@@ -534,6 +543,7 @@ mod linux {
             || (args.policy.no_new_privs && !no_new_privs)
             || (args.policy.run_dir.is_private()
                 && run_dir_outcome.mode != args.policy.run_dir.mode)
+            || (args.policy.resources.cgroup && !cgroup.applied())
             || !notes.is_empty();
         let ready = SandboxReady {
             app: app.to_owned(),
@@ -542,6 +552,7 @@ mod linux {
             private_tmp,
             no_new_privs,
             run_dir: run_dir_outcome,
+            cgroup,
             degraded,
             reason: (!notes.is_empty()).then(|| notes.join("; ")),
         };
@@ -587,6 +598,69 @@ mod linux {
             json!({ "app": app, "reason": reason }),
         ));
         exit_code(status)
+    }
+
+    /// Creates the launch's group under the Ferrix slice and moves this
+    /// process into it. A hierarchy or controller the system lacks is a
+    /// degraded launch with a `sandbox-degraded{feature:"cgroup"}` record (as
+    /// with a kernel without IPC namespaces); any other failure is `Err`
+    /// under `Required` (fail closed) and degraded under `BestEffort`.
+    fn apply_cgroup(
+        evidence: &str,
+        app: &str,
+        policy: &IsolationPolicy,
+        notes: &mut Vec<String>,
+    ) -> Result<CgroupOutcome, String> {
+        if !policy.resources.cgroup {
+            return Ok(CgroupOutcome::default());
+        }
+        let name = app_cgroup_name(app, std::process::id());
+        let result =
+            setup_app_cgroup(&cgroup_slice(), &name, &policy.resources).and_then(|outcome| {
+                let group = PathBuf::from(outcome.path.clone().unwrap_or_default());
+                join_cgroup(&group, std::process::id())
+                    .map(|()| outcome)
+                    .map_err(|error| {
+                        let _ = std::fs::remove_dir(&group);
+                        CgroupError::Failed(error)
+                    })
+            });
+        let error = match result {
+            Ok(outcome) => return Ok(outcome),
+            Err(CgroupError::Failed(reason)) if policy.mode == IsolationMode::Required => {
+                return Err(format!("cgroup: {reason}"));
+            }
+            Err(error) => error,
+        };
+        emit(&record(
+            evidence,
+            "sandbox-degraded",
+            json!({ "app": app, "feature": "cgroup", "error": error.message() }),
+        ));
+        notes.push(format!("cgroup: {}", error.message()));
+        Ok(CgroupOutcome::default())
+    }
+
+    /// The probe's cgroup check: create a throwaway group with the limits,
+    /// never join it, remove it again.
+    fn probe_cgroup(policy: &IsolationPolicy, reasons: &mut Vec<String>) -> CgroupOutcome {
+        if !policy.resources.cgroup {
+            return CgroupOutcome::default();
+        }
+        let name = app_cgroup_name("probe", std::process::id());
+        match setup_app_cgroup(&cgroup_slice(), &name, &policy.resources) {
+            Ok(outcome) => {
+                let group = PathBuf::from(outcome.path.clone().unwrap_or_default());
+                if let Err(error) = remove_app_cgroup(&group, Duration::from_secs(1)) {
+                    reasons.push(format!("cgroup: {error}"));
+                }
+                outcome
+            }
+            Err(error) => {
+                reasons.push(format!("cgroup: {}", error.message()));
+                CgroupOutcome::default()
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1035,6 +1109,7 @@ mod linux {
         let evidence = args.evidence.as_str();
         let policy = &args.policy;
         let mut reasons = Vec::new();
+        let cgroup = probe_cgroup(policy, &mut reasons);
         let unshared = match unshare_for(policy) {
             Ok(unshared) => unshared,
             Err((_, reason)) => {
@@ -1084,8 +1159,12 @@ mod linux {
             degraded: !reasons.is_empty()
                 || (policy.private_tmp && !private_tmp)
                 || (policy.no_new_privs && !no_new_privs)
-                || (policy.run_dir.is_private() && run_dir_outcome.mode != policy.run_dir.mode),
-            applied: applied.applied(private_tmp, no_new_privs, run_dir_outcome),
+                || (policy.run_dir.is_private() && run_dir_outcome.mode != policy.run_dir.mode)
+                || (policy.resources.cgroup && !cgroup.applied()),
+            applied: AppliedIsolation {
+                cgroup,
+                ..applied.applied(private_tmp, no_new_privs, run_dir_outcome)
+            },
             reason: (!reasons.is_empty()).then(|| reasons.join("; ")),
         };
         emit(&record(

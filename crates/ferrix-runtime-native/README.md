@@ -92,6 +92,43 @@ application starts with the inherited directory and the report is
 `degraded` with a `run_dir:` reason. On macOS the policy parses and the
 report says `inherit` (not enforced).
 
+## Per-application cgroup (`resources`, issue #10)
+
+`IsolationPolicy.resources` (`#[serde(default)]`):
+
+```json
+"isolation": { "resources": { "cgroup": true, "memory_max": 1073741824, "pids_max": 1024, "cpu_weight": 100 } }
+```
+
+The defaults are those values (1 GiB, 1024 tasks, the kernel's default
+weight); a `null` limit leaves that controller alone and `cgroup: false`
+creates no group. Stage 1 creates `ferrix.slice/app-<app-id>-<stage-1 pid>`
+under `/sys/fs/cgroup` (`FERRIX_CGROUP_SLICE` overrides the slice path),
+enables `memory`/`pids`/`cpu` down the path (slice parent, then the slice),
+writes `memory.max` (with `memory.oom.group = 1`, so an OOM kill takes the
+whole application down as one signal death), `pids.max` and `cpu.weight`,
+and moves itself into the group **before** `unshare`, so stage 2 and every
+application process inherit it. The runtime knows the path from the
+readiness report (or from the stage 1 pid when no report arrived), exposes
+it as `RunningApp::cgroup_path()` (the handle for a later `cpu.uclamp.min`
+boost, spec 10), and removes the group after reaping stage 1
+(`cgroup.kill`, then `rmdir` with retries; a failure is a
+`sandbox-cgroup-cleanup-failed` record).
+
+Failure semantics follow the IPC-namespace precedent: a system without the
+feature (no cgroup v2 hierarchy at the slice parent, a controller not
+offered there, or a hierarchy the launcher may not write) is a degraded
+launch with a `sandbox-degraded{feature:"cgroup"}` record and the reason in
+`sandbox-ready`; any other failure (for example a limit the kernel rejects,
+or a busy group of the same name) fails closed under `Required`
+(`sandbox-failed`, status 126) and is degraded under `BestEffort`.
+`sandbox-ready` and `--probe` report `cgroup: {path, memory_max, pids_max,
+cpu_weight}` (`{}` when none). The QEMU initramfs mounts cgroup2 on
+`/sys/fs/cgroup` and enables the three controllers from the root group
+(`cgroup-ready` record); the pmOS image sets `rc_cgroup_mode="unified"` in
+`/etc/rc.conf` explicitly and records it in `image-facts.json`
+(`cgroup.rc_cgroup_mode`).
+
 ## Readiness and records
 
 Readiness is observable: stage 2 reports to stage 1 and stage 1 reports to the
@@ -139,8 +176,8 @@ unless `FERRIX_SANDBOX_TESTS=required`, which turns every skip into a failure.
 ## Not provided yet
 
 No uid change (the application keeps the launcher's identity, mapped 1:1 in a
-user namespace), no seccomp filter, no cgroups (no memory/CPU limits, no
-freezing), no network namespace, no filesystem view restriction beyond
+user namespace), no seccomp filter, no cgroup freezing (limits only, see above), no
+network namespace, no filesystem view restriction beyond
 `/proc`, `/tmp`, and the socket directory (with `run_dir: private` the rest of
 `/run`, including the D-Bus system bus socket, stays visible; `private-run`
 hides it), and no capability dropping beyond `no_new_privs`. Socket
@@ -165,3 +202,12 @@ cover: a policy listing only `a.sock` shows
 `telephonyd.sock` while one with `telephony-state` can; a missing socket
 directory is `IsolationUnavailable` under `required` and degraded under
 `best-effort`; `private-run` hides a marker file placed in `/run`.
+The cgroup tests cover: the limits are written, stage 1, stage 2 and the
+application are in the group, and the group is gone after the exit; a fork
+loop under `pids_max: 16` is refused (`pids.events max > 0`,
+`pids.current <= 16`); writing 48 MiB to the private tmpfs under
+`memory_max: 24 MiB` (swap taken away from that group) ends in one OOM
+`SIGKILL` of the whole application; `cgroup: false` creates no group.
+`linux-check.sh` first moves the container's processes into a leaf group so
+the container's cgroup-namespace root can delegate controllers, as the guest
+root does.

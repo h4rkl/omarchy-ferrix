@@ -22,6 +22,9 @@ use crate::{
 pub const READY_TIMEOUT: Duration = Duration::from_secs(12);
 /// Polling interval for `terminate` and readiness waits.
 const POLL: Duration = Duration::from_millis(50);
+/// How long removing an instance's cgroup may wait for the kernel to finish
+/// tearing down its last processes.
+const CGROUP_REMOVE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Options for [`NativeRuntime`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -166,6 +169,9 @@ impl NativeRuntime {
             sandboxed: false,
             confirmed: false,
             finished: None,
+            cgroup: None,
+            cgroup_cleanup: None,
+            evidence: context.evidence.clone(),
         }))
     }
 
@@ -196,6 +202,12 @@ impl NativeRuntime {
             reason: format!("cannot start sandbox {}: {e}", bin.display()),
         })?;
 
+        // Stage 1 names its group after its own pid, which is this child's
+        // pid (stage 1 stays in the launcher's PID namespace), so the group
+        // is known, and removed after the exit, even without a report.
+        let cgroup_cleanup = launch.isolation.resources.cgroup.then(|| {
+            crate::app_cgroup_path(&crate::cgroup_slice(), &app.id.to_string(), child.id())
+        });
         let mut isolation = expected_isolation(&launch.isolation);
         let mut confirmed = false;
         let mut finished = None;
@@ -240,14 +252,26 @@ impl NativeRuntime {
                     Some("unverified: readiness channel could not be created".to_owned());
             }
         }
-        Ok(Box::new(NativeApp {
+        let cgroup = if confirmed {
+            isolation.applied.cgroup.path.as_ref().map(PathBuf::from)
+        } else {
+            cgroup_cleanup.clone().filter(|group| group.is_dir())
+        };
+        let mut running = NativeApp {
             id: app.id.clone(),
             child,
             isolation,
             sandboxed: true,
             confirmed,
-            finished,
-        }))
+            finished: None,
+            cgroup,
+            cgroup_cleanup,
+            evidence,
+        };
+        if let Some(finished) = finished {
+            running.finish(finished);
+        }
+        Ok(Box::new(running))
     }
 }
 
@@ -391,6 +415,12 @@ struct NativeApp {
     /// 126 belongs to the application, not to the sandbox.
     confirmed: bool,
     finished: Option<Result<ExitReason, AppError>>,
+    /// The instance's cgroup as reported by the sandbox (exposed through
+    /// [`RunningApp::cgroup_path`]).
+    cgroup: Option<PathBuf>,
+    /// The group to remove once the supervisor has been reaped.
+    cgroup_cleanup: Option<PathBuf>,
+    evidence: String,
 }
 
 impl NativeApp {
@@ -409,8 +439,25 @@ impl NativeApp {
 
     fn record(&mut self, status: ExitStatus) -> Result<ExitReason, AppError> {
         let result = self.classify(status);
-        self.finished = Some(result.clone());
+        self.finish(result.clone());
         result
+    }
+
+    /// Stores the final result and removes the instance's cgroup: every
+    /// process in it is gone once stage 1 has been reaped (stage 2 dies with
+    /// it, and with stage 2 the whole PID namespace).
+    fn finish(&mut self, result: Result<ExitReason, AppError>) {
+        self.finished = Some(result);
+        self.cgroup = None;
+        if let Some(group) = self.cgroup_cleanup.take()
+            && let Err(error) = crate::cgroup::remove_app_cgroup(&group, CGROUP_REMOVE_TIMEOUT)
+        {
+            crate::emit(&crate::record(
+                &self.evidence,
+                "sandbox-cgroup-cleanup-failed",
+                serde_json::json!({ "app": self.id.to_string(), "error": error }),
+            ));
+        }
     }
 
     fn signal(&self, signal: i32) {
@@ -435,6 +482,10 @@ impl NativeApp {
 impl RunningApp for NativeApp {
     fn pid(&self) -> Option<u32> {
         Some(self.child.id())
+    }
+
+    fn cgroup_path(&self) -> Option<PathBuf> {
+        self.cgroup.clone()
     }
 
     fn diagnostics(&self) -> serde_json::Value {
