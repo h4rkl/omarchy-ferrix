@@ -2,7 +2,10 @@
 """On-device test input: a virtual touchscreen + keyboard via /dev/uinput.
 
 Run as root in the background; send commands to /tmp/inj.fifo:
-  tap X Y | swipe X1 Y1 X2 Y2 [MS] | type TEXT | key NAME
+  tap X Y | swipe X1 Y1 X2 Y2 [MS] | type TEXT | key NAME | hold NAME MS
+
+`power` is KEY_POWER on the test keyboard: it exercises the shell's power-key
+path, not the gpio_keys button itself.
 """
 import fcntl, os, struct, time
 
@@ -90,7 +93,7 @@ KEYS.update({c: k for c, k in zip("qwertyuiop", range(16, 26))})
 KEYS.update({c: k for c, k in zip("asdfghjkl", range(30, 39))})
 KEYS.update({c: k for c, k in zip("zxcvbnm", range(44, 51))})
 KEYS.update({" ": 57, "-": 12, ".": 52, "/": 53, ",": 51, "@": None})
-NAMED = {"enter": 28, "backspace": 14, "esc": 1, "tab": 15, "up": 103, "down": 108, "left": 105, "right": 106}
+NAMED = {"enter": 28, "backspace": 14, "esc": 1, "tab": 15, "up": 103, "down": 108, "left": 105, "right": 106, "power": 116}
 SHIFTED = {"!": 2, "@": 3, "#": 4, "$": 5, "%": 6, "^": 7, "&": 8, "*": 9, "(": 10, ")": 11, "_": 12}
 
 
@@ -140,5 +143,10 @@ while True:
                     type_text(rest)
                 elif cmd == "key":
                     press(NAMED[rest.strip()])
+                elif cmd == "hold":
+                    name, ms = rest.split()
+                    ev(kbd, EV_KEY, NAMED[name], 1); syn(kbd)
+                    time.sleep(int(ms) / 1000)
+                    ev(kbd, EV_KEY, NAMED[name], 0); syn(kbd)
             except Exception as e:  # keep serving
                 print("inj error:", e, flush=True)
