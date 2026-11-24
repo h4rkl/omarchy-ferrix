@@ -1,20 +1,21 @@
 #!/sbin/openrc-run
-# OPT-IN Android compatibility runtime (Waydroid + Fulguris, ADR-005/ADR-007)
-# for the Pixel 9a development route. Installed by the package but linked
-# into the default runlevel only by tools/pixel-9a/dev-compose.py --android,
-# which also stages the pinned Waydroid images, the verified Fulguris APK,
-# and /usr/lib/ferrix/ferrix-waydroid.sh (shared with the QEMU route).
+# OPT-IN Android compatibility runtime (Waydroid, ADR-005/ADR-008) for the
+# Pixel 9a development route. Installed by the package but linked into the
+# default runlevel only by tools/pixel-9a/dev-compose.py --android, which
+# also stages the Waydroid images and /usr/lib/ferrix/ferrix-waydroid.sh
+# (shared with the QEMU route). The Browser is LineageOS Jelly, built into
+# the Android image.
 #
 # The bootstrap runs in the background so the product shell is never delayed:
 # offline `waydroid init` and container start, then (once ferrix-shell's
-# Wayland socket exists) the session as `user`, the Fulguris install, and the
+# Wayland socket exists) the session as `user`, Android setup, and the
 # default browser role. Records go to /var/log/ferrix-android.log with the
 # physical evidence label; none of them claims a rendered frame.
 
 [ -r /etc/ferrix/backends.env ] && . /etc/ferrix/backends.env
 
 name="Ferrix Android runtime"
-description="Initializes Waydroid and provisions the Browser (Fulguris) for user"
+description="Initializes Waydroid and provisions the Browser for user"
 
 helper=/usr/lib/ferrix/ferrix-waydroid.sh
 pidfile=/run/ferrix-android.pid

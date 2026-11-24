@@ -85,6 +85,10 @@ grep -q 'fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952' "$pmos
 	fail 'exynos-modem recipe archive hash is missing'
 grep -q '9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb97265' "$pmos_dir/modemmanager-samsung-sit/APKBUILD" ||
 	fail 'ModemManager recipe archive hash is missing'
+[ -f "$pmos_dir/waydroid/APKBUILD" ] || fail 'missing the Waydroid 1.6.3 backport recipe'
+grep -q '^pkgver=1\.6\.3$' "$pmos_dir/waydroid/APKBUILD" || fail 'Waydroid backport is not 1.6.3'
+grep -q '^_aports=3c2c2436e397ea23073cde73138f60e0d5c537b4$' "$pmos_dir/waydroid/APKBUILD" ||
+	fail 'Waydroid backport helper files are not pinned to an aports commit'
 if grep -q 'rm -f .cargo/config.toml' "$pmos_dir/exynos-modem/APKBUILD"; then
 	fail 'exynos-modem recipe removes the reviewed target configuration'
 fi
@@ -374,8 +378,14 @@ lib/firmware/bcmdhd_txcap.blob_4383_a3
 lib/firmware/brcm/BCM.hcd
 lib/firmware/mali_csffw-r52p0.bin
 lib/firmware/mali_csffw.bin
+lib/firmware/mfc_fw.bin
 lib/firmware/aoc.bin
-lib/firmware/tismartpa_driver_tuning.bin'
+lib/firmware/tismartpa_driver_tuning.bin
+lib/firmware/cs40l26.wmfw
+lib/firmware/cs40l26.bin
+lib/firmware/cs40l26-svc.bin
+lib/firmware/cs40l26-dvl.bin
+lib/firmware/cs40l26-dbc.bin'
 firmware_paths="$stage_file_paths
 lib/firmware/carrierconfig/carrier.conf
 lib/firmware/carrierconfig/carrier-extra.conf
@@ -396,14 +406,15 @@ cmp -s "$work/expected-bundles" "$work/allowlist-bundles" ||
 while IFS="$tab" read -r component path required; do
 	case "$component" in ''|'#'*) continue ;; esac
 	case "$component" in
-		bcm4383|bluetooth-broadcom|gpu-mali|audio-aoc|audio-tas25xx) ;;
+		bcm4383|bluetooth-broadcom|gpu-mali|video-mfc|audio-aoc|audio-tas25xx|haptics-cs40l26) ;;
 		modem-s5300) continue ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
-	# Mali, AoC and TAS25xx are not radio gate inputs, so they are the optional rows.
-	case "$component:$required" in
-		gpu-mali:0|audio-aoc:0|audio-tas25xx:0|bcm4383:1|bluetooth-broadcom:1) ;;
-		*) fail "unexpected firmware requirement: $component $path $required" ;;
+	# The Mali CSF, MFC, AoC audio, and haptics firmware are listed for the manifest
+	# but are not radio gate inputs, so they are the optional rows.
+	case "$required:$component" in
+		1:*|0:gpu-mali|0:video-mfc|0:audio-aoc|0:audio-tas25xx|0:haptics-cs40l26) ;;
+		*) fail "firmware fixture is not required: $path" ;;
 	esac
 	mkdir -p "$firmware/$(dirname -- "$path")"
 	if [ "$component" = gpu-mali ]; then
@@ -441,8 +452,7 @@ while IFS="$tab" read -r component source_image source_path path entry_type extr
 	[ "${entry_type:-file}" = file ] || fail "unexpected non-file firmware staging row: $component $source_path"
 	case "$component" in
 		wifi-bcm4383|bcm4383) manifest_controller=wifi-bcm4383 ;;
-		bluetooth-broadcom) manifest_controller=$component ;;
-		gpu-mali|audio-aoc|audio-tas25xx) manifest_controller=$component ;;
+		bluetooth-broadcom|gpu-mali|video-mfc|audio-aoc|audio-tas25xx|haptics-cs40l26) manifest_controller=$component ;;
 		*) fail "unexpected firmware component: $component" ;;
 	esac
 	hash=$(hash_file "$firmware/$path")
@@ -462,13 +472,13 @@ for path in lib/firmware/carrierconfig/carrier.conf lib/firmware/carrierconfig/c
 done
 awk -F "$tab" '
 	$1 == "firmware" {
-			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300|gpu-mali|audio-aoc|audio-tas25xx)$/ || $3 != "vendor.img" ||
+			if (NF != 7 || $2 !~ /^(wifi-bcm4383|bluetooth-broadcom|modem-s5300|gpu-mali|video-mfc|audio-aoc|audio-tas25xx|haptics-cs40l26)$/ || $3 != "vendor.img" ||
 			index($4, "/firmware/") != 1 || index($5, "lib/firmware/") != 1 ||
 			$4 == $5 || $4 ~ /[[:space:]]/ || $5 ~ /[[:space:]]/ ||
 			$6 !~ /^[0-9]+$/ || length($7) != 64 || $7 ~ /[^0-9a-f]/) exit 1
 		count++
 	}
-		END { exit(count == 18 ? 0 : 1) }
+		END { exit(count == 24 ? 0 : 1) }
 ' "$firmware/firmware-manifest.tsv"
 awk -F "$tab" '$1 == "firmware" { print $5 }' "$firmware/firmware-manifest.tsv" >"$work/manifest-firmware-paths"
 cmp -s "$work/expected-firmware-paths" "$work/manifest-firmware-paths" ||
@@ -602,6 +612,8 @@ radio_initfs_sha512=$(sha512_file "$package_dir/modules-initfs-radio")
 		'[ "${FERRIX_PMB_ROOTFS_PASSWORD-}" = "${FAKE_ROOTFS_PASSWORD:-test-password}" ]' \
 		'[ -f "$aports/device/testing/exynos-modem/APKBUILD" ]' \
 		'[ -f "$aports/device/testing/modemmanager-samsung-sit/APKBUILD" ]' \
+		'[ -f "$aports/device/testing/waydroid/APKBUILD" ]' \
+		'grep -q "^pkgver=1.6.3$" "$aports/device/testing/waydroid/APKBUILD"' \
 		'[ -f "$aports/device/testing/device-google-tegu/s5300-userspace-sources.toml" ]' \
 		'[ -f "$aports/device/testing/device-google-tegu/modules-initfs-radio" ]' \
 		'awk '\''! /^[[:space:]]*#/ && NF { bad=1 } END { exit bad }'\'' "$aports/device/testing/device-google-tegu/modules-initfs"' \
@@ -930,7 +942,7 @@ FAKE_PMB_RESULT="$wrapper_result" PYTHONPATH="$pmb_stub" PYTHONDONTWRITEBYTECODE
 	fail 'pmbootstrap wrapper supplied the password to a non-install action'
 fi
 
-if rg -n '^[[:space:]]*(adb|fastboot|pmbootstrap[[:space:]]+flasher)([[:space:]]|$)' "$script" >/dev/null; then
+if grep -En '^[[:space:]]*(adb|fastboot|pmbootstrap[[:space:]]+flasher)([[:space:]]|$)' "$script" >/dev/null; then
 	echo "FAIL: rootfs workflow contains device or flashing commands" >&2
 	exit 1
 fi

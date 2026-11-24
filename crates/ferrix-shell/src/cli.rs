@@ -2,11 +2,12 @@
 
 use crate::config::DisplayGeometry;
 
-pub const USAGE: &str = "usage: ferrix-shell [--nested] [--display WxH] [--socket NAME] [--core PATH] [--ferrix-appd PATH|--no-ferrix-appd] [--cmdline PATH|--no-cmdline] [--print-config] [PROFILE]\n\
+pub const USAGE: &str = "usage: ferrix-shell [--nested] [--display WxH] [--socket NAME] [--extra-socket [DIR/]NAME] [--core PATH] [--ferrix-appd PATH|--no-ferrix-appd] [--cmdline PATH|--no-cmdline] [--print-config] [PROFILE]\n\
   PROFILE defaults to /etc/ferrix/profile.toml\n\
   --nested        run in a host window (Linux host with a Wayland/X11 session); implies --no-cmdline and mock evidence\n\
   --display WxH   pin the output geometry (overridden by ferrix.display= on the kernel command line)\n\
   --socket NAME   Wayland socket name under XDG_RUNTIME_DIR (default wayland-0)\n\
+  --extra-socket [DIR/]NAME  also listen on this socket under XDG_RUNTIME_DIR (DIR is created 0755); the Android runtime binds DIR into its container\n\
   --core PATH     ferrix-core state/command socket (default /run/ferrix/core.sock)\n\
   --ferrix-appd PATH     ferrix-appd application-service socket (default $FERRIX_APPD_SOCKET or /run/ferrix/ferrix-appd.sock); connected with retries, never required\n\
   --no-ferrix-appd       do not link to ferrix-appd (home gesture then raises the oldest mapped window)\n\
@@ -19,6 +20,7 @@ pub struct Args {
     pub nested: bool,
     pub display: Option<DisplayGeometry>,
     pub socket: Option<String>,
+    pub extra_socket: Option<String>,
     pub core_socket: String,
     /// `ferrix_appd` socket to link to; `None` after `--no-ferrix_appd`.
     pub appd_socket: Option<String>,
@@ -34,6 +36,7 @@ impl Default for Args {
             nested: false,
             display: None,
             socket: None,
+            extra_socket: None,
             core_socket: std::env::var("FERRIX_CORE_SOCKET")
                 .ok()
                 .filter(|value| !value.is_empty())
@@ -75,6 +78,13 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
                 }
                 out.socket = Some(value);
             }
+            "--extra-socket" => {
+                let value = it.next().ok_or("--extra-socket requires a name")?;
+                if !valid_extra_socket(&value) {
+                    return Err(format!("invalid socket name {value:?}"));
+                }
+                out.extra_socket = Some(value);
+            }
             "--core" => {
                 let value = it.next().ok_or("--core requires a path")?;
                 if value.is_empty() {
@@ -109,6 +119,15 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
         }
     }
     Ok(out)
+}
+
+/// `NAME` or `DIR/NAME`: relative, no `.`/`..` component, no empty part.
+fn valid_extra_socket(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('/').collect();
+    parts.len() <= 2
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && *part != "." && *part != "..")
 }
 
 #[cfg(test)]
@@ -170,6 +189,7 @@ mod tests {
             })
         );
         assert_eq!(args.socket.as_deref(), Some("wayland-3"));
+        assert_eq!(args.extra_socket, None);
         assert_eq!(args.core_socket, "/tmp/core.sock");
         assert_eq!(args.cmdline_path.as_deref(), Some("/tmp/cmdline"));
         assert!(args.print_config);
@@ -177,10 +197,30 @@ mod tests {
     }
 
     #[test]
+    fn extra_socket_takes_a_name_or_one_directory() {
+        let args = parse_str("--extra-socket ferrix-android-wayland/wayland-0").unwrap();
+        assert_eq!(
+            args.extra_socket.as_deref(),
+            Some("ferrix-android-wayland/wayland-0")
+        );
+        assert_eq!(args.socket, None, "the primary socket is unchanged");
+        let args = parse_str("--extra-socket wayland-9").unwrap();
+        assert_eq!(args.extra_socket.as_deref(), Some("wayland-9"));
+        assert!(USAGE.contains("--extra-socket"));
+    }
+
+    #[test]
     fn rejects_bad_input() {
         assert!(parse_str("--display").is_err());
         assert!(parse_str("--display 12").is_err());
         assert!(parse_str("--socket a/b").is_err());
+        for bad in ["", "/abs", "a/b/c", "../x", "a/..", "a/", "./x"] {
+            assert!(
+                parse(vec!["--extra-socket".to_owned(), bad.to_owned()]).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(parse_str("--extra-socket").is_err());
         assert!(parse_str("--core").is_err());
         assert!(parse_str("--bogus").is_err());
         assert!(parse_str("a.toml b.toml").is_err());

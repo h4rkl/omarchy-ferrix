@@ -1,6 +1,8 @@
 # ADR-007: Fulguris browser APK input
 
-Status: accepted for the opt-in QEMU postmarketOS route on 2026-09-28. This
+Status: accepted for the opt-in QEMU postmarketOS route on 2026-09-28;
+**superseded by [ADR-008](008-apks-as-ferrix-apps.md) (2026-10-10):** the
+Browser is LineageOS Jelly and Fulguris leaves the default image. This
 ADR supersedes the browser choice in ADR-005; ADR-005's Brave runs remain
 historical evidence and are not Fulguris validation.
 

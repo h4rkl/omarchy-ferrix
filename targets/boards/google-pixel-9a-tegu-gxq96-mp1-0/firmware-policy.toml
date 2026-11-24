@@ -78,6 +78,18 @@ runtime_paths = ["mali"]
 required_names = ["mali_csffw-r51p0.bin"]
 
 [[controller]]
+id = "video-mfc"
+# Exynos MFC hardware video codec (s5p-mfc, /dev/video6..11). The driver loads
+# `mfc_fw.bin` when the first instance opens; without it every open fails
+# (`mfc_rm_instance_init ... Failed to init`) and the stock Codec2 service in
+# the Waydroid container reports "input is corrupted" for every frame
+# (physical:google-pixel-9a-tegu-gxq96-mp1-0, 2026-10-11).
+kernel_driver = "exynos_mfc"
+source_images = ["vendor.img"]
+runtime_paths = ["mfc"]
+required_names = ["mfc_fw.bin"]
+
+[[controller]]
 id = "audio-aoc"
 # Always-on Compute (AoC) DSP behind the Tegu AoC sound card. On
 # physical:google-pixel-9a-tegu-gxq96-mp1-0 (2026-10-11, read-only) the
@@ -117,6 +129,21 @@ kernel_driver = "snd-soc-tas25xx"
 source_images = ["vendor.img"]
 runtime_paths = ["tas25xx"]
 required_names = ["tismartpa_driver_tuning.bin"]
+
+[[controller]]
+id = "haptics-cs40l26"
+# Cirrus CS40L26 haptics driver (I2C 0x43). The Tegu DT has neither
+# `cirrus,fw-defer` nor `cirrus,calib-fw`, so the pinned `cs40l26-core.ko`
+# probe request_firmware()s `cs40l26.wmfw` and fails without it; only then
+# does it register the `cs40l26-codec` ASoC component, which is the AoC
+# card's haptics back end (`dai_be_haptic_rx`). The coefficient files are
+# loaded "continuing" when absent: wavetable `cs40l26.bin`, `cs40l26-svc.bin`,
+# `cs40l26-dvl.bin`, `cs40l26-dbc.bin`. The `cs40l26-calib.*` pair is used
+# only by the calibration firmware and is not staged. Not yet booted.
+kernel_driver = "cs40l26-core"
+source_images = ["vendor.img"]
+runtime_paths = ["cs40l26"]
+required_names = ["cs40l26.wmfw"]
 
 [[controller]]
 id = "display-audio-touch"

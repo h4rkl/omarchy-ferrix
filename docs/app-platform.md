@@ -31,7 +31,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 
 ```text
   home surface           native apps             Android app
-  (ferrix-basic-screen)  (Terminal, Phone, …)     (Fulguris via Waydroid)
+  (ferrix-basic-screen)  (Terminal, Phone, …)     (Browser/Jelly via Waydroid)
         |  Launch/Subscribe        |  YieldForeground
         +-------------+------------+-----------------------------+
                       |  ferrix-app-protocol (line-delimited JSON, schema v1)
@@ -89,6 +89,26 @@ descriptors are handled by the private `ferrix-runtime-android` adapter; a
 launch returns `RuntimeUnsupported` when Waydroid is absent and `LaunchFailed`
 when the runtime or package is unavailable. Android package/activity details
 remain in the daemon-private `launch` object.
+
+**Installed apps.** A runtime may also report applications by itself
+(`Runtime::installed_apps`): every launchable APK in the Android container.
+`ferrix-appd` merges them beside the checked-in catalog and returns them in
+`Reply::Catalog` with `"origin": "installed"` (the field is omitted for
+checked-in entries). Their ids use the reserved `apk.` prefix
+(`apk.<package>`, or `apk.<readable>.x-<hash>` for packages with uppercase
+or `_`); a checked-in descriptor may not use it. A package a checked-in
+descriptor already launches is not listed twice (`org.lineageos.jelly` is
+`org.ferrix.browser`). Installed apps are always `untrusted`, declare no
+capabilities or intents, and have no grants row. The list is refreshed by
+a poller (30 s; sooner while the runtime boots or when an unknown runtime
+window appears) and every change publishes `CatalogChanged`; the home
+surface appends them after the first-party tiles. An installed app's
+launcher bitmap comes from `Request::AppIcon { id }` ->
+`Reply::AppIcon { id, icon }`: `icon` is a straight-alpha RGBA8
+`AppIconBitmap` of at most 96x96 pixels (base64 on the wire), decoded and
+bounded by the runtime adapter, or `null` (unknown id, a checked-in entry,
+or no usable icon), in which case the home draws the letter glyph. Design
+and limitations: ADR-008 "Installed APKs".
 
 ## Lifecycle
 
@@ -243,12 +263,30 @@ release provides.
 
 ## Surface association and focus
 
-The compositor reads each client's pid from the kernel (`SO_PEERCRED`) and
-reports `SurfaceMapped{pid, app_id, title}`, `SurfaceUnmapped{pid}`, and
-`FocusChanged{pid}`. `ferrix-appd` resolves a pid to an instance by matching the
-sandbox pid or by walking `/proc/<pid>/status` parents (the application is a
-grandchild of `ferrix-appd`). The xdg `app_id` string an application sets is untrusted
-metadata: it is recorded and compared, never used to identify the caller.
+The compositor reads each client's pid from the kernel (`SO_PEERCRED`),
+gives every toplevel an opaque surface id, and reports
+`SurfaceMapped{pid, app_id, title, surface}`, `SurfaceUnmapped{pid, surface}`
+(per toplevel), and `FocusChanged{pid, surface}`. `ferrix-appd` resolves a pid
+to an instance by matching the sandbox pid or by walking `/proc/<pid>/status`
+parents (the application is a grandchild of `ferrix-appd`). The xdg `app_id`
+string an application sets is untrusted metadata: it is recorded and
+compared, never used to identify the caller.
+
+The one exception is a runtime whose windows all come from a shared client
+(the Android runtime's composer, one toplevel per Android task). Its adapter
+declares `SurfaceMatch::SharedHost { client_pids, app_id }`: a toplevel
+belongs to the instance only when its kernel pid is one of those
+runtime-reported pids **and** its `app_id` matches; those pids never resolve
+by pid or ancestry. Shared-host toplevels no running instance claims are
+withheld from presentation (`Notification::Withhold`) unless they can be
+**adopted**: when the toplevel's pid is one the runtime itself reports as
+its shared host (`Runtime::shared_host_pids`) and its `app_id` is the
+window id of a launchable catalog or installed app, `ferrix-appd` attaches
+a new instance (`Runtime::attach`, no relaunch) that owns it, raised when
+an Android app is in front and in the background otherwise. Activations
+name the exact surface, the close gesture asks the task to close
+(`Notification::Close`), and the instance ends `terminated` (not crashed)
+once its last window stays gone. Details in `docs/android-runtime.md` §7.
 
 `ferrix-appd` pushes `Notification::Activate{pid}` to the compositor to raise a
 window: on a first launch once its surface maps, on a second launch of a running
@@ -294,13 +332,13 @@ then gates by the verified role:
 
 | message | roles |
 |---|---|
-| `Catalog`, `Instances`, `Subscribe` | any |
+| `Catalog`, `Instances`, `AppIcon`, `Subscribe` | any |
 | `Home` | `compositor`, `home`, `application`, `tool` |
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
 | `Open` with `dial` / `compose` | `application`, `home`, `tool` |
 | `Open` with `show-call` or `show-bluetooth-pairing` | `service`, `tool` |
-| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture`, `CloseGesture` | `compositor` |
+| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `ActivationRequested`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
 
 A `service` resolves identities and observes lifecycle events; it never
@@ -361,7 +399,10 @@ Records are single JSON lines with `"evidence"` first (`QEMU` in the guest,
 `app-started` (with `granted`, `denied_capabilities`), `sandbox-ready` (with
 `run_dir`), `grants-loaded`, `grants-missing`, `grants-invalid`,
 `appd-identify` (`pid`, `app|null`, `granted_count`; once per connection per
-pid), `app-intent` (`kind`, `handler`, `delivery`: `launch` | `running` |
+pid), `installed-apps` (`apps`, `added`, `removed`, `changed`, `unavailable`;
+counts only), `installed-app-rejected`, `app-adopting` (`app`, `pid`,
+`surface`, `raise`),
+`app-intent` (`kind`, `handler`, `delivery`: `launch` | `running` |
 `activated-only`; never the number), `app-surface`, `app-foreground`,
 `app-background`, `app-exited`, `app-crashed`, `home-restarting`,
 `home-restart-abandoned`, `ferrix-appd-failed` (ferrix-appd and sandbox); `client-gone`,

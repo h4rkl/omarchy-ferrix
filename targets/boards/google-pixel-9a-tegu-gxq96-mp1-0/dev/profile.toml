@@ -16,9 +16,15 @@ orientation = "portrait"
 # The exynos DPU reads 32-bit DRM fourccs byte-reversed (AB24 as RA24);
 # verified with libdrm modetest colour bars on this exact target.
 scanout_byte_order = "reversed"
-# Hole-punch camera (lower edge ~80 px) and rounded corners at the top; the
-# corner curve and home-gesture pill at the bottom. Panel pixels, portrait.
-safe_area = { top = 96, bottom = 36 }
+# Panel pixels, portrait, from the CP3A factory framework overlay
+# (framework-res__tegu__auto_generated_rro_vendor.apk): the hole-punch cutout
+# is a circle at (540, 86) r 41.5 (lower edge 128 px, rect approximation
+# 484..596 x 0..152), corners are r 115 top and bottom, and the stock portrait
+# status bar is 52dp at ro.sf.lcd_density=420 (137 px). Top 137 keeps every
+# client clear of the camera; bottom 72 equals ferrix-shell's home-gesture
+# zone (bottom 3%), so no client control sits under the system gesture and
+# the compositor's home indicator has its own strip.
+safe_area = { top = 137, bottom = 72 }
 
 [input]
 touch = true

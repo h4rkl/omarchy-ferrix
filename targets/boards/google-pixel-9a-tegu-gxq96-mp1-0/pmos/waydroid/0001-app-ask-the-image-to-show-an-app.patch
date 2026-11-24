@@ -1,0 +1,111 @@
+From 63e2353aa5a421847c5f7080164bf2f13a259a72 Mon Sep 17 00:00:00 2001
+From: TheKit <thekit@disroot.org>
+Date: Tue, 4 Aug 2026 15:59:16 +0300
+Subject: [PATCH] app: Ask the image to show an app instead of setting
+ active_apps
+
+The window mode was set here with a setprop and the launch was a separate
+call, so a failed launch left the mode pointing at an app with no window.
+showApp does both in the image and answers false when there is nothing to
+launch; showFullUI replaces the other setprop.
+
+Images that predate both answer UNKNOWN_TRANSACTION, which reaches us as a
+failed transaction - fall back to the setprop and launchApp pair there.
+---
+ tools/actions/app_manager.py  | 14 +++++++++---
+ tools/interfaces/IPlatform.py | 43 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 54 insertions(+), 3 deletions(-)
+
+diff --git a/tools/actions/app_manager.py b/tools/actions/app_manager.py
+index 9fceb118..dedb09c8 100644
+--- a/tools/actions/app_manager.py
++++ b/tools/actions/app_manager.py
+@@ -75,8 +75,14 @@ def launch(args):
+     def justLaunch():
+         platformService = IPlatform.get_service(args)
+         if platformService:
+-            platformService.setprop("waydroid.active_apps", args.PACKAGE)
+-            platformService.launchApp(args.PACKAGE)
++            shown = platformService.showApp(args.PACKAGE)
++            if shown is None:
++                # Image predates showApp: set the window mode ourselves
++                platformService.setprop("waydroid.active_apps", args.PACKAGE)
++                platformService.launchApp(args.PACKAGE)
++            elif not shown:
++                logging.error("Nothing to launch for " + args.PACKAGE)
++                return
+             multiwin = platformService.getprop(
+                 "persist.waydroid.multi_windows", "false")
+             if multiwin == "false":
+@@ -119,7 +125,9 @@ def showFullUI(args):
+     def justShow():
+         platformService = IPlatform.get_service(args)
+         if platformService:
+-            platformService.setprop("waydroid.active_apps", "Waydroid")
++            if platformService.showFullUI() is None:
++                # Image predates showFullUI: set the window mode ourselves
++                platformService.setprop("waydroid.active_apps", "Waydroid")
+             platformService.settingsPutString(2, "policy_control", "null*")
+             # HACK: Refresh display contents
+             statusBarService = IStatusBarService.get_service(args)
+diff --git a/tools/interfaces/IPlatform.py b/tools/interfaces/IPlatform.py
+index 307508cf..cb5bdac8 100644
+--- a/tools/interfaces/IPlatform.py
++++ b/tools/interfaces/IPlatform.py
+@@ -22,6 +22,8 @@
+ TRANSACTION_settingsPutInt = 11
+ TRANSACTION_settingsGetInt = 12
+ TRANSACTION_launchIntent = 13
++TRANSACTION_showApp = 14
++TRANSACTION_showFullUI = 15
+ 
+ class IPlatform:
+     def __init__(self, remote):
+@@ -204,6 +206,47 @@ def launchIntent(self, arg1, arg2):
+                 logging.error("Failed with code: {}".format(exception))
+         return None
+ 
++    def showApp(self, arg1):
++        """Show an app: the image sets the window mode and launches it.
++
++        Returns True/False as the image answered, or None if the image is too
++        old to know the call -- callers then fall back to setting
++        waydroid.active_apps themselves and calling launchApp.
++        """
++        request = self.client.new_request()
++        request.append_string16(arg1)
++        reply, status = self.client.transact_sync_reply(
++            TRANSACTION_showApp, request)
++
++        # An image without showApp answers UNKNOWN_TRANSACTION, which lands here
++        if status:
++            return None
++
++        reader = reply.init_reader()
++        status, exception = reader.read_int32()
++        if exception != 0:
++            logging.error("Failed with code: {}".format(exception))
++            return False
++        status, ret = reader.read_int32()
++        return ret != 0
++
++    def showFullUI(self):
++        """Show the whole Android UI. True if the image handled it, None if it
++        is too old to know the call (see showApp)."""
++        request = self.client.new_request()
++        reply, status = self.client.transact_sync_reply(
++            TRANSACTION_showFullUI, request)
++
++        if status:
++            return None
++
++        reader = reply.init_reader()
++        status, exception = reader.read_int32()
++        if exception != 0:
++            logging.error("Failed with code: {}".format(exception))
++            return False
++        return True
++
+     def getAppName(self, arg1):
+         request = self.client.new_request()
+         request.append_string16(arg1)

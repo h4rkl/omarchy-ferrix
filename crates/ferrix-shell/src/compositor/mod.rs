@@ -35,14 +35,17 @@ use ferrix_protocol::Subscription;
 
 use smithay::{
     backend::{
+        allocator::{Buffer, dmabuf::Dmabuf, format::FormatSet},
         input::TouchSlot,
         renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     },
-    delegate_compositor, delegate_data_device, delegate_layer_shell, delegate_output,
-    delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_layer_shell,
+    delegate_output, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_activation,
+    delegate_xdg_shell,
     desktop::{
         LayerSurface, PopupKind, PopupManager, Window, WindowSurfaceType, find_popup_root_surface,
-        get_popup_toplevel_coords, layer_map_for_output, utils::send_frames_surface_tree,
+        get_popup_toplevel_coords, layer_map_for_output, space::SpaceElement,
+        utils::send_frames_surface_tree,
     },
     input::{Seat, SeatHandler, SeatState, keyboard::XkbConfig, pointer::CursorImageStatus},
     output::Output,
@@ -65,6 +68,7 @@ use smithay::{
             CompositorClientState, CompositorHandler, CompositorState, get_parent,
             is_sync_subsurface, with_states,
         },
+        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         output::{OutputHandler, OutputManagerState},
         selection::{
             SelectionHandler,
@@ -85,6 +89,10 @@ use smithay::{
         },
         shm::{ShmHandler, ShmState},
         socket::ListeningSocketSource,
+        viewporter::ViewporterState,
+        xdg_activation::{
+            XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+        },
     },
 };
 
@@ -94,8 +102,11 @@ use crate::{
     config::ShellConfig,
     evidence::{self, Evidence, Value},
     gesture::EdgeGesture,
-    layout::{OutputLayout, Rotation, WindowStack},
+    layout::{OutputLayout, Rotation, WindowStack, toplevel_configure_size},
 };
+
+/// Activation tokens older than this are refused (xdg_activation_v1).
+const ACTIVATION_TOKEN_TTL: Duration = Duration::from_secs(10);
 
 /// Which contact currently owns the grabbed home gesture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -174,6 +185,67 @@ pub fn rotation_to_transform(rotation: Rotation) -> Transform {
     }
 }
 
+/// Listen on a second socket (`--extra-socket`, a name under
+/// `XDG_RUNTIME_DIR` with at most one directory) for the same display.
+///
+/// The Android runtime bind-mounts that socket's *directory* into its
+/// container: a directory bind follows the socket this compositor recreates
+/// on every start, whereas Waydroid's own bind of the primary socket file
+/// pins the inode of the first compositor forever (docs/android-runtime.md
+/// "Compositor restarts"). Failure is recorded and never fatal: the product
+/// socket is what the shell is for.
+fn listen_extra_socket(loop_handle: &LoopHandle<'static, Shell>, evidence: Evidence, name: &str) {
+    let record = |status: &str, reason: Option<String>| {
+        let mut fields = vec![("socket", name.into()), ("status", status.into())];
+        if let Some(reason) = reason {
+            fields.push(("reason", reason.into()));
+        }
+        evidence::emit(&evidence::record(evidence, "wayland-extra-socket", &fields));
+    };
+    if let Some(dir) = extra_socket_dir(name)
+        && let Err(e) = create_socket_dir(&dir)
+    {
+        record("failed", Some(format!("{}: {e}", dir.display())));
+        return;
+    }
+    let socket = match ListeningSocketSource::with_name(name) {
+        Ok(socket) => socket,
+        Err(e) => {
+            record("failed", Some(format!("cannot bind: {e}")));
+            return;
+        }
+    };
+    let inserted = loop_handle.insert_source(socket, |stream, _, shell| {
+        if let Err(e) = shell
+            .display_handle
+            .insert_client(stream, Arc::new(ClientState::default()))
+        {
+            tracing::warn!("failed to insert client: {e}");
+        }
+    });
+    match inserted {
+        Ok(_) => record("listening", None),
+        Err(e) => record("failed", Some(format!("event loop: {e}"))),
+    }
+}
+
+/// `$XDG_RUNTIME_DIR/<dir>` for a socket name with a directory part.
+fn extra_socket_dir(name: &str) -> Option<std::path::PathBuf> {
+    let (dir, _) = name.split_once('/')?;
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
+    Some(std::path::Path::new(&runtime).join(dir))
+}
+
+/// Create the socket directory (0755: it holds only the socket, inside the
+/// 0700 runtime directory) unless it exists.
+fn create_socket_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    match std::fs::DirBuilder::new().mode(0o755).create(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        other => other,
+    }
+}
+
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
@@ -205,6 +277,11 @@ pub struct Shell {
     pub gesture_source: Option<GestureSource>,
 
     pub windows: WindowStack<Window>,
+    /// Stable damage-tracking ids for the rows of the compositor's home
+    /// indicator (`OutputLayout::system_pill_rows`).
+    pub pill_ids: Vec<smithay::backend::renderer::element::Id>,
+    /// Damage-tracking id for the opaque backdrop under the front window.
+    pub backdrop_id: smithay::backend::renderer::element::Id,
     pub popups: PopupManager,
     pub cursor_status: CursorImageStatus,
     pub pointer_location: Point<f64, Logical>,
@@ -219,6 +296,20 @@ pub struct Shell {
     pub xdg_shell_state: XdgShellState,
     pub layer_shell_state: WlrLayerShellState,
     pub shm_state: ShmState,
+    /// wp_viewporter: Waydroid's task windows are one buffer scaled to the
+    /// window size through a viewport. Smithay's buffer handler applies the
+    /// viewport's source crop and destination size to the surface state.
+    #[allow(dead_code)]
+    viewporter_state: ViewporterState,
+    /// xdg_activation_v1: lets a client (Android) ask to raise a window;
+    /// `ferrix-appd` decides.
+    activation_state: XdgActivationState,
+    /// zwp_linux_dmabuf_v1, published by the backend once its renderer is up
+    /// (`enable_dmabuf`); clients that render on a GPU (Waydroid's
+    /// hwcomposer) hand over linear buffers instead of CPU-copying into SHM.
+    dmabuf_state: DmabufState,
+    dmabuf_global: Option<DmabufGlobal>,
+    dmabuf_formats: FormatSet,
     /// Owns the wl_output/xdg_output globals; kept alive for the shell's lifetime.
     #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
@@ -251,6 +342,9 @@ impl Shell {
         );
         let layer_shell_state = WlrLayerShellState::new::<Shell>(&dh);
         let shm_state = ShmState::new::<Shell>(&dh, Vec::new());
+        let viewporter_state = ViewporterState::new::<Shell>(&dh);
+        let activation_state = XdgActivationState::new::<Shell>(&dh);
+        let dmabuf_state = DmabufState::new();
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Shell>(&dh);
         let data_device_state = DataDeviceState::new::<Shell>(&dh);
         let mut seat_state = SeatState::new();
@@ -278,6 +372,9 @@ impl Shell {
                 }
             })
             .map_err(|e| ("socket", format!("event loop: {e}")))?;
+        if let Some(name) = config.extra_socket.as_deref() {
+            listen_extra_socket(&loop_handle, evidence, name);
+        }
         // Wake the loop whenever clients wrote; the backend loop drains the
         // display right after every dispatch (`Shell::dispatch_clients`).
         let poll_fd = display
@@ -333,6 +430,12 @@ impl Shell {
             gesture: EdgeGesture::new(),
             gesture_source: None,
             windows: WindowStack::new(),
+            // One id per merged pill row: 32 covers a 1080 px basis (about a
+            // dozen rows) with room to spare; rows past the last id are not drawn.
+            pill_ids: (0..32)
+                .map(|_| smithay::backend::renderer::element::Id::new())
+                .collect(),
+            backdrop_id: smithay::backend::renderer::element::Id::new(),
             popups: PopupManager::default(),
             cursor_status: CursorImageStatus::default_named(),
             pointer_location: Point::from((0.0, 0.0)),
@@ -343,6 +446,11 @@ impl Shell {
             xdg_shell_state,
             layer_shell_state,
             shm_state,
+            viewporter_state,
+            activation_state,
+            dmabuf_state,
+            dmabuf_global: None,
+            dmabuf_formats: FormatSet::default(),
             output_manager_state,
             seat_state,
             data_device_state,
@@ -397,6 +505,27 @@ impl Shell {
         Rectangle::new((x, y).into(), (w as i32, h as i32).into())
     }
 
+    /// The configure size of every toplevel ([`toplevel_configure_size`]).
+    pub fn toplevel_size(&self) -> Size<i32, Logical> {
+        let (w, h) = toplevel_configure_size(&self.plan, self.config.safe_area);
+        Size::from((w as i32, h as i32))
+    }
+
+    /// Rows of the compositor home indicator, when the focused window does
+    /// not draw Ferrix's pill itself (see `layout::draws_own_pill`).
+    pub fn system_pill(&self) -> Vec<Rectangle<i32, Logical>> {
+        let focused = self.windows.focused();
+        let own = focused.is_some_and(|w| crate::layout::draws_own_pill(self.windows.app_id_of(w)));
+        if focused.is_none() || own {
+            return Vec::new();
+        }
+        self.plan
+            .system_pill_rows(self.config.safe_area)
+            .into_iter()
+            .map(|(x, y, w, h)| Rectangle::new((x, y).into(), (w as i32, h as i32).into()))
+            .collect()
+    }
+
     /// Apply a (possibly new) output plan: mode is owned by the backend, this
     /// updates transform and re-configures every toplevel to the new logical
     /// size.
@@ -408,7 +537,7 @@ impl Shell {
             None,
             Some((0, 0).into()),
         );
-        let size = self.client_area().size;
+        let size = self.toplevel_size();
         for window in self.windows.iter() {
             if let Some(toplevel) = window.toplevel() {
                 toplevel.with_pending_state(|state| state.size = Some(size));
@@ -524,8 +653,19 @@ impl Shell {
     /// stack no longer contains it, so focus moves to the next mapped window.
     fn refocus(&mut self) {
         let focused = self.windows.focused().cloned();
+        // Overlap is window-local: the front window covers the client area.
+        let overlap = Rectangle::from_size(self.client_area().size);
         for window in self.windows.iter() {
             let active = focused.as_ref() == Some(window);
+            // Only the front window is on the output. Clients that track
+            // their own visibility rely on wl_surface.enter/leave: Waydroid's
+            // hwcomposer puts Android to sleep when none of its windows has
+            // entered an output, and a sleeping Android never draws.
+            if active {
+                window.output_enter(&self.output, overlap);
+            } else {
+                window.output_leave(&self.output);
+            }
             if window.set_activated(active)
                 && let Some(toplevel) = window.toplevel()
                 && toplevel.is_initial_configure_sent()
@@ -550,6 +690,23 @@ impl Shell {
         self.mapped_clients += 1;
         let (app_id, title) = appd_link::toplevel_meta(window);
         self.windows.set_app_id(window, app_id.clone());
+        // A shared runtime's window (an Android task) is not presented until
+        // ferrix-appd names this exact surface in an activation: its pid is
+        // shared, so only appd can say which application it belongs to.
+        if self.ferrix_appd.is_some() && crate::layout::withheld_until_activated(app_id.as_deref())
+        {
+            self.windows.set_held(window, true);
+            let pid = self.windows.pid_of(window);
+            let surface = self.windows.surface_of(window).unwrap_or_default();
+            self.emit(
+                "client-withheld",
+                &[
+                    ("pid", pid.into()),
+                    ("surface", Value::Int(surface as i64)),
+                    ("source", "awaiting-activation".into()),
+                ],
+            );
+        }
         let size = window.geometry().size;
         evidence::emit(&evidence::client_mapped(
             self.evidence,
@@ -706,6 +863,46 @@ impl BufferHandler for Shell {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
+impl Shell {
+    /// Publish zwp_linux_dmabuf_v1 with the formats the backend's renderer
+    /// can import (pixman: linear single-plane only). Idempotent.
+    pub fn enable_dmabuf(&mut self, formats: FormatSet) {
+        if self.dmabuf_global.is_some() || formats.iter().next().is_none() {
+            return;
+        }
+        let global = self
+            .dmabuf_state
+            .create_global::<Shell>(&self.display_handle, formats.iter().copied());
+        tracing::info!(
+            formats = formats.iter().count(),
+            "zwp_linux_dmabuf_v1 published"
+        );
+        self.dmabuf_formats = formats;
+        self.dmabuf_global = Some(global);
+    }
+}
+
+impl DmabufHandler for Shell {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        // The renderer maps the buffer on first use; refuse up front what it
+        // could never import so the client falls back instead of drawing nothing.
+        if dmabuf.num_planes() == 1 && self.dmabuf_formats.contains(&dmabuf.format()) {
+            let _ = notifier.successful::<Shell>();
+        } else {
+            notifier.failed();
+        }
+    }
+}
+
 impl ShmHandler for Shell {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
@@ -714,6 +911,7 @@ impl ShmHandler for Shell {
 
 delegate_compositor!(Shell);
 delegate_shm!(Shell);
+delegate_dmabuf!(Shell);
 
 // ---------------------------------------------------------------------------
 // xdg-shell: fullscreen-only toplevels
@@ -723,8 +921,10 @@ impl XdgShellHandler for Shell {
         &mut self.xdg_shell_state
     }
 
+    /// Every toplevel gets the same fullscreen configure
+    /// ([`Shell::toplevel_size`]), sent with the first commit.
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let size = self.client_area().size;
+        let size = self.toplevel_size();
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Fullscreen);
             state.size = Some(size);
@@ -763,7 +963,7 @@ impl XdgShellHandler for Shell {
         surface: ToplevelSurface,
         _output: Option<wl_output::WlOutput>,
     ) {
-        let size = self.client_area().size;
+        let size = self.toplevel_size();
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Fullscreen);
             state.size = Some(size);
@@ -792,6 +992,7 @@ impl XdgShellHandler for Shell {
         if let Some(window) = self.window_for_surface(surface.wl_surface()) {
             let was_mapped = self.windows.is_mapped(&window);
             let pid = self.windows.pid_of(&window);
+            let surface_id = self.windows.surface_of(&window);
             let app_id = self
                 .windows
                 .app_id_of(&window)
@@ -812,9 +1013,10 @@ impl XdgShellHandler for Shell {
                         &app_id,
                         toplevels,
                     ));
-                    if let Some(pid) = pid {
-                        self.report_surface_unmapped(pid);
-                    }
+                }
+                // Per toplevel: several windows (Android tasks) share a pid.
+                if let Some(pid) = pid {
+                    self.report_surface_unmapped(pid, surface_id);
                 }
             }
         }
@@ -823,6 +1025,61 @@ impl XdgShellHandler for Shell {
 }
 
 delegate_xdg_shell!(Shell);
+delegate_viewporter!(Shell);
+
+// ---------------------------------------------------------------------------
+// xdg-activation: a client asks to raise one of its toplevels
+
+impl XdgActivationHandler for Shell {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.activation_state
+    }
+
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        self.activation_state.remove_token(&token);
+        // Old tokens are stale requests; drop every expired one too.
+        self.activation_state
+            .retain_tokens(|_, data| data.timestamp.elapsed() < ACTIVATION_TOKEN_TTL);
+        if token_data.timestamp.elapsed() >= ACTIVATION_TOKEN_TTL {
+            return;
+        }
+        let Some(window) = self.window_for_surface(&surface) else {
+            return;
+        };
+        if !self.windows.is_mapped(&window) {
+            return;
+        }
+        // A client may only ask to raise its own windows: the token must
+        // come from the same process (Waydroid may use one connection per
+        // task, all from the same pid). Raising another client's window
+        // would let any app pull an application over the foreground.
+        let token_pid = token_data.client_id.and_then(|id| {
+            self.display_handle
+                .backend_handle()
+                .get_client_credentials(id)
+                .ok()
+                .and_then(|c| u32::try_from(c.pid).ok())
+        });
+        if token_pid.is_none() || token_pid != self.windows.pid_of(&window) {
+            self.emit(
+                "client-activation-refused",
+                &[
+                    ("pid", self.windows.pid_of(&window).into()),
+                    ("token_pid", token_pid.into()),
+                ],
+            );
+            return;
+        }
+        self.raise_on_request(&window);
+    }
+}
+
+delegate_xdg_activation!(Shell);
 
 // ---------------------------------------------------------------------------
 // wlr-layer-shell: reserved for status / launcher surfaces
@@ -933,4 +1190,40 @@ pub fn cursor_hotspot(surface: &WlSurface) -> Point<i32, Logical> {
             .map(|attrs| attrs.lock().unwrap().hotspot)
             .unwrap_or_default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn extra_socket_directory_is_created_once_and_reused() {
+        let root = std::env::temp_dir().join(format!("ferrix-shell-extra-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = root.join("ferrix-android-wayland");
+        create_socket_dir(&dir).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode & 0o700, 0o700, "owner can create the socket");
+        assert_eq!(mode & !0o755, 0, "nobody else can write: {mode:o}");
+        // A restart finds the directory (still bind-mounted by the container).
+        create_socket_dir(&dir).unwrap();
+        // A file in the way is an error, not silently accepted.
+        let file = root.join("not-a-dir");
+        std::fs::write(&file, b"").unwrap();
+        assert!(create_socket_dir(&file).is_err());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn extra_socket_dir_is_only_the_directory_part() {
+        assert_eq!(extra_socket_dir("wayland-9"), None);
+        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+            assert_eq!(
+                extra_socket_dir("ferrix-android-wayland/wayland-0"),
+                Some(std::path::Path::new(&runtime).join("ferrix-android-wayland"))
+            );
+        }
+    }
 }

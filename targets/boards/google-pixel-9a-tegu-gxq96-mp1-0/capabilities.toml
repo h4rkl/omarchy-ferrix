@@ -26,7 +26,7 @@ evidence = "ferrix-bluetooth-uart attaches the BCM4383 controller (btattach -P b
 
 [audio]
 status = "unsupported"
-evidence = "No Ferrix adapter or physical Linux evidence."
+evidence = "Not physically verified. Observed on the Kleaf dev route (2026-10-11): no ALSA card, because the AoC DSP was never started (aoc_core probes, google-aoc-snd-card defers on 'wait for aoc output ctrl'); PipeWire offers only Dummy Output. Offline-only route, not yet booted: stage vendor.img aoc.bin, tismartpa_driver_tuning.bin and the cs40l26 haptics images (audio-aoc, audio-tas25xx, haptics-cs40l26; the card's haptics back end needs cs40l26 to probe) and have ferrix-aoc-firmware write aoc.bin to the AoC firmware attribute, as Android's aocd does. No mixer/UCM routing or speaker protection configuration yet; see audio-bringup.md."
 
 [telephony]
 status = "unsupported"

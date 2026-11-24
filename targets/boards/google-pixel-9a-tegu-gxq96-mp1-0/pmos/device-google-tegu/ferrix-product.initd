@@ -69,12 +69,17 @@ start() {
 	# A socket left by a previous shell would satisfy the wait below before
 	# the new compositor listens.
 	rm -f "$wayland_socket" "$wayland_socket.lock"
+	# --extra-socket: the opt-in Android runtime binds that socket's directory
+	# into its container (not the socket file, whose inode a restart replaces),
+	# so Android's hwcomposer reconnects after this service restarts
+	# (docs/android-runtime.md "Compositor restarts").
 	start-stop-daemon --start --background --make-pidfile --pidfile "$shell_pidfile" \
 		--chuid user:user --env HOME=/home/user --env USER=user \
 		--env XDG_RUNTIME_DIR=/run/user/1000 --env WAYLAND_DISPLAY=wayland-0 \
 		--env FERRIX_CORE_SOCKET="$core_socket" --env FERRIX_APPD_SOCKET="$appd_socket" \
 		--stdout /var/log/ferrix-shell.log --stderr /var/log/ferrix-shell.log \
 		--exec /usr/bin/ferrix-shell -- --core "$core_socket" \
+		--extra-socket ferrix-android-wayland/wayland-0 \
 		--ferrix-appd "$appd_socket" /etc/ferrix/profile.toml
 	wait_for_socket "$wayland_socket" ferrix-shell || { eend 1; return 1; }
 

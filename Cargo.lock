@@ -814,6 +814,7 @@ dependencies = [
 name = "ferrix-app-api"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "serde",
  "serde_json",
 ]
@@ -1095,6 +1096,7 @@ version = "0.1.0"
 dependencies = [
  "ferrix-app-api",
  "ferrix-app-runtime-api",
+ "png",
  "serde",
  "serde_json",
 ]

@@ -22,7 +22,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ferrix_app_api::{
-    AppDescriptor, AppError, AppEvent, AppId, AppIdentity, AppInstance, AppIntent, SCHEMA_VERSION,
+    AppDescriptor, AppError, AppEvent, AppIconBitmap, AppId, AppIdentity, AppInstance, AppIntent,
+    SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,13 @@ pub enum Request {
     },
     Catalog,
     Instances,
+    /// The launcher bitmap of an installed app (ADR-008), when its runtime
+    /// provides one. Wire form: `{"request":"app-icon","id":"apk.org.example"}`.
+    /// One bounded bitmap per reply ([`ferrix_app_api::APP_ICON_MAX_SIDE`]);
+    /// checked-in apps never have one (their glyphs are drawn by the home).
+    AppIcon {
+        id: AppId,
+    },
     /// Start an app, or activate it when a single-instance app already runs.
     Launch {
         id: AppId,
@@ -92,20 +100,36 @@ pub enum Request {
 pub enum Report {
     /// A toplevel committed its first buffer. `pid` is the client's process
     /// id as seen by the compositor; `app_id` is the untrusted xdg app id.
+    /// `surface` is the compositor's opaque id for this one toplevel: several
+    /// toplevels (and several Wayland connections) may share a pid, as the
+    /// Android runtime's per-task windows do.
     SurfaceMapped {
         pid: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         app_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
     },
-    /// The last toplevel of that client went away.
-    SurfaceUnmapped { pid: u32 },
-    /// Keyboard/visual focus moved to the client with `pid` (or to nothing).
+    /// A mapped toplevel went away. With `surface`, exactly that toplevel;
+    /// without it (older compositors), every toplevel of `pid`.
+    SurfaceUnmapped {
+        pid: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
+    },
+    /// Keyboard/visual focus moved to the client with `pid` (or to nothing);
+    /// `surface` names the focused toplevel when known.
     FocusChanged {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pid: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
     },
+    /// A client asked (xdg_activation_v1) to raise one of its toplevels.
+    /// `ferrix_appd` decides; a linked compositor never raises on its own.
+    ActivationRequested { pid: u32, surface: u64 },
     /// The compositor recognised the global home gesture.
     HomeGesture,
     /// The compositor recognised a deliberate dismiss/close gesture.
@@ -147,6 +171,15 @@ pub enum Reply {
         schema_version: u32,
         instances: Vec<AppInstance>,
     },
+    /// Result of `AppIcon`. `icon` is `null` when the app is unknown, not
+    /// installed, or its runtime has no usable icon; the caller then draws
+    /// its letter glyph.
+    AppIcon {
+        schema_version: u32,
+        id: AppId,
+        #[serde(default)]
+        icon: Option<AppIconBitmap>,
+    },
     /// Result of `Launch`/`Activate`: the (possibly pre-existing) instance.
     Instance {
         schema_version: u32,
@@ -169,8 +202,20 @@ pub enum Reply {
 pub enum Notification {
     /// A lifecycle or catalog event.
     App { event: AppEvent },
-    /// Compositor directive: raise the toplevel(s) of the client with `pid`.
-    Activate { pid: u32, app_id: AppId },
+    /// Compositor directive: raise the toplevel(s) of the client with `pid`;
+    /// with `surface`, exactly that toplevel (revealing it when withheld).
+    Activate {
+        pid: u32,
+        app_id: AppId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        surface: Option<u64>,
+    },
+    /// Compositor directive: never present this toplevel until an
+    /// `Activate` names it. Used for shared-runtime windows that belong to
+    /// no running application.
+    Withhold { pid: u32, surface: u64 },
+    /// Compositor directive: ask this toplevel to close (`xdg_toplevel.close`).
+    Close { pid: u32, surface: u64 },
     /// An intent for an already running handler. Sent only to the streams
     /// of the handler application itself.
     Intent { app_id: AppId, intent: AppIntent },
@@ -262,6 +307,17 @@ impl Client {
             Reply::Catalog { apps, .. } => Ok(apps),
             Reply::Error { error } => Err(error.to_string()),
             other => Err(format!("unexpected ferrix-appd catalog reply: {other:?}")),
+        }
+    }
+
+    /// The installed app's launcher bitmap (see [`Request::AppIcon`]).
+    /// `Ok(None)` when there is none; an `Err` also covers an older service
+    /// that does not know the request.
+    pub fn app_icon(&mut self, id: &AppId) -> Result<Option<AppIconBitmap>, String> {
+        match self.request(&Request::AppIcon { id: id.clone() })? {
+            Reply::AppIcon { id: got, icon, .. } if &got == id => Ok(icon),
+            Reply::Error { error } => Err(error.to_string()),
+            other => Err(format!("unexpected ferrix-appd app-icon reply: {other:?}")),
         }
     }
 
@@ -543,6 +599,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn app_icon_request_and_reply_wire_shapes() {
+        let id = AppId::new("apk.org.example.notes").unwrap();
+        let request = Request::AppIcon { id: id.clone() };
+        let text = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            text,
+            r#"{"request":"app-icon","id":"apk.org.example.notes"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Inbound>(&text).unwrap(),
+            Inbound::Request(request)
+        );
+        let reply = Reply::AppIcon {
+            schema_version: SCHEMA_VERSION,
+            id: id.clone(),
+            icon: Some(AppIconBitmap::new(1, 1, vec![1, 2, 3, 4]).unwrap()),
+        };
+        let text = serde_json::to_string(&reply).unwrap();
+        assert_eq!(
+            text,
+            r#"{"reply":"app-icon","schema_version":1,"id":"apk.org.example.notes","icon":{"width":1,"height":1,"rgba":"AQIDBA=="}}"#
+        );
+        assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
+        let none: Reply = serde_json::from_str(
+            r#"{"reply":"app-icon","schema_version":1,"id":"apk.org.example.notes","icon":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(none, Reply::AppIcon { icon: None, .. }));
+        // An out-of-bounds bitmap fails the whole reply.
+        assert!(
+            serde_json::from_str::<Reply>(
+                r#"{"reply":"app-icon","schema_version":1,"id":"apk.org.example.notes","icon":{"width":500,"height":1,"rgba":""}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn requests_and_reports_have_distinct_wire_shapes() {
         let launch = Request::Launch {
             id: AppId::new("org.ferrix.terminal").unwrap(),
@@ -555,6 +649,7 @@ mod tests {
             pid: 42,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: None,
+            surface: None,
         };
         assert_eq!(
             serde_json::to_string(&mapped).unwrap(),
@@ -566,7 +661,31 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<Inbound>(r#"{"report":"focus-changed"}"#).unwrap(),
-            Inbound::Report(Report::FocusChanged { pid: None })
+            Inbound::Report(Report::FocusChanged {
+                pid: None,
+                surface: None
+            })
+        );
+        // Per-toplevel ids are optional on the wire: an older compositor's
+        // pid-only report still parses.
+        assert_eq!(
+            serde_json::to_string(&Report::SurfaceUnmapped {
+                pid: 9,
+                surface: Some(3)
+            })
+            .unwrap(),
+            r#"{"report":"surface-unmapped","pid":9,"surface":3}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Inbound>(r#"{"report":"surface-unmapped","pid":9}"#).unwrap(),
+            Inbound::Report(Report::SurfaceUnmapped {
+                pid: 9,
+                surface: None
+            })
+        );
+        assert_eq!(
+            serde_json::to_string(&Report::ActivationRequested { pid: 9, surface: 3 }).unwrap(),
+            r#"{"report":"activation-requested","pid":9,"surface":3}"#
         );
         assert_eq!(
             serde_json::to_string(&Report::CloseGesture).unwrap(),
@@ -580,11 +699,20 @@ mod tests {
         let text = serde_json::to_string(&Notification::Activate {
             pid: 7,
             app_id: AppId::new("org.ferrix.home").unwrap(),
+            surface: None,
         })
         .unwrap();
         assert_eq!(
             text,
             r#"{"notification":"activate","pid":7,"app_id":"org.ferrix.home"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Notification::Withhold { pid: 7, surface: 2 }).unwrap(),
+            r#"{"notification":"withhold","pid":7,"surface":2}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Notification::Close { pid: 7, surface: 2 }).unwrap(),
+            r#"{"notification":"close","pid":7,"surface":2}"#
         );
         let event = Notification::App {
             event: AppEvent::CatalogChanged { apps: 3 },

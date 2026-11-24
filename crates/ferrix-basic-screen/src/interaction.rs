@@ -3,7 +3,10 @@
 
 use ferrix_app_api::AppId;
 use ferrix_hardware_api::{CapabilityMatrix, CapabilityStatus};
+use std::time::Instant;
+
 use ferrix_ui::draw::Rect;
+use ferrix_ui::fling::{Fling, VelocityTracker};
 
 use crate::catalog::Tile;
 use crate::status::{NetworkSummary, TelephonySummary};
@@ -11,6 +14,10 @@ use crate::status::{NetworkSummary, TelephonySummary};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Launcher,
+    /// Every catalog entry (first-party and installed APKs) as a scrolling
+    /// list sorted by label; reached from the home grid's Apps tile or an
+    /// upward swipe on home.
+    Apps,
     /// Illustrative in-process page of a non-launchable tile (by index).
     Reference(usize),
     QuickSettings,
@@ -22,6 +29,7 @@ impl Page {
     pub fn name(self) -> String {
         match self {
             Page::Launcher => "Launcher".to_owned(),
+            Page::Apps => "Apps".to_owned(),
             Page::Reference(index) => format!("Reference({index})"),
             Page::QuickSettings => "QuickSettings".to_owned(),
             Page::Notifications => "Notifications".to_owned(),
@@ -34,8 +42,11 @@ pub enum Target {
     Status,
     Battery,
     Network,
-    /// A launcher tile by index into `UiState::tiles`.
+    /// A catalog entry by index into `UiState::tiles`: a home grid tile or
+    /// an app list row.
     App(usize),
+    /// The home grid's last tile: opens the app list.
+    AllApps,
     Back,
     /// The bottom gesture zone. Drawn as the pill; the compositor owns the
     /// gesture, so the launcher never acts on it.
@@ -132,6 +143,9 @@ pub struct UiState {
     /// Queued hardware requests; the session owner drains these after input.
     pub pending_system: Vec<SystemAction>,
     pub crash_notice: Option<CrashNotice>,
+    /// App list scroll offset in panel pixels (clamped to the content by
+    /// [`apps_max_scroll`] wherever it is used).
+    pub apps_scroll: i32,
 }
 
 impl UiState {
@@ -154,6 +168,7 @@ impl UiState {
             pending_launch: Vec::new(),
             pending_system: Vec::new(),
             crash_notice: None,
+            apps_scroll: 0,
         };
         state.set_session(
             ferrix_session::DEFAULT_TARGET_ID,
@@ -184,14 +199,45 @@ impl UiState {
         self.tiles.iter().position(|tile| tile.id == *id)
     }
 
+    /// Tiles the home grid offers: first-party entries in catalog order.
+    /// Installed APKs live in the app list only, so the grid keeps its
+    /// designed tile size however many packages are installed.
+    pub fn home_entries(&self) -> Vec<usize> {
+        (0..self.tiles.len())
+            .filter(|index| !self.tiles[*index].installed)
+            .collect()
+    }
+
+    /// Every entry for the app list, sorted by label (case-insensitive); a
+    /// first-party entry precedes an Android app of the same name.
+    pub fn list_entries(&self) -> Vec<usize> {
+        let mut entries: Vec<usize> = (0..self.tiles.len()).collect();
+        entries.sort_by(|a, b| {
+            let (a, b) = (&self.tiles[*a], &self.tiles[*b]);
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.installed.cmp(&b.installed))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        entries
+    }
+
     fn home(&mut self) {
         self.page = Page::Launcher;
+    }
+
+    fn open_apps(&mut self) {
+        self.page = Page::Apps;
+        self.apps_scroll = 0;
     }
 
     fn back(&mut self) {
         match self.page {
             Page::Launcher => {}
-            Page::Reference(_) | Page::QuickSettings | Page::Notifications => self.home(),
+            Page::Apps | Page::Reference(_) | Page::QuickSettings | Page::Notifications => {
+                self.home()
+            }
         }
     }
 
@@ -204,11 +250,17 @@ impl UiState {
                     if tile.launchable {
                         tile.starting = true;
                         self.pending_launch.push(tile.id.clone());
+                        // Like a mobile app drawer: launching closes the
+                        // list, so going home later shows the home grid.
+                        if self.page == Page::Apps {
+                            self.page = Page::Launcher;
+                        }
                     } else {
                         self.page = Page::Reference(index);
                     }
                 }
             }
+            Target::AllApps => self.open_apps(),
             Target::Back => self.back(),
             Target::Home => {}
             Target::Wifi => {
@@ -233,14 +285,90 @@ struct Contact {
     start: (f64, f64),
     current: (f64, f64),
     target: Option<Target>,
+    /// App list offset when the contact began inside the list viewport;
+    /// `None` when the contact cannot scroll the list.
+    scroll_from: Option<i32>,
+    /// The contact became a list drag: it scrolls and never taps.
+    dragging: bool,
+    /// Event time of the down, so sample times stay small and survive the
+    /// Wayland clock wrapping.
+    start_ms: u32,
+}
+
+/// Minimum release speed that starts a glide: a tenth of the panel height
+/// per second (in px/ms).
+fn fling_min(size: (u32, u32)) -> f64 {
+    f64::from(size.1) * 0.1 / 1000.0
+}
+
+/// Fastest glide: four panel heights per second (in px/ms).
+fn fling_max(size: (u32, u32)) -> f64 {
+    f64::from(size.1) * 4.0 / 1000.0
 }
 
 #[derive(Default)]
 pub struct Input {
     contact: Option<Contact>,
+    /// Finger positions of a list drag, for the release velocity.
+    tracker: VelocityTracker,
+    /// The app list's glide after a fast release; advanced by [`Input::tick`].
+    fling: Option<Fling>,
+    /// Time of the event about to be delivered: Wayland milliseconds and the
+    /// matching instant, from [`Input::set_time`]. Untimed input (`None`)
+    /// never flings.
+    now: Option<(u32, Instant)>,
 }
 
 impl Input {
+    /// Stamps the next event: its Wayland time and the instant it was read.
+    pub fn set_time(&mut self, time_ms: u32, now: Instant) {
+        self.now = Some((time_ms, now));
+    }
+
+    fn time_ms(&self) -> u32 {
+        self.now.map_or(0, |(ms, _)| ms)
+    }
+
+    /// When [`Input::tick`] must next run: only while the list glides.
+    pub fn deadline(&self) -> Option<Instant> {
+        self.fling.map(|fling| fling.deadline())
+    }
+
+    /// Advances the app list's glide to `now`; returns whether the visible
+    /// offset changed. The glide ends when it slows down, reaches either end
+    /// of the list, or the list is no longer shown.
+    pub fn tick(&mut self, state: &mut UiState, size: (u32, u32), now: Instant) -> bool {
+        let Some(fling) = self.fling.as_mut() else {
+            return false;
+        };
+        if state.page != Page::Apps {
+            self.fling = None;
+            return false;
+        }
+        let Some(position) = fling.advance(now) else {
+            self.fling = None;
+            return false;
+        };
+        let max = f64::from(apps_max_scroll(size, state.tiles.len()));
+        let clamped = position.clamp(0.0, max);
+        if clamped != position {
+            self.fling = None;
+        }
+        let old = state.apps_scroll;
+        state.apps_scroll = clamped.round() as i32;
+        old != state.apps_scroll
+    }
+
+    /// The list is gliding.
+    pub fn flinging(&self) -> bool {
+        self.fling.is_some()
+    }
+
+    /// The glide's starting scroll speed in px/ms while the list glides.
+    pub fn fling_velocity(&self) -> Option<f64> {
+        self.fling.map(|fling| fling.initial_velocity())
+    }
+
     pub fn down(
         &mut self,
         id: i32,
@@ -251,13 +379,29 @@ impl Input {
         if self.contact.is_some() {
             return false;
         }
-        let target = hit_test(state, position, size);
+        // A touch on a gliding list stops it, and that touch never taps.
+        let caught = self.fling.take().is_some();
+        let target = (!caught).then(|| hit_test(state, position, size)).flatten();
+        let viewport = apps_viewport(size);
+        let scroll_from = (state.page == Page::Apps
+            && position.1 >= f64::from(viewport.y)
+            && position.1 < f64::from(viewport.y + viewport.h))
+        .then(|| {
+            state
+                .apps_scroll
+                .clamp(0, apps_max_scroll(size, state.tiles.len()))
+        });
         self.contact = Some(Contact {
             id,
             start: position,
             current: position,
             target,
+            scroll_from,
+            dragging: false,
+            start_ms: self.time_ms(),
         });
+        self.tracker.reset();
+        self.tracker.add(0.0, position.1);
         state.pressed = target;
         true
     }
@@ -273,6 +417,27 @@ impl Input {
             return false;
         };
         contact.current = position;
+        let t = f64::from(
+            self.now
+                .map_or(0, |(ms, _)| ms)
+                .wrapping_sub(contact.start_ms),
+        );
+        self.tracker.add(t, position.1);
+        if let Some(from) = contact.scroll_from {
+            let dx = position.0 - contact.start.0;
+            let dy = position.1 - contact.start.1;
+            if !contact.dragging && dy.abs() >= tap_slop(size) && dy.abs() > dx.abs() {
+                contact.dragging = true;
+            }
+            if contact.dragging {
+                let max = apps_max_scroll(size, state.tiles.len());
+                let scroll = (f64::from(from) - dy).round() as i32;
+                let old = (state.apps_scroll, state.pressed);
+                state.apps_scroll = scroll.clamp(0, max);
+                state.pressed = None;
+                return old != (state.apps_scroll, state.pressed);
+            }
+        }
         if contact.target == Some(Target::Brightness) {
             let old = state.brightness;
             state.brightness = brightness_at(position.0, size.0);
@@ -310,6 +475,32 @@ impl Input {
             return true;
         }
 
+        if contact.dragging {
+            // A list drag only scrolls; the offset is already applied. A
+            // fast release glides on (content follows the finger, so the
+            // scroll velocity is the finger's, reversed).
+            if let Some((ms, now)) = self.now {
+                let release = f64::from(ms.wrapping_sub(contact.start_ms));
+                let velocity = -self.tracker.velocity(release);
+                // Already pinned at the end it would glide toward: no glide.
+                let max = apps_max_scroll(size, state.tiles.len());
+                let pinned = (velocity < 0.0 && state.apps_scroll <= 0)
+                    || (velocity > 0.0 && state.apps_scroll >= max);
+                self.fling = (!pinned)
+                    .then(|| {
+                        Fling::start(
+                            f64::from(state.apps_scroll),
+                            velocity,
+                            fling_min(size),
+                            fling_max(size),
+                            now,
+                        )
+                    })
+                    .flatten();
+            }
+            state.pressed = None;
+            return true;
+        }
         let tap = distance(contact.start, contact.current) < tap_slop(size);
         // Any tap dismisses a crash notice; the tap still acts normally.
         if tap {
@@ -317,6 +508,16 @@ impl Input {
         }
         if contact.start.1 <= h * 0.08 && dy > swipe && dy.abs() > dx.abs() {
             state.page = Page::Notifications;
+        } else if state.page == Page::Launcher
+            && contact.start.1 < h * 0.92
+            && -dy > swipe
+            && dy.abs() > dx.abs()
+        {
+            // An upward swipe on home opens the app list (the Android drawer
+            // convention). It starts above the home zone (`Target::Home`,
+            // the bottom 8%); the compositor's own home gesture starts in the
+            // bottom 3% and never reaches this surface.
+            state.open_apps();
         } else if ((contact.start.0 <= w * 0.08 && dx > swipe)
             || (contact.start.0 >= w * 0.92 && -dx > swipe))
             && dx.abs() > dy.abs()
@@ -356,27 +557,62 @@ fn scale(v: i32, basis: i32) -> i32 {
     v * basis / 1080
 }
 
+/// Smallest launcher tile, in 1080-basis design px, at which the 96 px
+/// glyph and the 30 px label still sit apart inside the tile (see
+/// [`tile_parts`]). A grid that would need smaller tiles shows fewer rows
+/// instead; everything stays reachable through the app list.
+pub const MIN_TILE: i32 = 240;
+
 /// Launcher tile rectangles, shared by rendering and hit testing. Three
-/// columns; rows grow with the catalog. Portrait keeps the original geometry
-/// (48px margin, 24px gap, grid top at one panel width); landscape places
-/// the grid right of the cards and fits the rows into the free height.
+/// columns; rows grow with `count` up to what fits. Portrait keeps the
+/// original geometry (48px margin, 24px gap, grid top at one panel width)
+/// when it fits, then lifts the grid, then shrinks the tiles down to
+/// [`MIN_TILE`], and finally drops the rows that still do not fit, so the
+/// last row always ends above the footer caption and gesture pill (a short
+/// client area such as the Pixel 9a's 1080x2215) and a label never overlaps
+/// its glyph. Landscape places the grid right of the cards and fits the rows
+/// into the free height the same way. May return fewer than `count` rects.
 pub fn tile_rects(size: (u32, u32), count: usize) -> Vec<Rect> {
     let (w, h) = (size.0 as i32, size.1 as i32);
     let basis = w.min(h);
     let s = |v: i32| scale(v, basis);
     let gap = s(24);
-    let rows = count.div_ceil(3).max(1) as i32;
-    let (left, top, tile) = if w > h {
+    let min_tile = s(MIN_TILE).max(1);
+    let wanted = count.div_ceil(3).max(1) as i32;
+    // Rows of `tile` that fit between `top` and `bottom`.
+    let fit = |top: i32, bottom: i32, tile: i32| ((bottom - top + gap) / (tile + gap)).max(0);
+    let (left, top, tile, rows) = if w > h {
         let left = s(940);
         let top = s(120);
-        let tile =
-            ((w - left - s(40) - 2 * gap) / 3).min((h - top - s(90) - (rows - 1) * gap) / rows);
-        (left, top, tile)
+        let bottom = h - s(90);
+        let widest = (w - left - s(40) - 2 * gap) / 3;
+        let rows = wanted.min(fit(top, bottom, min_tile.min(widest)));
+        let tile = if rows == 0 {
+            widest
+        } else {
+            widest.min((bottom - top - (rows - 1) * gap) / rows)
+        };
+        (left, top, tile, rows)
     } else {
         let margin = s(48);
-        (margin, w, (w - 2 * margin - 2 * gap) / 3)
+        let designed = (w - 2 * margin - 2 * gap) / 3;
+        // Keep the caption (baseline h - 150) and the pill clear, and never
+        // rise into the battery/network cards and crash banner (end at 1056).
+        let bottom = h - s(200);
+        let lowest_top = s(1056);
+        let rows = wanted.min(fit(lowest_top, bottom, min_tile.min(designed)));
+        let mut tile = designed;
+        let mut top = w.min(bottom - rows * tile - (rows - 1) * gap);
+        if top < lowest_top {
+            top = lowest_top;
+            if rows > 0 {
+                tile = tile.min((bottom - top - (rows - 1) * gap) / rows);
+            }
+        }
+        ((w - 3 * tile - 2 * gap) / 2, top, tile, rows)
     };
-    (0..count)
+    let shown = count.min((rows * 3) as usize);
+    (0..shown)
         .map(|index| {
             let col = (index % 3) as i32;
             let row = (index / 3) as i32;
@@ -386,6 +622,120 @@ pub fn tile_rects(size: (u32, u32), count: usize) -> Vec<Rect> {
                 w: tile,
                 h: tile,
             }
+        })
+        .collect()
+}
+
+/// The home grid: first-party tiles (index into `UiState::tiles`, rect)
+/// followed by the Apps tile in the next slot. When the panel fits fewer
+/// slots than first-party entries plus one, the Apps tile takes the last
+/// slot and the remaining entries are reached through the list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HomeGrid {
+    pub tiles: Vec<(usize, Rect)>,
+    pub apps: Option<Rect>,
+}
+
+pub fn home_grid(state: &UiState, size: (u32, u32)) -> HomeGrid {
+    let entries = state.home_entries();
+    let mut slots = tile_rects(size, entries.len() + 1);
+    let apps = slots.pop();
+    HomeGrid {
+        tiles: entries.into_iter().zip(slots).collect(),
+        apps,
+    }
+}
+
+/// Where a tile draws its glyph and label, in panel px: the glyph box
+/// (square, centred on the tile) and the label box (one line, inset from the
+/// tile edges, baseline at `label_baseline`). Shared by rendering and the
+/// geometry tests that prove the two never overlap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileParts {
+    pub icon: Rect,
+    pub label: Rect,
+    pub label_baseline: i32,
+    pub label_px: i32,
+}
+
+pub fn tile_parts(r: Rect, size: (u32, u32)) -> TileParts {
+    let basis = size.0.min(size.1) as i32;
+    let s = |v: i32| scale(v, basis);
+    let landscape = size.0 > size.1;
+    let icon_size = s(96);
+    let icon_cy = r.y + s(if landscape { 105 } else { 118 });
+    let label_px = s(if landscape { 28 } else { 30 });
+    let label_baseline = r.y + r.h - s(if landscape { 38 } else { 44 });
+    // Ascent and descent of JetBrains Mono at `label_px` (generous).
+    let ascent = label_px * 3 / 4;
+    let descent = label_px / 4;
+    TileParts {
+        icon: Rect {
+            x: r.x + (r.w - icon_size) / 2,
+            y: icon_cy - icon_size / 2,
+            w: icon_size,
+            h: icon_size,
+        },
+        label: Rect {
+            x: r.x + s(14),
+            y: label_baseline - ascent,
+            w: r.w - 2 * s(14),
+            h: ascent + descent,
+        },
+        label_baseline,
+        label_px,
+    }
+}
+
+/// The app list viewport: below the page header, above the home zone (the
+/// bottom 8%, `Target::Home`).
+pub fn apps_viewport(size: (u32, u32)) -> Rect {
+    let basis = size.0.min(size.1) as i32;
+    let top = ferrix_ui::widgets::header_bottom(basis) + scale(12, basis);
+    let bottom = (f64::from(size.1) * 0.92) as i32;
+    Rect {
+        x: 0,
+        y: top,
+        w: size.0 as i32,
+        h: (bottom - top).max(0),
+    }
+}
+
+/// App list row height and gap, 1080-basis design px.
+pub const APP_ROW: i32 = 128;
+pub const APP_ROW_GAP: i32 = 12;
+
+/// Total height of `count` list rows plus the bottom padding, in panel px.
+fn apps_content_height(size: (u32, u32), count: usize) -> i32 {
+    let basis = size.0.min(size.1) as i32;
+    let n = count as i32;
+    if n == 0 {
+        return 0;
+    }
+    n * scale(APP_ROW, basis) + (n - 1) * scale(APP_ROW_GAP, basis) + scale(24, basis)
+}
+
+/// Largest scroll offset: zero when every row fits.
+pub fn apps_max_scroll(size: (u32, u32), count: usize) -> i32 {
+    (apps_content_height(size, count) - apps_viewport(size).h).max(0)
+}
+
+/// Row rectangles of the app list at `scroll`, in list order (unclipped:
+/// rows above or below the viewport have rects outside it).
+pub fn app_row_rects(size: (u32, u32), count: usize, scroll: i32) -> Vec<Rect> {
+    let basis = size.0.min(size.1) as i32;
+    let s = |v: i32| scale(v, basis);
+    let viewport = apps_viewport(size);
+    let scroll = scroll.clamp(0, apps_max_scroll(size, count));
+    let margin = s(48);
+    let row = s(APP_ROW);
+    let gap = s(APP_ROW_GAP);
+    (0..count as i32)
+        .map(|i| Rect {
+            x: margin,
+            y: viewport.y + i * (row + gap) - scroll,
+            w: size.0 as i32 - 2 * margin,
+            h: row,
         })
         .collect()
 }
@@ -427,10 +777,29 @@ pub fn hit_test(state: &UiState, position: (f64, f64), size: (u32, u32)) -> Opti
                     return Some(Target::Network);
                 }
             }
-            tile_rects(size, state.tiles.len())
+            let grid = home_grid(state, size);
+            if grid.apps.is_some_and(|rect| contains(rect, position)) {
+                return Some(Target::AllApps);
+            }
+            grid.tiles
                 .into_iter()
-                .position(|rect| contains(rect, position))
-                .map(Target::App)
+                .find(|(_, rect)| contains(*rect, position))
+                .map(|(index, _)| Target::App(index))
+        }
+        Page::Apps => {
+            if contains(ferrix_ui::widgets::back_rect(size), position) {
+                return Some(Target::Back);
+            }
+            let viewport = apps_viewport(size);
+            if !contains(viewport, position) {
+                return None;
+            }
+            let entries = state.list_entries();
+            app_row_rects(size, entries.len(), state.apps_scroll)
+                .into_iter()
+                .zip(entries)
+                .find(|(rect, _)| contains(*rect, position))
+                .map(|(_, index)| Target::App(index))
         }
         Page::Reference(_) => (x <= w * 0.22 && y <= h * 0.12).then_some(Target::Back),
         Page::QuickSettings => {
@@ -527,6 +896,434 @@ mod tests {
         assert_eq!(rects[6].x, rects[0].x);
         assert!(rects[6].y + rects[6].h < 2340 - 150, "{:?}", rects[6]);
         assert!(tile_rects(SIZE, 0).is_empty());
+    }
+
+    #[test]
+    fn a_short_client_area_lifts_the_grid_clear_of_the_footer() {
+        // The Pixel 9a client area after its 137/72 safe area.
+        let (w, h) = (1080, 2215);
+        let rects = tile_rects((w, h), 8);
+        let last = rects[7];
+        assert!(last.y + last.h <= h as i32 - 200, "{last:?}");
+        assert!(rects[0].y >= 1056, "{:?}", rects[0]);
+        // Still square, still centred (within integer rounding).
+        assert_eq!(rects[0].w, rects[0].h);
+        assert!((rects[0].x - (w as i32 - (rects[2].x + rects[2].w))).abs() <= 1);
+        // Rows that cannot fit at the minimum tile size are dropped rather
+        // than shrunk until labels collide with glyphs.
+        let rects = tile_rects((w, 1900), 12);
+        assert!(
+            rects.len() < 12 && rects.len().is_multiple_of(3),
+            "{}",
+            rects.len()
+        );
+        let last = rects[rects.len() - 1];
+        assert!(last.y + last.h <= 1900 - 200, "{last:?}");
+        assert!(rects.iter().all(|r| r.w >= MIN_TILE), "{rects:?}");
+    }
+
+    fn with_apks() -> UiState {
+        let mut tiles = test_tiles();
+        tiles.extend(crate::catalog::sample_installed_tiles());
+        UiState::new(true, true, tiles)
+    }
+
+    fn overlaps(a: Rect, b: Rect) -> bool {
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    }
+
+    fn inside(inner: Rect, outer: Rect) -> bool {
+        inner.x >= outer.x
+            && inner.y >= outer.y
+            && inner.x + inner.w <= outer.x + outer.w
+            && inner.y + inner.h <= outer.y + outer.h
+    }
+
+    /// The Pixel 9a regression: 8 first-party tiles plus 10 APKs squeezed
+    /// into one grid until labels overlapped their glyphs. The grid now
+    /// holds the first-party tiles and the Apps tile at the designed size.
+    #[test]
+    fn installed_apks_never_shrink_the_home_grid() {
+        for size in [(1080, 2340), (1080, 2215), (830, 1800), (2340, 1080)] {
+            let plain = UiState::new(true, true, test_tiles());
+            let state = with_apks();
+            let grid = home_grid(&state, size);
+            assert_eq!(
+                grid,
+                home_grid(&plain, size),
+                "{size:?}: APKs change nothing"
+            );
+            assert_eq!(grid.tiles.len(), plain.tiles.len(), "{size:?}");
+            assert!(grid.tiles.iter().all(|(i, _)| !state.tiles[*i].installed));
+            let apps = grid.apps.expect("Apps tile");
+            let mut rects: Vec<Rect> = grid.tiles.iter().map(|(_, r)| *r).collect();
+            rects.push(apps);
+            let basis = size.0.min(size.1) as i32;
+            for (i, r) in rects.iter().enumerate() {
+                assert!(r.w >= scale(MIN_TILE, basis), "{size:?} {r:?}");
+                if size.0 < size.1 {
+                    assert!(
+                        r.y + r.h <= size.1 as i32 - scale(200, basis),
+                        "{size:?} {r:?}"
+                    );
+                } else {
+                    assert!(
+                        r.y + r.h <= size.1 as i32 - scale(90, basis),
+                        "{size:?} {r:?}"
+                    );
+                }
+                let parts = tile_parts(*r, size);
+                assert!(
+                    !overlaps(parts.icon, parts.label),
+                    "{size:?}: label over glyph {parts:?}"
+                );
+                assert!(
+                    inside(parts.icon, *r) && inside(parts.label, *r),
+                    "{size:?} {parts:?}"
+                );
+                for other in &rects[i + 1..] {
+                    assert!(!overlaps(*r, *other), "{size:?}: {r:?} {other:?}");
+                }
+            }
+            if size == (1080, 2340) {
+                // The designed portrait tile: (1080 - 2*48 - 2*24) / 3.
+                assert_eq!(rects[0].w, 312);
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_grid_keeps_the_apps_tile_in_its_last_slot() {
+        // 20 first-party entries on a short panel: as many tiles as fit,
+        // the Apps tile last, nothing below the minimum size.
+        let mut tiles = test_tiles();
+        let template = tiles[0].clone();
+        for n in 0..12 {
+            let mut extra = template.clone();
+            extra.id = AppId::new(format!("org.example.extra{n}")).unwrap();
+            tiles.push(extra);
+        }
+        let state = UiState::new(true, true, tiles);
+        let size = (1080, 2215);
+        let grid = home_grid(&state, size);
+        let slots = tile_rects(size, 100);
+        assert_eq!(grid.tiles.len() + 1, slots.len());
+        assert_eq!(grid.apps, slots.last().copied());
+    }
+
+    #[test]
+    fn the_app_list_sorts_every_entry_by_label_with_android_after_same_names() {
+        let state = with_apks();
+        let names: Vec<(&str, bool)> = state
+            .list_entries()
+            .into_iter()
+            .map(|i| (state.tiles[i].name.as_str(), state.tiles[i].installed))
+            .collect();
+        assert_eq!(names.len(), state.tiles.len());
+        let mut sorted = names.clone();
+        sorted.sort_by_key(|(name, installed)| (name.to_lowercase(), *installed));
+        assert_eq!(names, sorted);
+        let contacts: Vec<bool> = names
+            .iter()
+            .filter(|(n, _)| *n == "Contacts")
+            .map(|(_, installed)| *installed)
+            .collect();
+        assert_eq!(contacts, vec![false, true]);
+    }
+
+    #[test]
+    fn app_list_rows_tile_the_viewport_and_scroll_within_bounds() {
+        for size in [(1080, 2340), (830, 1800)] {
+            let state = with_apks();
+            let n = state.tiles.len();
+            let viewport = apps_viewport(size);
+            let max = apps_max_scroll(size, n);
+            assert!(max > 0, "{size:?}: 18 rows do not fit one screen");
+            let top = app_row_rects(size, n, 0);
+            assert_eq!(top[0].y, viewport.y);
+            for pair in top.windows(2) {
+                assert!(pair[0].y + pair[0].h < pair[1].y, "{size:?}: rows overlap");
+            }
+            // Out-of-range offsets clamp.
+            assert_eq!(app_row_rects(size, n, -50), top);
+            let end = app_row_rects(size, n, i32::MAX);
+            assert_eq!(end, app_row_rects(size, n, max));
+            let last = end[n - 1];
+            assert!(
+                last.y + last.h <= viewport.y + viewport.h,
+                "{size:?} {last:?}"
+            );
+            assert!(
+                last.y + last.h >= viewport.y + viewport.h - scale(40, 1080),
+                "{size:?}"
+            );
+            // A short list never scrolls.
+            assert_eq!(apps_max_scroll(size, 3), 0);
+            // The viewport ends above the home zone.
+            assert!(viewport.y + viewport.h <= (f64::from(size.1) * 0.92) as i32);
+        }
+    }
+
+    fn drag(input: &mut Input, state: &mut UiState, from: (f64, f64), to: (f64, f64)) {
+        input.down(0, from, state, SIZE);
+        for step in 1..=8 {
+            let t = f64::from(step) / 8.0;
+            let p = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+            input.motion(0, p, state, SIZE);
+        }
+        input.up(0, state, SIZE);
+    }
+
+    #[test]
+    fn apps_opens_from_the_tile_or_an_upward_swipe_and_scrolls_by_drag() {
+        let mut state = with_apks();
+        let mut input = Input::default();
+        // The Apps tile.
+        let apps = home_grid(&state, SIZE).apps.unwrap();
+        let center = (
+            f64::from(apps.x + apps.w / 2),
+            f64::from(apps.y + apps.h / 2),
+        );
+        input.down(0, center, &mut state, SIZE);
+        assert_eq!(state.pressed, Some(Target::AllApps));
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.page, Page::Apps);
+        assert!(state.pending_launch.is_empty());
+        // Back (edge swipe) returns home.
+        drag(&mut input, &mut state, (20.0, 1200.0), (320.0, 1200.0));
+        assert_eq!(state.page, Page::Launcher);
+        // An upward swipe on home opens the list; one from the home zone
+        // (the bottom 8%) does not.
+        drag(&mut input, &mut state, (540.0, 2200.0), (540.0, 1500.0));
+        assert_eq!(state.page, Page::Launcher, "home zone is the compositor's");
+        drag(&mut input, &mut state, (540.0, 1800.0), (540.0, 1100.0));
+        assert_eq!(state.page, Page::Apps);
+        assert_eq!(state.apps_scroll, 0);
+        assert!(state.pending_launch.is_empty(), "a swipe never launches");
+
+        // Dragging up scrolls (content follows the finger) and never taps.
+        drag(&mut input, &mut state, (540.0, 1600.0), (540.0, 1200.0));
+        assert_eq!(state.apps_scroll, 400);
+        assert!(state.pending_launch.is_empty());
+        assert_eq!(state.page, Page::Apps);
+        // Far past the end clamps to the bounds.
+        drag(&mut input, &mut state, (540.0, 2000.0), (540.0, 300.0));
+        let max = apps_max_scroll(SIZE, state.tiles.len());
+        assert_eq!(state.apps_scroll, max);
+        drag(&mut input, &mut state, (540.0, 400.0), (540.0, 2100.0));
+        assert_eq!(state.apps_scroll, 0);
+
+        // A tap on a row launches that entry and closes the list.
+        let entries = state.list_entries();
+        let rows = app_row_rects(SIZE, entries.len(), state.apps_scroll);
+        let (row, index) = rows
+            .iter()
+            .zip(&entries)
+            .find(|(_, i)| state.tiles[**i].installed)
+            .map(|(r, i)| (*r, *i))
+            .unwrap();
+        let tap = (f64::from(row.x + row.w / 2), f64::from(row.y + row.h / 2));
+        input.down(0, tap, &mut state, SIZE);
+        assert_eq!(state.pressed, Some(Target::App(index)));
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.pending_launch, vec![state.tiles[index].id.clone()]);
+        assert_eq!(state.page, Page::Launcher);
+    }
+
+    /// A vertical drag on the list with injected event times: `steps`
+    /// motions `interval_ms` apart, then a release `hold_ms` after the last.
+    /// Returns the instant of the release.
+    #[allow(clippy::too_many_arguments)]
+    fn timed_drag(
+        input: &mut Input,
+        state: &mut UiState,
+        t0: Instant,
+        from_y: f64,
+        to_y: f64,
+        steps: u32,
+        interval_ms: u32,
+        hold_ms: u32,
+    ) -> Instant {
+        let stamp = |input: &mut Input, ms: u32| {
+            let now = t0 + std::time::Duration::from_millis(u64::from(ms));
+            input.set_time(ms, now);
+            now
+        };
+        stamp(input, 0);
+        input.down(0, (540.0, from_y), state, SIZE);
+        for step in 1..=steps {
+            stamp(input, step * interval_ms);
+            let y = from_y + (to_y - from_y) * f64::from(step) / f64::from(steps);
+            input.motion(0, (540.0, y), state, SIZE);
+        }
+        let release = stamp(input, steps * interval_ms + hold_ms);
+        input.up(0, state, SIZE);
+        release
+    }
+
+    /// Runs the glide at 16 ms frames from `start`; returns the scroll after
+    /// each frame that changed it and the instant the glide ended.
+    fn run_glide(input: &mut Input, state: &mut UiState, start: Instant) -> (Vec<i32>, Instant) {
+        let mut frames = Vec::new();
+        let mut now = start;
+        while let Some(at) = input.deadline() {
+            assert!(at > now, "deadlines advance");
+            now = at;
+            if input.tick(state, SIZE, now) {
+                frames.push(state.apps_scroll);
+            }
+            assert!(now - start < std::time::Duration::from_secs(5), "ends");
+        }
+        (frames, now)
+    }
+
+    fn open_list() -> (UiState, Input) {
+        let mut state = with_apks();
+        state.page = Page::Apps;
+        (state, Input::default())
+    }
+
+    #[test]
+    fn a_fast_release_glides_on_and_decelerates() {
+        let (mut state, mut input) = open_list();
+        let t0 = Instant::now();
+        // 120 Hz touch: 60 px up in 6 motions 8 ms apart (1.25 px/ms).
+        let release = timed_drag(&mut input, &mut state, t0, 1600.0, 1540.0, 6, 8, 4);
+        assert_eq!(state.apps_scroll, 60, "the drag itself follows the finger");
+        assert!(input.flinging());
+        let v = input.fling_velocity().unwrap();
+        assert!((v - 1.25).abs() < 0.05, "scroll speed {v}");
+        let (frames, end) = run_glide(&mut input, &mut state, release);
+        assert!(
+            !input.flinging() && input.deadline().is_none(),
+            "idle after"
+        );
+        assert!(frames.len() > 10, "{frames:?}");
+        let steps: Vec<i32> = std::iter::once(60)
+            .chain(frames.iter().copied())
+            .collect::<Vec<_>>()
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .collect();
+        assert!(steps.iter().all(|d| *d > 0), "forward only: {steps:?}");
+        assert!(steps.first() > steps.last(), "decelerates: {steps:?}");
+        // Settles near v0 * tau (~406 px) short of the list's end.
+        assert!(state.apps_scroll > 60 + 380 && state.apps_scroll <= 60 + 407);
+        assert!(state.apps_scroll < apps_max_scroll(SIZE, state.tiles.len()));
+        assert!(end - release > std::time::Duration::from_millis(500));
+        // A tick with nothing gliding never redraws.
+        assert!(!input.tick(&mut state, SIZE, end + std::time::Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_glide_stops_at_either_end_of_the_list() {
+        let (mut state, mut input) = open_list();
+        let max = apps_max_scroll(SIZE, state.tiles.len());
+        let t0 = Instant::now();
+        state.apps_scroll = max - 300;
+        let release = timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 4);
+        let (frames, _) = run_glide(&mut input, &mut state, release);
+        assert_eq!(state.apps_scroll, max, "clamped at the end");
+        assert_eq!(frames.last(), Some(&max));
+        assert!(frames.iter().all(|s| *s <= max));
+        // A drag that already reached the end does not start a glide there.
+        timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 4);
+        assert_eq!(state.apps_scroll, max);
+        assert!(!input.flinging() && input.deadline().is_none());
+        // Downward fling back toward the top.
+        state.apps_scroll = 150;
+        let release = timed_drag(&mut input, &mut state, t0, 1400.0, 1500.0, 4, 8, 2);
+        assert!(input.flinging());
+        run_glide(&mut input, &mut state, release);
+        assert_eq!(state.apps_scroll, 0);
+    }
+
+    #[test]
+    fn touching_a_gliding_list_stops_it_without_tapping() {
+        let (mut state, mut input) = open_list();
+        let t0 = Instant::now();
+        let release = timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 4);
+        let mid = release + std::time::Duration::from_millis(48);
+        input.tick(&mut state, SIZE, mid);
+        let held = state.apps_scroll;
+        assert!(held > 200);
+        // Touch on a row mid-glide: it stops, and lifting does not launch.
+        input.set_time(200, mid);
+        input.down(0, (540.0, 1200.0), &mut state, SIZE);
+        assert!(!input.flinging() && input.deadline().is_none());
+        assert_eq!(state.pressed, None);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.apps_scroll, held);
+        assert!(state.pending_launch.is_empty());
+        assert_eq!(state.page, Page::Apps);
+        // The next tap acts normally.
+        input.down(0, (540.0, 1200.0), &mut state, SIZE);
+        input.up(0, &mut state, SIZE);
+        assert_eq!(state.pending_launch.len(), 1);
+    }
+
+    #[test]
+    fn slow_paused_or_untimed_drags_do_not_glide() {
+        let t0 = Instant::now();
+        // Slow: 60 px over 400 ms (0.15 px/ms, under the 0.234 minimum).
+        let (mut state, mut input) = open_list();
+        timed_drag(&mut input, &mut state, t0, 1600.0, 1540.0, 10, 40, 4);
+        assert!(!input.flinging());
+        // Fast, but the finger rested 80 ms before lifting.
+        let (mut state, mut input) = open_list();
+        timed_drag(&mut input, &mut state, t0, 1600.0, 1400.0, 6, 8, 80);
+        assert!(!input.flinging());
+        // Untimed input (no `set_time`) never flings.
+        let (mut state, mut input) = open_list();
+        drag(&mut input, &mut state, (540.0, 1600.0), (540.0, 1200.0));
+        assert!(!input.flinging());
+        assert_eq!(state.apps_scroll, 400);
+    }
+
+    #[test]
+    fn sparse_qemu_style_input_still_glides() {
+        // QEMU's tablet: 6 motions 20 ms apart (and sometimes coalesced).
+        let (mut state, mut input) = open_list();
+        let t0 = Instant::now();
+        let release = timed_drag(&mut input, &mut state, t0, 1800.0, 1500.0, 6, 20, 0);
+        let v = input.fling_velocity().expect("glides");
+        assert!((v - 300.0 / 120.0).abs() < 0.2, "{v}");
+        // Only two motions, 60 ms apart.
+        let (mut state, mut input) = open_list();
+        timed_drag(&mut input, &mut state, t0, 1800.0, 1400.0, 2, 60, 0);
+        assert!(input.flinging());
+        // Leaving the list ends the glide on the next frame.
+        state.page = Page::Launcher;
+        assert!(!input.tick(&mut state, SIZE, release + FRAME));
+        assert!(!input.flinging());
+    }
+
+    const FRAME: std::time::Duration = ferrix_ui::fling::FRAME;
+
+    #[test]
+    fn app_list_hits_only_rows_inside_the_viewport() {
+        let mut state = with_apks();
+        state.page = Page::Apps;
+        state.apps_scroll = 300;
+        let viewport = apps_viewport(SIZE);
+        // A row scrolled under the header is not hit through the header.
+        assert_eq!(
+            hit_test(&state, (540.0, f64::from(viewport.y - 4)), SIZE),
+            None
+        );
+        assert_eq!(hit_test(&state, (60.0, 150.0), SIZE), Some(Target::Back));
+        assert_eq!(hit_test(&state, (540.0, 2300.0), SIZE), Some(Target::Home));
+        let entries = state.list_entries();
+        let rows = app_row_rects(SIZE, entries.len(), state.apps_scroll);
+        let visible = rows
+            .iter()
+            .position(|r| r.y >= viewport.y)
+            .expect("a fully visible row");
+        let r = rows[visible];
+        assert_eq!(
+            hit_test(&state, (540.0, f64::from(r.y + r.h / 2)), SIZE),
+            Some(Target::App(entries[visible]))
+        );
     }
 
     #[test]

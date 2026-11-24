@@ -126,7 +126,7 @@ pub fn page_header(
             t.surface_hi,
         );
     }
-    // The back affordance is the filled Remix chevron; the hit target is
+    // The back affordance is the Material chevron_left glyph; the hit target is
     // `back_rect`, and "back" stays the accessible name in `ui-state`.
     icons::draw(
         c,

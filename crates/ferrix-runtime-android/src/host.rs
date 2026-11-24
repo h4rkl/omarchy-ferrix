@@ -49,6 +49,25 @@ pub struct LaunchedApp {
     pub surface_client_pid: Option<u32>,
 }
 
+/// One package the Android side reports (`waydroid app list` block).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledPackage {
+    pub package: String,
+    /// Android's label for the package (`Name:`), untrusted display text.
+    pub name: String,
+    /// Intent categories of its launch activity (`categories:`).
+    pub categories: Vec<String>,
+}
+
+impl InstalledPackage {
+    /// Whether the package has a launcher entry (`android.intent.category.LAUNCHER`).
+    pub fn is_launchable(&self) -> bool {
+        self.categories
+            .iter()
+            .any(|c| c == "android.intent.category.LAUNCHER")
+    }
+}
+
 /// Typed failures of the host; the runtime maps them onto `AppError`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostError {
@@ -101,6 +120,28 @@ pub trait AndroidHost: Send + Sync {
     /// Whether `package` is installed in the Android side.
     fn is_installed(&self, package: &str) -> Result<bool, HostError>;
 
+    /// Every package the Android side lists with a launch activity. An
+    /// empty listing is reported as an error (a running Android always has
+    /// launchable packages; the CLI prints nothing while the session is
+    /// stopped), so callers never mistake "unavailable" for "uninstalled".
+    fn installed_packages(&self) -> Result<Vec<InstalledPackage>, HostError>;
+
+    /// Whether Android inside the running container finished booting
+    /// (`sys.boot_completed`). `None` when the host cannot tell; callers
+    /// then rely on [`AndroidHost::status`] and the listing alone. While
+    /// Android boots, PackageManager may answer with a partial or empty
+    /// launcher set, so a listing taken then is not authoritative.
+    fn android_booted(&self) -> Option<bool> {
+        None
+    }
+
+    /// The package's launcher icon, decoded and bounded
+    /// ([`crate::icon`]), or `None` when the host has none or it is
+    /// unusable. Bounded file I/O only; never starts anything.
+    fn launcher_icon(&self, _package: &str) -> Option<ferrix_app_api::AppIconBitmap> {
+        None
+    }
+
     /// Starts `package` (its default activity, or `activity` when given).
     fn launch(&self, package: &str, activity: Option<&str>) -> Result<LaunchedApp, HostError>;
 
@@ -117,4 +158,17 @@ pub trait AndroidHost: Send + Sync {
     fn surface_client_pid(&self) -> Option<u32> {
         None
     }
+
+    /// Every host pid that may hold a Wayland connection for the container
+    /// (multi-window mode opens one connection per Android task, possibly
+    /// from more than one process). These pids are the trust anchor for
+    /// associating task windows; ascending order.
+    fn surface_client_pids(&self) -> Vec<u32> {
+        self.surface_client_pid().into_iter().collect()
+    }
+
+    /// The xdg `app_id` the runtime gives the task window(s) of `package`.
+    /// Only meaningful together with [`AndroidHost::surface_client_pids`]:
+    /// the compositor-side match requires both.
+    fn window_app_id(&self, package: &str) -> String;
 }

@@ -73,7 +73,9 @@ if [ "$android" = 1 ]; then
   # carries them. Nothing here claims the runtime renders anything.
   grep -q '"event":"android-binder-devices"' "$log" || fail "missing-android-binder-devices"
   grep -q '"event":"waydroid-init"' "$log" || fail "missing-waydroid-init"
-  grep -q '"event":"android-app-staged"' "$log" || fail "fulguris-not-staged"
-  grep -E '"event":"(android-binder-devices|waydroid-init|waydroid-properties|waydroid-container|android-app-staged)"' "$log"
+  # The Browser (LineageOS Jelly) ships inside the pinned Android image, so
+  # no APK is staged; the renderer selection proves prepare ran to the end.
+  grep -q '"event":"waydroid-renderer"' "$log" || fail "missing-waydroid-renderer"
+  grep -E '"event":"(android-binder-devices|waydroid-init|waydroid-renderer|waydroid-properties|waydroid-container)"' "$log"
 fi
 printf '{"evidence":"QEMU","event":"pmos-check-passed","accel":"tcg","android":%s,"seconds":%s,"serial_log":"%s"}\n' "$android" "$elapsed" "$log"
