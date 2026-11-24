@@ -4,8 +4,8 @@
 //! capability the session exposes.
 
 use ferrix_hardware_api::{
-    Capability, HardwareCommand, HardwareError, HardwareEvent, MockCommand, SuspendOutcome,
-    clamp_brightness,
+    Capability, HardwareCommand, HardwareError, HardwareEvent, MockCommand, SleepState,
+    SuspendOutcome, clamp_brightness,
 };
 use ferrix_session::HardwareServices;
 
@@ -102,6 +102,11 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
                 ));
             }
             ControlCommand::Suspend { outcome: wanted } => {
+                // A raw capability cycle that bypasses the suspend policy:
+                // mocked targets only, so it can never sleep a real board.
+                if services.mock_control.is_none() {
+                    return Err(HardwareError::unsupported(Capability::MockControl));
+                }
                 if let Some(wanted) = wanted {
                     mock(
                         services,
@@ -110,7 +115,16 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
                     )?;
                 }
                 let lifecycle_before = services.lifecycle.lifecycle_state();
-                let result = services.lifecycle.suspend();
+                let state = services
+                    .lifecycle
+                    .sleep_states()
+                    .first()
+                    .copied()
+                    .unwrap_or(SleepState::S2idle);
+                let result = services
+                    .lifecycle
+                    .suspend(state)
+                    .map(|report| report.outcome);
                 let lifecycle = services.lifecycle.lifecycle_state();
                 let reported = match result {
                     Ok(o) => o,
@@ -148,11 +162,17 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             | ControlCommand::BluetoothDisconnect { .. }
             | ControlCommand::BluetoothForget { .. } => {}
             ControlCommand::Shutdown => shutdown = true,
-            // Screen policy verbs: the control handler in main.rs applies
-            // them to the policy store and never calls here.
+            ControlCommand::SetSuspendSleep { sleep_ms, wake } => mock(
+                services,
+                MockCommand::SetSuspendSleep { sleep_ms, wake },
+                &mut events,
+            )?,
+            // Screen and suspend policy verbs: the control handler in
+            // main.rs applies them to the policy store and never calls here.
             ControlCommand::SetIdleTimeout { .. }
             | ControlCommand::InhibitBlank { .. }
-            | ControlCommand::ReleaseInhibit { .. } => {}
+            | ControlCommand::ReleaseInhibit { .. }
+            | ControlCommand::SetSuspendPolicy { .. } => {}
             // A process action, not hardware state: the control handler in
             // main.rs performs it (see daemon_kill.rs) and never calls here.
             ControlCommand::KillDaemon { .. } => {}
@@ -219,7 +239,12 @@ pub fn apply_product(
             services.audio.set_audio_muted(muted)?;
         }
         HardwareCommand::Suspend => {
-            services.lifecycle.suspend()?;
+            // The state socket routes this through the core's suspend
+            // policy (board flag, kill switch, inhibitors); never here.
+            return Err(HardwareError::invalid(
+                Capability::Lifecycle,
+                "suspend goes through the core suspend policy",
+            ));
         }
         HardwareCommand::PowerAction { action } => {
             services.lifecycle.power_action(action)?;

@@ -9,7 +9,8 @@
 
 use ferrix_hardware_api::{
     AudioRoute, BluetoothCommand, BluetoothPin, CameraFacing, HardwareState, InhibitReason,
-    MockPairingOutcome, ModemRegistration, Orientation, SimState, SuspendOutcome, WifiState,
+    MockPairingOutcome, ModemRegistration, Orientation, SimState, SuspendMode, SuspendOutcome,
+    WakeSource, WifiState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -125,6 +126,20 @@ pub enum ControlCommand {
     ReleaseInhibit {
         holder: String,
     },
+    /// Overrides the board's suspend flag and delay (mocked targets only;
+    /// `null` restores the profile value). The kill switch still wins.
+    SetSuspendPolicy {
+        #[serde(default)]
+        mode: Option<SuspendMode>,
+        #[serde(default)]
+        after_blank_secs: Option<u32>,
+    },
+    /// How long each following mock sleep lasts and what wakes it
+    /// (mocked targets only).
+    SetSuspendSleep {
+        sleep_ms: u32,
+        wake: WakeSource,
+    },
     /// Fault injection (mocked targets only): SIGKILL the named supervised
     /// daemon so a test can watch init restart it. Only the names in
     /// `daemon_kill::KILLABLE` are accepted.
@@ -165,6 +180,8 @@ impl ControlCommand {
             ControlCommand::SetIdleTimeout { .. } => "set-idle-timeout",
             ControlCommand::InhibitBlank { .. } => "inhibit-blank",
             ControlCommand::ReleaseInhibit { .. } => "release-inhibit",
+            ControlCommand::SetSuspendPolicy { .. } => "set-suspend-policy",
+            ControlCommand::SetSuspendSleep { .. } => "set-suspend-sleep",
             ControlCommand::KillDaemon { .. } => "kill-daemon",
         }
     }

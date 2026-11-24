@@ -52,3 +52,14 @@ sim = "absent"
 [audio]
 route = "speaker"
 
+# Suspend policy flag: off until resume is reliable on this board. The
+# 2026-11-24 probe (docs/status-log/2026-11.md, "Pixel 9a: suspend/resume
+# probe") found s2idle and deep both suspend and resume on RTC alarm, but
+# Wi-Fi's host-wake IRQ ends s2idle within ~0.3 s while the radio is on and
+# the physical power key has not been pressed as a wake source yet. Opt in
+# for one boot with `echo s2idle > /run/ferrix/suspend-opt-in` (or `deep`);
+# `touch /run/ferrix/no-suspend` is the kill switch and always wins.
+[lifecycle]
+suspend = "off"
+suspend_after_blank_secs = 30
+

@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use ferrix_hardware_api::{HardwareCommand, PowerAction, ScreenPolicy};
+use ferrix_hardware_api::{HardwareCommand, PowerAction, ScreenPolicy, SuspendStatus};
 use ferrix_protocol::PolicyFeed;
 use smithay::{
     backend::{
@@ -59,6 +59,8 @@ pub struct Lifecycle {
     pub menu: Option<MenuState>,
     policy: Option<ScreenPolicy>,
     policy_feed: Option<Receiver<PolicyFeed>>,
+    /// Tells the core whether the screen is off (the suspend policy's input).
+    screen_report: Option<Sender<bool>>,
     power_tx: Sender<(PowerAction, Result<(), String>)>,
     power_rx: Receiver<(PowerAction, Result<(), String>)>,
     ping: Ping,
@@ -85,6 +87,7 @@ impl Lifecycle {
             menu: None,
             policy: None,
             policy_feed: None,
+            screen_report: None,
             power_tx,
             power_rx,
             ping,
@@ -107,6 +110,20 @@ impl Lifecycle {
             Duration::from_secs(1),
             std::sync::Arc::new(move || ping.ping()),
         ));
+        let report = ferrix_protocol::report_screen(
+            self.core_socket.clone(),
+            Duration::from_secs(2),
+            Duration::from_secs(1),
+        );
+        let _ = report.send(self.screen_off());
+        self.screen_report = Some(report);
+    }
+
+    /// Tell the core the screen's power state (never blocks).
+    fn report_screen(&self) {
+        if let Some(report) = &self.screen_report {
+            let _ = report.send(self.screen_off());
+        }
     }
 
     pub fn screen_off(&self) -> bool {
@@ -256,6 +273,8 @@ impl Shell {
                 ("windows_left", Value::Int(left)),
             ],
         );
+        // After the record, so the core's report-screen record follows it.
+        self.life.report_screen();
     }
 
     fn unblank(&mut self, cause: &str) {
@@ -280,6 +299,7 @@ impl Shell {
                 ),
             ],
         );
+        self.life.report_screen();
     }
 
     fn open_menu(&mut self) {
@@ -450,29 +470,85 @@ impl Shell {
 
     fn apply_policy(&mut self, policy: ScreenPolicy) {
         let effective = policy.effective_idle_timeout_secs();
-        let changed = self
-            .life
-            .policy
-            .as_ref()
-            .is_none_or(|old| old.effective_idle_timeout_secs() != effective);
+        let old = self.life.policy.as_ref();
+        let changed = old.is_none_or(|old| old.effective_idle_timeout_secs() != effective);
+        // A change of the suspend half alone is not an idle-policy change.
+        let suspend_only = old.is_some_and(|old| {
+            old.idle_timeout_secs == policy.idle_timeout_secs
+                && old.inhibitors == policy.inhibitors
+                && old.suspend != policy.suspend
+        });
+        let resumed = old.is_some_and(|old| policy.suspend.cycles > old.suspend.cycles);
         if changed {
             self.life.screen.set_idle_timeout(
                 effective.map(|s| Duration::from_secs(u64::from(s))),
                 Instant::now(),
             );
         }
-        let reasons: Vec<&str> = policy.reasons().iter().map(|r| r.name()).collect();
+        if !suspend_only {
+            let reasons: Vec<&str> = policy.screen_reasons().iter().map(|r| r.name()).collect();
+            self.emit(
+                "idle-policy",
+                &[
+                    ("status", "applied".into()),
+                    ("idle_timeout_secs", policy.idle_timeout_secs.into()),
+                    ("inhibited", Value::Bool(policy.inhibited())),
+                    ("reasons", reasons.join(",").into()),
+                    ("effective_secs", effective.into()),
+                ],
+            );
+        }
+        // A restarted core has no report; re-send whenever it disagrees.
+        if policy.suspend.screen_off != self.life.screen_off()
+            && policy.suspend.phase != ferrix_hardware_api::SuspendPhase::Suspending
+        {
+            self.life.report_screen();
+        }
+        if resumed {
+            self.resumed(&policy.suspend);
+        }
+        self.life.policy = Some(policy);
+    }
+
+    /// The core finished a suspend cycle. The screen state is the shell's
+    /// own: after a background wake (RTC, radio) it stays off and the DPMS
+    /// off is re-asserted (the panel may come back lit from resume); when
+    /// it is on (a power key press during entry, or one that woke the
+    /// device and arrived first) the wake logic runs again: the output is
+    /// restored, the front window re-enters it (`wl_surface.enter`, so the
+    /// Waydroid hwcomposer wakes), and the scene is redrawn. A power key
+    /// press that woke the device reaches `power_key` as an ordinary press
+    /// (gpio-keys reports wakeup keys on resume) and wakes the screen there.
+    fn resumed(&mut self, status: &SuspendStatus) {
+        let action = match self.life.screen.screen() {
+            Screen::Off => {
+                self.life.pending_display = Some(Screen::Off);
+                self.life.wake_frame_pending = false;
+                "reassert-off"
+            }
+            Screen::On => {
+                self.life.screen.activity(Instant::now());
+                self.life.pending_display = Some(Screen::On);
+                self.life.wake_frame_pending = true;
+                self.refocus();
+                self.request_full_redraw();
+                "rewake"
+            }
+        };
+        let last = status.last.as_ref();
         self.emit(
-            "idle-policy",
+            "resume",
             &[
-                ("status", "applied".into()),
-                ("idle_timeout_secs", policy.idle_timeout_secs.into()),
-                ("inhibited", Value::Bool(policy.inhibited())),
-                ("reasons", reasons.join(",").into()),
-                ("effective_secs", effective.into()),
+                ("screen", self.life.screen.screen().label().into()),
+                ("action", action.into()),
+                ("cycles", Value::Int(i64::from(status.cycles))),
+                (
+                    "outcome",
+                    last.map_or(Value::Null, |r| r.outcome.name().into()),
+                ),
+                ("wake", last.map_or(Value::Null, |r| r.wake.name().into())),
             ],
         );
-        self.life.policy = Some(policy);
     }
 
     /// Redraw the menu's buffer when its state changed; the backend calls

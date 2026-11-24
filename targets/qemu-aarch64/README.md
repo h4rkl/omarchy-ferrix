@@ -332,6 +332,32 @@ Settings > Display. Power off/Restart from the menu really power off or
 reboot the guest (ferrix-core hands the accepted action to init through
 `/run/ferrix/power-action`).
 
+Suspend policy (spec 04 deliverable 3). The profile ships
+`[lifecycle] suspend = "off"`, and the mock Lifecycle only simulates a
+sleep. It blocks for the mock delay, then reports a resume on a mock RTC
+alarm. Nothing is frozen. When the policy is on, ferrix-core suspends after
+the screen has been blanked for the delay with no inhibitor held. It
+re-arms after every resume while the screen stays off. Try it by hand:
+
+- `just qemu-mock set-suspend-policy mode=s2idle after_blank_secs=5` turns
+  it on. With no arguments it restores the profile values.
+- `just qemu-mock set-suspend-sleep sleep_ms=1500 wake=alarm` sets the mock
+  sleep length and wake source.
+- `just qemu-mock inhibit-blank reason=download holder=me` keeps the system
+  awake but lets the screen blank. `audio` does the same; `call`, `video`
+  and `navigation` hold the screen too.
+
+The `screen-policy` records carry `screen_off`, `suspend_mode` and
+`suspend_phase`. Each cycle is a `suspend-request` record, then
+`suspend-resumed`, then the shell's `resume` record (`reassert-off` while
+the screen stays off). A deadline that an inhibitor or the kill switch
+blocks is a `suspend-blocked` record. The
+`lifecycle-blank-suspend-resume-inhibit` scenario covers blank, delay,
+suspend, resume, an inhibitor blocking the next cycle, and its release.
+The kill switch (`/run/ferrix/no-suspend`) and the per-boot opt-in file
+(`/run/ferrix/suspend-opt-in`) are guest files, covered by ferrix-core unit
+tests rather than a scenario.
+
 Each step sends the command, requires a `"status":"ok"` ack (or an error when
 `expect_ack_error = true`, or the `ack` subset), then waits at most
 `timeout_ms` for every `expect` entry, **in order**, among records appended
