@@ -2,7 +2,7 @@
 pkgname=device-google-tegu
 pkgdesc="Google Pixel 9a native Linux device package"
 pkgver=1
-pkgrel=8
+pkgrel=9
 maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 url="https://postmarketos.org"
 license="MIT"
