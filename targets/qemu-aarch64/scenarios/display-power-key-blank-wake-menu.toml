@@ -1,0 +1,88 @@
+schema_version = 1
+name = "display-power-key-blank-wake-menu"
+description = "Screen lifecycle on the QEMU virtual phone (spec 04 deliverables 1 and 2). The power key enters as a real virtio-keyboard KEY_POWER over QMP and ferrix-shell takes it before any client: a short press DPMS-offs the DRM output and a tap while off is dropped, never delivered; a second short press restores the output and presents a frame; a long press opens the compositor-drawn power menu and Cancel closes it. Then ferrix-core's screen policy: a 5 s idle timeout blanks the screen with no input, a call inhibitor reaches the shell and its release restores the timeout, and the profile's never-blank default is restored for later scenarios. QEMU evidence only."
+
+[[step]]
+service = "core"
+command = { cmd = "set-idle-timeout" }
+ack = { status = "ok", ack = "set-idle-timeout" }
+expect = [ { event = "screen-policy", cause = "set-idle-timeout", inhibited = false }, { event = "idle-policy", status = "applied", compositor = "ferrix-shell" } ]
+note = "known start: never blank on idle (the QEMU profile default)"
+
+[[step]]
+service = "input"
+command = { cmd = "key", key = "power" }
+expect = [ { event = "power-key", press = "short" }, { event = "screen-power", state = "off", cause = "power-key" }, { event = "drm-dpms", state = "off", status = "ok" } ]
+timeout_ms = 15000
+note = "short press: the shell DPMS-offs the output (DrmCompositor::clear) and every window leaves it"
+
+[[step]]
+service = "input"
+command = { cmd = "tap", x = 540, y = 1200 }
+expect = [ { event = "input-dropped", kind = "pointer", reason = "screen-off" } ]
+timeout_ms = 15000
+note = "a contact while off is dropped before any client sees it"
+
+[[step]]
+service = "input"
+command = { cmd = "key", key = "power" }
+expect = [ { event = "power-key", press = "short" }, { event = "screen-power", state = "on", cause = "power-key" }, { event = "drm-dpms", state = "on", status = "presented" } ]
+timeout_ms = 15000
+note = "short press again: the output is restored, the front window re-enters it, and a frame is presented"
+
+[[step]]
+service = "input"
+command = { cmd = "key", key = "power", hold_ms = 1200 }
+expect = [ { event = "power-key", press = "long" }, { event = "power-menu", state = "open" } ]
+timeout_ms = 15000
+note = "long press (held past 600 ms): the trusted power menu opens"
+
+[[step]]
+service = "input"
+command = { cmd = "tap", x = 540, y = 2115 }
+expect = [ { event = "power-menu", state = "selected", button = "cancel" }, { event = "power-menu", state = "closed", reason = "cancel" } ]
+timeout_ms = 15000
+note = "Cancel (the bottom button) closes it; the screen stays on"
+
+[[step]]
+service = "core"
+command = { cmd = "inhibit-blank", reason = "call", holder = "scenario" }
+ack = { status = "ok", ack = "inhibit-blank" }
+expect = [ { event = "screen-policy", cause = "inhibit", holder = "scenario", inhibited = true, reasons = ["call"] }, { event = "idle-policy", status = "applied", inhibited = true, reasons = "call" } ]
+note = "an active call holds the screen on before any timeout is set"
+
+[[step]]
+service = "core"
+command = { cmd = "set-idle-timeout", idle_timeout_secs = 5 }
+ack = { status = "ok", ack = "set-idle-timeout" }
+expect = [ { event = "screen-policy", cause = "set-idle-timeout", idle_timeout_secs = 5, inhibited = true }, { event = "idle-policy", status = "applied", idle_timeout_secs = 5, inhibited = true } ]
+note = "the same policy store Settings > Display writes; the inhibitor keeps the shell's effective timeout at none"
+
+[[step]]
+service = "core"
+command = { cmd = "release-inhibit", holder = "scenario" }
+ack = { status = "ok", ack = "release-inhibit" }
+expect = [ { event = "screen-policy", cause = "release", inhibited = false }, { event = "idle-policy", status = "applied", inhibited = false, effective_secs = 5 } ]
+note = "the call ended: the 5 s timeout applies, counted from the release"
+
+[[step]]
+service = "core"
+command = { cmd = "state" }
+ack = { status = "ok" }
+expect = [ { event = "screen-power", state = "off", cause = "idle" }, { event = "drm-dpms", state = "off", status = "ok" } ]
+timeout_ms = 30000
+note = "no input for 5 s: the shell blanks the screen on its own"
+
+[[step]]
+service = "core"
+command = { cmd = "set-idle-timeout" }
+ack = { status = "ok", ack = "set-idle-timeout" }
+expect = [ { event = "screen-policy", cause = "set-idle-timeout", inhibited = false }, { event = "idle-policy", status = "applied", inhibited = false } ]
+note = "restore never-blank (while off) so nothing blanks after the wake"
+
+[[step]]
+service = "input"
+command = { cmd = "key", key = "power" }
+expect = [ { event = "screen-power", state = "on", cause = "power-key" }, { event = "drm-dpms", state = "on", status = "presented" } ]
+timeout_ms = 15000
+note = "wake: later scenarios and frame captures see a lit screen"

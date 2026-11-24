@@ -41,7 +41,9 @@ modprobe virtio_console 2>/dev/null || true
 # The core writes its JSON records straight to the serial console (no log
 # relay, so records are never delayed). It binds the state socket immediately
 # before printing boot-health, so a live process plus the socket is readiness.
-/usr/bin/ferrix-core /etc/ferrix/profile.toml --socket /run/ferrix/core.sock --control auto --shutdown-marker /run/ferrix/shutdown &
+# --power-marker: a power-off/restart the core accepted from the shell's power
+# menu is handed to this init (the watcher at the end acts on it).
+/usr/bin/ferrix-core /etc/ferrix/profile.toml --socket /run/ferrix/core.sock --control auto --shutdown-marker /run/ferrix/shutdown --power-marker /run/ferrix/power-action &
 core_pid=$!
 core_ready=false
 for _ in $(seq 1 200); do
@@ -353,4 +355,17 @@ if [ "$check_mode" = true ]; then
   sleep 1
   poweroff -f
 fi
+# Power menu hand-off (interactive and agent sessions): ferrix-core writes
+# poweroff or reboot here once the shell's typed PowerAction was accepted.
+# This smoke guest has no service manager to stop, so after a moment for the
+# last records to reach serial it syncs and powers off or reboots directly.
+(
+  while [ ! -e /run/ferrix/power-action ]; do sleep 0.2; done
+  action=$(cat /run/ferrix/power-action 2>/dev/null)
+  case "$action" in reboot) ;; *) action=poweroff ;; esac
+  printf '{"evidence":"QEMU","event":"power-action-init","action":"%s","status":"executing"}\n' "$action"
+  sleep 1
+  sync
+  if [ "$action" = reboot ]; then reboot -f; else poweroff -f; fi
+) &
 exec /bin/sh

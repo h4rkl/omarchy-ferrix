@@ -289,7 +289,7 @@ name = "incoming-call-answer-route-remote-hangup"
 description = "..."
 
 [[step]]
-service = "telephony"                    # telephony | network | core
+service = "telephony"                    # telephony | network | core | input
 command = { cmd = "incoming-call", number = "+15550100042" }
 expect = [ { event = "telephony-event", event_name = "call-changed", state = "ringing" } ]
 timeout_ms = 5000                        # bound only; default 5000; never asserted
@@ -297,6 +297,29 @@ ack = { status = "ok" }                  # optional JSON subset of the ack
 expect_ack_error = false                 # true when the command must be rejected
 note = "free text carried into result.json"
 ```
+
+`service = "input"` steps (guest agent sessions only) inject through QEMU's
+QMP socket, so the event takes the real virtio-input -> kernel -> libinput ->
+`ferrix-shell` path: `{ cmd = "key", key = "power", hold_ms = 1200 }` (a
+QEMU qcode, optional hold) and `{ cmd = "tap", x = 540, y = 2115 }` (display
+pixels of the session profile). They have no ack; only `expect` is checked.
+`display-power-key-blank-wake-menu` uses them for the power key, a dropped
+tap while the screen is off, and the power menu's Cancel button.
+
+Power key by hand: `just qemu-key power` is a short press (screen off/on);
+`just qemu-key-hold power 1000` holds it past the 600 ms long press and opens
+the power menu. QEMU's virtio-keyboard reports the `power` qcode as evdev
+`KEY_POWER` (116), the same code a phone's PMIC or gpio-keys button sends.
+While the screen is off QEMU's display shows its "Display output is not
+active" placeholder (the CRTC is disabled), and every contact is dropped
+(`input-dropped`). The QEMU profile never blanks on idle
+(`[display] idle_timeout_secs = 0`); set a timeout with
+`just qemu-mock set-idle-timeout idle_timeout_secs=15` (no argument: never),
+`just qemu-mock inhibit-blank reason=call holder=me` /
+`release-inhibit holder=me`, or in
+Settings > Display. Power off/Restart from the menu really power off or
+reboot the guest (ferrix-core hands the accepted action to init through
+`/run/ferrix/power-action`).
 
 Each step sends the command, requires a `"status":"ok"` ack (or an error when
 `expect_ack_error = true`, or the `ack` subset), then waits at most

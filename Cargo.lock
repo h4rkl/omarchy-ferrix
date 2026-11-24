@@ -885,6 +885,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-camera"
+version = "0.1.0"
+dependencies = [
+ "ferrix-app-api",
+ "ferrix-app-protocol",
+ "ferrix-hardware-api",
+ "ferrix-protocol",
+ "ferrix-ui",
+ "jiff",
+ "png 0.17.16",
+]
+
+[[package]]
 name = "ferrix-contacts"
 version = "0.1.0"
 dependencies = [
@@ -954,6 +967,7 @@ dependencies = [
 name = "ferrix-hardware-api"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "serde",
  "serde_json",
 ]
@@ -1124,6 +1138,7 @@ name = "ferrix-scenario"
 version = "0.1.0"
 dependencies = [
  "ferrix-mock-control",
+ "ferrix-target-profile",
  "serde",
  "serde_json",
  "toml",

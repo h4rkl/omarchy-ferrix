@@ -16,7 +16,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # kill(2) for the mock-only `kill-daemon` fault injection (safe wrapper; the
 # workspace forbids unsafe code).
-rustix = { version = "1", features = ["process"] }
+# SO_PEERCRED for the camera socket's per-request authorization (ADR-004).
+rustix = { version = "1", features = ["net", "process"] }
 
 [lints]
 workspace = true

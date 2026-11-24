@@ -4,12 +4,15 @@
   "runtime": "native",
   "name": "Files",
   "icon": {
-    "glyph": "▤",
+    "glyph": "\u25a4",
     "tone": "neutral"
   },
   "launchable": true,
   "capabilities": [
     "files-home"
+  ],
+  "intents": [
+    "show-pictures"
   ],
   "launch": {
     "exec": [

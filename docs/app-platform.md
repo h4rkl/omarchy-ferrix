@@ -53,7 +53,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 | `ferrix-runtime-native` | native launch configuration and isolation types (namespaces, private `/tmp`, socket-directory view); the native `Runtime` that spawns `ferrix-sandbox`, classifies exits, and terminates | internal adapter |
 | `ferrix-shell` | toplevels keyed by client pid, focus, `Activate` handling, trusted navigation/dismiss gestures, crash refocus | system |
 | `ferrix-basic-screen` | catalog-driven launcher, in-process quick settings/notifications, crash notice | privileged first-party |
-| `ferrix-terminal`, `ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, `ferrix-files` | independent native Wayland applications | untrusted applications |
+| `ferrix-terminal`, `ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, `ferrix-files`, `ferrix-camera` | independent native Wayland applications | untrusted applications |
 | `ferrix-runtime-android` | private Waydroid adapter for Android descriptors; composed only by `ferrix-appd` | internal adapter |
 | `ferrix-ui` | software-rendering toolkit and the shared fullscreen Wayland client runner; a convenience library, not part of any ABI | library |
 
@@ -82,8 +82,9 @@ opaque to `ferrix-appd` and interpreted only by the selected runtime adapter. Fo
 native adapter it contains `exec` (program resolved through `PATH`) and an
 optional isolation policy. The `launch` object is never returned by
 `ferrix-app-protocol`, so applications and shells cannot couple to another runtime's
-implementation. Non-launchable entries exist for catalog placeholders such as
-Camera; the catalog, not an enum, decides what is shown. `web`
+implementation. Non-launchable entries are allowed for catalog placeholders
+(none is checked in since Camera became an app, ADR-009); the catalog, not
+an enum, decides what is shown. `web`
 remains a reserved kind and returns `AppError::RuntimeUnsupported`. Android
 descriptors are handled by the private `ferrix-runtime-android` adapter; a
 launch returns `RuntimeUnsupported` when Waydroid is absent and `LaunchFailed`
@@ -153,7 +154,8 @@ Capability names (`AppCapability`, kebab-case on the wire): `core-state`,
 the application's own loopback; without it the native sandbox gives the
 application a loopback-only network namespace), `files-home` (the user's home
 folder; without it the sandbox's minimal filesystem view shows only the
-application's data directory). Read-only `*-state`
+application's data directory), `camera` (enumerate, preview, and stills over
+`camera.sock`; ADR-009). Read-only `*-state`
 grants and privileged `*-control`/
 `*-call`/`*-sms`/`*-write` grants are distinct so a state grant can never
 reach a control verb.
@@ -203,17 +205,35 @@ isolation in the private runtime diagnostics attached to the `app-started`
 evidence record; it never hides it or exposes Linux-specific fields as public
 application state.
 
+### Keeping the screen on
+
+An application that must keep the screen on (an active call, video
+playback, turn-by-turn navigation) asks `ferrix-core`, never the compositor:
+`ferrix_protocol::inhibit_blank(socket, InhibitReason::Call, "org.ferrix.phone",
+timeout)` returns a `BlankInhibitor`. While any inhibitor is held the idle
+timeout (Settings > Display > Screen timeout) does not blank the screen; the
+power key still does. The inhibitor lives on its own connection to
+`core.sock`: dropping the handle, calling `release`, or the process dying
+closes it and the core releases it, so a crashed app can never hold the
+screen on. `InhibitReason` is a closed set (`call`, `video`, `navigation`);
+the holder string is a label for evidence and the Settings caption, never an
+identity. The app needs a `core-*` grant to see `core.sock`. Policy changes
+reach the shell and Settings through `watch_screen_policy`.
+
 ### Socket visibility
 
 Platform daemons listen under one directory, `/run/ferrix` (`FERRIX_RUN_DIR`
 in nested runs): `ferrix-appd.sock`, `core.sock`, `telephonyd.sock`,
-`networkd.sock`, `contactsd.sock`. The Wayland socket is elsewhere
+`networkd.sock`, `contactsd.sock`, `camera.sock` (served by `ferrix-core`,
+ADR-009). The Wayland socket is elsewhere
 (`XDG_RUNTIME_DIR`, `/run/user/<uid>`). A manifest opts into the filtered
 view with `"isolation": {"run_dir": {"mode": "private-run"}}`; the native runtime
 then **derives the visible socket list from the effective grants** (a list
 written into the manifest is replaced, never merged): always
 `ferrix-appd.sock`; `core-*` → `core.sock`; `telephony-*` → `telephonyd.sock`;
-`network-*` → `networkd.sock`; `contacts-*` → `contactsd.sock`. Stage 2 mounts
+`network-*` → `networkd.sock`; `contacts-*` → `contactsd.sock`; `camera` →
+`camera.sock` (never `core.sock`, so a camera grant cannot reach core
+control). Stage 2 mounts
 a tmpfs on a staging directory, creates one file per listed socket and
 bind-mounts the original over it (the originals stay visible until the very
 end, so no descriptor has to be held open), then `mount --move`s the staging
@@ -352,7 +372,7 @@ then gates by the verified role:
 | `Home` | `compositor`, `home`, `application`, `tool` |
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
-| `Open` with `dial` / `compose` | `application`, `home`, `tool` |
+| `Open` with `dial` / `compose` / `show-pictures` | `application`, `home`, `tool` |
 | `Open` with `show-call` or `show-bluetooth-pairing` | `service`, `tool` |
 | `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `ActivationRequested`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
@@ -377,9 +397,11 @@ An application never launches another application by id. It asks
 order, whose descriptor lists the kind in `intents`. Kinds: `dial` (Phone
 opens the dialer with the number in the buffer), `compose` (Messages opens a
 new message addressed to the number), and `show-call` (Phone shows the
-ringing or live call), and `show-bluetooth-pairing` (Settings shows the
+ringing or live call), `show-bluetooth-pairing` (Settings shows the
 pairing request a remote started; it carries nothing, the handler reads the
-request from `ferrix-core`). A number is validated (at most 32 characters, digits,
+request from `ferrix-core`), and `show-pictures` (Files opens `~/Pictures`,
+Camera's gallery hand-off; it carries no path, the handler resolves the
+folder inside its own home). A number is validated (at most 32 characters, digits,
 a leading `+`, and ` -()*#`). Intents only prefill or reveal UI: nothing is
 dialed or sent until the user presses Call or Send, so opening one needs no
 grant beyond the role rule above.

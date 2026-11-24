@@ -253,11 +253,13 @@ pub enum AppCapability {
     /// it the native sandbox's minimal filesystem view shows the application
     /// only its own data directory ([`APP_DATA_DIR_ENV`]).
     FilesHome,
+    /// Enumerate cameras, stream a preview, and take stills (ADR-009).
+    Camera,
 }
 
 impl AppCapability {
     /// Every capability, in declaration order.
-    pub const ALL: [AppCapability; 15] = [
+    pub const ALL: [AppCapability; 16] = [
         AppCapability::CoreState,
         AppCapability::CoreControl,
         AppCapability::Shell,
@@ -273,6 +275,7 @@ impl AppCapability {
         AppCapability::NetworkControl,
         AppCapability::Network,
         AppCapability::FilesHome,
+        AppCapability::Camera,
     ];
 
     /// The kebab-case wire name (`telephony-call`).
@@ -293,6 +296,7 @@ impl AppCapability {
             AppCapability::NetworkControl => "network-control",
             AppCapability::Network => "network",
             AppCapability::FilesHome => "files-home",
+            AppCapability::Camera => "camera",
         }
     }
 }
@@ -487,6 +491,7 @@ pub enum IntentKind {
     Compose,
     ShowCall,
     ShowBluetoothPairing,
+    ShowPictures,
 }
 
 impl IntentKind {
@@ -496,6 +501,7 @@ impl IntentKind {
             IntentKind::Compose => "compose",
             IntentKind::ShowCall => "show-call",
             IntentKind::ShowBluetoothPairing => "show-bluetooth-pairing",
+            IntentKind::ShowPictures => "show-pictures",
         }
     }
 }
@@ -525,6 +531,9 @@ pub enum AppIntent {
     /// services only). It carries nothing: the handler reads the request
     /// from the core, so no device name or code passes through here.
     ShowBluetoothPairing,
+    /// Show the user's `~/Pictures` folder (the Camera hand-off to Files).
+    /// It carries no path: the handler resolves the folder in its own home.
+    ShowPictures,
 }
 
 impl AppIntent {
@@ -534,6 +543,7 @@ impl AppIntent {
             AppIntent::Compose { .. } => IntentKind::Compose,
             AppIntent::ShowCall => IntentKind::ShowCall,
             AppIntent::ShowBluetoothPairing => IntentKind::ShowBluetoothPairing,
+            AppIntent::ShowPictures => IntentKind::ShowPictures,
         }
     }
 
@@ -541,7 +551,7 @@ impl AppIntent {
     pub fn number(&self) -> Option<&str> {
         match self {
             AppIntent::Dial { number } | AppIntent::Compose { number } => Some(number),
-            AppIntent::ShowCall | AppIntent::ShowBluetoothPairing => None,
+            AppIntent::ShowCall | AppIntent::ShowBluetoothPairing | AppIntent::ShowPictures => None,
         }
     }
 
@@ -1209,6 +1219,7 @@ mod tests {
             "network-control",
             "network",
             "files-home",
+            "camera",
         ];
         assert_eq!(AppCapability::ALL.len(), expected.len());
         for (capability, name) in AppCapability::ALL.into_iter().zip(expected) {

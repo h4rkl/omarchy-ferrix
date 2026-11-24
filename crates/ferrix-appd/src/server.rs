@@ -115,7 +115,9 @@ pub fn allowed(role: ClientRole, inbound: &Inbound) -> bool {
         ) => role == Compositor,
         Inbound::Report(Report::YieldForeground) => matches!(role, Application | Home),
         Inbound::Request(Request::Open { intent }) => match intent.kind() {
-            IntentKind::Dial | IntentKind::Compose => matches!(role, Application | Home | Tool),
+            IntentKind::Dial | IntentKind::Compose | IntentKind::ShowPictures => {
+                matches!(role, Application | Home | Tool)
+            }
             IntentKind::ShowCall | IntentKind::ShowBluetoothPairing => {
                 matches!(role, Service | Tool)
             }

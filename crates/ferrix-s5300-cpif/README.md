@@ -4,8 +4,10 @@ This crate provides bounded, Rust-only SIPC5 and Exynos SIT link-frame codecs
 for the Google S5300 CPIF work. The exact tegu DTS selects `PROTOCOL_SIT`, so
 the SIT codec is the board-relevant framing slice; SIPC5 remains a generic
 source-backed slice for related configurations. It also models the seven-byte
-userspace FMT envelope carried inside the SIT link frame and can apply that
-envelope to an explicitly supplied payload transport. The crate intentionally
+`sipc_fmt_hdr` envelope, which is **SIPC-only**. That codec requires a
+`SipcLink` proof that tegu's `PROTOCOL_SIT` cannot produce; see
+[tegu uses SIT, not `sipc_fmt_hdr`](#tegu-uses-sit-not-sipc_fmt_hdr-issue-76).
+The crate intentionally
 stops at a wire-frame and payload-I/O boundary. It does not claim a working
 modem, phone, SMS, packet-data, voice, IMS, or call-audio implementation; it
 neither discovers target device nodes nor binds board channels.
@@ -19,7 +21,7 @@ source definitions from that exact revision:
 
 - [`include/sipc5.h`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/include/sipc5.h): the SIPC5 link header, config bits, header sizes, little-endian native length fields, and eight-byte padding calculation;
 - [`include/exynos_ipc.h`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/include/exynos_ipc.h): the Exynos SIT sync word, 12-byte allocation, fragment configuration, channel fields, and length semantics;
-- [`modem_prj.h`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/modem_prj.h): the packed seven-byte userspace FMT header and CP-state ioctl declarations;
+- [`modem_prj.h`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/modem_prj.h): the packed seven-byte `sipc_fmt_hdr` (consumed only on the SIPC path) and CP-state ioctl declarations;
 - [`modem_v1.h`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/modem_v1.h): the packed multi-frame control byte (`id:7`, `more:1`);
 - [`modem_io_device.c`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/modem_io_device.c): transmit-side header construction, the declared length as header plus payload excluding padding, and device registration;
 - [`ipc_io_device.c`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/ipc_io_device.c): the character-device payload boundary, where the kernel adds/removes link framing around userspace `read(2)`/`write(2)` payloads;
@@ -91,20 +93,52 @@ area and writes named fields only at offsets 0 through 9. The codec emits
 zeroes for the two remaining bytes so fixtures are deterministic; it does not
 assign protocol fields to them.
 
-### Userspace FMT envelope
+### Tegu uses SIT, not `sipc_fmt_hdr` (issue #76)
 
-`FmtPacket` and `FmtCodec` implement the inner packet returned by
-`ipc_read(2)` and accepted by `ipc_write(2)`: a little-endian `u16` total
-length followed by `msg_seq`, `ack_seq`, `main_cmd`, `sub_cmd`, and `cmd_type`
-bytes. The parser enforces the seven-byte minimum, the `u16` wire limit, a
-caller-selected allocation bound, and strict packet boundaries. `FmtTransport`
-wraps an explicit `PayloadTransport`, reassembles a packet split across short
-payload reads within that bound, and still rejects trailing bytes rather than
-silently treating concatenated packets as one message. The kernel still owns
-SIT framing and packet fragmentation. Command bytes remain opaque:
-the open S5300 source does not provide a tegu command vocabulary, so this
-crate does not implement SIM, registration, SMS, APN/PDP, calls, IMS, or a
-Google RIL replacement.
+All references below are at the pinned driver revision `a8976934` (G) and the
+pinned zuma DTS revision `42395e8a` (D). The E0 report in the board's
+[`s5300-source-evidence.md`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-source-evidence.md#s5300-e0-device-free-cpif-abi-comparison-issue-1)
+(rows F1 and F2) gives the matching line ranges.
+
+| Step | Pinned source | What it shows |
+| --- | --- | --- |
+| Board selects the protocol | D `zuma-cp-s5300-sit.dtsi`: `mif,protocol = <PROTOCOL_SIT>`; G `modem_main.c: parse_dt_common_pdata` reads it; G `link_device.c: set_ld_attr` → `set_protocol_attr` installs the SIT helpers | tegu is `PROTOCOL_SIT` |
+| RX strips the link header | G `modem_io_device.c: rx_demux` → `rx_fmt_ipc` → `rx_frame_with_link_header`, `case PROTOCOL_SIT`: `skb_pull(skb, EXYNOS_HEADER_SIZE)` | the 12-byte SIT header never reaches userspace |
+| RX reassembles opaquely | G `modem_io_device.c: gather_multi_frame_sit` | fragments are concatenated with `memcpy`; the payload is not parsed |
+| `sipc_fmt_hdr` is SIPC-only | G `modem_prj.h: struct sipc_fmt_hdr`; its sole use is G `modem_io_device.c: gather_multi_frame`, reached only from the `case PROTOCOL_SIPC` branch | the seven-byte header has no role on SIT |
+| TX adds the link header | G `ipc_io_device.c: ipc_write` (`case PROTOCOL_SIT`: `headroom = EXYNOS_HEADER_SIZE`, then `copy_from_user`); G `modem_io_device.c: exynos_build_header` | the user buffer is an opaque SIT payload |
+| Userspace read | G `ipc_io_device.c: ipc_read` | one queued skb per read, already stripped |
+
+On tegu, the bytes on `umts_ipc0`/`umts_ipc1` are SIT payloads. In the
+route-A plan the external, process-isolated `sit-proxy`/`samsung-sit` defines
+their framing (E0 F1). This crate does not reimplement it and does not decode
+those payloads.
+
+The crate enforces this as follows:
+
+- `LinkProtocol { Sipc, Sit }` names the DT choice, and `TEGU_LINK_PROTOCOL`
+  is `LinkProtocol::Sit`, cited to D.
+- `SipcFmtCodec`, `SipcFmtTransport`, and the `SIPC_FMT_*` constants are the
+  only seven-byte codec API. There is no `Default` and no constructor without
+  a `SipcLink`.
+- `SipcLink` is a zero-sized proof with a private field. Only
+  `LinkProtocol::Sipc.require_sipc()` produces one. On a SIT link,
+  `require_sipc()` returns `Error::Unsupported` with
+  `UnsupportedFeature::SipcFmtOnSitLink`.
+- Tests cover the boundary with a SIPC5 multi-frame fixture whose stripped
+  payload decodes as `sipc_fmt_hdr`, and a 12-byte SIT FMT0 fixture whose
+  payload stays opaque and cannot reach the SIPC codec from tegu. A further
+  test shows the SIPC codec would silently misread a SIT payload, so a
+  length check alone could not catch the misuse. `compile_fail` doctests
+  check that neither `SipcLink` nor a default codec can be constructed.
+
+The SIPC codec checks the seven-byte minimum, the `u16` wire limit, a
+caller-selected allocation bound, and strict packet boundaries.
+`SipcFmtTransport` reassembles a packet split across short payload reads,
+within that bound. It rejects trailing bytes rather than treating
+concatenated packets as one message. Command bytes stay opaque. This crate
+implements no SIM, registration, SMS, APN/PDP, call, IMS, or RIL behaviour.
+A codec test is not a capability claim.
 
 ## Explicit unsupported transport boundary
 
@@ -141,7 +175,7 @@ ModemManager modem API:
 
 | Kernel surface | Source-backed role | Safe crate boundary |
 | --- | --- | --- |
-| `umts_ipc0` / `umts_ipc1` and other `IODEV_IPC` devices | Character-device payload I/O; kernel owns SIT framing and CP state | `PayloadTransport` plus opaque `FmtTransport`, with an exact caller-supplied node |
+| `umts_ipc0` / `umts_ipc1` and other `IODEV_IPC` devices | Character-device payload I/O; kernel owns SIT framing and CP state | `PayloadTransport` with an exact caller-supplied node; on tegu (SIT) the payload is opaque and owned by external `sit-proxy` |
 | `rmnet0` through `rmnet29` | Kernel raw-IP packet-data netdevs | No implementation here; APN/session/control semantics are not specified by this driver |
 | CPIF controls/ioctls and link/PCIe machinery | CP status, crash/GNSS controls, boot/reset, queues, and transport | Unsupported in this crate; never expose as modem commands |
 
