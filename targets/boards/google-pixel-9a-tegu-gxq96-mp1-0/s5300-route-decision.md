@@ -86,7 +86,7 @@ work around.
 | Kleaf route boots exact device to Home | Physical, exact target | docs/status.md 2026-10-09 |
 | Kleaf build includes `shm_ipc`, `cpif_page`, `cpif` | Source/config (`modules-initfs`, `kernel-config.tegu`) | not observed loaded |
 | DT selects `PROTOCOL_SIT`; FMT 245/246, RFS 41, OEM 129–136, rmnet 181–210, boot 241 | Pinned source | `s5300-channels.toml` |
-| tegu SIT payload framing; the seven-byte `sipc_fmt_hdr` belongs to the SIPC path | E0 pinned-source comparison; Rust codec correction tracked in #76 | not exercised on device |
+| tegu SIT payload framing; the seven-byte `sipc_fmt_hdr` belongs to the SIPC path | E0 pinned-source comparison; Rust codec scoped to SIPC behind a `SipcLink` proof in #76 (tegu cannot select it) | not exercised on device |
 | Opening `umts_boot0`/`umts_ipc*` calls `init_comm` and changes open counts; the pinned SIT handler returns without link setup | Pinned source, E0 | runtime module skew remains, so E1 does not open nodes |
 | CP boot inputs: TOC `BOOT`/MAIN/VSS/APM from current-slot `modem.bin`, EFS NV, persist `cpsha`, runtime 161-byte handover | External `exynos-modem` source | not exercised |
 | Physical S5300 + stock firmware can attach on this board | External Halium port report | not Ferrix evidence; Android RIL path |
