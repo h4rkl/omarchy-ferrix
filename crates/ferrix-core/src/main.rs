@@ -18,6 +18,7 @@
 //! Nothing here knows about QEMU beyond the neutral control-port name.
 
 mod attention;
+mod camera;
 mod control;
 mod core;
 mod daemon_kill;
@@ -36,6 +37,7 @@ use crate::protocol::{Ack, ControlCommand};
 use crate::server::{Server, Subscribers, broadcast};
 
 const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
+use ferrix_protocol::camera::{CAMERA_SOCKET_ENV, DEFAULT_CAMERA_SOCKET};
 const DEFAULT_SHUTDOWN_MARKER: &str = "/run/ferrix/shutdown";
 
 /// The target bootstrap supplies an exact redacted evidence label for a
@@ -65,6 +67,8 @@ pub(crate) fn emit(value: Value) {
 struct Args {
     profile: Option<PathBuf>,
     socket: PathBuf,
+    /// Camera socket (ADR-009); `None` disables it.
+    camera_socket: Option<PathBuf>,
     control: control::ControlPath,
     shutdown_marker: PathBuf,
     /// `None` disables the incoming-pairing raise.
@@ -76,6 +80,9 @@ fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         profile: None,
         socket: PathBuf::from(env("FERRIX_CORE_SOCKET").unwrap_or(DEFAULT_SOCKET.to_owned())),
+        camera_socket: Some(PathBuf::from(
+            env(CAMERA_SOCKET_ENV).unwrap_or(DEFAULT_CAMERA_SOCKET.to_owned()),
+        )),
         control: control::ControlPath::parse(&env("FERRIX_CONTROL_PORT").unwrap_or("auto".into())),
         shutdown_marker: PathBuf::from(
             env("FERRIX_SHUTDOWN_MARKER").unwrap_or(DEFAULT_SHUTDOWN_MARKER.to_owned()),
@@ -89,6 +96,10 @@ fn parse_args() -> Result<Args, String> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--socket" => args.socket = PathBuf::from(it.next().ok_or("--socket needs a path")?),
+            "--camera-socket" => {
+                let text = it.next().ok_or("--camera-socket needs PATH|none")?;
+                args.camera_socket = (text != "none").then(|| PathBuf::from(text));
+            }
             "--control" => {
                 args.control =
                     control::ControlPath::parse(&it.next().ok_or("--control needs auto|none|PATH")?)
@@ -103,7 +114,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: ferrix-core [profile.toml] [--socket PATH] [--control auto|none|PATH] [--shutdown-marker PATH] [--appd PATH|none]"
+                    "usage: ferrix-core [profile.toml] [--socket PATH] [--camera-socket PATH|none] [--control auto|none|PATH] [--shutdown-marker PATH] [--appd PATH|none]"
                         .to_owned(),
                 );
             }
@@ -137,6 +148,9 @@ impl control::Handler for Controller {
         if let ControlCommand::KillDaemon { name } = &command {
             return self.kill_daemon(name);
         }
+        if let Some(result) = camera::control(&*self.session.services.camera, &command) {
+            return self.camera_ack(&command, result);
+        }
         match core::apply(&self.session.services, &command) {
             Ok(applied) => {
                 emit(json!({
@@ -169,6 +183,47 @@ impl control::Handler for Controller {
 }
 
 impl Controller {
+    /// Reports a camera client verb like any other control command.
+    fn camera_ack(
+        &self,
+        command: &ControlCommand,
+        result: Result<camera::ControlOutcome, String>,
+    ) -> Ack {
+        match result {
+            Ok(outcome) => {
+                for record in &outcome.records {
+                    emit(record.clone());
+                }
+                emit(json!({
+                    "evidence": evidence_label(),
+                    "event": "mock-command",
+                    "cmd": command.name(),
+                    "status": "ok",
+                    "events": outcome.events(),
+                }));
+                Ack::Ok {
+                    ack: outcome.ack.to_owned(),
+                    events: outcome.events(),
+                    outcome: None,
+                    state: self.session.services.snapshot(),
+                }
+            }
+            Err(reason) => {
+                emit(json!({
+                    "evidence": evidence_label(),
+                    "event": "mock-command",
+                    "cmd": command.name(),
+                    "status": "error",
+                    "reason": reason,
+                }));
+                Ack::Error {
+                    ack: Some(command.name().to_owned()),
+                    reason,
+                }
+            }
+        }
+    }
+
     /// `kill-daemon`: SIGKILL a supervised daemon (mocked targets only). The
     /// restart itself is init's job and shows up as its `daemon-restarted`
     /// record followed by the daemon's own readiness record.
@@ -294,6 +349,24 @@ fn run() -> Result<(), String> {
         .name("core-socket".to_owned())
         .spawn(move || server.serve(listener))
         .map_err(|e| format!("cannot start socket thread: {e}"))?;
+
+    // The camera on its own socket, authorized per request through appd.
+    if let Some(path) = &args.camera_socket {
+        let listener = camera::CameraServer::bind(path)?;
+        let auth: Arc<dyn camera::CameraAuth> = match &args.appd {
+            Some(socket) => Arc::new(camera::AppdAuth::new(
+                socket.clone(),
+                std::time::Duration::from_secs(2),
+            )),
+            None => Arc::new(camera::DenyAll),
+        };
+        let camera_server = Arc::new(camera::CameraServer::new(Arc::clone(&session), auth));
+        emit(camera_server.ready_record(path));
+        thread::Builder::new()
+            .name("core-camera".to_owned())
+            .spawn(move || camera_server.serve(listener))
+            .map_err(|e| format!("cannot start camera socket thread: {e}"))?;
+    }
 
     // Incoming Bluetooth pairing requests raise Settings system-wide.
     let attention = match args.appd {

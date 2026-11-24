@@ -121,6 +121,7 @@ fn capability_key(capability: Capability) -> &'static str {
         Capability::Audio => "audio",
         Capability::Telephony => "telephony",
         Capability::Lifecycle => "lifecycle",
+        Capability::Camera => "camera",
         Capability::MockControl => "mock-control",
     }
 }
@@ -1023,6 +1024,11 @@ mod tests {
         assert_eq!(m.status(Capability::Power), CapabilityStatus::Supported);
         assert_eq!(m.status(Capability::Audio), CapabilityStatus::Unsupported);
         assert_eq!(m.status(Capability::Display), CapabilityStatus::Unsupported);
+        // No camera adapter or physical Linux evidence yet.
+        assert_eq!(
+            capability_matrix().status(Capability::Camera),
+            CapabilityStatus::Unsupported
+        );
         // A physical target never claims the mock test seam.
         assert_eq!(
             capability_matrix().status(Capability::MockControl),

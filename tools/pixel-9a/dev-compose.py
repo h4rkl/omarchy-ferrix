@@ -403,6 +403,7 @@ PRODUCT_BINARIES = (
     "ferrix-terminal", "ferrix-telephonyd", "ferrix-networkd", "ferrix-contactsd",
     "ferrix-phone", "ferrix-messages", "ferrix-contacts", "ferrix-settings",
     "ferrix-files",
+    "ferrix-camera",
 )
 
 
