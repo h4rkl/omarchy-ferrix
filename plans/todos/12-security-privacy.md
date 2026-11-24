@@ -1,6 +1,8 @@
 # 12 — Lock screen, data protection, sandbox and permissions
 
-Status: open · Issues: #31 (lock screen and at-rest protection), #10
+Status: open · ADR:
+[011](../../docs/adr/011-lock-screen-threat-model-and-encryption.md)
+(proposed) · Issues: #31 (lock screen and at-rest protection), #10
 (sandbox hardening), #11 (consent portals) · Depends on: 04 (power key),
 11 (chrome and notifications) · Related draft:
 `plans/ferrix-encrypted-spaces/`
