@@ -29,6 +29,13 @@ sim = "present"
 [audio]
 route = "speaker"
 
+# Suspend policy flag (off on every target by default). The mock Lifecycle
+# only simulates a sleep; the lifecycle-blank-suspend-resume-inhibit
+# scenario turns the policy on through ferrix-core's control channel and
+# restores this value.
+[lifecycle]
+suspend = "off"
+
 # Detailed mock telephony state (ADR-006). Synthetic values only: the mock
 # adapter in ferrix-telephonyd starts from these; the host mock-control
 # channel `ferrix.telephony` mutates them. Never a carrier or device fact.

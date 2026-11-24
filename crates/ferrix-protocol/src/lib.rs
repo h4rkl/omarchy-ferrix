@@ -61,6 +61,12 @@ pub enum Request {
     ReleaseInhibit {
         id: u64,
     },
+    /// The shell's screen power state, the suspend policy's input; answered
+    /// with the policy. The report lives as long as this connection: when
+    /// it closes the core treats the screen as on and never suspends.
+    ReportScreen {
+        off: bool,
+    },
 }
 
 /// A pushed screen policy change on a [`Request::WatchScreenPolicy`]
@@ -485,6 +491,59 @@ pub fn inhibit_blank(
     }
 }
 
+/// Keeps the core told whether the screen is off. Send the state on the
+/// returned channel at every change, and again after the core came back
+/// (a new core has no report). The worker holds one connection (the core
+/// forgets the report when it closes), coalesces states it has not sent
+/// yet, and retries an undelivered one every `retry`. Dropping the sender
+/// ends the worker and closes the connection, which the core reads as
+/// "screen on".
+pub fn report_screen(path: PathBuf, timeout: Duration, retry: Duration) -> mpsc::Sender<bool> {
+    let (tx, rx) = mpsc::channel::<bool>();
+    let _ = thread::Builder::new()
+        .name("core-screen-report".to_owned())
+        .spawn(move || {
+            let mut pending: Option<bool> = None;
+            let mut link: Option<(UnixStream, BufReader<UnixStream>)> = None;
+            loop {
+                let next = if pending.is_some() {
+                    match rx.recv_timeout(retry) {
+                        Ok(v) => Some(v),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                } else {
+                    match rx.recv() {
+                        Ok(v) => Some(v),
+                        Err(_) => return,
+                    }
+                };
+                pending = next.or(pending);
+                while let Ok(v) = rx.try_recv() {
+                    pending = Some(v);
+                }
+                let Some(off) = pending else { continue };
+                if link.is_none() {
+                    link = connect_stream(&path, timeout).ok().and_then(|stream| {
+                        stream.set_read_timeout(Some(timeout)).ok()?;
+                        let reader = BufReader::new(stream.try_clone().ok()?);
+                        Some((stream, reader))
+                    });
+                }
+                let delivered = link.as_mut().is_some_and(|(stream, reader)| {
+                    write_request(stream, &Request::ReportScreen { off }).is_ok()
+                        && read_reply(reader).and_then(policy_from).is_ok()
+                });
+                if delivered {
+                    pending = None;
+                } else {
+                    link = None;
+                }
+            }
+        });
+    tx
+}
+
 /// What a [`watch_screen_policy`] subscriber receives.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PolicyFeed {
@@ -613,6 +672,10 @@ mod tests {
                 Request::WatchScreenPolicy,
                 r#"{"request":"watch-screen-policy"}"#,
             ),
+            (
+                Request::ReportScreen { off: true },
+                r#"{"request":"report-screen","off":true}"#,
+            ),
         ];
         for (request, wire) in cases {
             assert_eq!(serde_json::to_string(&request).unwrap(), wire);
@@ -623,7 +686,11 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&update).unwrap(),
-            r#"{"event":"screen-policy-changed","policy":{"idle_timeout_secs":60,"inhibitors":[]}}"#
+            concat!(
+                r#"{"event":"screen-policy-changed","policy":{"idle_timeout_secs":60,"inhibitors":[],"#,
+                r#""suspend":{"mode":"off","source":"profile","after_blank_secs":30,"supported":false,"#,
+                r#""kill_switch":false,"screen_off":false,"phase":"disabled","cycles":0,"last":null}}}"#
+            )
         );
         // A hardware event line is not a policy update, and vice versa, so
         // neither stream's parser mistakes the other's lines.

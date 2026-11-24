@@ -81,6 +81,10 @@ struct Args {
     power_marker: Option<PathBuf>,
     /// The saved idle timeout; `None` keeps it in memory only.
     screen_state: Option<PathBuf>,
+    /// Suspend kill switch: while this file exists the core never suspends.
+    no_suspend: PathBuf,
+    /// Per-boot suspend opt-in file; `None` disables it.
+    suspend_opt_in: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -102,6 +106,12 @@ fn parse_args() -> Result<Args, String> {
         power_marker: env("FERRIX_POWER_MARKER").map(PathBuf::from),
         screen_state: Some(PathBuf::from(
             env("FERRIX_SCREEN_STATE").unwrap_or(DEFAULT_SCREEN_STATE.to_owned()),
+        )),
+        no_suspend: PathBuf::from(
+            env("FERRIX_NO_SUSPEND").unwrap_or(screen::DEFAULT_NO_SUSPEND.to_owned()),
+        ),
+        suspend_opt_in: Some(PathBuf::from(
+            env("FERRIX_SUSPEND_OPT_IN").unwrap_or(screen::DEFAULT_SUSPEND_OPT_IN.to_owned()),
         )),
     };
     let mut it = std::env::args().skip(1);
@@ -132,9 +142,16 @@ fn parse_args() -> Result<Args, String> {
                 let text = it.next().ok_or("--screen-state needs PATH|none")?;
                 args.screen_state = (text != "none").then(|| PathBuf::from(text));
             }
+            "--no-suspend" => {
+                args.no_suspend = PathBuf::from(it.next().ok_or("--no-suspend needs a path")?)
+            }
+            "--suspend-opt-in" => {
+                let text = it.next().ok_or("--suspend-opt-in needs PATH|none")?;
+                args.suspend_opt_in = (text != "none").then(|| PathBuf::from(text));
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: ferrix-core [profile.toml] [--socket PATH] [--camera-socket PATH|none] [--control auto|none|PATH] [--shutdown-marker PATH] [--appd PATH|none] [--power-marker PATH|none] [--screen-state PATH|none]"
+                    "usage: ferrix-core [profile.toml] [--socket PATH] [--camera-socket PATH|none] [--control auto|none|PATH] [--shutdown-marker PATH] [--appd PATH|none] [--power-marker PATH|none] [--screen-state PATH|none] [--no-suspend PATH] [--suspend-opt-in PATH|none]"
                         .to_owned(),
                 );
             }
@@ -224,6 +241,19 @@ impl Controller {
                 0 => Err(format!("{holder:?} holds no inhibitor")),
                 _ => Ok(()),
             },
+            ControlCommand::SetSuspendPolicy {
+                mode,
+                after_blank_secs,
+            } => {
+                if self.session.services.mock_control.is_none() {
+                    Err("set-suspend-policy needs the mock-control capability (mocked targets only)".to_owned())
+                } else {
+                    self.screen
+                        .set_suspend_override(*mode, *after_blank_secs)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                }
+            }
             _ => return None,
         };
         emit(json!({
@@ -373,10 +403,19 @@ fn run() -> Result<(), String> {
     // Subscribe before anything can mutate state so no event is missed.
     let events = session.services.subscribe();
     let listener = Server::bind(&args.socket)?;
-    let screen = Arc::new(screen::ScreenPolicyStore::new(
+    let lifecycle = session.profile.lifecycle_section();
+    let screen = Arc::new(screen::ScreenPolicyStore::with_suspend(
         session.profile.display.idle_timeout(),
         args.screen_state.clone(),
+        screen::SuspendConfig {
+            mode: lifecycle.suspend,
+            after_blank_secs: lifecycle.suspend_after_blank(),
+            kill_switch: args.no_suspend.clone(),
+            opt_in: args.suspend_opt_in.clone(),
+            lifecycle: Arc::clone(&session.services.lifecycle),
+        },
     ));
+    screen.spawn_suspend()?;
     let server = Arc::new(Server::new(
         Arc::clone(&session),
         Arc::clone(&screen),

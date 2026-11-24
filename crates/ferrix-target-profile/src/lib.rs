@@ -14,7 +14,7 @@ use std::path::Path;
 use ferrix_hardware_api::{
     AudioRoute, BluetoothDeviceKind, CAMERA_PREVIEW_FPS_MAX, CameraFacing, CameraRotation,
     FrameSize, MockPairingMethod, MockPairingOutcome, ModemRegistration, Orientation, SimState,
-    WifiState,
+    SuspendMode, WifiState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,9 @@ pub struct Profile {
     /// Synthetic cameras (ADR-009). Absent means the mock exposes none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraSection>,
+    /// Suspend policy flag (`[lifecycle]`). Absent means suspend is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<LifecycleSection>,
 }
 
 /// Which deterministic test pattern a mock camera draws.
@@ -263,6 +266,27 @@ impl DisplaySection {
             Some(0) => None,
             Some(secs) => Some(secs),
         }
+    }
+}
+
+/// The board's suspend flag. `ferrix-core` suspends only when `suspend` is
+/// not `off`, the target offers that sleep state, no kill switch exists,
+/// and the screen has been blanked for `suspend_after_blank_secs` with no
+/// inhibitor held.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LifecycleSection {
+    pub suspend: SuspendMode,
+    /// Optional; absent means
+    /// [`ferrix_hardware_api::DEFAULT_SUSPEND_AFTER_BLANK_SECS`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suspend_after_blank_secs: Option<u32>,
+}
+
+impl LifecycleSection {
+    pub fn suspend_after_blank(&self) -> u32 {
+        self.suspend_after_blank_secs
+            .unwrap_or(ferrix_hardware_api::DEFAULT_SUSPEND_AFTER_BLANK_SECS)
     }
 }
 
@@ -692,6 +716,13 @@ impl Profile {
                 "display.idle_timeout_secs: {error}"
             )));
         }
+        if let Err(error) = ferrix_hardware_api::validate_suspend_after_blank(
+            self.lifecycle_section().suspend_after_blank(),
+        ) {
+            return Err(ProfileError::Invalid(format!(
+                "lifecycle.suspend_after_blank_secs: {error}"
+            )));
+        }
         if self.power.battery_percent > 100 {
             return Err(ProfileError::Invalid(format!(
                 "power.battery_percent must be 0..=100 (got {})",
@@ -729,6 +760,11 @@ impl Profile {
         self.telephony
             .clone()
             .unwrap_or_else(|| TelephonySection::derived_from(&self.connectivity))
+    }
+
+    /// The `[lifecycle]` section, or suspend off when it is absent.
+    pub fn lifecycle_section(&self) -> LifecycleSection {
+        self.lifecycle.clone().unwrap_or_default()
     }
 
     /// The `[network]` section, or the one `[connectivity]` implies when the
@@ -894,6 +930,43 @@ route = "speaker"
             None,
             "agent sessions and CI captures never blank on their own"
         );
+    }
+
+    #[test]
+    fn suspend_is_off_unless_a_board_opts_in_and_bounds_hold() {
+        let p = Profile::parse(FIXTURE).unwrap();
+        assert_eq!(p.lifecycle_section().suspend, SuspendMode::Off);
+        assert_eq!(
+            p.lifecycle_section().suspend_after_blank(),
+            ferrix_hardware_api::DEFAULT_SUSPEND_AFTER_BLANK_SECS
+        );
+        let on = Profile::parse(&format!(
+            "{FIXTURE}\n[lifecycle]\nsuspend = \"s2idle\"\nsuspend_after_blank_secs = 10\n"
+        ))
+        .unwrap();
+        assert_eq!(on.lifecycle_section().suspend, SuspendMode::S2idle);
+        assert_eq!(on.lifecycle_section().suspend_after_blank(), 10);
+        let err = Profile::parse(&format!(
+            "{FIXTURE}\n[lifecycle]\nsuspend_after_blank_secs = 1\n"
+        ))
+        .expect_err("1 s is too short");
+        assert!(
+            err.to_string().contains("suspend_after_blank_secs"),
+            "{err}"
+        );
+        assert!(Profile::parse(&format!("{FIXTURE}\n[lifecycle]\nsuspend = \"mem\"\n")).is_err());
+        // Every checked-in profile ships with suspend off.
+        for path in [
+            "/../../targets/qemu-aarch64/profile.toml",
+            "/../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/dev/profile.toml",
+        ] {
+            let profile = Profile::load(format!("{}{path}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+            assert_eq!(
+                profile.lifecycle_section().suspend,
+                SuspendMode::Off,
+                "{path}"
+            );
+        }
     }
 
     #[test]
