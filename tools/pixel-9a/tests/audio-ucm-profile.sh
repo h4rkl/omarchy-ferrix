@@ -104,17 +104,36 @@ done
 # ferrix-audio-wireplumber classifies sinks by these description tokens.
 grep -q 'Comment "Speaker"' "$verb" || fail 'Speaker description must classify as a speaker route'
 
+# --- Mic capture routing (the only writes allowed) ----------------------------
+# The Mic device may route capture, and only with these two controls (owner-
+# approved physical measurement, 2026-11-24). Everything outside the Mic
+# section, and any other cset, stays forbidden below.
+mic_section=$(awk '/^SectionDevice\."Mic"/{p=1} p{print} p&&/^}/{exit}' "$verb")
+outside_mic=$(awk '/^SectionDevice\."Mic"/{skip=1} !skip{print} skip&&/^}/{skip=0}' "$verb")
+printf '%s\n' "$mic_section" | grep -q 'EnableSequence' || fail 'Mic must enable its capture route'
+printf '%s\n' "$mic_section" | grep -q 'DisableSequence' || fail 'Mic must restore its capture route'
+printf '%s\n' "$mic_section" | grep -E '^[[:space:]]*cset ' | grep -v -E "cset \"name='(BUILDIN MIC ID CAPTURE LIST|EP1 TX Mixer INTERNAL_MIC_TX)' " | grep -q . &&
+	fail 'Mic may only set the capture list and EP1 TX Mixer INTERNAL_MIC_TX'
+printf '%s\n' "$mic_section" | grep -q "INTERNAL_MIC_TX' off" || fail 'Mic DisableSequence must turn INTERNAL_MIC_TX off'
+printf '%s\n' "$mic_section" | grep -q "CAPTURE LIST' 0,-1,-1,-1" || fail 'Mic DisableSequence must restore the capture list'
+tmp_verb=$(mktemp); printf '%s\n' "$outside_mic" > "$tmp_verb"
+mic_only_keywords='EnableSequence DisableSequence cset'
+
 # --- Discovery-only safety ---------------------------------------------------
 # ACP runs verb and device sequences at session start, and alsactl runs boot
-# sequences. Neither file may write a control, run a command, bind a hardware
-# volume, or name calibration data.
-for file in "$entry" "$verb"; do
+# sequences. Outside the Mic device neither file may write a control, run a
+# command, bind a hardware volume, or name calibration data; inside it only the
+# two csets above are allowed.
+for file in "$entry" "$tmp_verb" "$verb"; do
 	for keyword in EnableSequence DisableSequence TransitionSequence BootSequence \
 		FixedBootSequence cset cset-bin-file cset-tlv cset-new ctl-remove cdev \
 		exec shell sysw cfg-save sleep msleep usleep \
 		PlaybackVolume PlaybackSwitch PlaybackMixer PlaybackMixerElem PlaybackMasterElem \
 		CaptureVolume CaptureSwitch CaptureMixer CaptureMixerElem CaptureMasterElem \
 		JackControl JackDev Include; do
+		if [ "$file" = "$verb" ]; then
+			case " $mic_only_keywords " in *" $keyword "*) continue ;; esac
+		fi
 		if code "$file" | grep -Eq "(^|[^A-Za-z])$keyword([^A-Za-z-]|\$)"; then
 			fail "$(basename "$file") uses '$keyword'; the profile must stay discovery-only"
 		fi
@@ -130,4 +149,5 @@ for file in "$entry" "$verb"; do
 	' "$file" || fail "$(basename "$file") has unbalanced braces"
 done
 
-echo "Pixel 9a discovery-only UCM profile checks passed (offline; no device or audio)."
+rm -f "$tmp_verb"
+echo "Pixel 9a UCM profile checks passed: discovery-only except the Mic capture route (offline; no device or audio)."
