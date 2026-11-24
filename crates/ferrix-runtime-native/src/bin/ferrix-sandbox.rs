@@ -61,6 +61,7 @@ fn main() -> ExitCode {
             SandboxMode::Init => linux::init(&args),
             SandboxMode::Probe => linux::probe(&args),
             SandboxMode::MountProc => linux::mount_proc(),
+            SandboxMode::MapIds => linux::map_ids(&args),
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -90,6 +91,7 @@ mod linux {
         DEV_DIRS, DEV_NODES, SYSTEM_DIRS, app_data_dir, exposable_home, ferrix_config_dir,
         home_dir, mounts_under, under_root,
     };
+    use ferrix_runtime_native::identity::per_app_map;
     use ferrix_runtime_native::seccomp::{
         denies_clone_namespaces, effective_denied, syscall_number,
     };
@@ -102,6 +104,7 @@ mod linux {
     };
     use ferrix_runtime_native::{CgroupError, CgroupOutcome, app_cgroup_name, cgroup_slice};
     use ferrix_runtime_native::{FsViewMode, FsViewOutcome};
+    use ferrix_runtime_native::{IdentityOutcome, UidMode, app_subuid};
     use ferrix_runtime_native::{SeccompOutcome, SeccompPolicy, SeccompProfile};
     use rustix::io::Errno;
     use rustix::mount::{
@@ -478,6 +481,110 @@ mod linux {
         }
     }
 
+    // -- per-application uid (issue #10) -------------------------------------
+
+    /// `--map-ids PID ID`: waits for one line on stdin (`go`, written by
+    /// stage 1 once it has unshared its user namespace), then writes that
+    /// process's `uid_map` and `gid_map` ([`per_app_map`]). It runs in the
+    /// launcher's namespace with the launcher's `CAP_SETUID`/`CAP_SETGID`,
+    /// which is what a map holding an id other than the writer's own needs.
+    /// End of input without `go` (stage 1 gave up) writes nothing.
+    pub fn map_ids(args: &SandboxArgs) -> ExitCode {
+        let Some((pid, id)) = args.map_ids else {
+            return exit_code(SANDBOX_INTERNAL_STATUS);
+        };
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).is_err() || line.trim() != "go" {
+            return exit_code(SANDBOX_INTERNAL_STATUS);
+        }
+        let identity = Identity::current();
+        for (file, launcher) in [("uid_map", identity.uid), ("gid_map", identity.gid)] {
+            let path = format!("/proc/{pid}/{file}");
+            if let Err(e) = std::fs::write(&path, per_app_map(launcher, id)) {
+                eprintln!("{path}: {e}");
+                return exit_code(ISOLATION_UNAVAILABLE_STATUS);
+            }
+        }
+        ExitCode::SUCCESS
+    }
+
+    /// Starts the map helper for this process before it unshares; `Err`
+    /// when a per-app uid cannot be had here (an unprivileged launcher
+    /// cannot map a foreign id).
+    fn start_map_helper(policy: &IsolationPolicy, app: &str) -> Result<Option<Child>, String> {
+        if policy.uid != UidMode::PerApp {
+            return Ok(None);
+        }
+        if !geteuid().is_root() {
+            return Err(
+                "uid per-app needs a root launcher (CAP_SETUID to map the subuid)".to_owned(),
+            );
+        }
+        let exe = std::env::current_exe().map_err(|e| format!("resolve sandbox binary: {e}"))?;
+        Command::new(exe)
+            .arg("--map-ids")
+            .arg(std::process::id().to_string())
+            .arg(app_subuid(app).to_string())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map(Some)
+            .map_err(|e| format!("start the id-map helper: {e}"))
+    }
+
+    /// Tells the helper to write the maps now that the namespace exists.
+    fn finish_map_helper(mut helper: Child) -> Result<(), String> {
+        use std::io::Write as _;
+        if let Some(mut stdin) = helper.stdin.take() {
+            stdin
+                .write_all(b"go\n")
+                .map_err(|e| format!("id-map helper: {e}"))?;
+        }
+        let output = helper
+            .wait_with_output()
+            .map_err(|e| format!("id-map helper: {e}"))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "id-map helper exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
+    }
+
+    /// Writes this namespace's maps: the per-app map through the helper, or
+    /// the identity map of the launcher's own ids.
+    fn write_maps(identity: Identity, helper: Option<Child>) -> Vec<String> {
+        match helper {
+            Some(helper) => finish_map_helper(helper).err().into_iter().collect(),
+            None => map_identity(identity),
+        }
+    }
+
+    /// Whether this process's user namespace maps the application's subuid
+    /// (read from its own `/proc` in stage 2).
+    fn maps_subuid(app: &str) -> bool {
+        let id = app_subuid(app).to_string();
+        std::fs::read_to_string("/proc/self/uid_map").is_ok_and(|map| {
+            map.lines().any(|line| {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                fields == [id.as_str(), id.as_str(), "1"]
+            })
+        })
+    }
+
+    /// Hands the application's data directory to its subuid (owner-only).
+    fn own_for(path: &Path, id: u32) -> Result<(), String> {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::os::unix::fs::chown(path, Some(id), Some(id))
+            .map_err(|e| io_error("chown", path, e))?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| io_error("chmod", path, e))
+    }
+
     // -----------------------------------------------------------------------
     // Stage 1
     // -----------------------------------------------------------------------
@@ -521,6 +628,17 @@ mod linux {
             Ok(outcome) => outcome,
             Err(reason) => return fail(evidence, app, reason, ISOLATION_UNAVAILABLE_STATUS),
         };
+        // A per-app uid's map is written from outside the new namespace.
+        let helper = match start_map_helper(&args.policy, app) {
+            Ok(helper) => helper,
+            Err(reason) if args.policy.mode == IsolationMode::Required => {
+                return fail(evidence, app, reason, ISOLATION_UNAVAILABLE_STATUS);
+            }
+            Err(reason) => {
+                notes.push(format!("uid: {reason}"));
+                None
+            }
+        };
         let unshared = match unshare_for(&args.policy) {
             Ok(unshared) => unshared,
             Err((wanted, reason)) => {
@@ -541,7 +659,16 @@ mod linux {
         let mut applied = unshared.applied;
 
         if applied.user {
-            for error in map_identity(unshared.identity) {
+            let per_app = helper.is_some();
+            for error in write_maps(unshared.identity, helper) {
+                if per_app && args.policy.mode == IsolationMode::Required {
+                    return fail(
+                        evidence,
+                        app,
+                        format!("uid per-app: {error}"),
+                        ISOLATION_UNAVAILABLE_STATUS,
+                    );
+                }
                 emit(&record(
                     evidence,
                     "sandbox-degraded",
@@ -642,6 +769,7 @@ mod linux {
         let mut run_dir_outcome = RunDirOutcome::default();
         let mut fs_view = FsViewOutcome::default();
         let mut seccomp = SeccompOutcome::default();
+        let mut identity = IdentityOutcome::default();
         match listener
             .map(|l| l.wait_for_line(&mut child, INIT_REPORT_TIMEOUT, &mut forward_pending))
         {
@@ -652,6 +780,7 @@ mod linux {
                     run_dir_outcome = report.run_dir;
                     fs_view = report.fs_view;
                     seccomp = report.seccomp;
+                    identity = report.identity;
                     notes.extend(report.reasons);
                 }
                 Err(e) => notes.push(format!("unreadable init report: {e}")),
@@ -687,6 +816,7 @@ mod linux {
                 && run_dir_outcome.mode != args.policy.run_dir.mode)
             || (args.policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal)
             || (args.policy.seccomp.is_confined() && !seccomp.applied())
+            || (args.policy.uid == UidMode::PerApp && identity.uid.is_none())
             || (args.policy.resources.cgroup && !cgroup.applied())
             || (applied.net && !network.loopback_up)
             || !notes.is_empty();
@@ -701,6 +831,7 @@ mod linux {
             network,
             fs_view,
             seccomp,
+            identity,
             degraded,
             reason: (!notes.is_empty()).then(|| notes.join("; ")),
         };
@@ -970,6 +1101,8 @@ mod linux {
         home: Option<PathBuf>,
         expose_home: bool,
         config: Option<PathBuf>,
+        /// The per-app subuid that owns the stand-in home.
+        owner: Option<u32>,
     }
 
     fn populate_root(root: &Path, plan: &ViewPlan) -> Result<FsViewOutcome, String> {
@@ -1016,6 +1149,9 @@ mod linux {
                 // An empty, writable stand-in so `$HOME` still exists.
                 let dest = under_root(root, home);
                 std::fs::create_dir_all(&dest).map_err(|e| io_error("create", &dest, e))?;
+                if let Some(id) = plan.owner {
+                    own_for(&dest, id)?;
+                }
             }
         }
         if let Some(data) = &plan.data_dir
@@ -1081,6 +1217,7 @@ mod linux {
     fn build_minimal_root(
         policy: &IsolationPolicy,
         data_dir: Option<&Path>,
+        owner: Option<u32>,
         reasons: &mut Vec<String>,
     ) -> Result<FsViewOutcome, String> {
         let home = home_dir(env_var);
@@ -1107,6 +1244,7 @@ mod linux {
             home: home.filter(|h| exposable_home(h).is_ok()),
             expose_home,
             config: ferrix_config_dir(env_var),
+            owner,
         };
         let staging = PathBuf::from("/tmp").join(format!(".ferrix-root-{}", std::process::id()));
         std::fs::create_dir(&staging).map_err(|e| io_error("create", &staging, e))?;
@@ -1143,6 +1281,7 @@ mod linux {
         policy: &IsolationPolicy,
         mount_namespace: bool,
         data_dir: Option<&Path>,
+        owner: Option<u32>,
         reasons: &mut Vec<String>,
     ) -> Result<FsViewOutcome, String> {
         let inherit = || FsViewOutcome {
@@ -1156,7 +1295,7 @@ mod linux {
             reasons.push("fs_view needs the mount namespace".to_owned());
             return Ok(inherit());
         }
-        build_minimal_root(policy, data_dir, reasons).map_err(|error| {
+        build_minimal_root(policy, data_dir, owner, reasons).map_err(|error| {
             emit(&record(
                 evidence,
                 "sandbox-mount-failed",
@@ -1609,12 +1748,33 @@ mod linux {
                 }
             };
         let data_dir = prepare_data_dir(app, &mut reasons);
+        // The subuid exists only when stage 1's map really holds it.
+        let subuid =
+            (args.policy.uid == UidMode::PerApp && maps_subuid(app)).then(|| app_subuid(app));
+        if args.policy.uid == UidMode::PerApp && subuid.is_none() {
+            reasons.push("uid per-app: the user namespace does not map the subuid".to_owned());
+        }
+        if let (Some(id), Some(dir)) = (subuid, &data_dir)
+            && let Err(error) = own_for(dir, id)
+        {
+            reasons.push(format!("uid per-app: {error}"));
+        }
+        let identity = IdentityOutcome {
+            mode: if subuid.is_some() {
+                UidMode::PerApp
+            } else {
+                UidMode::Launcher
+            },
+            uid: subuid,
+            gid: subuid,
+        };
         let fs_view = match apply_fs_view(
             evidence,
             app,
             &args.policy,
             applied.mount,
             data_dir.as_deref(),
+            subuid,
             &mut reasons,
         ) {
             Ok(outcome) => outcome,
@@ -1665,6 +1825,9 @@ mod linux {
             if args.policy.seccomp.is_confined() && !seccomp.applied() {
                 unmet.push("seccomp");
             }
+            if args.policy.uid == UidMode::PerApp && identity.uid.is_none() {
+                unmet.push("uid");
+            }
             if !unmet.is_empty() || !reasons.is_empty() {
                 let mut detail = Vec::new();
                 if !unmet.is_empty() {
@@ -1690,6 +1853,7 @@ mod linux {
                 run_dir: run_dir_outcome,
                 fs_view: fs_view.clone(),
                 seccomp,
+                identity: identity.clone(),
                 reasons: reasons.clone(),
             };
             let _ = send_line(name, &serde_json::to_string(&report).unwrap_or_default());
@@ -1700,6 +1864,12 @@ mod linux {
         command.args(&args.exec[1..]);
         if let Some(dir) = &fs_view.data_dir {
             command.env(ferrix_app_api::APP_DATA_DIR_ENV, dir);
+        }
+        if let Some(id) = identity.uid {
+            // std drops the supplementary groups (setgroups) before setgid
+            // and setuid in the child; nothing of root's survives the exec.
+            use std::os::unix::process::CommandExt as _;
+            command.uid(id).gid(id);
         }
         let child = match command.spawn() {
             Ok(child) => child,
@@ -1759,6 +1929,11 @@ mod linux {
         let policy = &args.policy;
         let mut reasons = Vec::new();
         let cgroup = probe_cgroup(policy, &mut reasons);
+        let helper = start_map_helper(policy, "probe").unwrap_or_else(|reason| {
+            reasons.push(format!("uid: {reason}"));
+            None
+        });
+        let per_app = helper.is_some();
         let unshared = match unshare_for(policy) {
             Ok(unshared) => unshared,
             Err((_, reason)) => {
@@ -1787,7 +1962,7 @@ mod linux {
         }
         if applied.user {
             reasons.extend(
-                map_identity(unshared.identity)
+                write_maps(unshared.identity, helper)
                     .into_iter()
                     .map(|e| format!("uid_map: {e}")),
             );
@@ -1810,11 +1985,19 @@ mod linux {
                 RunDirOutcome::default()
             });
         // No data directory: the probe must not leave one behind.
-        let fs_view = apply_fs_view(evidence, "probe", policy, applied.mount, None, &mut reasons)
-            .unwrap_or_else(|error| {
-                reasons.push(format!("fs_view: {error}"));
-                FsViewOutcome::default()
-            });
+        let fs_view = apply_fs_view(
+            evidence,
+            "probe",
+            policy,
+            applied.mount,
+            None,
+            None,
+            &mut reasons,
+        )
+        .unwrap_or_else(|error| {
+            reasons.push(format!("fs_view: {error}"));
+            FsViewOutcome::default()
+        });
         let no_new_privs =
             policy.no_new_privs && apply_no_new_privs(evidence, "probe", &mut reasons);
         let seccomp = apply_seccomp(evidence, "probe", policy, &mut reasons);
@@ -1825,8 +2008,18 @@ mod linux {
                 || (policy.run_dir.is_private() && run_dir_outcome.mode != policy.run_dir.mode)
                 || (policy.resources.cgroup && !cgroup.applied())
                 || (policy.fs_view.is_minimal() && fs_view.mode != FsViewMode::Minimal)
-                || (policy.seccomp.is_confined() && !seccomp.applied()),
+                || (policy.seccomp.is_confined() && !seccomp.applied())
+                || (policy.uid == UidMode::PerApp && !per_app),
             applied: AppliedIsolation {
+                identity: IdentityOutcome {
+                    mode: if per_app {
+                        UidMode::PerApp
+                    } else {
+                        UidMode::Launcher
+                    },
+                    uid: per_app.then(|| app_subuid("probe")),
+                    gid: per_app.then(|| app_subuid("probe")),
+                },
                 cgroup,
                 network,
                 fs_view,

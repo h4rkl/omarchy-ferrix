@@ -22,11 +22,11 @@ use ferrix_app_api::{
 };
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use ferrix_runtime_native::{
-    APPD_SOCKET_FILE, FsViewMode, FsViewPolicy, ISOLATION_UNAVAILABLE_STATUS, IsolationMode,
-    IsolationPolicy, NativeLaunch, NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV,
+    APPD_SOCKET_FILE, FsViewMode, FsViewPolicy, ISOLATION_UNAVAILABLE_STATUS, IdentityOutcome,
+    IsolationMode, IsolationPolicy, NativeLaunch, NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV,
     ResourcePolicy, RunDirMode, RunDirPolicy, SandboxReady, SeccompPolicy, SeccompProfile,
-    TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan,
-    skipped_record,
+    TELEPHONYD_SOCKET_FILE, UidMode, UserNamespace, app_subuid, emit, find_record,
+    probe_sandbox_with, sandbox_plan, skipped_record,
 };
 
 const SANDBOX: &str = env!("CARGO_BIN_EXE_ferrix-sandbox");
@@ -934,7 +934,17 @@ struct ScratchHome(PathBuf);
 
 impl ScratchHome {
     fn new() -> Self {
-        let home = scratch("ferrix-home");
+        Self::at(scratch("ferrix-home"))
+    }
+
+    /// Under `/home` (the container's own filesystem, and not a reserved
+    /// directory a home may never be in), for tests that check ownership on
+    /// the host side.
+    fn local() -> Self {
+        Self::at(Path::new("/home").join(unique("ferrix-home")))
+    }
+
+    fn at(home: PathBuf) -> Self {
         std::fs::create_dir_all(home.join("Documents")).unwrap();
         std::fs::write(home.join("Documents/secret.txt"), "secret").unwrap();
         Self(home)
@@ -1164,5 +1174,79 @@ fn the_escape_hatch_relaxes_only_the_named_calls() {
     let report: ferrix_runtime_native::IsolationReport =
         serde_json::from_value(running.diagnostics()).unwrap();
     assert_eq!(report.applied.seccomp.allowed, ["mount", "umount2"]);
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Per-application uid (issue #10, increment 5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn per_app_uid_runs_the_application_as_its_own_subuid() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let policy = IsolationPolicy {
+        uid: UidMode::PerApp,
+        ..IsolationPolicy::default()
+    };
+    if !available(&policy) {
+        return;
+    }
+    // A container-local directory: the cargo target directory may be a host
+    // share (macOS through OrbStack) that does not keep foreign owners.
+    let home = ScratchHome::local();
+    let uid = app_subuid("org.ferrix.test");
+    // /etc/shadow is root-only (0640 root:shadow): the launcher can read it,
+    // the application must not, although it is "root-like" in nothing.
+    let script = r#"
+        [ "$(id -u)" = "$1" ] && [ "$(id -g)" = "$1" ] || exit 40
+        [ "$(id -G)" = "$1" ] || exit 41                     # no supplementary groups
+        [ -e /etc/shadow ] || exit 42
+        cat /etc/shadow >/dev/null 2>&1 && exit 43           # forbidden path
+        grep -q '^CapEff:[[:space:]]*0*$' /proc/self/status || exit 44   # no capabilities at all
+        echo mine > "$FERRIX_APP_DATA_DIR/f" || exit 45      # its data directory
+        [ "$(stat -c %u:%g "$FERRIX_APP_DATA_DIR/f")" = "$1:$1" ] || exit 46
+        touch "$HOME/x" || exit 47                           # its stand-in home
+        exit 0
+    "#;
+    let mut running = launch_with(
+        &["sh", "-c", script, "sh", &uid.to_string()],
+        policy,
+        &home.context(&[]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.identity,
+        IdentityOutcome {
+            mode: UidMode::PerApp,
+            uid: Some(uid),
+            gid: Some(uid),
+        },
+        "{report:?}"
+    );
+    assert!(
+        report.applied.user_namespace && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    // On the host the files belong to the subuid, and the directory is
+    // owner-only.
+    let data = std::fs::metadata(home.data_dir()).unwrap();
+    assert_eq!((data.uid(), data.gid()), (uid, uid));
+    assert_eq!(data.permissions().mode() & 0o777, 0o700);
+    let file = std::fs::metadata(home.data_dir().join("f")).unwrap();
+    assert_eq!(file.uid(), uid);
+}
+
+#[test]
+fn launcher_identity_is_the_default() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", "exit 0"], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(report.applied.identity, IdentityOutcome::default());
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
 }

@@ -23,6 +23,7 @@
 
 pub mod cgroup;
 pub mod fsview;
+pub mod identity;
 mod plan;
 mod policy;
 mod report;
@@ -34,6 +35,7 @@ pub use cgroup::{
     CGROUP_FS, CGROUP_SLICE_ENV, CgroupError, CgroupOutcome, FERRIX_SLICE, app_cgroup_name,
     app_cgroup_path, cgroup_slice,
 };
+pub use identity::{IdentityOutcome, UidMode, app_subuid};
 pub use plan::*;
 pub use policy::*;
 pub use report::*;

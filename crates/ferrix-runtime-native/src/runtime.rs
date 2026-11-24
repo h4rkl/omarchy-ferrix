@@ -323,6 +323,14 @@ impl Runtime for NativeRuntime {
                 reason,
             });
         }
+        if launch.isolation.uid == crate::UidMode::PerApp {
+            per_app_uid_constraints(&launch.isolation, context).map_err(|reason| {
+                AppError::InvalidDescriptor {
+                    id: Some(app.id.clone()),
+                    reason,
+                }
+            })?;
+        }
         if launch.isolation.fs_view.is_minimal() && !launch.isolation.mount_namespace {
             return Err(AppError::InvalidDescriptor {
                 id: Some(app.id.clone()),
@@ -379,6 +387,30 @@ pub fn with_grants(mut policy: IsolationPolicy, context: &LaunchContext) -> Isol
     policy.fs_view.home =
         policy.fs_view.is_minimal() && context.granted.contains(&AppCapability::FilesHome);
     policy
+}
+
+/// What a per-application uid needs today: the minimal filesystem view (the
+/// subuid can traverse only the view's own directories to its data
+/// directory), `no_new_privs` (the namespace maps root, which a set-uid
+/// binary must never reach), and no `files-home` (the home folder belongs
+/// to the session user; exposing it needs an id-mapped mount).
+pub fn per_app_uid_constraints(
+    policy: &IsolationPolicy,
+    context: &LaunchContext,
+) -> Result<(), String> {
+    if !policy.fs_view.is_minimal() {
+        return Err("uid per-app requires fs_view.mode minimal".to_owned());
+    }
+    if !policy.no_new_privs {
+        return Err("uid per-app requires no_new_privs".to_owned());
+    }
+    if context.granted.contains(&AppCapability::FilesHome) {
+        return Err(
+            "uid per-app cannot be combined with files-home yet (needs an id-mapped home)"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 /// Spawns with the launch environment, its own process group, and inherited
@@ -692,6 +724,37 @@ mod tests {
         assert!(matches!(
             runtime().launch(&app, &config, &context()),
             Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("not_a_syscall")
+        ));
+    }
+
+    #[test]
+    fn per_app_uid_needs_the_minimal_view_no_new_privs_and_no_home() {
+        use crate::{FsViewPolicy, UidMode};
+        use ferrix_app_api::AppCapability;
+        let per_app = IsolationPolicy {
+            uid: UidMode::PerApp,
+            ..IsolationPolicy::default()
+        };
+        assert!(per_app_uid_constraints(&per_app, &context()).is_ok());
+        let inherit = IsolationPolicy {
+            fs_view: FsViewPolicy::inherit(),
+            ..per_app.clone()
+        };
+        assert!(per_app_uid_constraints(&inherit, &context()).is_err());
+        let privs = IsolationPolicy {
+            no_new_privs: false,
+            ..per_app.clone()
+        };
+        assert!(per_app_uid_constraints(&privs, &context()).is_err());
+        let mut files = context();
+        files.granted = [AppCapability::FilesHome].into_iter().collect();
+        assert!(per_app_uid_constraints(&per_app, &files).is_err());
+
+        let app = descriptor();
+        let config = launch_value(&["sh", "-c", "exit 0"], inherit);
+        assert!(matches!(
+            runtime().launch(&app, &config, &context()),
+            Err(AppError::InvalidDescriptor { reason, .. }) if reason.contains("per-app")
         ));
     }
 

@@ -59,6 +59,8 @@ pub struct SandboxReady {
     pub fs_view: FsViewOutcome,
     /// `{profile, denied, allowed}` from stage 2.
     pub seccomp: SeccompOutcome,
+    /// `{mode, uid, gid}` of the application process.
+    pub identity: crate::IdentityOutcome,
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -71,6 +73,7 @@ impl SandboxReady {
             network: self.network.clone(),
             fs_view: self.fs_view.clone(),
             seccomp: self.seccomp.clone(),
+            identity: self.identity.clone(),
             ..self
                 .namespaces
                 .applied(self.private_tmp, self.no_new_privs, self.run_dir.clone())
@@ -96,6 +99,7 @@ pub struct InitReport {
     pub run_dir: RunDirOutcome,
     pub fs_view: FsViewOutcome,
     pub seccomp: SeccompOutcome,
+    pub identity: crate::IdentityOutcome,
     pub reasons: Vec<String>,
 }
 
@@ -425,6 +429,7 @@ mod tests {
                 denied: 45,
                 allowed: Vec::new(),
             },
+            identity: crate::IdentityOutcome::default(),
             degraded: false,
             reason: None,
         };

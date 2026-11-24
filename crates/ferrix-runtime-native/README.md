@@ -243,6 +243,40 @@ refuses the filter (no `CONFIG_SECCOMP_FILTER`) is a
 `Required` (`unmet: seccomp`). `kexec_file_load`'s number is pinned in the
 source because musl's aarch64 `libc` bindings lack it.
 
+## Per-application uid (`uid`, issue #10)
+
+```json
+"isolation": { "uid": "launcher" | "per-app" }
+```
+
+`per-app` (opt-in; root launchers only) runs the application as its own
+stable subuid and subgid `S = app_subuid(id)` = `0x60000000 + FNV-1a(id) mod
+2^24` (clear of `/etc/subuid` user ranges and `nobody`; the checked-in ids
+are tested not to collide). It always creates a user namespace whose map
+holds two identity lines, `0 0 1` and `S S 1`. The sandbox stages stay in-
+namespace root (root's file ownership, capabilities only over the
+application's own namespaces) and build the view as before; **only the
+application process** switches to `S` (stage 2 starts it with std's
+`CommandExt::uid`/`gid`, which also clears the supplementary groups), so it
+holds no capability even inside its namespaces and cannot reach a set-uid
+root (`no_new_privs` is required). A map with an id other than the writer's
+own needs `CAP_SETUID` in the parent namespace, which stage 1 gives up by
+unsharing; a helper started before the `unshare` (`ferrix-sandbox --map-ids
+PID S`, waiting on stdin) writes `/proc/<stage 1>/{uid,gid}_map` when stage
+1 says `go`. Stage 2 confirms the map from its own `/proc/self/uid_map`
+before it trusts it, `chown`s the data directory to `S:S` (mode 0700) and
+gives `S` the stand-in `$HOME`. `sandbox-ready` gains `identity: {mode, uid,
+gid}`; an unprivileged launcher or a map that cannot be written fails closed
+under `Required` (`unmet: uid`).
+
+Constraints (`InvalidDescriptor` otherwise): `fs_view: minimal` (the subuid
+reaches its data directory only through the view's own directories),
+`no_new_privs`, and no `files-home` (the home folder belongs to the session
+user; exposing it needs an id-mapped mount). The default stays `launcher`:
+under `per-app` the application cannot reach root-owned sockets such as the
+Wayland socket in `/run/user/0` (0700) or `/run/ferrix/*.sock`, so no
+checked-in graphical application uses it yet.
+
 ## Readiness and records
 
 Readiness is observable: stage 2 reports to stage 1 and stage 1 reports to the
@@ -289,8 +323,8 @@ unless `FERRIX_SANDBOX_TESTS=required`, which turns every skip into a failure.
 
 ## Not provided yet
 
-No uid change (the application keeps the launcher's identity, mapped 1:1 in a
-user namespace), no cgroup freezing (limits only, see
+No uid change by default (`uid: launcher`: the application keeps the launcher's
+identity; `per-app` exists but no graphical app can use it yet), no cgroup freezing (limits only, see
 above), no per-application network routing (granted apps share the launcher
 network), no filesystem restriction under `fs_view: inherit` beyond `/proc`,
 `/tmp`, and the socket directory (with `run_dir: private` the rest of `/run`,
@@ -349,3 +383,9 @@ or `-U`, or `chroot`, and `/proc/self/status` shows `Seccomp: 2`; the
 control run with `profile: unconfined` gets as far as the `mount` (exit
 20), so the refusal is the filter's; `allow: [mount, umount2]` lets the
 mount through while `unshare` stays refused.
+The per-app uid test (home under the container's own `/home`, since a
+macOS share does not keep foreign owners) covers: the application's uid and
+gid are `S`, it has no supplementary groups and `CapEff` 0, the root-only
+`/etc/shadow` (which the launcher can read) is refused, it can write its
+data directory and stand-in `$HOME`, and on the host the data directory is
+`S:S` mode 0700 and the written file is `S`'s.

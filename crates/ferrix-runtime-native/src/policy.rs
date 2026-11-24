@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CgroupOutcome, SeccompOutcome, SeccompPolicy};
+use crate::{CgroupOutcome, IdentityOutcome, SeccompOutcome, SeccompPolicy, UidMode};
 
 /// The application's filesystem view ([`crate::fsview`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -197,6 +197,8 @@ pub struct IsolationPolicy {
     /// System-call filter ([`crate::seccomp`]); the default profile unless
     /// the launch configuration relaxes it.
     pub seccomp: SeccompPolicy,
+    /// Identity of the application process ([`crate::identity`]).
+    pub uid: UidMode,
 }
 
 impl Default for IsolationPolicy {
@@ -215,6 +217,7 @@ impl Default for IsolationPolicy {
             resources: ResourcePolicy::default(),
             fs_view: FsViewPolicy::default(),
             seccomp: SeccompPolicy::default(),
+            uid: UidMode::Launcher,
         }
     }
 }
@@ -235,6 +238,7 @@ impl IsolationPolicy {
             resources: ResourcePolicy::none(),
             fs_view: FsViewPolicy::inherit(),
             seccomp: SeccompPolicy::unconfined(),
+            uid: UidMode::Launcher,
         }
     }
 
@@ -245,6 +249,7 @@ impl IsolationPolicy {
             || self.uts_namespace
             || self.net_namespace
             || self.user_namespace == UserNamespace::Always
+            || self.uid == UidMode::PerApp
     }
 }
 
@@ -290,6 +295,8 @@ pub struct AppliedIsolation {
     pub fs_view: FsViewOutcome,
     /// The installed system-call filter.
     pub seccomp: SeccompOutcome,
+    /// The application's identity (`uid`/`gid` with `per-app`).
+    pub identity: IdentityOutcome,
     /// The application's cgroup (`{}` when none was created).
     pub cgroup: CgroupOutcome,
 }
