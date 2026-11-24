@@ -14,6 +14,10 @@ pub enum UnsupportedFeature {
     /// The shared-memory/PCIe CPIF rings and their doorbell protocol are
     /// kernel-internal in the current slice.
     CpifLinkTransport,
+    /// The seven-byte `sipc_fmt_hdr` envelope belongs to `PROTOCOL_SIPC`.
+    /// On a `PROTOCOL_SIT` link (tegu), the kernel strips the 12-byte SIT
+    /// header and passes an opaque payload; it never parses `sipc_fmt_hdr`.
+    SipcFmtOnSitLink,
 }
 
 impl fmt::Display for UnsupportedFeature {
@@ -25,6 +29,9 @@ impl fmt::Display for UnsupportedFeature {
             Self::DeviceTreeChannelBinding => formatter.write_str("device-tree channel binding"),
             Self::CpifLinkTransport => {
                 formatter.write_str("CPIF shared-memory/PCIe link transport")
+            }
+            Self::SipcFmtOnSitLink => {
+                formatter.write_str("SIPC FMT envelope on an Exynos SIT link")
             }
         }
     }
