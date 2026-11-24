@@ -262,14 +262,13 @@ fn view(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model) {
     }
     let rows = l.view_rows();
     let window = model.view_scroll.window(lines.len(), rows);
-    let style = Style::regular(l.view_px() as f32, t.fg);
+    // Source text: Plex Mono, shaped per line so non-Latin content (Arabic,
+    // Devanagari, CJK via the Noto fallback) joins and orders correctly.
+    let style = Style::mono(l.view_px() as f32, t.fg);
     let x = area.x + l.view_pad();
     let mut baseline = area.y + l.view_pad() + l.view_line() - s(10);
     for line in &lines[window.clone()] {
-        let mut pen = x as f32;
-        for ch in line.chars() {
-            pen += ty.char(c, style, ch, pen.round() as i32, baseline);
-        }
+        ty.text(c, style, line, x, baseline);
         baseline += l.view_line();
     }
     if file.truncated && window.end == lines.len() {
@@ -499,7 +498,7 @@ mod tests {
         let ty = Type::load().unwrap();
         assert!(ty.has_glyphs(ferrix_ui::draw::Weight::Bold, "\u{2026}"));
         let l = Layout::new(SIZE);
-        let style = Style::regular(l.view_px() as f32, 0);
+        let style = Style::mono(l.view_px() as f32, 0);
         let adv = ty.advance(style, 'M');
         assert!(
             (adv - l.view_px() as f32 * 0.6).abs() < 0.5,

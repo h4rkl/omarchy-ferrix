@@ -10,6 +10,8 @@
 //! of any PTY.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+use std::collections::BTreeMap;
+
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions as _;
 use alacritty_terminal::index::{Column, Line, Point as TermPoint};
@@ -29,6 +31,10 @@ pub struct Cell {
     /// `None` when the cell uses the default background.
     pub bg: Option<u32>,
     pub bold: bool,
+    /// Columns this cell's glyph spans: 1, 2 for a double-width character
+    /// (CJK, emoji; alacritty applies the Unicode East Asian Width rules),
+    /// or 0 for the spacer column that follows one.
+    pub width: u8,
 }
 
 impl Cell {
@@ -39,6 +45,7 @@ impl Cell {
             fg: theme::get().fg,
             bg: None,
             bold: false,
+            width: 1,
         }
     }
 }
@@ -49,6 +56,11 @@ pub struct Snapshot {
     pub cols: usize,
     pub rows: usize,
     pub cells: Vec<Cell>,
+    /// Zero-width combining marks (a Devanagari virama or vowel sign, an
+    /// Arabic harakah, a variation selector) that alacritty attaches to the
+    /// cell at this index in `cells`. Drawn with the base character as one
+    /// shaped cluster; kept out of [`Cell`] so cells stay `Copy`.
+    pub marks: BTreeMap<usize, String>,
     /// Cursor `(column, row)` in the viewport, if visible.
     pub cursor: Option<(usize, usize)>,
     /// Lines scrolled back into history (the display offset).
@@ -72,6 +84,7 @@ impl Snapshot {
             cols: 0,
             rows: 0,
             cells: Vec::new(),
+            marks: BTreeMap::new(),
             cursor: None,
             scrollback: 0,
             history: 0,
@@ -94,12 +107,27 @@ impl Snapshot {
         (col < self.cols && row < self.rows).then(|| &self.cells[row * self.cols + col])
     }
 
-    /// Text of one viewport row with trailing blanks removed.
+    /// Combining marks drawn with the cell at `(col, row)`, if any.
+    pub fn marks(&self, col: usize, row: usize) -> Option<&str> {
+        (col < self.cols && row < self.rows)
+            .then(|| self.marks.get(&(row * self.cols + col)))
+            .flatten()
+            .map(String::as_str)
+    }
+
+    /// Text of one viewport row with trailing blanks removed. Wide-character
+    /// spacer columns are not text; combining marks follow their base.
     pub fn line_text(&self, row: usize) -> String {
-        let mut text: String = (0..self.cols)
-            .filter_map(|col| self.cell(col, row))
-            .map(|cell| cell.c)
-            .collect();
+        let mut text = String::new();
+        for col in 0..self.cols {
+            let Some(cell) = self.cell(col, row) else {
+                continue;
+            };
+            if cell.width != 0 {
+                text.push(cell.c);
+                text.push_str(self.marks(col, row).unwrap_or_default());
+            }
+        }
         let trimmed = text.trim_end().len();
         text.truncate(trimmed);
         text
@@ -119,6 +147,7 @@ impl Snapshot {
         let rows = term.screen_lines();
         let default_bg = theme::get().bg;
         let mut cells = vec![Cell::blank(); cols * rows];
+        let mut marks = BTreeMap::new();
         for indexed in content.display_iter {
             let Some(point) = point_to_viewport(content.display_offset, indexed.point) else {
                 continue;
@@ -129,9 +158,11 @@ impl Snapshot {
             }
             let cell = indexed.cell;
             let flags = cell.flags;
-            if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-                continue;
-            }
+            // The spacer column after a wide character keeps its colours but
+            // draws nothing; the leading spacer at a wrapped line's end is a
+            // plain blank.
+            let spacer = flags.contains(Flags::WIDE_CHAR_SPACER);
+            let blank = spacer || flags.contains(Flags::LEADING_WIDE_CHAR_SPACER);
             let mut fg = rgb(cell.fg, content.colors);
             let mut bg = rgb(cell.bg, content.colors);
             if flags.contains(Flags::INVERSE) {
@@ -140,15 +171,22 @@ impl Snapshot {
             if flags.contains(Flags::DIM) {
                 fg = mix(fg, bg, 0.5);
             }
+            let hidden = blank || flags.contains(Flags::HIDDEN);
+            if !hidden && let Some(zw) = cell.zerowidth() {
+                marks.insert(row * cols + col, zw.iter().collect::<String>());
+            }
             cells[row * cols + col] = Cell {
-                c: if flags.contains(Flags::HIDDEN) {
-                    ' '
-                } else {
-                    cell.c
-                },
+                c: if hidden { ' ' } else { cell.c },
                 fg,
                 bg: (bg != default_bg).then_some(bg),
                 bold: flags.contains(Flags::BOLD),
+                width: if spacer {
+                    0
+                } else if flags.contains(Flags::WIDE_CHAR) {
+                    2
+                } else {
+                    1
+                },
             };
         }
         let cursor = (content.cursor.shape != CursorShape::Hidden)
@@ -159,6 +197,7 @@ impl Snapshot {
             cols,
             rows,
             cells,
+            marks,
             cursor,
             scrollback: content.display_offset,
             history: term.history_size(),
@@ -550,6 +589,47 @@ mod tests {
         assert!(!s.app_cursor);
         let app = Snapshot::from_bytes(10, 2, b"\x1b[?1h");
         assert!(app.app_cursor);
+    }
+
+    #[test]
+    fn wide_characters_span_two_columns_with_a_spacer() {
+        // CJK and emoji are double width (East Asian Width W); Arabic and
+        // Devanagari letters are single cells.
+        let s = Snapshot::from_bytes(12, 2, "中文a\u{1f600}b\x1b[44m日\x1b[0m".as_bytes());
+        let widths: Vec<(char, u8)> = (0..9)
+            .map(|col| s.cell(col, 0).map(|c| (c.c, c.width)).unwrap())
+            .collect();
+        assert_eq!(
+            widths,
+            [
+                ('中', 2),
+                (' ', 0),
+                ('文', 2),
+                (' ', 0),
+                ('a', 1),
+                ('\u{1f600}', 2),
+                (' ', 0),
+                ('b', 1),
+                ('日', 2),
+            ]
+        );
+        // The spacer keeps the wide cell's background; it is not text.
+        assert_eq!(s.cell(9, 0).unwrap().bg, s.cell(8, 0).unwrap().bg);
+        assert!(s.cell(9, 0).unwrap().bg.is_some());
+        assert_eq!(s.line_text(0), "中文a\u{1f600}b日");
+    }
+
+    #[test]
+    fn combining_marks_stay_with_their_base_cell() {
+        // क् + ष: the virama (U+094D) is zero-width, so alacritty stores it
+        // on the क cell; it must reach the renderer and the text.
+        let s = Snapshot::from_bytes(12, 2, "\u{915}\u{94d}\u{937}e\u{301}".as_bytes());
+        assert_eq!(s.cell(0, 0).unwrap().c, '\u{915}');
+        assert_eq!(s.marks(0, 0), Some("\u{94d}"));
+        assert_eq!(s.cell(1, 0).unwrap().c, '\u{937}');
+        assert_eq!(s.marks(2, 0), Some("\u{301}"));
+        assert_eq!(s.marks(1, 0), None);
+        assert_eq!(s.line_text(0), "\u{915}\u{94d}\u{937}e\u{301}");
     }
 
     #[test]

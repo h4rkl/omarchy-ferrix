@@ -61,6 +61,17 @@ channel, waits for the `power-changed` event the core emits, then sends
 `check-failed` record; there is no fallback that prints success. Inspect the
 captured serial output at `out/qemu-aarch64/serial.log`.
 `FERRIX_QEMU_CHECK_TIMEOUT` (seconds, default 90) bounds the whole check.
+
+**Time budget (#14).** Image growth must keep the `qemu-check` wall-time
+median (five runs, TCG, Apple Silicon host) within **+1.0 s** of the
+previous image, and always far inside the 90 s timeout. Measured on
+2026-11-24 when the Noto fallback fonts joined the initramfs (+24.8 MB
+compressed): 5.84 s before, 6.17 s after (+0.33 s); the graphical agent start
+under TCG 8.63 s before, 8.94 s after; the first committed Contacts frame
+(which scans the guest fonts and shapes Arabic names) 0.96 s before, 0.95 s
+after. The check is headless and draws no text, so its cost is the larger
+initramfs; shaping cost shows in the agent-session numbers.
+
 `FERRIX_QEMU_REQUIRE_SERVICES=0` drops the two daemon assertions (the
 `check-passed` record then says `"services":"optional"`); it exists for
 integration work while a daemon is still a skeleton and is not the CI setting.
@@ -539,7 +550,7 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders the Omarchy Ferrix launcher — the black/amber/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
+The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `cosmic-text` with the embedded IBM Plex faces and the guest Noto fallback in `/usr/share/fonts`) that software-renders the Omarchy Ferrix launcher — the black/amber/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
 
 ```sh
 cargo run -p ferrix-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
