@@ -13,6 +13,7 @@
 
 pub mod appd_link;
 pub mod input;
+pub mod lifecycle;
 pub mod render;
 #[cfg(feature = "udev")]
 mod scanout;
@@ -275,6 +276,8 @@ pub struct Shell {
     /// Bottom-edge home gesture recogniser and the contact that owns it.
     pub gesture: EdgeGesture,
     pub gesture_source: Option<GestureSource>,
+    /// Power key, screen blanking, idle policy, and the power menu.
+    pub life: lifecycle::Lifecycle,
 
     pub windows: WindowStack<Window>,
     /// Stable damage-tracking ids for the rows of the compositor's home
@@ -390,11 +393,19 @@ impl Shell {
             .map_err(|e| ("display", format!("event loop: {e}")))?;
 
         let hardware = core.state;
+        let core_socket = core.socket().to_path_buf();
         let (core_ping, core_source) = make_ping().map_err(|e| ("core", e.to_string()))?;
         loop_handle
             .insert_source(core_source, |_, _, shell| shell.hardware_wake())
             .map_err(|e| ("core", format!("event source: {e}")))?;
         let hardware_events = core.spawn(Arc::new(move || core_ping.ping()));
+        // Screen policy watch and power-menu results wake the loop here.
+        let (life_ping, life_source) = make_ping().map_err(|e| ("lifecycle", e.to_string()))?;
+        loop_handle
+            .insert_source(life_source, |_, _, shell| shell.lifecycle_wake())
+            .map_err(|e| ("lifecycle", format!("event source: {e}")))?;
+        let mut life = lifecycle::Lifecycle::new(core_socket, life_ping);
+        life.watch_policy();
 
         // ferrix_appd may start later or restart; the link retries in the background
         // and wakes the loop through its own ping. Nothing here waits for it.
@@ -429,6 +440,7 @@ impl Shell {
             ferrix_appd,
             gesture: EdgeGesture::new(),
             gesture_source: None,
+            life,
             windows: WindowStack::new(),
             // One id per merged pill row: 32 covers a 1080 px basis (about a
             // dozen rows) with room to spare; rows past the last id are not drawn.
@@ -547,6 +559,7 @@ impl Shell {
             }
         }
         layer_map_for_output(&self.output).arrange();
+        self.relayout_menu();
         self.request_redraw();
     }
 
@@ -655,13 +668,16 @@ impl Shell {
         let focused = self.windows.focused().cloned();
         // Overlap is window-local: the front window covers the client area.
         let overlap = Rectangle::from_size(self.client_area().size);
+        // While the screen is off nothing is on the output, whatever maps,
+        // unmaps, or is activated meanwhile; wake re-enters the front window.
+        let visible = !self.life.screen_off();
         for window in self.windows.iter() {
             let active = focused.as_ref() == Some(window);
             // Only the front window is on the output. Clients that track
             // their own visibility rely on wl_surface.enter/leave: Waydroid's
             // hwcomposer puts Android to sleep when none of its windows has
             // entered an output, and a sleeping Android never draws.
-            if active {
+            if active && visible {
                 window.output_enter(&self.output, overlap);
             } else {
                 window.output_leave(&self.output);

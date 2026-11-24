@@ -6,6 +6,11 @@ width = 1080
 height = 2340
 scale = 1.0
 orientation = "portrait"
+# Default screen idle timeout (seconds; 0 = never). The virtual phone never
+# blanks on its own so agent sessions, CI captures, and scenarios see a lit
+# framebuffer; the display-power-key-blank-wake-menu scenario sets a short
+# timeout through ferrix-core and restores this one.
+idle_timeout_secs = 0
 
 [input]
 touch = true

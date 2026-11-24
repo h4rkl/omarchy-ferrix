@@ -175,6 +175,22 @@ pub struct DisplaySection {
     /// Optional; absent means the whole panel is usable.
     #[serde(default, skip_serializing_if = "SafeArea::is_empty")]
     pub safe_area: SafeArea,
+    /// Default screen idle timeout in seconds until the user picks one in
+    /// Settings; `0` means never blank on idle. Optional; absent means
+    /// [`ferrix_hardware_api::DEFAULT_IDLE_TIMEOUT_SECS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_secs: Option<u32>,
+}
+
+impl DisplaySection {
+    /// The profile's default idle timeout (`None` = never).
+    pub fn idle_timeout(&self) -> Option<u32> {
+        match self.idle_timeout_secs {
+            None => Some(ferrix_hardware_api::DEFAULT_IDLE_TIMEOUT_SECS),
+            Some(0) => None,
+            Some(secs) => Some(secs),
+        }
+    }
 }
 
 /// Insets from each panel edge, in pixels of the panel's natural orientation.
@@ -597,6 +613,12 @@ impl Profile {
                 self.display.scale
             )));
         }
+        if let Err(error) = ferrix_hardware_api::validate_idle_timeout(self.display.idle_timeout())
+        {
+            return Err(ProfileError::Invalid(format!(
+                "display.idle_timeout_secs: {error}"
+            )));
+        }
         if self.power.battery_percent > 100 {
             return Err(ProfileError::Invalid(format!(
                 "power.battery_percent must be 0..=100 (got {})",
@@ -740,6 +762,37 @@ route = "speaker"
         let err = Profile::parse(&text).expect_err("missing power must fail");
         assert!(matches!(err, ProfileError::Schema(_)), "{err}");
         assert!(err.to_string().contains("power"), "{err}");
+    }
+
+    #[test]
+    fn idle_timeout_is_optional_zero_is_never_and_bounds_hold() {
+        let p = Profile::parse(FIXTURE).unwrap();
+        assert_eq!(
+            p.display.idle_timeout(),
+            Some(ferrix_hardware_api::DEFAULT_IDLE_TIMEOUT_SECS)
+        );
+        let with = |line: &str| {
+            FIXTURE.replace(
+                "orientation = \"portrait\"",
+                &format!("orientation = \"portrait\"\n{line}"),
+            )
+        };
+        let never = Profile::parse(&with("idle_timeout_secs = 0")).unwrap();
+        assert_eq!(never.display.idle_timeout(), None);
+        let thirty = Profile::parse(&with("idle_timeout_secs = 30")).unwrap();
+        assert_eq!(thirty.display.idle_timeout(), Some(30));
+        let err = Profile::parse(&with("idle_timeout_secs = 2")).expect_err("2 s is too short");
+        assert!(err.to_string().contains("idle_timeout_secs"), "{err}");
+        let qemu = Profile::load(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../targets/qemu-aarch64/profile.toml"
+        ))
+        .unwrap();
+        assert_eq!(
+            qemu.display.idle_timeout(),
+            None,
+            "agent sessions and CI captures never blank on their own"
+        );
     }
 
     #[test]

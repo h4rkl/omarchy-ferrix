@@ -21,7 +21,9 @@ mod attention;
 mod control;
 mod core;
 mod daemon_kill;
+mod power;
 mod protocol;
+mod screen;
 mod server;
 
 use std::path::PathBuf;
@@ -37,6 +39,7 @@ use crate::server::{Server, Subscribers, broadcast};
 
 const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
 const DEFAULT_SHUTDOWN_MARKER: &str = "/run/ferrix/shutdown";
+const DEFAULT_SCREEN_STATE: &str = "/var/lib/ferrix/screen.json";
 
 /// The target bootstrap supplies an exact redacted evidence label for a
 /// physical board. Development defaults stay compatible with the QEMU/mock
@@ -69,6 +72,11 @@ struct Args {
     shutdown_marker: PathBuf,
     /// `None` disables the incoming-pairing raise.
     appd: Option<PathBuf>,
+    /// Where an accepted power-off/restart is handed to init; `None` when
+    /// the target adapter performs the transition itself.
+    power_marker: Option<PathBuf>,
+    /// The saved idle timeout; `None` keeps it in memory only.
+    screen_state: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -83,6 +91,10 @@ fn parse_args() -> Result<Args, String> {
         appd: Some(PathBuf::from(
             env(ferrix_app_api::APPD_SOCKET_ENV)
                 .unwrap_or(ferrix_app_api::DEFAULT_APPD_SOCKET.to_owned()),
+        )),
+        power_marker: env("FERRIX_POWER_MARKER").map(PathBuf::from),
+        screen_state: Some(PathBuf::from(
+            env("FERRIX_SCREEN_STATE").unwrap_or(DEFAULT_SCREEN_STATE.to_owned()),
         )),
     };
     let mut it = std::env::args().skip(1);
@@ -101,9 +113,17 @@ fn parse_args() -> Result<Args, String> {
                 let text = it.next().ok_or("--appd needs PATH|none")?;
                 args.appd = (text != "none").then(|| PathBuf::from(text));
             }
+            "--power-marker" => {
+                let text = it.next().ok_or("--power-marker needs PATH|none")?;
+                args.power_marker = (text != "none").then(|| PathBuf::from(text));
+            }
+            "--screen-state" => {
+                let text = it.next().ok_or("--screen-state needs PATH|none")?;
+                args.screen_state = (text != "none").then(|| PathBuf::from(text));
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: ferrix-core [profile.toml] [--socket PATH] [--control auto|none|PATH] [--shutdown-marker PATH] [--appd PATH|none]"
+                    "usage: ferrix-core [profile.toml] [--socket PATH] [--control auto|none|PATH] [--shutdown-marker PATH] [--appd PATH|none] [--power-marker PATH|none] [--screen-state PATH|none]"
                         .to_owned(),
                 );
             }
@@ -118,6 +138,7 @@ fn parse_args() -> Result<Args, String> {
 struct Controller {
     session: Arc<Session>,
     shutdown_marker: PathBuf,
+    screen: Arc<screen::ScreenPolicyStore>,
 }
 
 impl control::Handler for Controller {
@@ -136,6 +157,9 @@ impl control::Handler for Controller {
         };
         if let ControlCommand::KillDaemon { name } = &command {
             return self.kill_daemon(name);
+        }
+        if let Some(ack) = self.screen_command(&command) {
+            return ack;
         }
         match core::apply(&self.session.services, &command) {
             Ok(applied) => {
@@ -169,6 +193,46 @@ impl control::Handler for Controller {
 }
 
 impl Controller {
+    /// The screen policy verbs (the same store the state socket serves).
+    /// `None` for every other command.
+    fn screen_command(&self, command: &ControlCommand) -> Option<Ack> {
+        let result = match command {
+            ControlCommand::SetIdleTimeout { idle_timeout_secs } => self
+                .screen
+                .set_idle_timeout(*idle_timeout_secs)
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            ControlCommand::InhibitBlank { reason, holder } => {
+                self.screen.inhibit(*reason, holder);
+                Ok(())
+            }
+            ControlCommand::ReleaseInhibit { holder } => match self.screen.release_holder(holder) {
+                0 => Err(format!("{holder:?} holds no inhibitor")),
+                _ => Ok(()),
+            },
+            _ => return None,
+        };
+        emit(json!({
+            "evidence": evidence_label(),
+            "event": "mock-command",
+            "cmd": command.name(),
+            "status": if result.is_ok() { "ok" } else { "error" },
+            "reason": result.as_ref().err(),
+        }));
+        Some(match result {
+            Ok(()) => Ack::Ok {
+                ack: command.name().to_owned(),
+                events: Vec::new(),
+                outcome: None,
+                state: self.session.services.snapshot(),
+            },
+            Err(reason) => Ack::Error {
+                ack: Some(command.name().to_owned()),
+                reason,
+            },
+        })
+    }
+
     /// `kill-daemon`: SIGKILL a supervised daemon (mocked targets only). The
     /// restart itself is init's job and shows up as its `daemon-restarted`
     /// record followed by the daemon's own readiness record.
@@ -254,7 +318,17 @@ fn run() -> Result<(), String> {
     // Subscribe before anything can mutate state so no event is missed.
     let events = session.services.subscribe();
     let listener = Server::bind(&args.socket)?;
-    let server = Arc::new(Server::new(Arc::clone(&session)));
+    let screen = Arc::new(screen::ScreenPolicyStore::new(
+        session.profile.display.idle_timeout(),
+        args.screen_state.clone(),
+    ));
+    let server = Arc::new(Server::new(
+        Arc::clone(&session),
+        Arc::clone(&screen),
+        power::PowerHandoff {
+            marker: args.power_marker.clone(),
+        },
+    ));
     let subscribers: Subscribers = server.subscribers();
 
     let control_path = args.control.resolve();
@@ -263,6 +337,7 @@ fn run() -> Result<(), String> {
             let controller: Arc<dyn control::Handler> = Arc::new(Controller {
                 session: Arc::clone(&session),
                 shutdown_marker: args.shutdown_marker.clone(),
+                screen: Arc::clone(&screen),
             });
             control::spawn(path.clone(), controller)?;
             json!({"status": "ready", "path": path.display().to_string()})
