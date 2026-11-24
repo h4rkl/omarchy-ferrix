@@ -431,6 +431,33 @@ A notice uses a local instrument rail or semantic outline, a factual reason,
 and the next available action. It never takes over the entire screen unless the
 screen genuinely cannot continue.
 
+### Power menu and screen off
+
+The power menu is the one surface the compositor draws itself
+(`crates/ferrix-shell/src/power_menu.rs`). A long press of the power key
+opens it; no client draws it, sees it, or receives the contacts made on it.
+It is a focused fullscreen decision on the opaque `bg` field, not a popup
+over the app: the `system` section label, the `Power` title with one
+`rust_dim` instrument rail, a factual caption (`Press the power key to turn
+the screen off`), and three large buttons stacked in thumb reach above the
+gesture strip: **Power off** (the region's one rust accent), **Restart**, and
+**Cancel**. Taps outside the buttons do nothing. While the request is with
+`ferrix-core` the actions are disabled and a neutral notice says
+`Powering off · waiting for ferrix-core`; a refusal is a local `err`
+notice with the reason (`Power off unavailable · …`) and the menu stays open
+for a retry or Cancel. A short press of the power key with the menu open
+closes it and turns the screen off.
+
+Departure from GrapheneOS/Android: no emergency or lockdown entries yet
+(spec 12 adds the lock screen), and no scrim over the app, because
+correctness must not need translucency and no app content shows behind a
+system decision.
+
+Screen off is never a brightness of zero. The brightness rail stops at
+`MIN_BRIGHTNESS_PERCENT` (5 %); the screen goes dark only through the power
+key or the idle timeout (Settings > Display > Screen timeout), which DPMS the
+output off.
+
 ### On-screen keyboard
 
 The keyboard is an instrument bed: `bg_dark` well, `surface` character keys,

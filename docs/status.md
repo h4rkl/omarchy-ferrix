@@ -34,7 +34,8 @@ here is physical evidence.
 | `bluetooth` | `mocked` | QEMU/mock | [2026-10-10](status-log/2026-10.md#2026-10-10-bluetooth-legacy-pin-incoming-pairing-raise-live-scan-countdown-qemumock-only) | — |
 | `audio` | `mocked` | mock | [2026-10-12](status-log/2026-10.md#2026-10-12-typed-output-volumemute-and-settings-sound-host-tests-and-mock-previews-only) | — |
 | `telephony` | `mocked` | mock | [2026-10-12](status-log/2026-10.md#2026-10-12-telephony-subscribe-is-a-gap-free-snapshot-plus-stream-issue-68-host-tests-mock-only) | — |
-| `lifecycle` | `mocked` | — | — (no dedicated entry) | — |
+| `lifecycle` | `mocked` | QEMU/mock | [2026-11-24](status-log/2026-11.md#2026-11-24-power-key-screen-blanking-idle-timeout-power-menu-backlight-floor-issue-9-qemumock-only) (power key, blanking, idle timeout, power menu; no suspend) | #9 |
+| `camera` | `mocked` | QEMU/mock | [2026-11-24](status-log/2026-11.md#2026-11-24-camera-contract-mock-cameras-and-camera-app-issue-3-qemumock-only) (synthetic frames; ADR-009) | #3 |
 | `mock-control` | `mocked` | QEMU | [2026-10-10](status-log/2026-10.md#2026-10-10-qemu-harness-flakes-cursor-ready-start-serial-interleaving-socket-path-limit-record-identity-daemon-kill-qemu-only) | — |
 
 ### `google-pixel-9a-tegu-gxq96-mp1-0`
@@ -52,6 +53,7 @@ Evidence labelled `physical:` applies to this exact target only.
 | `audio` | `unsupported` | No Ferrix adapter or physical Linux evidence. | physical:google-pixel-9a-tegu-gxq96-mp1-0 (partial, no promotion) | [2026-10-12](status-log/2026-10.md#2026-10-12-a2dp-active-proof-play-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0) (A2DP) | #2, #94 |
 | `telephony` | `unsupported` | No Ferrix adapter or physical Linux evidence. | physical:google-pixel-9a-tegu-gxq96-mp1-0 (S5300 staging, no promotion) | [2026-10-12](status-log/2026-10.md#2026-10-12-1-r5-image-s5300-s2-pre-mount-go-with-opener-positive-control-and-unitboot-identity-issues-107-and-108-physicalgoogle-pixel-9a-tegu-gxq96-mp1-0) | #1, #27, #76, #92, #109, #110, #116, #117 |
 | `lifecycle` | `unsupported` | No Ferrix adapter or physical Linux evidence. | — | — | #9 |
+| `camera` | `unsupported` | No Ferrix adapter or physical Linux evidence. | — | — | #3 |
 | `mock-control` | `unsupported` | Physical target; no mock control is claimed. | — | — | — |
 
 ## Recent

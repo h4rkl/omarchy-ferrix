@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
 use ferrix_hardware_api::{
-    Audio, Bluetooth, CapabilityMatrix, Display, EventSource, HardwareEvent, HardwareState, Input,
-    Lifecycle, MockControl, Network, Power, Telephony,
+    Audio, Bluetooth, Camera, CapabilityMatrix, Display, EventSource, HardwareEvent, HardwareState,
+    Input, Lifecycle, MockControl, Network, Power, Telephony, UnsupportedCamera,
 };
 use ferrix_target_profile::{Profile, ProfileError};
 
@@ -74,6 +74,9 @@ pub struct HardwareServices {
     pub audio: Arc<dyn Audio>,
     pub telephony: Arc<dyn Telephony>,
     pub lifecycle: Arc<dyn Lifecycle>,
+    /// Cameras (ADR-009). Not part of the copyable snapshot: clients
+    /// enumerate and stream on demand.
+    pub camera: Arc<dyn Camera>,
     pub events: Arc<dyn EventSource>,
     /// Present only on mocked targets.
     pub mock_control: Option<Arc<dyn MockControl>>,
@@ -184,6 +187,7 @@ fn select_adapters(
                 audio: emulator.clone(),
                 telephony: emulator.clone(),
                 lifecycle: emulator.clone(),
+                camera: Arc::new(ferrix_hardware_emulator::MockCamera::from_profile(profile)),
                 events: emulator.clone(),
                 mock_control: Some(emulator),
             };
@@ -204,6 +208,8 @@ fn select_adapters(
                 audio: target.audio,
                 telephony: target.telephony,
                 lifecycle: target.lifecycle,
+                // No camera adapter or physical Linux evidence (capabilities.toml).
+                camera: Arc::new(UnsupportedCamera),
                 events: target.events,
                 mock_control: None,
             };
@@ -238,6 +244,11 @@ mod tests {
         assert_eq!(state.power.battery_percent, 75);
         assert!(!state.power.charging);
         assert!(session.services.mock_control.is_some());
+        assert_eq!(
+            session.capabilities.status(Capability::Camera),
+            CapabilityStatus::Mocked
+        );
+        assert_eq!(session.services.camera.cameras().unwrap().len(), 2);
     }
 
     #[test]

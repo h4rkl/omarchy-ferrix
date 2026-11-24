@@ -5,8 +5,9 @@ use smithay::{
     backend::renderer::{
         Color32F, ImportAll, ImportMem, Renderer,
         element::{
-            AsRenderElements, Kind, solid::SolidColorRenderElement,
-            surface::WaylandSurfaceRenderElement, surface::render_elements_from_surface_tree,
+            AsRenderElements, Kind, memory::MemoryRenderBufferRenderElement,
+            solid::SolidColorRenderElement, surface::WaylandSurfaceRenderElement,
+            surface::render_elements_from_surface_tree,
         },
     },
     desktop::layer_map_for_output,
@@ -31,6 +32,8 @@ smithay::backend::renderer::element::render_elements! {
     pub ShellRenderElement<R> where R: ImportAll + ImportMem;
     Surface = WaylandSurfaceRenderElement<R>,
     Solid = SolidColorRenderElement,
+    /// The compositor-drawn power menu.
+    Menu = MemoryRenderBufferRenderElement<R>,
 }
 
 impl<R: Renderer> std::fmt::Debug for ShellRenderElement<R> {
@@ -38,6 +41,7 @@ impl<R: Renderer> std::fmt::Debug for ShellRenderElement<R> {
         match self {
             Self::Surface(e) => f.debug_tuple("Surface").field(e).finish(),
             Self::Solid(e) => f.debug_tuple("Solid").field(e).finish(),
+            Self::Menu(e) => f.debug_tuple("Menu").field(e).finish(),
             Self::_GenericCatcher(e) => f.debug_tuple("_GenericCatcher").field(e).finish(),
         }
     }
@@ -45,10 +49,12 @@ impl<R: Renderer> std::fmt::Debug for ShellRenderElement<R> {
 
 /// Collect render elements front-to-back: client cursor, overlay/top layers,
 /// the fullscreen toplevel (and its popups), then bottom/background layers.
+/// With the power menu open only the cursor and the opaque menu are drawn:
+/// no client content is composed behind a system decision.
 pub fn collect_elements<R>(shell: &Shell, renderer: &mut R) -> Vec<ShellRenderElement<R>>
 where
     R: Renderer + ImportAll + ImportMem,
-    R::TextureId: Clone + 'static,
+    R::TextureId: Send + Clone + 'static,
 {
     let scale = Scale::from(shell.output.current_scale().fractional_scale());
     let mut elements: Vec<ShellRenderElement<R>> = Vec::new();
@@ -68,6 +74,29 @@ where
             1.0,
             Kind::Cursor,
         ));
+    }
+
+    if let Some(buffer) = shell.menu_buffer() {
+        match MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            (0.0, 0.0),
+            buffer,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            Ok(menu) => {
+                elements.push(ShellRenderElement::Menu(menu));
+                return elements;
+            }
+            // Never show client content in its place: an empty scene is the
+            // theme background, and the menu still owns input.
+            Err(e) => {
+                tracing::warn!("power menu import: {e:?}");
+                return elements;
+            }
+        }
     }
 
     let map = layer_map_for_output(&shell.output);

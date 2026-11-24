@@ -25,6 +25,8 @@ mod config;
 mod evidence;
 mod gesture;
 mod layout;
+mod power;
+mod power_menu;
 
 #[cfg(target_os = "linux")]
 mod compositor;

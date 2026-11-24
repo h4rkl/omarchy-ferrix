@@ -101,13 +101,25 @@ the tegu SIT map:
 | `umts_boot0`, dump | 241, 242 |
 
 The open [`modem_prj.h`](https://android.googlesource.com/kernel/google-modules/radio/samsung/s5300/+/a8976934fe7f396627f9900958eb1457a74ebcca/modem_prj.h)
-defines the userspace FMT envelope as a packed seven-byte header: little-endian
-total length (`u16`), then `msg_seq`, `ack_seq`, `main_cmd`, `sub_cmd`, and
-`cmd_type`. The Rust `ferrix-s5300-cpif` crate now bounds and round-trips this
-envelope and can wrap an explicitly supplied IPC payload transport. It keeps
-the command tuple opaque because the open kernel source does not define the
-firmware-specific command vocabulary. This is transport evidence only; it is
-not SIM, registration, SMS, APN/PDP, call, IMS, or ModemManager support.
+declares a packed seven-byte `struct sipc_fmt_hdr`: a little-endian `u16`
+total length, then `msg_seq`, `ack_seq`, `main_cmd`, `sub_cmd`, and
+`cmd_type`. That header belongs to `PROTOCOL_SIPC` only, and **it is not the
+tegu payload format** (issue #76, E0 row F2). Its sole user is
+`modem_io_device.c: gather_multi_frame`, which only the `PROTOCOL_SIPC`
+branch of `rx_frame_with_link_header` reaches. Tegu selects `PROTOCOL_SIT`.
+For SIT, `rx_frame_with_link_header` pulls the 12-byte `EXYNOS_HEADER_SIZE`
+link header, `gather_multi_frame_sit` concatenates fragments without parsing
+them, and `ipc_io_device.c: ipc_write` and `exynos_build_header` add the
+header around an opaque user buffer. In route A, the external `sit-proxy`
+and `samsung-sit` own the framing of the bytes on `umts_ipc0`/`umts_ipc1`
+(E0 row F1).
+
+The Rust `ferrix-s5300-cpif` crate now scopes its seven-byte codec to SIPC as
+`SipcFmtCodec`/`SipcFmtTransport`. Construction needs a `SipcLink` proof, and
+the crate's `TEGU_LINK_PROTOCOL` (`LinkProtocol::Sit`) cannot produce one.
+Fixture tests cover both sides of the boundary; see the
+[crate README](../../../crates/ferrix-s5300-cpif/README.md#tegu-uses-sit-not-sipc_fmt_hdr-issue-76). This is source evidence only. It is not SIM,
+registration, SMS, APN/PDP, call, IMS, or ModemManager support.
 
 The old SIPC5 numeric tables commonly used by unrelated Samsung devices (for
 example FMT 235–244 and RFS 245–254) are not valid for this tegu SIT map. The
@@ -447,7 +459,7 @@ returns `-EINVAL` for unknown commands.
 | O1 | OEM/GEMS read loop | blocking `read()` with no `poll`; `Ok(0)` is treated as EOF → close, sleep 1 s, reopen (X `exynos-modem/src/oem.rs:31-62`) | `ipc_read` waits 100 ms on an empty queue and then **returns 0** (G `ipc_io_device.c:428-446`); release purges the rxq (L57-70); `rx_demux` drops frames for an unopened iod (G `modem_io_device.c:482-486`) | blocks until data (R L2720-2743) | source | **Bounded adapter required.** Poll for POLLIN before reading, or treat 0 as "no data" on the CPIF backend. As-is, GEMS requests arriving during the 1 s gap are dropped. The external notes say that leads to PAL_QUEUE_FULL crashes |
 | O2 | OEM framing | one `write()` per message ≤ 256×2036 B; the kernel reassembles on RX (X `oem.rs:23-26,67-77`) | IPC_FMT: TX split into ≤2 KiB SIT multi-frames (G `ipc_io_device.c:270-399`); RX reassembles via `gather_multi_frame_sit` for `is_oem_ch` (G `modem_io_device.c:249-315,497-499`) | same idea (R L3297-3304) | source | **GO as-is** (G is the stock reference framing) |
 | F1 | FMT/SIT control on `umts_ipc0/1` | sit-proxy reads whole or fragmented frames, accumulates and splits on the 8-byte SIT header length (X `sit-proxy/src/port.rs:47,566-577`; `samsung-sit/src/lib.rs:74,355-363`); TX ≤ 2036 B, retries EBUSY/EAGAIN (`port.rs:51,500-521`) | strips the 12 B SIT link header and reassembles multi-frame before queueing one skb (G `modem_io_device.c:317-358`). TX: single frame when `n+12 ≤ 2048` (G `ipc_io_device.c:327-328`); `-EPERM` before ONLINE, `-EAGAIN` before INIT_END (L264-307). POLLHUP on crash/reset states (L83-124) | strips the header; delivers fragments separately (`port.rs:20-25`) | source | **GO as-is for the transport** with `--dev` paths. sit-proxy's length-based reassembly also accepts G's reassembled messages, and POLLHUP leads to a clean reopen. Byte equivalence with `wwan0sit*` on device is **runtime** (U3). The ModemManager plugin's `wwan`-only subsystem watch is unchanged (S3, not E0) |
-| F2 | FMT header the kernel imposes | — | `struct sipc_fmt_hdr` (7 B, G `modem_prj.h:265`) is used only on the **SIPC** multi-frame path (G `modem_io_device.c:220`). With `PROTOCOL_SIT` (D L37) the kernel never parses FMT payloads | — | source | **Finding:** the 7-byte envelope in `crates/ferrix-s5300-cpif` (`fmt.rs`) is not the SIT payload format. SIT userspace uses the 8-byte header defined only by the external `samsung-sit`. This is not changed here; it should be noted before any Ferrix code relies on it |
+| F2 | FMT header the kernel imposes | — | `struct sipc_fmt_hdr` (7 B, G `modem_prj.h:265`) is used only on the **SIPC** multi-frame path (G `modem_io_device.c:220`). With `PROTOCOL_SIT` (D L37) the kernel never parses FMT payloads | — | source | **Finding:** the 7-byte envelope in `crates/ferrix-s5300-cpif` (`fmt.rs`) is not the SIT payload format. SIT userspace uses the 8-byte header defined only by the external `samsung-sit`. This is not changed here; it should be noted before any Ferrix code relies on it. *Resolved 2026-11-24 (#76): the crate codec is now SIPC-only behind a `SipcLink` proof that tegu cannot obtain* |
 | S1 | RFS | `CHUNK=2012`, frames ≤ `0x14+2012` B, poll then read, read buffer 4096 (X `exynos-modem/src/rfs.rs:30-31,131-184,411-429`) | `umts_rfs0` is IPC_RAW: TX single frame because `2032+12 ≤ 2048`; RX header stripped with **no** multi-frame reassembly (G `modem_io_device.c:360-370,502-503`). Writes refused before ONLINE (G `ipc_io_device.c:264`) | 4 KiB single frame, also refused before ONLINE (R L3279-3288, L3412-3415) | source | **GO as-is** while the CP's RFS frames stay ≤ 2036 B (the daemon requests ≤ 2012 B chunks). CP-originated RFS frames > 2 KiB would arrive as fragments on G: **runtime** |
 | S2 | RFS/daemon writes | NV writes go to `/tmp/rfs-nv_*.bin`; crash JSON to `/tmp`; reads use `File::open` only on `/mnt/vendor/{modem_img,efs,persist,modem_userdata}` (X `rfs.rs:45-61,293-308`; `boot/s5300.rs:27-56,213,257`) | — | — | source | **GO for the recovery invariant.** No write path to calibration partitions. Writes go to `/tmp`, not `/var/lib/exynos-modem` as the route doc assumes. CP NV changes are not persisted (external claim: the CP rebuilds NV each boot) |
 | T1 | Firmware TOC and inputs | TOC 32×32 B, sections TOC/MAIN/VSS/APM from modem.bin, NV_NORM/NV_PROT from efs, REPLAY padded from `modem_userdata` (X `boot/s5300.rs:42-56,284-350`) | the kernel never parses modem.bin | same (transport only) | fw-meta | **GO offline for CP3A image metadata:** INFO `g5300t-260604-260807-B-16036236` passes the s5300 gate; MAIN/VSS/APM present; NV/REPLAY TOC size 0x80000. Whether the efs files are ≥ 0x80000 is **runtime** (device data). TOC/CRC semantics are **opaque firmware** |

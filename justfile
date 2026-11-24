@@ -887,6 +887,13 @@ qemu-swipe x1 y1 x2 y2:
 qemu-key key:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}"
 
+# Hold a key (QEMU qcode) for MS milliseconds, e.g. the power menu:
+#   just qemu-key-hold power 1000
+# `just qemu-key power` is a short press (screen off/on).
+[group('qemu')]
+qemu-key-hold key ms="1000":
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}" --hold-ms "{{ms}}"
+
 [group('qemu')]
 qemu-type text:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" type "{{text}}"

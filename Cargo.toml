@@ -7,6 +7,7 @@ members = [
     "crates/ferrix-audio-wireplumber",
     "crates/ferrix-basic-screen",
     "crates/ferrix-bluetooth-bluez",
+    "crates/ferrix-camera",
     "crates/ferrix-contacts",
     "crates/ferrix-contacts-api",
     "crates/ferrix-contacts-protocol",
