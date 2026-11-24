@@ -1,6 +1,9 @@
 # 05 — Charging, thermal safety and battery endurance
 
-Status: open · Issue: #26 · Depends on: 00, 04 (screen-off and standby
+Status: open; deliverable 1 done (GO-with-conditions for attended sessions,
+NO-GO unattended:
+[`power-thermal-source-evidence.md`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/power-thermal-source-evidence.md))
+· Issue: #26 · Depends on: 00, 04 (screen-off and standby
 drain) · Feeds: 14
 
 ## Goal

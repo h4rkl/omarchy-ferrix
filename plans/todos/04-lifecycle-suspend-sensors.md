@@ -1,6 +1,9 @@
 # 04 — Lifecycle: power key, screen blanking, suspend/resume, sensors
 
-Status: open · Issue: #9 · Depends on: 00 · Feeds: 02 (proximity), 05
+Status: open; deliverable 5 researched (accelerometer, proximity and ambient
+light all NO-GO:
+[`sensors-source-evidence.md`](../../targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/sensors-source-evidence.md))
+· Issue: #9 · Depends on: 00 · Feeds: 02 (proximity), 05
 (standby drain), 12 (power-key lock), 14
 
 ## Goal
