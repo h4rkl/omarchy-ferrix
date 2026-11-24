@@ -1,7 +1,16 @@
 # 00 — Baseline: land the GPU stream, re-flash, re-verify
 
-Status: open · Issues: #53 (builder divergence), #8 and #7 (pending device
-checks) · Blocks: every other spec
+Status: done except deliverable 1 · Issues: #53 (closed by #159), #8 and #7
+(device checks passed 2026-11-24) · Blocks: every other spec
+
+**Outcome (2026-11-24):** the owner chose one merge instead of the five-PR
+split: `pixel-9a-gpu` landed as PR #159 (`2c55662`). Image
+`tegu-kleaf-dev-20261124T014923Z` from that commit reaches Home unattended;
+#8 and #7 passed on it (the #7 failure path needed a `ferrix-network-nm`
+fix). Evidence: the 2026-11-24 reviewed-main entry in
+`docs/status-log/2026-11.md`. Deliverable 1 (boot stock Android to verify the
+restore) was skipped because the owner handed the phone over in Fastboot; it is
+still open.
 
 ## Why first
 

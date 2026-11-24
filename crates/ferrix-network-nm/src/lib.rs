@@ -159,6 +159,42 @@ pub mod map {
         matches!(reason, 5 | 6 | 7..=11 | 15..=17 | 53)
     }
 
+    /// Folds one `Device.StateChanged (new, old, reason)` into the remembered
+    /// failure reason of the current join attempt. A FAILED transition
+    /// records its reason; a new attempt (PREPARE) or a success (ACTIVATED)
+    /// clears it; anything else keeps it.
+    pub fn track_failure(pending: Option<u32>, new_state: u32, reason: u32) -> Option<u32> {
+        match new_state {
+            NM_DEVICE_STATE_FAILED if is_join_failure(reason) => Some(reason),
+            NM_DEVICE_STATE_FAILED => None,
+            NM_DEVICE_STATE_PREPARE | NM_DEVICE_STATE_ACTIVATED => None,
+            _ => pending,
+        }
+    }
+
+    /// [`connection_state`] for a device whose last join attempt may have
+    /// failed between two snapshots. NetworkManager holds FAILED only for an
+    /// instant, and on some builds the following DISCONNECTED carries no
+    /// reason (`none`, 0), so a snapshot alone reads a wrong passphrase as
+    /// a plain disconnect. `pending` is the FAILED reason the signal watcher
+    /// saw for this attempt ([`track_failure`]). A disconnect with a real
+    /// reason (for example user-requested, 39) is still a plain disconnect.
+    pub fn connection_state_after(
+        device_state: u32,
+        reason: u32,
+        pending: Option<u32>,
+        connected: impl FnOnce() -> ferrix_network_api::ApId,
+    ) -> ConnectionState {
+        match pending {
+            Some(failed) if device_state == NM_DEVICE_STATE_DISCONNECTED && reason == 0 => {
+                ConnectionState::Failed {
+                    error: failure(failed),
+                }
+            }
+            _ => connection_state(device_state, reason, connected),
+        }
+    }
+
     /// Connection state of a device. `connected` names the access point (or
     /// link) id used for `connected { ap }`.
     pub fn connection_state(
@@ -430,6 +466,34 @@ mod tests {
             ConnectionState::Disconnected
         );
         assert!(!is_join_failure(0) && is_join_failure(8) && is_join_failure(53));
+
+        // Physical 2026-11-24: need-auth -> failed (no-secrets, 7), then
+        // failed -> disconnected (none, 0). The snapshot alone sees 30/0.
+        let pending = track_failure(None, NM_DEVICE_STATE_PREPARE, 0);
+        let pending = track_failure(pending, NM_DEVICE_STATE_NEED_AUTH, 0);
+        let pending = track_failure(pending, NM_DEVICE_STATE_FAILED, 7);
+        let pending = track_failure(pending, NM_DEVICE_STATE_DISCONNECTED, 0);
+        assert_eq!(pending, Some(7));
+        assert_eq!(
+            connection_state_after(NM_DEVICE_STATE_DISCONNECTED, 0, pending, ap),
+            ConnectionState::Failed {
+                error: NetworkError::AuthenticationFailed
+            }
+        );
+        // A user disconnect keeps its own reason and stays a disconnect.
+        assert_eq!(
+            connection_state_after(NM_DEVICE_STATE_DISCONNECTED, 39, pending, ap),
+            ConnectionState::Disconnected
+        );
+        // The next attempt and a success clear the remembered failure.
+        assert_eq!(track_failure(pending, NM_DEVICE_STATE_PREPARE, 0), None);
+        assert_eq!(track_failure(pending, NM_DEVICE_STATE_ACTIVATED, 0), None);
+        // A FAILED without a join-failure reason does not stick.
+        assert_eq!(track_failure(None, NM_DEVICE_STATE_FAILED, 0), None);
+        assert_eq!(
+            connection_state_after(NM_DEVICE_STATE_DISCONNECTED, 0, None, ap),
+            ConnectionState::Disconnected
+        );
         assert_eq!(failure(17), NetworkError::DhcpFailed);
         assert_eq!(failure(11), NetworkError::TimedOut);
         assert_eq!(failure(53), NetworkError::NotFound { id: "ssid".into() });
