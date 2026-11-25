@@ -210,8 +210,8 @@ arecord_listing() {
 # in any directory (a node seen through another mount namespace still counts).
 # The scan is complete only if /proc has at least one fd table, ls neither
 # timed out nor failed to run, and every ls complaint is a process that
-# exited mid-scan; a permission error or any unknown line makes it
-# incomplete. Sets openers, opener_scan, and opener_procs.
+# exited mid-scan (or an fd that closed mid-scan); a permission error or any
+# unknown line makes it incomplete. Sets openers, opener_scan, and opener_procs.
 opener_scan() {
 	opener_procs=0
 	for fd_dir in "$proc_root"/[0-9]*/fd; do [ -d "$fd_dir" ] && opener_procs=$((opener_procs + 1)); done
@@ -224,6 +224,9 @@ opener_scan() {
 			if (part[m] == node || part[m] == node " (deleted)") hits++
 			next
 		}
+		# A link with no target: the fd closed between readdir and readlink
+		# (busybox prints the entry without " -> "). A closed fd holds nothing.
+		/^l[-r][-w][-xsS]/ { next }
 		/^total [0-9]+$/ || /^$/ || /\/fd\/?:$/ { next }
 		{ other++ }
 		END { print hits + 0, other + 0 }')

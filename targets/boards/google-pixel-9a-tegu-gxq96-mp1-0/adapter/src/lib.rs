@@ -14,6 +14,9 @@ use ferrix_hardware_api::{
     Lifecycle, Network, Power, Telephony,
 };
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod sleep;
+
 /// Stable id of the exact admitted physical target.
 pub const TARGET_ID: &str = "google-pixel-9a-tegu-gxq96-mp1-0";
 /// Exact root compatible/model strings emitted by the pinned `zumapro-tegu-mp`
@@ -150,7 +153,8 @@ mod linux {
         Capability, Display, DisplayState, EventSource, HardwareError, HardwareEvent, Input,
         InputState, Lifecycle, LifecycleState, ModemRegistration, Network,
         NetworkState as HardwareNetworkState, Orientation, Power, PowerAction, SimState,
-        SuspendOutcome, Telephony, TelephonyState, WifiState,
+        SleepState, SuspendOutcome, SuspendReport, Telephony, TelephonyState, WakeSource,
+        WifiState,
     };
     use ferrix_network_adapter_api::NetworkBackend;
     use ferrix_network_api::{
@@ -324,10 +328,6 @@ mod linux {
     impl Lifecycle for UnavailableHardware {
         fn lifecycle_state(&self) -> LifecycleState {
             LifecycleState::default()
-        }
-
-        fn suspend(&self) -> Result<SuspendOutcome, HardwareError> {
-            Err(HardwareError::unsupported(Capability::Lifecycle))
         }
     }
 
@@ -778,6 +778,11 @@ mod linux {
         }
     }
 
+    const POWER_STATE: &str = "/sys/power/state";
+    const POWER_MEM_SLEEP: &str = "/sys/power/mem_sleep";
+    /// The GKI's wakeup-reason report (absent on kernels without it).
+    const WAKEUP_REASON: &str = "/sys/kernel/wakeup_reasons/last_resume_reason";
+
     struct LinuxLifecycle {
         state: Mutex<LifecycleState>,
         events: Arc<EventHub>,
@@ -797,41 +802,82 @@ mod linux {
             *lock(&self.state)
         }
 
-        fn suspend(&self) -> Result<SuspendOutcome, HardwareError> {
-            // The target image uses OpenRC, so systemctl is neither required
-            // nor a valid lifecycle dependency. The kernel power-state ABI is
-            // the shared Linux interface and returns only after resume.
-            let states = fs::read_to_string("/sys/power/state").map_err(|error| {
-                HardwareError::failed(
-                    Capability::Lifecycle,
-                    format!("could not read /sys/power/state: {error}"),
-                )
-            })?;
-            let mode = states
-                .split_whitespace()
-                .find(|state| matches!(*state, "mem" | "freeze"))
-                .ok_or_else(|| {
+        fn sleep_states(&self) -> Vec<SleepState> {
+            match fs::read_to_string(POWER_STATE) {
+                Ok(state) => super::sleep::offered(
+                    &state,
+                    fs::read_to_string(POWER_MEM_SLEEP).ok().as_deref(),
+                ),
+                Err(_) => Vec::new(),
+            }
+        }
+
+        /// The only writer of `/sys/power/mem_sleep` and `/sys/power/state`
+        /// in Ferrix. The target image uses OpenRC, so systemctl is neither
+        /// required nor a valid lifecycle dependency; the kernel power-state
+        /// ABI is the shared Linux interface and the write returns only
+        /// after resume. `ferrix-core`'s suspend policy gates every call
+        /// (board flag, kill switch, inhibitors).
+        fn suspend(&self, state: SleepState) -> Result<SuspendReport, HardwareError> {
+            if !self.sleep_states().contains(&state) {
+                return Err(HardwareError::unsupported(Capability::Lifecycle));
+            }
+            let (mem_sleep, word) = super::sleep::entry(state);
+            if let Some(choice) = mem_sleep {
+                fs::write(POWER_MEM_SLEEP, format!("{choice}\n")).map_err(|error| {
                     HardwareError::failed(
                         Capability::Lifecycle,
-                        format!("/sys/power/state exposes no supported suspend mode: {states:?}"),
+                        format!("could not select mem_sleep {choice}: {error}"),
                     )
                 })?;
-            fs::write("/sys/power/state", format!("{mode}\n")).map_err(|error| {
-                HardwareError::failed(
-                    Capability::Lifecycle,
-                    format!("could not enter Linux suspend mode {mode}: {error}"),
-                )
-            })?;
-            let outcome = SuspendOutcome::Resumed;
+            }
+            // CLOCK_MONOTONIC (Instant) stops while asleep; the wall clock
+            // does not. Their difference is the time asleep (approximate:
+            // a wall-clock step during the call distorts it).
+            let wall = std::time::SystemTime::now();
+            let mono = std::time::Instant::now();
+            let entered = fs::write(POWER_STATE, format!("{word}\n"));
+            let slept_ms = wall.elapsed().ok().map(|wall| {
+                u64::try_from(wall.saturating_sub(mono.elapsed()).as_millis()).unwrap_or(u64::MAX)
+            });
+            let outcome = match &entered {
+                Ok(()) => SuspendOutcome::Resumed,
+                // EBUSY: a wakeup event was pending, the kernel aborted entry.
+                Err(error) if error.kind() == std::io::ErrorKind::ResourceBusy => {
+                    SuspendOutcome::Rejected
+                }
+                Err(_) => SuspendOutcome::Failed,
+            };
+            let reason = fs::read_to_string(WAKEUP_REASON).unwrap_or_default();
+            let wake = match outcome {
+                SuspendOutcome::Resumed => super::sleep::classify_wake(&reason),
+                _ => WakeSource::Unknown,
+            };
             let lifecycle = {
-                let mut state = lock(&self.state);
-                state.suspend_count = state.suspend_count.saturating_add(1);
-                state.last_suspend = Some(outcome);
-                *state
+                let mut lifecycle = lock(&self.state);
+                lifecycle.suspend_count = lifecycle.suspend_count.saturating_add(1);
+                lifecycle.last_suspend = Some(outcome);
+                lifecycle.last_sleep_state = Some(state);
+                lifecycle.last_wake = Some(wake);
+                *lifecycle
             };
             self.events
                 .publish(HardwareEvent::Suspended { outcome, lifecycle });
-            Ok(outcome)
+            match entered {
+                Err(error) if outcome == SuspendOutcome::Failed => Err(HardwareError::failed(
+                    Capability::Lifecycle,
+                    format!("could not enter {} ({word}): {error}", state.name()),
+                )),
+                _ => Ok(SuspendReport {
+                    state,
+                    outcome,
+                    wake,
+                    wake_detail: super::sleep::wake_detail(&reason),
+                    slept_ms: (outcome == SuspendOutcome::Resumed)
+                        .then_some(slept_ms)
+                        .flatten(),
+                }),
+            }
         }
 
         /// Orderly OpenRC transition: `poweroff`/`reboot` without `-f` ask

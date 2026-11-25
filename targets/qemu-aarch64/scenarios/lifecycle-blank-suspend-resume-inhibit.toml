@@ -1,0 +1,68 @@
+schema_version = 1
+name = "lifecycle-blank-suspend-resume-inhibit"
+description = "Linux suspend policy on the QEMU virtual phone (spec 04 deliverable 3), mock Lifecycle only: nothing is frozen and no sleep is real. The QEMU profile ships suspend off; ferrix-core's control channel turns it on (s2idle, 5 s after blank). The power key blanks the screen and ferrix-shell reports it to the core, which arms; with no input and no inhibitor the core requests suspend after the delay, the mock sleeps 1.5 s and resumes on a mock RTC alarm, and the shell keeps the screen off and re-asserts DPMS off. The policy re-arms with the screen still off; a download inhibitor makes the next deadline a suspend-blocked record instead of a suspend, and releasing it re-arms and suspends again. A power key press wakes the screen and disarms; the profile's off is restored. QEMU/mock evidence only."
+
+[[step]]
+service = "core"
+command = { cmd = "set-suspend-sleep", sleep_ms = 1500, wake = "alarm" }
+ack = { status = "ok", ack = "set-suspend-sleep" }
+note = "each mock sleep lasts 1.5 s and ends on a mock RTC alarm"
+
+[[step]]
+service = "core"
+command = { cmd = "set-suspend-policy", mode = "s2idle", after_blank_secs = 5 }
+ack = { status = "ok", ack = "set-suspend-policy" }
+expect = [ { event = "screen-policy", cause = "set-suspend-policy", suspend_mode = "s2idle", suspend_source = "control", suspend_phase = "awake", screen_off = false } ]
+note = "the board flag is off in the QEMU profile; the control channel opts in (mocked targets only)"
+
+[[step]]
+service = "input"
+command = { cmd = "key", key = "power" }
+expect = [ { event = "power-key", press = "short" }, { event = "screen-power", state = "off", cause = "power-key" } ]
+timeout_ms = 15000
+note = "the shell blanks and reports screen-off to the core over its report connection; the 5 s delay starts (the core's report-screen record is not ordered against the shell's serial output, so the next step proves the arming)"
+
+[[step]]
+service = "core"
+command = { cmd = "state" }
+ack = { status = "ok" }
+expect = [ { event = "suspend-request", state = "s2idle", trigger = "policy", source = "control" }, { event = "suspend-resumed", state = "s2idle", outcome = "resumed", wake = "alarm" }, { event = "screen-policy", cause = "resumed", suspend_cycles = 1, suspend_phase = "armed", screen_off = true }, { event = "resume", screen = "off", action = "reassert-off", cycles = 1, wake = "alarm" }, { event = "drm-dpms", state = "off", status = "ok" } ]
+timeout_ms = 30000
+note = "blank + 5 s, nothing inhibits: suspend; after the mock alarm the screen stays off (DPMS re-asserted) and the policy re-arms"
+
+[[step]]
+service = "core"
+command = { cmd = "inhibit-blank", reason = "download", holder = "scenario" }
+ack = { status = "ok", ack = "inhibit-blank" }
+expect = [ { event = "screen-policy", cause = "inhibit", holder = "scenario", inhibited = false, reasons = ["download"], suspend_phase = "inhibited" } ]
+note = "a download keeps the system awake but does not hold the screen"
+
+[[step]]
+service = "core"
+command = { cmd = "state" }
+ack = { status = "ok" }
+expect = [ { event = "suspend-blocked", reason = "inhibited", reasons = ["download"] } ]
+timeout_ms = 30000
+note = "the re-armed deadline passes with the inhibitor held: blocked, no suspend request"
+
+[[step]]
+service = "core"
+command = { cmd = "release-inhibit", holder = "scenario" }
+ack = { status = "ok", ack = "release-inhibit" }
+expect = [ { event = "screen-policy", cause = "release", suspend_phase = "armed", screen_off = true }, { event = "suspend-request", state = "s2idle", trigger = "policy" }, { event = "suspend-resumed", outcome = "resumed" }, { event = "resume", screen = "off", action = "reassert-off", cycles = 2 } ]
+timeout_ms = 30000
+note = "the release re-arms the delay counted from it; the next deadline suspends again"
+
+[[step]]
+service = "input"
+command = { cmd = "key", key = "power" }
+expect = [ { event = "power-key", press = "short" }, { event = "screen-power", state = "on", cause = "power-key" } ]
+timeout_ms = 15000
+note = "the power key wakes the screen and the shell reports it"
+
+[[step]]
+service = "core"
+command = { cmd = "set-suspend-policy" }
+ack = { status = "ok", ack = "set-suspend-policy" }
+expect = [ { event = "screen-policy", cause = "set-suspend-policy", suspend_mode = "off", suspend_source = "profile", suspend_phase = "disabled", screen_off = false } ]
+note = "the core saw the wake (screen_off false); restore the profile's off for later scenarios"

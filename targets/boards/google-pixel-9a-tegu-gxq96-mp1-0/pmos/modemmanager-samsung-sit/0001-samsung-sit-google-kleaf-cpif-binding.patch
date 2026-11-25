@@ -1,0 +1,315 @@
+Subject: [PATCH] samsung-sit: bind the Google Kleaf CPIF SIT ports via sit-proxy
+
+Target-local patch for the Pixel 9a (google-pixel-9a-tegu-gxq96-mp1-0) on
+the Google Kleaf CPIF kernel route (route A, gate S3). See
+targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s3-mm-binding.md.
+
+The pinned CPIF driver (a8976934) creates the SIT FMT channels 245/246 as
+umts_ipc0/umts_ipc1 in the "cpif" device class with no parent device, and
+its rmnet* netdevs with no parent either. Before this patch the fork only
+binds "wwan" SIT ports of the s5300-modem driver, so no modem is created on
+CPIF. This patch:
+
+- kernel device (udev): when a parentless device reports no driver, take it
+  from the udev property ID_MM_KERNEL_DRIVER;
+- plugin core: probe "cpif" ports only when udev declared them SIT (their
+  probe results are preset, so nothing is sent), and grab them as SIT ports;
+- samsung-sit plugin: also watch "cpif" and accept the cp_interface driver;
+  ID_MM_SIT_PROXY_REQUIRED makes sit-proxy the only transport (no fallback
+  to opening the device node);
+- sit client: map umts_ipcN to /run/sit-proxy/N (it mapped every CPIF name
+  to socket 0), with unit tests.
+
+No SIT protocol behaviour changes.
+
+diff -ruN a/src/kerneldevice/mm-kernel-device-udev.c b/src/kerneldevice/mm-kernel-device-udev.c
+--- a/src/kerneldevice/mm-kernel-device-udev.c	2026-11-25 10:49:57
++++ b/src/kerneldevice/mm-kernel-device-udev.c	2026-11-25 10:49:57
+@@ -83,6 +83,19 @@
+      * together. Also, obviously, no vendor, product, revision or interface. */
+     self->priv->driver = g_strdup (g_udev_device_get_driver (self->priv->device));
+ 
++    /* A class device the kernel created without a parent (device_create() with
++     * a NULL parent, or a netdev without SET_NETDEV_DEV(), as Google's CPIF
++     * does for its umts_ipc* nodes and rmnet* netdevs) has no driver at all,
++     * and plugins filter on drivers. Let udev name the driver that owns it,
++     * but only when the kernel reports none. */
++    if (!self->priv->driver) {
++        const gchar *driver;
++
++        driver = g_udev_device_get_property (self->priv->device, "ID_MM_KERNEL_DRIVER");
++        if (driver && driver[0])
++            self->priv->driver = g_strdup (driver);
++    }
++
+     /* But look for a lower real physical device, as we may have one */
+     lower_device_name = mm_kernel_device_get_lower_device_name (g_udev_device_get_sysfs_path (self->priv->device));
+     if (lower_device_name) {
+diff -ruN a/src/mm-base-modem.c b/src/mm-base-modem.c
+--- a/src/mm-base-modem.c	2026-11-25 10:49:56
++++ b/src/mm-base-modem.c	2026-11-25 10:49:57
+@@ -424,6 +424,10 @@
+         port = base_modem_create_virtual_port (self, name);
+     else if (g_str_equal (subsys, "wwan"))
+         port = MM_BASE_MODEM_GET_CLASS (self)->create_wwan_port (self, name, ptype);
++    /* Google CPIF exposes the same SIT FMT channels as plain character
++     * devices of the "cpif" class; only the SIT port type is accepted. */
++    else if (g_str_equal (subsys, "cpif") && ptype == MM_PORT_TYPE_SIT)
++        port = MM_BASE_MODEM_GET_CLASS (self)->create_wwan_port (self, name, ptype);
+ 
+     if (!port) {
+         g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_UNSUPPORTED,
+diff -ruN a/src/mm-plugin.c b/src/mm-plugin.c
+--- a/src/mm-plugin.c	2026-11-25 10:49:56
++++ b/src/mm-plugin.c	2026-11-25 10:49:57
+@@ -24,6 +24,7 @@
+ #include <string.h>
+ 
+ #include <ModemManager.h>
++#include <ModemManager-tags.h>
+ #include <mm-errors-types.h>
+ 
+ #include "mm-plugin.h"
+@@ -271,6 +272,15 @@
+         return TRUE;
+     }
+ 
++    /* A Google CPIF character device is one of many unrelated CP channels
++     * (boot, RFS, OEM, logging). Only a port that udev explicitly declared
++     * as SIT is ever considered, so no other channel is opened or probed. */
++    if (g_str_equal (mm_kernel_device_get_subsystem (port), "cpif") &&
++        !mm_kernel_device_get_property_as_boolean (port, ID_MM_PORT_TYPE_SIT)) {
++        mm_obj_dbg (self, "port %s filtered: cpif port not declared as SIT", mm_kernel_device_get_name (port));
++        return TRUE;
++    }
++
+     /* The plugin may specify that only some drivers are supported, or that some
+      * drivers are not supported. If that is the case, filter by driver.
+      *
+@@ -753,6 +763,10 @@
+     { "usbmisc", MM_PORT_PROBE_QMI | MM_PORT_PROBE_MBIM | MM_PORT_PROBE_AT },
+     { "rpmsg",   MM_PORT_PROBE_AT | MM_PORT_PROBE_QMI },
+     { "wwan",    MM_PORT_PROBE_QMI | MM_PORT_PROBE_MBIM | MM_PORT_PROBE_AT | MM_PORT_PROBE_QCDM },
++    /* Google CPIF: only udev-declared SIT ports get this far (see
++     * apply_pre_probing_filters()), and a SIT port's probe results are all
++     * preset, so this never sends anything to the device. */
++    { "cpif",    MM_PORT_PROBE_AT },
+ #if defined WITH_QRTR
+     { "qrtr",    MM_PORT_PROBE_QMI },
+ #endif
+diff -ruN a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-25 10:49:56
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-25 10:49:57
+@@ -43,6 +43,9 @@
+      * nodes, so mm-sit-tool and the IMS helper can share them. Set from
+      * ID_MM_SIT_PROXY on the port. */
+     gboolean     use_proxy;
++    /* Set from ID_MM_SIT_PROXY_REQUIRED: the proxy is the only transport and
++     * the device node is never opened directly. */
++    gboolean     proxy_required;
+ };
+ 
+ typedef struct {
+@@ -913,7 +916,9 @@
+             continue;
+         }
+ 
+-        client = self->priv->use_proxy
++        client = self->priv->proxy_required
++            ? mm_sit_client_new_proxy_only (mm_port_get_device (port))
++            : self->priv->use_proxy
+             ? mm_sit_client_new_proxy (mm_port_get_device (port))
+             : mm_sit_client_new (mm_port_get_device (port));
+         if (!mm_sit_client_open (client, error)) {
+@@ -3627,6 +3632,17 @@
+      * well after construction. */
+     self->priv->use_proxy = use_proxy;
+     return self;
++}
++
++void
++mm_broadband_modem_samsung_sit_set_proxy_required (MMBroadbandModemSamsungSit *self,
++                                                    gboolean                    required)
++{
++    g_return_if_fail (MM_IS_BROADBAND_MODEM_SAMSUNG_SIT (self));
++
++    self->priv->proxy_required = required;
++    if (required)
++        self->priv->use_proxy = TRUE;
+ }
+ 
+ static void
+diff -ruN a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h	2026-11-25 10:49:56
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.h	2026-11-25 10:49:57
+@@ -37,6 +37,9 @@
+                                                                  guint16       product_id,
+                                                                  const gchar  *carrier_config_database,
+                                                                  gboolean      use_proxy);
++/* Refuse to fall back to the device node when sit-proxy is unreachable. */
++void mm_broadband_modem_samsung_sit_set_proxy_required (MMBroadbandModemSamsungSit *self,
++                                                         gboolean                    required);
+ 
+ MMSitClient *mm_broadband_modem_samsung_sit_peek_client (MMBroadbandModemSamsungSit  *self,
+                                                           GError                     **error);
+diff -ruN a/src/plugins/samsung-sit/mm-plugin-samsung-sit.c b/src/plugins/samsung-sit/mm-plugin-samsung-sit.c
+--- a/src/plugins/samsung-sit/mm-plugin-samsung-sit.c	2026-11-25 10:49:56
++++ b/src/plugins/samsung-sit/mm-plugin-samsung-sit.c	2026-11-25 10:49:57
+@@ -27,6 +27,8 @@
+     g_autofree gchar *database = NULL;
+     const gchar      *directory = MM_SIT_DEFAULT_CARRIER_CONFIG_DIRECTORY;
+     gboolean          use_proxy = FALSE;
++    gboolean          proxy_required = FALSE;
++    MMBroadbandModemSamsungSit *modem;
+     GList            *l;
+ 
+     if (!mm_port_probe_list_has_sit_port (probes)) {
+@@ -50,20 +52,31 @@
+         /* Declared by the udev rule that ships with sit-proxy, so the transport
+          * is a packaging decision rather than something probed at runtime. */
+         use_proxy = mm_kernel_device_get_property_as_boolean (port, "ID_MM_SIT_PROXY");
++        /* Never fall back to opening the device node: on Google CPIF the
++         * nodes exist before the CP boots, and sit-proxy must stay their
++         * only opener. */
++        proxy_required = mm_kernel_device_get_property_as_boolean (port, "ID_MM_SIT_PROXY_REQUIRED");
++        if (proxy_required)
++            use_proxy = TRUE;
+         break;
+     }
+ 
+     database = g_build_filename (directory, "cfg.db", NULL);
+-    return MM_BASE_MODEM (mm_broadband_modem_samsung_sit_new (
++    modem = mm_broadband_modem_samsung_sit_new (
+         uid, physdev, drivers, mm_plugin_get_name (self), vendor, product, database,
+-        use_proxy));
++        use_proxy);
++    mm_broadband_modem_samsung_sit_set_proxy_required (modem, proxy_required);
++    return MM_BASE_MODEM (modem);
+ }
+ 
+ MM_PLUGIN_NAMED_CREATOR_SCOPE MMPlugin *
+ mm_plugin_create_samsung_sit (void)
+ {
+-    static const gchar *subsystems[] = { "wwan", "net", NULL };
+-    static const gchar *drivers[] = { "s5300-modem", NULL };
++    /* "cpif" and "cp_interface": the Google Kleaf CPIF driver's class and
++     * platform driver; its parentless nodes get the driver from udev's
++     * ID_MM_KERNEL_DRIVER. */
++    static const gchar *subsystems[] = { "wwan", "net", "cpif", NULL };
++    static const gchar *drivers[] = { "s5300-modem", "cp_interface", NULL };
+ 
+     return MM_PLUGIN (
+         g_object_new (MM_TYPE_PLUGIN_SAMSUNG_SIT,
+diff -ruN a/src/plugins/samsung-sit/mm-sit-client.c b/src/plugins/samsung-sit/mm-sit-client.c
+--- a/src/plugins/samsung-sit/mm-sit-client.c	2026-11-25 10:49:56
++++ b/src/plugins/samsung-sit/mm-sit-client.c	2026-11-25 10:49:57
+@@ -108,9 +108,17 @@
+             index = p;
+     }
+     if (!index) {
+-        /* An unrecognised name (a downstream-style /dev/umts_ipc0, say) has no
+-         * index to read; assume the first stack, which is the one that carries
+-         * everything today. */
++        /* Google's CPIF names the same two FMT channels umts_ipc0/umts_ipc1,
++         * and sit-proxy is given them in that order, so the trailing index
++         * selects the socket exactly as it does for wwan0sitN. */
++        const gchar *ipc = g_strrstr (device, "umts_ipc");
++
++        if (ipc && g_ascii_isdigit (ipc[strlen ("umts_ipc")]))
++            index = ipc + strlen ("umts_ipc");
++    }
++    if (!index) {
++        /* Any other unrecognised name has no index to read; assume the first
++         * stack, which is the one that carries everything today. */
+         index = "0";
+     }
+     return g_build_filename (MM_SIT_PROXY_SOCKET_DIRECTORY, index, NULL);
+@@ -135,6 +143,18 @@
+     self->priv->device = g_strdup (name);
+     self->priv->proxy_fallback_device = g_strdup (name);
+     self->priv->port = mm_port_serial_sit_new_socket (socket_path);
++    return self;
++}
++
++MMSitClient *
++mm_sit_client_new_proxy_only (const gchar *device)
++{
++    MMSitClient *self;
++
++    self = mm_sit_client_new_proxy (device);
++    /* Without a fallback device, mm_sit_client_open() propagates the socket
++     * error instead of opening the node. */
++    g_clear_pointer (&self->priv->proxy_fallback_device, g_free);
+     return self;
+ }
+ 
+diff -ruN a/src/plugins/samsung-sit/mm-sit-client.h b/src/plugins/samsung-sit/mm-sit-client.h
+--- a/src/plugins/samsung-sit/mm-sit-client.h	2026-11-25 10:49:56
++++ b/src/plugins/samsung-sit/mm-sit-client.h	2026-11-25 10:49:57
+@@ -35,6 +35,9 @@
+ /* Go through sit-proxy so debug tools can share the port, falling back to the
+  * device node at open() time if the proxy is not there. */
+ MMSitClient *mm_sit_client_new_proxy  (const gchar *device);
++/* As mm_sit_client_new_proxy(), but open() fails rather than falling back to
++ * the device node when the proxy is not there. */
++MMSitClient *mm_sit_client_new_proxy_only (const gchar *device);
+ MMSitClient *mm_sit_client_new_from_port (MMPortSerialSit *port);
+ const gchar *mm_sit_client_get_device (MMSitClient *self);
+ /* TRUE if this client actually ended up talking to sit-proxy. */
+diff -ruN a/src/plugins/samsung-sit/tests/test-sit-protocol.c b/src/plugins/samsung-sit/tests/test-sit-protocol.c
+--- a/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-25 10:49:56
++++ b/src/plugins/samsung-sit/tests/test-sit-protocol.c	2026-11-25 10:49:57
+@@ -1696,6 +1696,44 @@
+     g_assert_true (ctx.completed);
+ }
+ 
++static void
++test_client_proxy_socket_path (void)
++{
++    static const struct {
++        const gchar *device;
++        const gchar *socket;
++    } cases[] = {
++        { "wwan0sit0",          "/run/sit-proxy/0" },
++        { "/dev/wwan0sit1",     "/run/sit-proxy/1" },
++        /* Google Kleaf CPIF FMT channels 245/246, in sit-proxy's --dev order. */
++        { "umts_ipc0",          "/run/sit-proxy/0" },
++        { "/dev/umts_ipc1",     "/run/sit-proxy/1" },
++        { "something-else",     "/run/sit-proxy/0" },
++    };
++    guint i;
++
++    for (i = 0; i < G_N_ELEMENTS (cases); i++) {
++        g_autofree gchar *path = mm_sit_proxy_socket_path (cases[i].device);
++
++        g_assert_cmpstr (path, ==, cases[i].socket);
++    }
++}
++
++static void
++test_client_proxy_only_no_fallback (void)
++{
++    g_autoptr(MMSitClient) client = NULL;
++
++    /* A proxy-only client talks to sit-proxy's socket from the start and keeps
++     * the CPIF node name as its identity. (Its open() failure path logs at
++     * warning level, which this test binary has no log backend for, so the
++     * missing fallback is covered by source review rather than here.) */
++    client = mm_sit_client_new_proxy_only ("/dev/umts_ipc1");
++    g_assert_true (mm_sit_client_is_proxied (client));
++    g_assert_cmpstr (mm_sit_client_get_device (client), ==, "umts_ipc1");
++    g_assert_false (mm_sit_client_is_open (client));
++}
++
+ int
+ main (int argc,
+       char **argv)
+@@ -1727,6 +1765,8 @@
+     g_test_add_func ("/MM/sit/client/connect-sequence", test_client_connect_sequence);
+     g_test_add_func ("/MM/sit/client/radio-transition", test_client_radio_transition);
+     g_test_add_func ("/MM/sit/client/boot-config", test_client_boot_config);
++    g_test_add_func ("/MM/sit/client/proxy-socket-path", test_client_proxy_socket_path);
++    g_test_add_func ("/MM/sit/client/proxy-only-no-fallback", test_client_proxy_only_no_fallback);
+ 
+     return g_test_run ();
+ }

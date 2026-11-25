@@ -9,7 +9,7 @@ license.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Identifier hashing (SSID and BSSID digests on the wire and in evidence).
-sha2 = "0.10"
+sha2 = "0.11"
 
 [lints]
 workspace = true
