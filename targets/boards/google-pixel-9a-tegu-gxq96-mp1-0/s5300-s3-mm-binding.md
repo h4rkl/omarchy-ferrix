@@ -1,15 +1,74 @@
 # S5300 S3: ModemManager binding on the Google Kleaf CPIF route (issue #1)
 
-Status: **offline only, 2026-11-25.** Nothing here has run on a phone. The
-patch compiles against the pinned ModemManager tree and its unit tests pass
-in an Alpine container; the udev and service changes pass the repository's
-offline suites. Whether `mmcli -L` lists a modem on the exact device is the
+Status: **S3 partial on the exact device (2026-11-24): the modem object is
+created, then initialization fails at the primary AT port.** Patch 0001
+(ModemManager r4) and the udev/service changes bound the right ports on
+`physical:google-pixel-9a-tegu-gxq96-mp1-0`; see
+[Physical result](#physical-result-2026-11-24-0001-only). Patch 0002
+(ModemManager r5, offline only, 2026-11-25) removes the AT-port assumption
+that stopped initialization. Whether `mmcli -L` lists a usable modem is the
 S3 gate in [`s5300-route-decision.md`](s5300-route-decision.md#stopgo-summary),
 and it is still open.
 
 Target: `google-pixel-9a-tegu-gxq96-mp1-0`, route A (Kleaf GKI 6.1.124 with
 Google's `cpif`). Route B (`linux-google-tegu-wwan`, `wwan0sit*`) keeps its
 behaviour.
+
+## Physical result 2026-11-24 (0001 only)
+
+Run by the lead on `physical:google-pixel-9a-tegu-gxq96-mp1-0`, image
+`tegu-kleaf-dev-20261124T231905Z` (main `0a10575`), `modemmanager-samsung-sit`
+r4, `device-google-tegu` r9. The redacted `ModemManager --debug` log stays out
+of Git (it contained no IMEI, IMSI or ICCID).
+
+- The CP reached `ONLINE` through the S2 path. Before `sit-proxy` started,
+  no CPIF device carried an `ID_MM_*` tag and `mmcli -L` listed nothing.
+- After `rc-service sit-proxy start`, `umts_ipc0/1` carried exactly the
+  expected tags (candidate, device-process, `KERNEL_DRIVER=cp_interface`,
+  `PHYSDEV_UID=google-tegu-s5300-cpif`, SIT, proxy, proxy-required, carrier
+  directory), and `rmnet0` carried candidate, device-process, driver and
+  physdev UID. **The udev gates and the re-trigger worked.**
+- **The ModemManager instance already running did not create a modem.** A
+  foreground `ModemManager --debug` did; the cause is not established (see
+  the test procedure, step 5).
+- In that run, all three ports passed the filter as one device and got the
+  SIT probe hint. The `samsung-sit` plugin was chosen for all three, and
+  `umts_ipc1` finished probing with "no more probings needed", so no AT
+  probe was sent. It logged "creating modem with plugin 'samsung-sit' and
+  '3' ports" and grabbed `cpif/umts_ipc1`, `cpif/umts_ipc0` and `net/rmnet0`.
+- Initialization then failed: `couldn't start initialization: Couldn't open
+  ports during modem initialization: Couldn't get primary port`, followed by
+  `fatal error initializing: Fatal error: modem is unusable`. No SIT client
+  was opened (no "opened Samsung SIT logical stack" line), and there was no
+  fallback line. The log shows no attempt to open a CPIF node; the opener
+  scan was not part of this report.
+
+### Why it failed (fork `14a0013a`)
+
+- `src/mm-broadband-modem.c`, `initialization_started()`, calls
+  `ports_context_open()`. That needs `mm_base_modem_get_port_primary()`, the
+  primary **AT** port, and returns "Couldn't get primary port" without one.
+  `enabling_started()` opens the same context, so enabling would fail the
+  same way.
+- `mm-broadband-modem-samsung-sit.c`, `mm_broadband_modem_samsung_sit_class_init()`,
+  overrides only `enabling_modem_init` (its comment refers to "the Shannon AT
+  service"). The fork assumes the WWAN route's AT port is present.
+  `mm_base_modem_organize_ports()` already allows a SIT-only modem without
+  an AT port, but the broadband modem it creates cannot start.
+- The next fatal step would have been `mm-broadband-modem.c`
+  `modem_load_current_capabilities()`, which asks over QCDM or AT. In
+  `mm-iface-modem.c`, `load_current_capabilities_ready()` turns a failure
+  into `fatal_error`, so fixing only the primary port would have moved the
+  failure.
+- **Why only `umts_ipc0` was listed as `sit`:** `mm_base_modem_organize_ports()`
+  keeps a single `sit` port for its summary and logs it once
+  (`log_port (…, sit, "sit")`). Both SIT ports stay grabbed (the shutdown log
+  cleans up both), and the plugin opens every SIT port through
+  `mm_base_modem_find_ports (…, MM_PORT_TYPE_SIT)`. This is expected.
+- **Why it says `wwan/`:** 0001 builds the SIT port with
+  `create_wwan_port()`, which sets `MM_PORT_SUBSYS_WWAN`. The port table key
+  still uses the kernel subsystem (`cpif/umts_ipc0` when grabbed). The prefix
+  is cosmetic.
 
 ## Why no modem appeared
 
@@ -145,6 +204,42 @@ files (+134/−8 lines) and leaves SIT protocol behaviour alone:
   `_mm_log`, before and after this patch alike), so the missing fallback is
   covered by source review only.
 
+### ModemManager patch 0002: `pmos/modemmanager-samsung-sit/0002-samsung-sit-sit-only-modem-without-at-port.patch`
+
+This patch was added after the physical result above. It is applied after
+0001 and hash-pinned in `APKBUILD`, and `pkgrel` goes from 4 to 5. It touches
+only `mm-broadband-modem-samsung-sit.c` (+167 lines) and adds no SIT message.
+Each override first asks `mm_base_modem_peek_port_primary()`. **With an AT
+port, every call goes to the parent unchanged**, so the WWAN route keeps its
+behaviour. Without one:
+
+- `initialization_started()` returns no ports context and no error.
+  `mm-broadband-modem.c` `initialization_started_ready()` accepts that ("May
+  return NULL without error"). `initialization_stopped()` is skipped for a
+  NULL context.
+- `enabling_started()` returns TRUE without opening or flashing a port.
+  `disabling_stopped()` already tolerates a missing `enabled_ports_ctx`.
+  This follows `mm-broadband-modem-mbim.c`, which treats the parent's "no
+  primary AT port" error as non-fatal in both places.
+- `load_current_capabilities()` reports `GSM_UMTS | LTE | 5GNR`. Those are
+  the families the plugin already declares: `load_supported_modes()` builds
+  2G|3G|4G|5G, and the constructor sets PS, EPS and 5GS network support.
+  The Modem interface derives supported capabilities from current
+  capabilities when no loader exists. With an AT or QCDM port, the parent
+  loader still asks the modem.
+
+Steps that were already non-fatal stay so. Manufacturer, model, revision,
+equipment identifier (`STR_REPLY_READY_FN`, logged at debug) and the 3GPP
+IMEI (`load_imei_ready()`) still have no SIT source. `setup_ports()` already
+skips a missing primary.
+
+Verified offline: 0001 and 0002 apply in order to the pinned tree and
+compile with the plugin enabled in Alpine edge. The test results are in the
+[2026-11-25 status-log entry](../../../docs/status-log/2026-11.md). There is
+no unit test for 0002, because exercising the broadband modem's
+initialization needs the daemon. The repository test checks the patch order,
+the three overrides, the AT-port guard, and that no SIT message is added.
+
 ### udev: `pmos/device-google-tegu/99-google-tegu-sit.rules`
 
 The route B lines are unchanged. A new gated block (`ferrix_tegu_cpif_end`)
@@ -194,8 +289,11 @@ arbitrary.
 
 ## What remains unproven
 
-- **Everything on the device.** That includes whether eudev applies the `TEST`
-  gates and whether the re-trigger reaches ModemManager as expected.
+- **0002 on the device.** Nothing past "creating modem" has run yet. The
+  next unknowns are the plugin's SIT init sequence (radio state, SIM status,
+  carrier configuration) and the state the modem settles in.
+- **Why the boot-time ModemManager ignored the re-triggered ports.** The
+  `TEST` gates and the re-trigger did work on the device (2026-11-24).
 - **U3:** that the bytes on `umts_ipc0/1` match what `wwan0sit0/1` give
   `sit-proxy`.
 - **That the plugin's SIT init sequence works with this CP firmware build**
@@ -221,8 +319,8 @@ arbitrary.
 ## On-device test procedure (lead only)
 
 Prerequisites: an image built through the checked-in builder that contains
-`device-google-tegu` r8 and `modemmanager-samsung-sit` 1.25.95_git20260731-r4
-(`exynos-modem` stays r3), flashed through the recovery-gated workflow, and a
+`device-google-tegu` r9 or later and `modemmanager-samsung-sit`
+1.25.95_git20260731-r5 (`exynos-modem` stays r3), flashed through the recovery-gated workflow, and a
 completed S2 path (preflight, arm, start) with the CP `ONLINE`. Do not start
 `sit-proxy` before the CP is `ONLINE`.
 
@@ -275,7 +373,11 @@ completed S2 path (preflight, arm, start) with the CP `ONLINE`. Do not start
    # expect exactly one line: <pid> sit-proxy
    ```
 
-6. **S3 gate.** Allow about 10 s for probing:
+6. **S3 gate.** Allow about 10 s for probing. On 2026-11-24 the ModemManager
+   started at boot did not pick up the re-triggered ports. If `mmcli -L` is
+   still empty after 15 s, record that, then run `rc-service modemmanager
+   restart` (or stop it and run `ModemManager --debug` in the foreground, as
+   the lead did) and wait again:
 
    ```sh
    mmcli -L
@@ -294,7 +396,7 @@ completed S2 path (preflight, arm, start) with the CP `ONLINE`. Do not start
      System   |              device: google-tegu-s5300-cpif
               |             drivers: cp_interface
               |              plugin: samsung-sit
-              |        primary port: umts_ipc0   (expected)
+              |        primary port: <not established; there is no primary AT port>
               |               ports: rmnet0 (net), umts_ipc0 (sit), umts_ipc1 (sit)
      Status   |               state: disabled | locked | failed (sim-missing)
      3GPP     |                imei: --
@@ -302,7 +404,11 @@ completed S2 path (preflight, arm, start) with the CP `ONLINE`. Do not start
    ```
 
    GO for S3 means one modem, `plugin: samsung-sit`, the three ports above,
-   and a reported SIM state (present or missing). Record whether the IMEI is
+   a state other than `failed (unknown)`, and a reported SIM state (present
+   or missing). With 0002 the debug log should show `no primary AT port:
+   initializing over SIT only` and `no AT or QCDM port: reporting the SIT
+   3GPP capabilities`, then the SIT client lines in step 7. A new fatal error
+   after those lines is the next finding; capture it the same way. Record whether the IMEI is
    readable. The expected answer is no; that is the known gap, not a STOP.
 
 7. **Logs to keep.** Collect with `logread` or the service output capture used

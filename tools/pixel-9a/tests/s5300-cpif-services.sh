@@ -141,6 +141,18 @@ printf '%s\n' "$rules" | grep -Eq 'umts_boot|umts_rfs|oem_ipc|umts_ipc\*|rmnet\*
 	fail 'static: udev rule tags a CPIF node other than umts_ipc0/1 or rmnet0' || true
 grep -Fq '0001-samsung-sit-google-kleaf-cpif-binding.patch' "$mm/APKBUILD" &&
 	ok 'static: ModemManager carries the CPIF binding patch' || fail 'static: ModemManager lacks the CPIF binding patch'
+# 0002 (physical S3 result 2026-11-24): a SIT-only modem must initialize
+# without a primary AT port, and only that case may bypass the parent.
+p2="$mm/0002-samsung-sit-sit-only-modem-without-at-port.patch"
+grep -Fq '0002-samsung-sit-sit-only-modem-without-at-port.patch' "$mm/APKBUILD" &&
+	[ "$(grep -o '000[12]-samsung-sit-[a-z-]*\.patch' "$mm/APKBUILD" | head -2 | tr '\n' ' ')" = '0001-samsung-sit-google-kleaf-cpif-binding.patch 0002-samsung-sit-sit-only-modem-without-at-port.patch ' ] &&
+	grep -q '^+    broadband_modem_class->initialization_started = initialization_started;$' "$p2" &&
+	grep -q '^+    broadband_modem_class->enabling_started = enabling_started;$' "$p2" &&
+	grep -q '^+    iface->load_current_capabilities = load_current_capabilities;$' "$p2" &&
+	[ "$(grep -c '^+    if (has_primary_at_port (self))' "$p2")" -eq 2 ] &&
+	! grep -E '^\+.*(mm_sit_|SIT_MESSAGE|0x[0-9a-fA-F]{4})' "$p2" >/dev/null &&
+	ok 'static: ModemManager carries 0002 after 0001 (SIT-only init, no new SIT messages)' ||
+	fail 'static: ModemManager 0002 SIT-only init patch missing or changed'
 
 # Version and kernel pins in the library follow the recipe and the workflows.
 modem_ver=$(sed -n 's/^pkgver=//p' "$board/pmos/exynos-modem/APKBUILD")-r$(sed -n 's/^pkgrel=//p' "$board/pmos/exynos-modem/APKBUILD")
