@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use ferrix_scenario::{FrameCapture, Mode, Scenario, run};
+use ferrix_scenario::{FrameCapture, Mode, QmpInput, Scenario, run};
 
 const USAGE: &str = "usage: ferrix-scenario [--guest | --nested --log PATH] [--out DIR] [--sockets DIR] [--serial PATH] [--frame] [--qmp PATH] [--qmp-helper PATH] [--validate] SCENARIO.toml...";
 
@@ -115,12 +115,12 @@ fn resolve_mode(args: &Args) -> Result<(Mode, PathBuf), String> {
             serial_log.display()
         ));
     }
+    let qmp_socket = args.qmp.clone().unwrap_or_else(|| sockets.join("qmp.sock"));
+    let qmp_helper = args
+        .qmp_helper
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("targets/qemu-aarch64/scripts/qmp.py"));
     let frame = if args.frame {
-        let qmp_socket = args.qmp.clone().unwrap_or_else(|| sockets.join("qmp.sock"));
-        let qmp_helper = args
-            .qmp_helper
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("targets/qemu-aarch64/scripts/qmp.py"));
         if !qmp_helper.is_file() {
             return Err(format!(
                 "qmp helper {} not found; pass --qmp-helper",
@@ -128,9 +128,35 @@ fn resolve_mode(args: &Args) -> Result<(Mode, PathBuf), String> {
             ));
         }
         Some(FrameCapture {
-            qmp_socket,
-            qmp_helper,
+            qmp_socket: qmp_socket.clone(),
+            qmp_helper: qmp_helper.clone(),
         })
+    } else {
+        None
+    };
+    // `input` steps scale taps against the session's display geometry, read
+    // through the strict profile parser. Without a helper or a readable
+    // profile, an input step fails with that reason when it runs.
+    let input = if qmp_helper.is_file() {
+        // The helper lives in targets/qemu-aarch64/scripts/; the profile
+        // beside that directory is the session's unless overridden.
+        let profile = std::env::var_os("FERRIX_QEMU_PROFILE")
+            .map(PathBuf::from)
+            .or_else(|| {
+                qmp_helper
+                    .parent()
+                    .and_then(|scripts| scripts.parent())
+                    .map(|target| target.join("profile.toml"))
+            })
+            .unwrap_or_else(|| PathBuf::from("targets/qemu-aarch64/profile.toml"));
+        ferrix_target_profile::Profile::load(&profile)
+            .ok()
+            .map(|p| QmpInput {
+                qmp_socket,
+                qmp_helper,
+                width: p.display.width,
+                height: p.display.height,
+            })
     } else {
         None
     };
@@ -139,6 +165,7 @@ fn resolve_mode(args: &Args) -> Result<(Mode, PathBuf), String> {
             sockets,
             serial_log,
             frame,
+            input,
         },
         out,
     ))

@@ -1,0 +1,4 @@
+# October 2026 public stock release, kept separate from the tested September recovery pin.
+# kind<TAB>build<TAB>version<TAB>filename<TAB>url<TAB>sha256<TAB>bytes<TAB>source-page
+factory	CP3A.261005.005	17.0.0	tegu-cp3a.261005.005-factory-6166e73e.zip	https://dl.google.com/dl/android/aosp/tegu-cp3a.261005.005-factory-6166e73e.zip	6166e73ebf50a856e5280bed4b3db26dfddbfe0b1279885b28bde97c0d8498c7	4220118030	https://developers.google.cn/android/images?hl=en#tegu
+ota	CP3A.261005.005	17.0.0	tegu-ota-cp3a.261005.005-c83a4af1.zip	https://dl.google.com/dl/android/aosp/tegu-ota-cp3a.261005.005-c83a4af1.zip	c83a4af1946c4bdb4360cd241343f575660a969267edd1ef5cb61460b70c7c72	3377532157	https://developers.google.cn/android/ota?hl=en#tegu

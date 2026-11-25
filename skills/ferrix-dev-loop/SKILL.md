@@ -46,8 +46,8 @@ its paths, serials or MACs.
 - Every builder run goes through `tools/pixel-9a/attempt-env.sh` (UTC stamp +
   named capacity TSV) and `tools/pixel-9a/native-builder.sh run kernel|product|dev-compose build`
   with its typed acknowledgement variable. The scripts do this for you.
-- `dev-compose` on the Mac fails on pin checks (Fulguris APK and Waydroid
-  image paths, no e2fsprogs); run it in the builder.
+- `dev-compose` on the Mac fails on pin checks (Waydroid image paths, no
+  e2fsprogs); run it in the builder.
 - `kernel.sh` reverts and reapplies `targets/boards/…/kernel-patches/`
   around source verification; "kernel patch reverted/applied" lines are
   normal. Only rebuild the kernel when patches or the defconfig fragment
@@ -57,7 +57,8 @@ its paths, serials or MACs.
   coldplug; `ferrix.modules_skip` only filters the initramfs lists). The CSF
   firmware is staged from the factory image (`gpu-mali` in the firmware
   allowlist). Product rendering is still software. GPU work is tracked in
-  issues #4 and #19; read `targets/boards/…/gpu-research.md` first.
+  issues #4 and #19; read
+  `targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/gpu-research.md` first.
 
 ## 3. Get code onto the phone
 
@@ -86,6 +87,13 @@ OpenRC to settle. The possible outcomes are:
 - stock Android: the bootloader fell back to slot a, which is still stock
 - a timeout
 
+Ferrix never marks slot b boot-successful (#175): after a `set_active` the
+bootloader allows 3 boots, then stops in Fastboot with `slot-retry-count:b=1`
+("Enter reason: BL1 requested"). `reflash.sh` resets the counter after a flash
+(`set-active a`, then `set-active b`; a is never booted). Mid-session, if a
+reboot lands in Fastboot with retry-count 1, run the same two
+`just pixel-9a-dev-flash set-active` steps, then `just pixel-9a-dev-flash reboot`.
+
 If the phone cannot get back to Fastboot, **stop** and ask the human to
 hold Volume Down + Power. Never call raw `fastboot flash|erase|oem` or
 `adb` mutations.
@@ -96,7 +104,9 @@ You cannot trust a process log for graphical claims (AGENTS.md). Capture,
 then open the image with your file-reading tool and look at it.
 
 - **QEMU**: `just qemu-agent-start`, then `scripts/qemu-shot.sh NAME`.
-  Input: `just qemu-tap X Y`, `qemu-swipe`, `qemu-type`, `qemu-key`. Mock
+  Input: `just qemu-tap X Y`, `qemu-swipe`, `qemu-type`, `qemu-key`
+  (`qemu-key power` blanks/wakes; `qemu-key-hold power 1000` opens the power
+  menu; taps are dropped while the screen is off). Mock
   hardware state: `just qemu-mock …`. Serial log:
   `out/qemu-aarch64/agent/serial.log` (apps print `ui-state` JSON lines,
   which are good for asserting state without pixels).
@@ -266,5 +276,6 @@ checkout's `out/`. Then clean up in this order:
   failures, and read `docs/pixel-9a-bt-wpa3-research.md`.
 - Bluetooth is a UART controller (`btattach -P bcm`, `/dev/ttySAC18`, 115200)
   and needs about 90 s after boot before scans return anything.
-- Fulguris's first-run terms are for the owner to accept; don't click
-  through them.
+- The Browser is LineageOS Jelly, built into the Android image (no APK to
+  fetch or install). Any first-run terms or prompts an Android app shows are
+  for the owner to accept; don't click through them.

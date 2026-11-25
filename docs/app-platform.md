@@ -31,7 +31,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 
 ```text
   home surface           native apps             Android app
-  (ferrix-basic-screen)  (Terminal, Phone, …)     (Fulguris via Waydroid)
+  (ferrix-basic-screen)  (Terminal, Phone, …)     (Browser/Jelly via Waydroid)
         |  Launch/Subscribe        |  YieldForeground
         +-------------+------------+-----------------------------+
                       |  ferrix-app-protocol (line-delimited JSON, schema v1)
@@ -53,7 +53,7 @@ low-noise notice. The home surface itself is restarted by `ferrix-appd` with bac
 | `ferrix-runtime-native` | native launch configuration and isolation types (namespaces, private `/tmp`, socket-directory view); the native `Runtime` that spawns `ferrix-sandbox`, classifies exits, and terminates | internal adapter |
 | `ferrix-shell` | toplevels keyed by client pid, focus, `Activate` handling, trusted navigation/dismiss gestures, crash refocus | system |
 | `ferrix-basic-screen` | catalog-driven launcher, in-process quick settings/notifications, crash notice | privileged first-party |
-| `ferrix-terminal`, `ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, `ferrix-files` | independent native Wayland applications | untrusted applications |
+| `ferrix-terminal`, `ferrix-phone`, `ferrix-messages`, `ferrix-contacts`, `ferrix-settings`, `ferrix-files`, `ferrix-camera` | independent native Wayland applications | untrusted applications |
 | `ferrix-runtime-android` | private Waydroid adapter for Android descriptors; composed only by `ferrix-appd` | internal adapter |
 | `ferrix-ui` | software-rendering toolkit and the shared fullscreen Wayland client runner; a convenience library, not part of any ABI | library |
 
@@ -82,13 +82,34 @@ opaque to `ferrix-appd` and interpreted only by the selected runtime adapter. Fo
 native adapter it contains `exec` (program resolved through `PATH`) and an
 optional isolation policy. The `launch` object is never returned by
 `ferrix-app-protocol`, so applications and shells cannot couple to another runtime's
-implementation. Non-launchable entries exist for catalog placeholders such as
-Camera; the catalog, not an enum, decides what is shown. `web`
+implementation. Non-launchable entries are allowed for catalog placeholders
+(none is checked in since Camera became an app, ADR-009); the catalog, not
+an enum, decides what is shown. `web`
 remains a reserved kind and returns `AppError::RuntimeUnsupported`. Android
 descriptors are handled by the private `ferrix-runtime-android` adapter; a
 launch returns `RuntimeUnsupported` when Waydroid is absent and `LaunchFailed`
 when the runtime or package is unavailable. Android package/activity details
 remain in the daemon-private `launch` object.
+
+**Installed apps.** A runtime may also report applications by itself
+(`Runtime::installed_apps`): every launchable APK in the Android container.
+`ferrix-appd` merges them beside the checked-in catalog and returns them in
+`Reply::Catalog` with `"origin": "installed"` (the field is omitted for
+checked-in entries). Their ids use the reserved `apk.` prefix
+(`apk.<package>`, or `apk.<readable>.x-<hash>` for packages with uppercase
+or `_`); a checked-in descriptor may not use it. A package a checked-in
+descriptor already launches is not listed twice (`org.lineageos.jelly` is
+`org.ferrix.browser`). Installed apps are always `untrusted`, declare no
+capabilities or intents, and have no grants row. The list is refreshed by
+a poller (30 s; sooner while the runtime boots or when an unknown runtime
+window appears) and every change publishes `CatalogChanged`; the home
+surface appends them after the first-party tiles. An installed app's
+launcher bitmap comes from `Request::AppIcon { id }` ->
+`Reply::AppIcon { id, icon }`: `icon` is a straight-alpha RGBA8
+`AppIconBitmap` of at most 96x96 pixels (base64 on the wire), decoded and
+bounded by the runtime adapter, or `null` (unknown id, a checked-in entry,
+or no usable icon), in which case the home draws the letter glyph. Design
+and limitations: ADR-008 "Installed APKs".
 
 ## Lifecycle
 
@@ -129,7 +150,12 @@ has zero effective capabilities**; a missing file is recorded
 Capability names (`AppCapability`, kebab-case on the wire): `core-state`,
 `core-control`, `shell`, `background`, `telephony-state`, `telephony-call`,
 `telephony-sms`, `telephony-data`, `telephony-radio`, `contacts-read`,
-`contacts-write`, `network-state`, `network-control`. Read-only `*-state`
+`contacts-write`, `network-state`, `network-control`, `network` (sockets beyond
+the application's own loopback; without it the native sandbox gives the
+application a loopback-only network namespace), `files-home` (the user's home
+folder; without it the sandbox's minimal filesystem view shows only the
+application's data directory), `camera` (enumerate, preview, and stills over
+`camera.sock`; ADR-009). Read-only `*-state`
 grants and privileged `*-control`/
 `*-call`/`*-sms`/`*-write` grants are distinct so a state grant can never
 reach a control verb.
@@ -179,17 +205,35 @@ isolation in the private runtime diagnostics attached to the `app-started`
 evidence record; it never hides it or exposes Linux-specific fields as public
 application state.
 
+### Keeping the screen on
+
+An application that must keep the screen on (an active call, video
+playback, turn-by-turn navigation) asks `ferrix-core`, never the compositor:
+`ferrix_protocol::inhibit_blank(socket, InhibitReason::Call, "org.ferrix.phone",
+timeout)` returns a `BlankInhibitor`. While any inhibitor is held the idle
+timeout (Settings > Display > Screen timeout) does not blank the screen; the
+power key still does. The inhibitor lives on its own connection to
+`core.sock`: dropping the handle, calling `release`, or the process dying
+closes it and the core releases it, so a crashed app can never hold the
+screen on. `InhibitReason` is a closed set (`call`, `video`, `navigation`);
+the holder string is a label for evidence and the Settings caption, never an
+identity. The app needs a `core-*` grant to see `core.sock`. Policy changes
+reach the shell and Settings through `watch_screen_policy`.
+
 ### Socket visibility
 
 Platform daemons listen under one directory, `/run/ferrix` (`FERRIX_RUN_DIR`
 in nested runs): `ferrix-appd.sock`, `core.sock`, `telephonyd.sock`,
-`networkd.sock`, `contactsd.sock`. The Wayland socket is elsewhere
+`networkd.sock`, `contactsd.sock`, `camera.sock` (served by `ferrix-core`,
+ADR-009). The Wayland socket is elsewhere
 (`XDG_RUNTIME_DIR`, `/run/user/<uid>`). A manifest opts into the filtered
 view with `"isolation": {"run_dir": {"mode": "private-run"}}`; the native runtime
 then **derives the visible socket list from the effective grants** (a list
 written into the manifest is replaced, never merged): always
 `ferrix-appd.sock`; `core-*` → `core.sock`; `telephony-*` → `telephonyd.sock`;
-`network-*` → `networkd.sock`; `contacts-*` → `contactsd.sock`. Stage 2 mounts
+`network-*` → `networkd.sock`; `contacts-*` → `contactsd.sock`; `camera` →
+`camera.sock` (never `core.sock`, so a camera grant cannot reach core
+control). Stage 2 mounts
 a tmpfs on a staging directory, creates one file per listed socket and
 bind-mounts the original over it (the originals stay visible until the very
 end, so no descriptor has to be held open), then `mount --move`s the staging
@@ -217,10 +261,23 @@ private `/proc` and `/tmp`, its own IPC and hostname namespaces, and cannot
 gain privileges; with `run_dir.mode = private-run` it can reach exactly the
 daemon sockets its grants imply, and every daemon additionally enforces
 capabilities per request after resolving the caller through `Identify`.
-What it does not provide yet: a different uid (every application runs as the
-launcher's uid), seccomp filters, cgroup resource limits, a network
-namespace, or a restricted view of the filesystem beyond `/proc`, `/tmp`, and
-the socket directory. With `mode: private` the rest of `/run` is unchanged,
+Since issue #10 (each part in `crates/ferrix-runtime-native/README.md`): a
+per-application cgroup under `ferrix.slice` with `memory.max` (OOM kills
+the whole application), `pids.max` and `cpu.weight`, whose path the runtime
+exposes for scheduling policy; a loopback-only network namespace unless the
+application holds `network`; a minimal root filesystem (read-only system
+directories and `/sys`, a minimal `/dev`, a writable per-application data
+directory in `FERRIX_APP_DATA_DIR`, and `$HOME` only with `files-home`); and
+a default-deny-dangerous seccomp filter (no `mount`, `unshare`, `setns`,
+`ptrace`, `bpf`, module or `kexec` calls, `chroot`, keyring, and more). An
+opt-in `uid: per-app` runs the application as its own subuid through the
+user namespace, with its data directory owned by that id.
+What it does not provide yet: a different uid by default (every checked-in
+application still runs as the launcher's uid: a per-app subuid cannot reach
+the root-owned Wayland and daemon sockets yet), capability dropping beyond
+`no_new_privs` and the seccomp filter, per-application network routing (an
+application with `network` shares the launcher's network), and cgroup
+freezing. With `mode: private` the rest of `/run` is unchanged,
 so the D-Bus system bus socket remains visible (though only the daemons
 speak D-Bus; applications have no grant that reaches ModemManager or
 NetworkManager directly); `mode: private-run` hides it. Every checked-in
@@ -229,26 +286,43 @@ only as a documented compatibility mode for manifests that deliberately need
 other `/run` facilities.
 
 Files (`org.ferrix.files`) depends on exactly that boundary. It talks to no
-platform daemon, so its descriptor declares no capabilities and
-`apps/grants.json` has no row for it (zero effective capabilities; its
-`private-run` view holds only `ferrix-appd.sock` for Back). The mount
-namespace replaces only `/proc`, `/tmp`, and `/run`, so the inherited `$HOME`
-stays the shared, durable home directory Files reads and writes (and where
-Contacts writes its vCard export). Keeping Files inside `$HOME` is the
-app's job, not the sandbox's: every folder path is canonicalized and must stay
-under the canonical home, entry names are single components, and symlinks that
-leave home are listed but never followed. A sandbox-enforced filesystem view
-(bind-mounting only `$HOME`) is future isolation work, not something this
-release provides.
+platform daemon; its only capability is `files-home` (its `private-run`
+view holds only `ferrix-appd.sock` for Back). The sandbox's minimal root
+binds `$HOME` read-write only for applications granted `files-home`: Files,
+the Terminal, and Contacts (whose vCard export writes to `~/Documents` until
+a document portal exists, #11). Every other application sees an empty,
+ephemeral stand-in at `$HOME` plus its own data directory. Within the
+exposed home, keeping Files inside `$HOME` remains the app's job as well:
+every folder path is canonicalized and must stay under the canonical home,
+entry names are single components, and symlinks that leave home are listed
+but never followed.
 
 ## Surface association and focus
 
-The compositor reads each client's pid from the kernel (`SO_PEERCRED`) and
-reports `SurfaceMapped{pid, app_id, title}`, `SurfaceUnmapped{pid}`, and
-`FocusChanged{pid}`. `ferrix-appd` resolves a pid to an instance by matching the
-sandbox pid or by walking `/proc/<pid>/status` parents (the application is a
-grandchild of `ferrix-appd`). The xdg `app_id` string an application sets is untrusted
-metadata: it is recorded and compared, never used to identify the caller.
+The compositor reads each client's pid from the kernel (`SO_PEERCRED`),
+gives every toplevel an opaque surface id, and reports
+`SurfaceMapped{pid, app_id, title, surface}`, `SurfaceUnmapped{pid, surface}`
+(per toplevel), and `FocusChanged{pid, surface}`. `ferrix-appd` resolves a pid
+to an instance by matching the sandbox pid or by walking `/proc/<pid>/status`
+parents (the application is a grandchild of `ferrix-appd`). The xdg `app_id`
+string an application sets is untrusted metadata: it is recorded and
+compared, never used to identify the caller.
+
+The one exception is a runtime whose windows all come from a shared client
+(the Android runtime's composer, one toplevel per Android task). Its adapter
+declares `SurfaceMatch::SharedHost { client_pids, app_id }`: a toplevel
+belongs to the instance only when its kernel pid is one of those
+runtime-reported pids **and** its `app_id` matches; those pids never resolve
+by pid or ancestry. Shared-host toplevels no running instance claims are
+withheld from presentation (`Notification::Withhold`) unless they can be
+**adopted**: when the toplevel's pid is one the runtime itself reports as
+its shared host (`Runtime::shared_host_pids`) and its `app_id` is the
+window id of a launchable catalog or installed app, `ferrix-appd` attaches
+a new instance (`Runtime::attach`, no relaunch) that owns it, raised when
+an Android app is in front and in the background otherwise. Activations
+name the exact surface, the close gesture asks the task to close
+(`Notification::Close`), and the instance ends `terminated` (not crashed)
+once its last window stays gone. Details in `docs/android-runtime.md` §7.
 
 `ferrix-appd` pushes `Notification::Activate{pid}` to the compositor to raise a
 window: on a first launch once its surface maps, on a second launch of a running
@@ -294,13 +368,13 @@ then gates by the verified role:
 
 | message | roles |
 |---|---|
-| `Catalog`, `Instances`, `Subscribe` | any |
+| `Catalog`, `Instances`, `AppIcon`, `Subscribe` | any |
 | `Home` | `compositor`, `home`, `application`, `tool` |
 | `Identify` | `service`, `tool` |
 | `Launch`, `Activate`, `Terminate` | `home`, `tool` |
-| `Open` with `dial` / `compose` | `application`, `home`, `tool` |
+| `Open` with `dial` / `compose` / `show-pictures` | `application`, `home`, `tool` |
 | `Open` with `show-call` or `show-bluetooth-pairing` | `service`, `tool` |
-| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `HomeGesture`, `CloseGesture` | `compositor` |
+| `SurfaceMapped`, `SurfaceUnmapped`, `FocusChanged`, `ActivationRequested`, `HomeGesture`, `CloseGesture` | `compositor` |
 | `YieldForeground` | `application`, `home` |
 
 A `service` resolves identities and observes lifecycle events; it never
@@ -323,9 +397,11 @@ An application never launches another application by id. It asks
 order, whose descriptor lists the kind in `intents`. Kinds: `dial` (Phone
 opens the dialer with the number in the buffer), `compose` (Messages opens a
 new message addressed to the number), and `show-call` (Phone shows the
-ringing or live call), and `show-bluetooth-pairing` (Settings shows the
+ringing or live call), `show-bluetooth-pairing` (Settings shows the
 pairing request a remote started; it carries nothing, the handler reads the
-request from `ferrix-core`). A number is validated (at most 32 characters, digits,
+request from `ferrix-core`), and `show-pictures` (Files opens `~/Pictures`,
+Camera's gallery hand-off; it carries no path, the handler resolves the
+folder inside its own home). A number is validated (at most 32 characters, digits,
 a leading `+`, and ` -()*#`). Intents only prefill or reveal UI: nothing is
 dialed or sent until the user presses Call or Send, so opening one needs no
 grant beyond the role rule above.
@@ -361,7 +437,10 @@ Records are single JSON lines with `"evidence"` first (`QEMU` in the guest,
 `app-started` (with `granted`, `denied_capabilities`), `sandbox-ready` (with
 `run_dir`), `grants-loaded`, `grants-missing`, `grants-invalid`,
 `appd-identify` (`pid`, `app|null`, `granted_count`; once per connection per
-pid), `app-intent` (`kind`, `handler`, `delivery`: `launch` | `running` |
+pid), `installed-apps` (`apps`, `added`, `removed`, `changed`, `unavailable`;
+counts only), `installed-app-rejected`, `app-adopting` (`app`, `pid`,
+`surface`, `raise`),
+`app-intent` (`kind`, `handler`, `delivery`: `launch` | `running` |
 `activated-only`; never the number), `app-surface`, `app-foreground`,
 `app-background`, `app-exited`, `app-crashed`, `home-restarting`,
 `home-restart-abandoned`, `ferrix-appd-failed` (ferrix-appd and sandbox); `client-gone`,
@@ -376,9 +455,10 @@ evidence for this slice is recorded in `docs/status.md`.
 ## Remaining platform work
 
 Portals and user-facing permission prompts (grants are a checked-in policy,
-not a runtime consent flow), a different uid per application, seccomp, cgroup
-limits, a network namespace, a filesystem view restricted beyond `/proc`,
-`/tmp`, and the socket directory, authenticated (rather than bootstrap-trusted)
+not a runtime consent flow), a per-application uid by default (the opt-in
+`uid: per-app` needs socket permissions and an id-mapped home first),
+per-application network routing, a document portal narrower than
+`files-home`, authenticated (rather than bootstrap-trusted)
 compositor/tool/service endpoints, the Rust SDK beyond the launch environment
 constants, the TypeScript/web runtime, per-application logs, and any device
 target. The Android compatibility runtime is documented separately (ADR-005

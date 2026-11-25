@@ -1,0 +1,7 @@
+# Waydroid base patches that a Ferrix patch in this tree replaces, because
+# the pinned LineageOS source moved under them. One path per line, relative
+# to vendor/extra/waydroid-patches/base-patches-<sdk>/.
+#
+# LineageOS's b/498720726 seal check rewrote is_memfd_fd(); ported as
+# system/core/0001-ashmem-fall-back-to-seals-when-fd-readlink-is-denied.patch.
+system/core/0020-ashmem-Fallback-to-old-method-for-checking-memfd-whe.patch

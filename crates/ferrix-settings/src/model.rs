@@ -138,6 +138,8 @@ pub enum Action {
     SetBrightness(u8),
     /// Auto-rotate off (`true`, pinned portrait) or on.
     SetRotationLock(bool),
+    /// The screen idle timeout through `ferrix-core` (`None` = never).
+    SetIdleTimeout(Option<u32>),
     /// Active output volume through `ferrix-core`.
     SetVolume(u8),
     /// Active output (playback) mute through `ferrix-core`.
@@ -202,6 +204,8 @@ pub struct Model {
     pub bt_now: Option<std::time::Instant>,
     /// Brightness preview while the rail is dragged.
     pub brightness_drag: Option<u8>,
+    /// The core's screen policy (idle timeout, inhibitors), once known.
+    pub screen_policy: Option<ferrix_hardware_api::ScreenPolicy>,
     /// Volume preview while the rail is dragged.
     pub volume_drag: Option<u8>,
     /// The on-screen keyboard layout id shown as active (Keyboard page).
@@ -280,6 +284,7 @@ impl Model {
             bt_session_at: None,
             bt_now: None,
             brightness_drag: None,
+            screen_policy: None,
             volume_drag: None,
             kbd_layout: ferrix_ui::keyboard::DEFAULT_LAYOUT.to_owned(),
             kbd_try: String::new(),

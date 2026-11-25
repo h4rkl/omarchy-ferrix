@@ -120,9 +120,56 @@ printf '%s\n' "$code" | grep -Eq '^[[:space:]]*need .*(ferrix-s5300-mounts|exyno
 	ok 'static: ModemManager only orders after the S5300 chain'
 printf '%s\n' "$code" | grep -qx '	use ferrix-s5300-mounts exynos-modem sit-proxy' ||
 	fail 'static: ModemManager lost its S5300 ordering'
-# The udev rule still tags only WWAN SIT ports; no CPIF node is handed to
-# ModemManager until a reviewed S3 plugin change.
-grep -Eq 'cpif|umts_|oem_ipc' "$pkg/99-google-tegu-sit.rules" && fail 'static: udev rule tags CPIF nodes for ModemManager' || true
+# S3 (s5300-s3-mm-binding.md): the udev rule hands exactly umts_ipc0/1 and
+# rmnet0 to ModemManager, only on a CPIF kernel and only while both sit-proxy
+# sockets exist, and only through those sockets. No other CPIF node (boot,
+# RFS, OEM/GEMS) is ever tagged.
+rules=$(grep -v '^[[:space:]]*#' "$pkg/99-google-tegu-sit.rules")
+for gate in 'ACTION!="add|change", GOTO="ferrix_tegu_cpif_end"' 'SUBSYSTEM!="cpif|net", GOTO="ferrix_tegu_cpif_end"' \
+	'TEST!="/sys/class/cpif", GOTO="ferrix_tegu_cpif_end"' 'TEST!="/run/sit-proxy/0", GOTO="ferrix_tegu_cpif_end"' \
+	'TEST!="/run/sit-proxy/1", GOTO="ferrix_tegu_cpif_end"'; do
+	printf '%s\n' "$rules" | grep -Fqx "$gate" || fail "static: CPIF udev gate missing: $gate"
+done
+cpif_lines=$(printf '%s\n' "$rules" | sed -n '/GOTO="ferrix_tegu_cpif_end"/,/LABEL="ferrix_tegu_cpif_end"/p' | grep -v 'GOTO=\|LABEL=')
+[ "$(printf '%s\n' "$cpif_lines" | wc -l | tr -d ' ')" -eq 2 ] &&
+	printf '%s\n' "$cpif_lines" | grep -q '^SUBSYSTEM=="cpif", KERNEL=="umts_ipc\[01\]", .*ENV{ID_MM_PORT_TYPE_SIT}="1", ENV{ID_MM_SIT_PROXY}="1", ENV{ID_MM_SIT_PROXY_REQUIRED}="1"' &&
+	printf '%s\n' "$cpif_lines" | grep -q '^SUBSYSTEM=="net", KERNEL=="rmnet0", ENV{ID_MM_DEVICE_PROCESS}="1", ENV{ID_MM_PHYSDEV_UID}="google-tegu-s5300-cpif", ENV{ID_MM_KERNEL_DRIVER}="cp_interface"$' &&
+	[ "$(printf '%s\n' "$cpif_lines" | grep -c 'ENV{ID_MM_PHYSDEV_UID}="google-tegu-s5300-cpif", ENV{ID_MM_KERNEL_DRIVER}="cp_interface"')" -eq 2 ] &&
+	ok 'static: udev hands only umts_ipc0/1 (proxy-only) and rmnet0 to ModemManager, gated on the sockets' ||
+	fail 'static: CPIF udev rule contract changed'
+printf '%s\n' "$rules" | grep -Eq 'umts_boot|umts_rfs|oem_ipc|umts_ipc\*|rmnet\*' &&
+	fail 'static: udev rule tags a CPIF node other than umts_ipc0/1 or rmnet0' || true
+grep -Fq '0001-samsung-sit-google-kleaf-cpif-binding.patch' "$mm/APKBUILD" &&
+	ok 'static: ModemManager carries the CPIF binding patch' || fail 'static: ModemManager lacks the CPIF binding patch'
+# 0002 (physical S3 result 2026-11-24): a SIT-only modem must initialize
+# without a primary AT port, and only that case may bypass the parent.
+p2="$mm/0002-samsung-sit-sit-only-modem-without-at-port.patch"
+grep -Fq '0002-samsung-sit-sit-only-modem-without-at-port.patch' "$mm/APKBUILD" &&
+	[ "$(grep -o '000[1-9]-[a-z-]*\.patch' "$mm/APKBUILD" | head -3 | tr '\n' ' ')" = '0001-samsung-sit-google-kleaf-cpif-binding.patch 0002-samsung-sit-sit-only-modem-without-at-port.patch 0003-iface-modem-sit-port-as-primary.patch ' ] &&
+	grep -q '^+    broadband_modem_class->initialization_started = initialization_started;$' "$p2" &&
+	grep -q '^+    broadband_modem_class->enabling_started = enabling_started;$' "$p2" &&
+	grep -q '^+    iface->load_current_capabilities = load_current_capabilities;$' "$p2" &&
+	[ "$(grep -c '^+    if (has_primary_at_port (self))' "$p2")" -eq 2 ] &&
+	! grep -E '^\+.*(mm_sit_|SIT_MESSAGE|0x[0-9a-fA-F]{4})' "$p2" >/dev/null &&
+	ok 'static: ModemManager carries 0002 after 0001 (SIT-only init, no new SIT messages)' ||
+	fail 'static: ModemManager 0002 SIT-only init patch missing or changed'
+# 0003 (physical r5 result 2026-11-25): the Modem interface takes a SIT port
+# as primary only when there is no AT, QMI or MBIM port; it touches nothing else.
+p3="$mm/0003-iface-modem-sit-port-as-primary.patch"
+[ "$(grep -c '^diff ' "$p3")" -eq 1 ] && grep -q '^diff -ruN a/src/mm-iface-modem.c b/src/mm-iface-modem.c$' "$p3" &&
+	grep -q '^+                                                      MM_PORT_TYPE_SIT);$' "$p3" &&
+	grep -q '^+            if (!primary) {$' "$p3" &&
+	grep -Eq '^ +"Primary port initialization failed: none found"\);$' "$p3" &&
+	[ "$(grep -c '^-' "$p3" | tr -d ' ')" -eq 1 ] &&
+	! grep -E '^\+.*(mm_sit_|SIT_MESSAGE|0x[0-9a-fA-F]{4})' "$p3" >/dev/null &&
+	ok 'static: ModemManager 0003 only adds the SIT-primary fallback to mm-iface-modem.c' ||
+	fail 'static: ModemManager 0003 SIT-primary patch missing or changed'
+sh -n "$root/tools/pixel-9a/s5300-mm-hotswap.sh" && sh -n "$root/tools/pixel-9a/s5300-mm-hotswap/abuild.sh" &&
+	sh -n "$root/tools/pixel-9a/s5300-mm-hotswap/sim.sh" &&
+	grep -q 'abuild -F -r' "$root/tools/pixel-9a/s5300-mm-hotswap/abuild.sh" &&
+	! grep -Eq '\b(adb|fastboot)\b|/dev/cu\.' "$root/tools/pixel-9a/s5300-mm-hotswap.sh" "$root/tools/pixel-9a/s5300-mm-hotswap/abuild.sh" "$root/tools/pixel-9a/s5300-mm-hotswap/sim.sh" &&
+	ok 'static: the native ModemManager build/emulation helper builds the recipe and never touches a device' ||
+	fail 'static: s5300-mm-hotswap helper changed'
 
 # Version and kernel pins in the library follow the recipe and the workflows.
 modem_ver=$(sed -n 's/^pkgver=//p' "$board/pmos/exynos-modem/APKBUILD")-r$(sed -n 's/^pkgrel=//p' "$board/pmos/exynos-modem/APKBUILD")
@@ -146,8 +193,12 @@ extract_config() {
 	ok 'static: init scripts expect the reviewed --print-config output' ||
 	fail 'static: init script --print-config expectations differ from the adapter contract'
 for initd in exynos-modem.initd sit-proxy.initd; do
+	# The one allowed exception is the S3 udev re-trigger, a sysname match
+	# that synthesises uevents and opens nothing.
 	grep -v '^[[:space:]]*#' "$pkg/$initd" | grep -E 'umts_ipc|oem_ipc' |
-		grep -vE '^		command_args=|^(dev\.[01]|oem_gems_dev)=' && fail "static: $initd names a CPIF node outside its CLI" || true
+		grep -vE '^		command_args=|^(dev\.[01]|oem_gems_dev)=' |
+		grep -vxF "	udevadm trigger --action=change --subsystem-match=cpif --sysname-match='umts_ipc[01]' &&" &&
+		fail "static: $initd names a CPIF node outside its CLI" || true
 done
 # The library touches /dev only through the node path built in
 # cpif_check_node, and that path only through file tests and stat.
@@ -700,6 +751,36 @@ run_case 'cpif: sit-proxy refuses another kernel' fail 'not the pinned Kleaf' si
 	"$online; export FAKE_UNAME=6.1.99"
 run_case 'cpif: sit-proxy refuses a stale binary' fail 'does not resolve the reviewed' sit-proxy start_pre \
 	"$online; export FAKE_STALE_BINARY=1"
+
+# S3: once both sockets exist, start_post re-runs the CPIF udev rules for
+# exactly umts_ipc0/1 and rmnet0 (uevents only); stop_post does it again after
+# removing the sockets. AF_UNIX paths are short, so the sockets live outside
+# $work.
+sockdir=$(mktemp -d /tmp/fxsp.XXXXXX)
+mk_sockets() {
+	rm -f "$sockdir/0" "$sockdir/1"
+	python3 -c 'import socket, sys
+for p in sys.argv[1:]:
+    socket.socket(socket.AF_UNIX).bind(p)' "$sockdir/0" "$sockdir/1"
+}
+fake_udevadm() {
+	cat >"$fx/usr/sbin/udevadm" <<'EOF'
+#!/bin/sh
+printf 'udevadm %s\n' "$*" >>"$FAKE_LOG"
+EOF
+	chmod 755 "$fx/usr/sbin/udevadm"
+}
+retriggered='grep -qx "udevadm trigger --action=change --subsystem-match=cpif --sysname-match=umts_ipc\[01\]" "$FAKE_LOG" && grep -qx "udevadm trigger --action=change --subsystem-match=net --sysname-match=rmnet0" "$FAKE_LOG" && grep -qx "udevadm settle --timeout=10" "$FAKE_LOG" && [ "$(grep -c "^udevadm " "$FAKE_LOG")" -eq 3 ]'
+run_case 'cpif: sit-proxy start_post re-runs the CPIF udev rules once both sockets exist' ok '' sit-proxy \
+	"sit_socket_dir=\$sockdir; start_post && $retriggered" 'fake_udevadm; mk_sockets'
+run_case 'cpif: sit-proxy start_post refuses when the sockets never appear' fail 'did not create' sit-proxy \
+	'sit_socket_dir=$fx/run/no-sockets; start_post' 'fake_udevadm'
+run_case 'cpif: sit-proxy stop_post removes the sockets and re-runs the rules' ok '' sit-proxy \
+	"sit_socket_dir=\$sockdir; stop_post && [ ! -e \"\$sockdir/0\" ] && [ ! -e \"\$sockdir/1\" ] && $retriggered" 'fake_udevadm; mk_sockets'
+run_case 'wwan: sit-proxy start_post and stop_post leave udev alone' ok '' sit-proxy \
+	'sit_socket_dir=$sockdir; start_post && stop_post && ! grep -q "^udevadm " "$FAKE_LOG"' \
+	'set_backend linux-google-tegu-wwan; fake_udevadm; mk_sockets'
+rm -rf "$sockdir"
 
 # --- Kleaf composer: backend pairing and runlevel policy -----------------------
 PYTHONDONTWRITEBYTECODE=1 python3 - "$root" 2>"$work/compose.err" <<'EOF' && ok 'compose: Kleaf pairs google-kleaf-cpif and strips every S5300 runlevel link' || { fail 'compose: backend pairing or runlevel policy'; cat "$work/compose.err"; }

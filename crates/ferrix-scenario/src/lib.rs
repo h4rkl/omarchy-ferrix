@@ -12,7 +12,7 @@ pub mod runner;
 pub mod scenario;
 
 pub use matcher::{is_subset, match_in_order};
-pub use runner::{FrameCapture, Mode, Outcome, run};
+pub use runner::{FrameCapture, Mode, Outcome, QmpInput, run};
 pub use scenario::{Scenario, ScenarioError, Service, Step};
 
 /// Scenario names ADR-006 requires to be checked in.

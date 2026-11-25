@@ -4,7 +4,8 @@
 //! capability the session exposes.
 
 use ferrix_hardware_api::{
-    Capability, HardwareCommand, HardwareError, HardwareEvent, MockCommand, SuspendOutcome,
+    Capability, HardwareCommand, HardwareError, HardwareEvent, MockCommand, SleepState,
+    SuspendOutcome, clamp_brightness,
 };
 use ferrix_session::HardwareServices;
 
@@ -94,13 +95,18 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             )?,
             ControlCommand::SetBrightness { percent } => {
                 // A real capability call, not a mock mutation: the adapter
-                // emits display-changed itself.
-                services.display.set_brightness(percent)?;
+                // emits display-changed itself. Same floor as the product path.
+                services.display.set_brightness(clamp_brightness(percent))?;
                 events.push(HardwareEvent::DisplayChanged(
                     services.display.display_state(),
                 ));
             }
             ControlCommand::Suspend { outcome: wanted } => {
+                // A raw capability cycle that bypasses the suspend policy:
+                // mocked targets only, so it can never sleep a real board.
+                if services.mock_control.is_none() {
+                    return Err(HardwareError::unsupported(Capability::MockControl));
+                }
                 if let Some(wanted) = wanted {
                     mock(
                         services,
@@ -109,7 +115,16 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
                     )?;
                 }
                 let lifecycle_before = services.lifecycle.lifecycle_state();
-                let result = services.lifecycle.suspend();
+                let state = services
+                    .lifecycle
+                    .sleep_states()
+                    .first()
+                    .copied()
+                    .unwrap_or(SleepState::S2idle);
+                let result = services
+                    .lifecycle
+                    .suspend(state)
+                    .map(|report| report.outcome);
                 let lifecycle = services.lifecycle.lifecycle_state();
                 let reported = match result {
                     Ok(o) => o,
@@ -147,9 +162,26 @@ pub fn apply(services: &HardwareServices, command: &ControlCommand) -> Result<Ap
             | ControlCommand::BluetoothDisconnect { .. }
             | ControlCommand::BluetoothForget { .. } => {}
             ControlCommand::Shutdown => shutdown = true,
+            ControlCommand::SetSuspendSleep { sleep_ms, wake } => mock(
+                services,
+                MockCommand::SetSuspendSleep { sleep_ms, wake },
+                &mut events,
+            )?,
+            // Screen and suspend policy verbs: the control handler in
+            // main.rs applies them to the policy store and never calls here.
+            ControlCommand::SetIdleTimeout { .. }
+            | ControlCommand::InhibitBlank { .. }
+            | ControlCommand::ReleaseInhibit { .. }
+            | ControlCommand::SetSuspendPolicy { .. } => {}
             // A process action, not hardware state: the control handler in
             // main.rs performs it (see daemon_kill.rs) and never calls here.
             ControlCommand::KillDaemon { .. } => {}
+            // Camera client verbs produce records, not hardware events: the
+            // control handler in main.rs runs them through camera::control.
+            ControlCommand::CameraList
+            | ControlCommand::CameraCapture { .. }
+            | ControlCommand::CameraPreview { .. }
+            | ControlCommand::CameraVideo { .. } => {}
         }
         Ok(())
     })();
@@ -184,7 +216,15 @@ pub fn apply_product(
             services.bluetooth.set_bluetooth_enabled(enabled)?;
         }
         HardwareCommand::SetBrightness { percent } => {
-            services.display.set_brightness(percent)?;
+            // Never fully dark while the screen is on; the shell's DPMS
+            // blank is the only way to turn the panel off.
+            if percent > 100 {
+                return Err(HardwareError::invalid(
+                    Capability::Display,
+                    format!("brightness must be 0..=100 (got {percent})"),
+                ));
+            }
+            services.display.set_brightness(clamp_brightness(percent))?;
         }
         HardwareCommand::SetRotationLock { locked } => {
             services.display.set_rotation_lock(locked)?;
@@ -199,7 +239,15 @@ pub fn apply_product(
             services.audio.set_audio_muted(muted)?;
         }
         HardwareCommand::Suspend => {
-            services.lifecycle.suspend()?;
+            // The state socket routes this through the core's suspend
+            // policy (board flag, kill switch, inhibitors); never here.
+            return Err(HardwareError::invalid(
+                Capability::Lifecycle,
+                "suspend goes through the core suspend policy",
+            ));
+        }
+        HardwareCommand::PowerAction { action } => {
+            services.lifecycle.power_action(action)?;
         }
     }
     Ok(())
@@ -336,6 +384,27 @@ mod tests {
         assert_eq!(display.orientation, Orientation::Portrait, "lock holds");
         apply_product(&s, HardwareCommand::SetRotationLock { locked: false }).unwrap();
         assert_eq!(s.snapshot().display.orientation, Orientation::Landscape);
+    }
+
+    #[test]
+    fn brightness_never_goes_fully_dark_and_power_actions_reach_lifecycle() {
+        use ferrix_hardware_api::{MIN_BRIGHTNESS_PERCENT, PowerAction};
+        let s = services();
+        apply_product(&s, HardwareCommand::SetBrightness { percent: 0 }).unwrap();
+        assert_eq!(
+            s.snapshot().display.brightness_percent,
+            MIN_BRIGHTNESS_PERCENT
+        );
+        apply(&s, &ControlCommand::SetBrightness { percent: 1 }).unwrap();
+        assert_eq!(
+            s.snapshot().display.brightness_percent,
+            MIN_BRIGHTNESS_PERCENT
+        );
+        assert!(apply_product(&s, HardwareCommand::SetBrightness { percent: 101 }).is_err());
+        for action in [PowerAction::PowerOff, PowerAction::Restart] {
+            apply_product(&s, HardwareCommand::PowerAction { action })
+                .expect("the virtual phone accepts and hands off to init");
+        }
     }
 
     #[test]

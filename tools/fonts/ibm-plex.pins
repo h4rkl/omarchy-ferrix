@@ -1,0 +1,26 @@
+# Pinned IBM Plex faces compiled into ferrix-ui (issue #14).
+# Read by tools/fonts/ibm-plex-fetch.sh; never sourced as shell.
+#
+# Source of the pins (recorded 2026-11-24, UTC):
+#   Repository    https://github.com/IBM/plex
+#   Licence       SIL Open Font License 1.1 (GitHub licence API `OFL-1.1`, and
+#                 the per-package license.txt at the commit below, vendored as
+#                 LICENSE.txt next to the faces)
+#   Commit        the `@ibm/plex-sans-condensed@2.3.1` release commit (also
+#                 master at 2026-11-18T17:42:42Z); Plex Mono at this commit is
+#                 the `@ibm/plex-mono@2.5.0` release
+#   Files         packages/<package>/fonts/complete/ttf/<file>
+#
+# Per-file SHA-256 hashes live in crates/ferrix-ui/assets/fonts/ibm-plex/SHA256SUMS,
+# which crates/ferrix-ui/build.rs enforces. Nothing here auto-updates: moving
+# the pin means editing the commit, running `just fonts-fetch`, reviewing the
+# diff, and then `just fonts-verify`. The build never uses the network.
+IBM_PLEX_COMMIT=2e90fe366fdc27c12682db13e5aa20ded3d90908
+IBM_PLEX_PINNED_ON=2026-11-24
+IBM_PLEX_LICENSE=packages/plex-sans-condensed/fonts/complete/ttf/license.txt
+# System voice: Regular body and chrome, SemiBold titles and readouts.
+FONT=packages/plex-sans-condensed/fonts/complete/ttf/IBMPlexSansCondensed-Regular.ttf
+FONT=packages/plex-sans-condensed/fonts/complete/ttf/IBMPlexSansCondensed-SemiBold.ttf
+# Terminal cells and source text.
+FONT=packages/plex-mono/fonts/complete/ttf/IBMPlexMono-Regular.ttf
+FONT=packages/plex-mono/fonts/complete/ttf/IBMPlexMono-Bold.ttf

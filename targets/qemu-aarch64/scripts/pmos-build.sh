@@ -24,22 +24,10 @@ if [ "$android" = 1 ]; then
   done
   sh "$root/tools/android/waydroid-images-fetch.sh" --verify-only >/dev/null || { echo "Waydroid images failed verification; re-run: just waydroid-images-fetch" >&2; exit 2; }
   android_mounts="-v $images_dir:/android/images:ro"
-  # Fulguris is part of the Android product image: refuse to build that
-  # variant unless the pinned F-Droid APK exists and passes verification.
-  fulguris_pins="$root/tools/android/fulguris.pins"
-  fulguris_version=$(sed -n 's/^FULGURIS_VERSION=//p' "$fulguris_pins" | head -1)
-  fulguris_asset=$(sed -n 's/^FULGURIS_ASSET=//p' "$fulguris_pins" | head -1)
-  fulguris_apk=${FERRIX_ANDROID_FULGURIS_APK:-"${FERRIX_OUT_DIR:-$root/out}/android/fulguris/$fulguris_version/$fulguris_asset"}
-  [ -f "$fulguris_apk" ] || {
-    echo "missing pinned Fulguris APK at $fulguris_apk; run: sh tools/android/fulguris-fetch.sh" >&2
-    exit 2
-  }
-  sh "$root/tools/android/fulguris-verify.sh" "$fulguris_apk" --pins "$fulguris_pins" >/dev/null \
-    || { echo "pinned Fulguris APK failed verification: $fulguris_apk" >&2; exit 2; }
-  android_mounts="$android_mounts -v $fulguris_apk:/android/fulguris.apk:ro"
+  # The Browser (LineageOS Jelly) is part of the pinned system image
+  # (ADR-008); no APK is fetched or staged.
   # Guest bootstrap shared with the Pixel 9a dev route (single implementation).
   android_mounts="$android_mounts -v $root/tools/android/guest/ferrix-waydroid.sh:/android/ferrix-waydroid.sh:ro"
-  printf 'fulguris apk: %s (verified)\n' "$fulguris_apk"
 fi
 cache=${FERRIX_CACHE_DIR:-"$root/.cache/ferrix"}
 pmos_dir=$root/targets/qemu-aarch64/pmos
@@ -54,7 +42,7 @@ docker info >/dev/null 2>&1 || { echo "container engine is not running; start Or
 # daemons, the apps, and the ADR-004 grants policy (without it ferrix-appd
 # starts with an empty policy and the home surface has no capabilities).
 for file in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-    ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files \
+    ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files ferrix-camera \
     profile.toml colors.toml apps/org.ferrix.home.json apps/grants.json; do
   [ -f "$product/$file" ] || { echo "missing product artifact $product/$file" >&2; exit 1; }
 done

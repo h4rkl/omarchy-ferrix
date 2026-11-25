@@ -71,7 +71,7 @@ install -Dm755 "$marker_src" "$mnt$marker_dst"
 install -Dm755 "$product_src" "$mnt$product_dst"
 # Product binaries: the same set qemu-build.sh stages for the smoke guest,
 # including the service daemons and the Phone/Messages/Contacts/Settings/Files apps.
-product_bins="ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files"
+product_bins="ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files ferrix-camera"
 for bin in $product_bins; do
   [ -f "/product/$bin" ] || fail "missing-product-binary" "$bin not in /product; run just qemu-build first"
   install -Dm755 "/product/$bin" "$mnt/usr/bin/$bin"
@@ -85,8 +85,8 @@ for descriptor in /product/apps/*.json; do
   install -Dm644 "$descriptor" "$mnt/usr/share/ferrix/apps/$(basename "$descriptor")"
 done
 [ -f "$mnt/usr/share/ferrix/apps/grants.json" ] || fail "missing-grants" "/product/apps/grants.json not staged"
-# Third-party notices staged by qemu-build.sh (Remix Icon licence, JetBrains
-# Mono OFL; docs/licensing.md).
+# Third-party notices staged by qemu-build.sh (Material Symbols licence, IBM
+# Plex OFL; docs/licensing.md).
 if [ -d /product/licenses ]; then
   for notice in /product/licenses/*/*; do
     rel=${notice#/product/licenses/}
@@ -109,7 +109,8 @@ fi
 # Only when FERRIX_PMOS_ANDROID=1: stage the pinned container images, the
 # software-rendering properties, the nftables rule, the first-boot init
 # script (00-ferrix-android.start, before 00-ferrix-product.start), and the
-# verified Fulguris APK when pmos-build mounted one. `waydroid init` itself runs
+# shared guest helper. The Browser (LineageOS Jelly) is part of the pinned
+# system image, so no APK is staged (ADR-008). `waydroid init` itself runs
 # at first guest boot (offline, from /etc/waydroid-extra/images): it needs
 # the guest's dbus/lxc environment, not a loop-mounted rootfs.
 android_facts='"enabled": false'
@@ -129,7 +130,8 @@ if [ "${FERRIX_PMOS_ANDROID:-0}" = 1 ]; then
 [properties]
 ro.hardware.gralloc=default
 ro.hardware.egl=swiftshader
-persist.waydroid.multi_windows=false
+persist.waydroid.multi_windows=true
+persist.waydroid.task_streams=true
 ro.sf.lcd_density=400
 INI
   install -Dm755 "$project/local.d/00-ferrix-android.start" "$mnt/etc/local.d/00-ferrix-android.start"
@@ -148,14 +150,9 @@ INI
       ln -s "/etc/init.d/$svc" "$mnt/etc/runlevels/default/$svc"
     fi
   done
-  fulguris_sha=""
-  if [ -f /android/fulguris.apk ]; then
-    install -Dm644 /android/fulguris.apk "$mnt/usr/share/ferrix/android/fulguris.apk"
-    fulguris_sha=$(sha256sum "$mnt/usr/share/ferrix/android/fulguris.apk" | cut -d' ' -f1)
-  fi
   waydroid_pkg=$(awk '/^P:waydroid$/ { getline; sub(/^V:/, ""); print; exit }' "$mnt/lib/apk/db/installed")
   [ -n "$waydroid_pkg" ] || fail "waydroid-not-installed" "package waydroid missing from the rootfs apk database"
-  android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"helper_sha256\": \"$(sha256sum "$mnt/usr/lib/ferrix/ferrix-waydroid.sh" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"fulguris_apk_sha256\": \"$fulguris_sha\", \"init_mode\": \"first-boot\""
+  android_facts="\"enabled\": true, \"waydroid_version\": \"$waydroid_pkg\", \"images_json\": $(cat /android/images/images.json), \"system_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/system.img" | cut -d' ' -f1)\", \"vendor_img_sha256\": \"$(sha256sum "$mnt/etc/waydroid-extra/images/vendor.img" | cut -d' ' -f1)\", \"properties_sha256\": \"$(sha256sum "$mnt/etc/ferrix/waydroid-properties.ini" | cut -d' ' -f1)\", \"init_script_sha256\": \"$(sha256sum "$mnt/etc/local.d/00-ferrix-android.start" | cut -d' ' -f1)\", \"helper_sha256\": \"$(sha256sum "$mnt/usr/lib/ferrix/ferrix-waydroid.sh" | cut -d' ' -f1)\", \"nftables_rule_linked\": $nft_rule, \"browser_package\": \"org.lineageos.jelly\", \"browser_source\": \"system-image\", \"init_mode\": \"first-boot\""
   android_facts="\"density_dpi\": $android_density_dpi, $android_facts"
   log "android runtime staged (waydroid $waydroid_pkg, density ${android_density_dpi}dpi)"
 fi
@@ -169,6 +166,35 @@ if [ ! -L "$mnt/etc/runlevels/default/local" ] && [ ! -e "$mnt/etc/runlevels/def
   ln -s /etc/init.d/local "$mnt/etc/runlevels/default/local"
   log "enabled OpenRC local service in default runlevel"
 fi
+
+# cgroup v2 for the per-application groups ferrix-sandbox creates under
+# /sys/fs/cgroup/ferrix.slice (issue #10). OpenRC's cgroups service mounts
+# the unified hierarchy at /sys/fs/cgroup only with rc_cgroup_mode="unified"
+# (hybrid puts cgroup2 at /sys/fs/cgroup/unified with the controllers on v1).
+# Set it explicitly, whatever the packaged default, and record the result.
+rc_conf="$mnt/etc/rc.conf"
+[ -f "$rc_conf" ] || fail "no-rc-conf" "OpenRC /etc/rc.conf missing in rootfs"
+if grep -Eq '^[[:space:]]*#?[[:space:]]*rc_cgroup_mode=' "$rc_conf"; then
+  sed -i -E 's/^[[:space:]]*#?[[:space:]]*rc_cgroup_mode=.*/rc_cgroup_mode="unified"/' "$rc_conf"
+else
+  printf 'rc_cgroup_mode="unified"\n' >>"$rc_conf"
+fi
+cgroup_mode=$(sed -n 's/^rc_cgroup_mode="\([^"]*\)".*/\1/p' "$rc_conf" | tail -n 1)
+[ "$cgroup_mode" = unified ] || fail "cgroup-mode" "rc_cgroup_mode is '$cgroup_mode', expected unified"
+cgroup_runlevel=""
+for level in sysinit boot default; do
+  if [ -L "$mnt/etc/runlevels/$level/cgroups" ]; then
+    cgroup_runlevel=$level
+    break
+  fi
+done
+if [ -z "$cgroup_runlevel" ]; then
+  [ -x "$mnt/etc/init.d/cgroups" ] || fail "no-openrc-cgroups" "OpenRC cgroups service missing in rootfs"
+  ln -s /etc/init.d/cgroups "$mnt/etc/runlevels/boot/cgroups"
+  cgroup_runlevel=boot
+  log "enabled OpenRC cgroups service in boot runlevel"
+fi
+log "rc_cgroup_mode=$cgroup_mode (cgroups service in $cgroup_runlevel)"
 
 # Boot files: boot-deploy places them on the boot partition.
 mkdir -p "$out"
@@ -231,7 +257,7 @@ terminal_sha=$(sha256sum "$mnt/usr/bin/ferrix-terminal" | cut -d' ' -f1)
 colors_sha=$(sha256sum "$mnt/etc/ferrix/colors.toml" | cut -d' ' -f1)
 grants_sha=$(sha256sum "$mnt/usr/share/ferrix/apps/grants.json" | cut -d' ' -f1)
 service_shas=""
-for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files; do
+for bin in ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files ferrix-camera; do
   key=$(printf '%s' "$bin" | tr '-' '_')
   service_shas="$service_shas, \"${key}_sha256\": \"$(sha256sum "$mnt/usr/bin/$bin" | cut -d' ' -f1)\""
 done
@@ -251,6 +277,7 @@ cat > "$out/image-facts.json" <<JSON
   "readiness_marker": {"path": "$marker_dst", "sha256": "$marker_sha", "service": "openrc local", "local_service_was_enabled": $local_enabled},
   "product": {"startup_path": "$product_dst", "startup_sha256": "$product_marker_sha", "ferrix_core_sha256": "$core_sha", "ferrix_shell_sha256": "$shell_sha", "ferrix_basic_screen_sha256": "$screen_sha", "ferrix_appd_sha256": "$appd_sha", "ferrix_sandbox_sha256": "$sandbox_sha", "ferrix_terminal_sha256": "$terminal_sha"$service_shas, "grants_sha256": "$grants_sha", "contacts_fixtures_sha256": "$contacts_fixtures_sha", "colors_path": "/etc/ferrix/colors.toml", "colors_sha256": "$colors_sha", "telephony_backend_default": "mock", "network_backend_default": "mock", "networkmanager_installed": $nm_installed, "modemmanager_installed": $mm_installed},
   "android": {$android_facts},
+  "cgroup": {"rc_cgroup_mode": "$cgroup_mode", "service_runlevel": "$cgroup_runlevel"},
   "exported": [$exported,"qemu-aarch64.img"]
 }
 JSON

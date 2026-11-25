@@ -8,7 +8,11 @@
 //! channel has data. When `ferrix_appd` is not reachable the catalog comes
 //! from the descriptor directory and a thread keeps retrying every second,
 //! so the launcher is never blank and starts launching as soon as the
-//! service appears. `CatalogChanged` re-fetches the catalog.
+//! service appears. `CatalogChanged` re-fetches the catalog. Installed
+//! apps' launcher bitmaps (`Request::AppIcon`) are fetched on a short-lived
+//! background connection after each catalog update, so the UI thread never
+//! waits for them; until one arrives (or when none exists) the tile shows
+//! its letter glyph.
 //!
 //! Status bar and quick settings follow ADR-001/002: signal, registration,
 //! SIM, and connectivity come from `ferrix-telephonyd` / `ferrix-networkd`
@@ -20,9 +24,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use ferrix_app_api::{AppEvent, AppId, LifecycleState};
+use ferrix_app_api::{AppEvent, AppIconBitmap, AppId, LifecycleState};
 use ferrix_app_protocol::{Client, ClientRole, Notification, Subscription};
 use ferrix_hardware_api::{HardwareCommand, HardwareEvent, HardwareState, WifiState};
 use ferrix_network_api::NetworkState;
@@ -39,7 +43,7 @@ use ferrix_ui::evidence::{emit, json_escape};
 use ferrix_ui::keymap::Modifiers;
 
 use crate::EVIDENCE;
-use crate::catalog::{self, tiles_from_catalog};
+use crate::catalog::{self, IconCache, tiles_from_catalog};
 use crate::interaction::{CrashNotice, Input, SystemAction, UiState};
 use crate::screen;
 use crate::status::{self, WifiRoute};
@@ -66,6 +70,8 @@ struct Home {
     core_lost_reported: bool,
     ui: UiState,
     input: Input,
+    /// Last configured surface size, for the list glide's timer frames.
+    size: (u32, u32),
     wake: Wake,
     appd_socket: PathBuf,
     ferrix_appd: AppdLink,
@@ -81,6 +87,46 @@ struct Home {
     network: Receiver<Feed>,
     net_state: Option<NetworkState>,
     network_socket: PathBuf,
+    /// Installed-app bitmaps already fetched, and those in flight.
+    icons: IconCache,
+    /// Results of the background icon fetches still running.
+    icon_fetches: Vec<Receiver<(AppId, Option<AppIconBitmap>)>>,
+}
+
+/// Fetches the bitmaps of `ids` on a fresh Home connection in the
+/// background; every id gets exactly one result (`None` on any failure),
+/// then the UI is woken.
+fn spawn_icon_fetch(
+    socket: PathBuf,
+    ids: Vec<AppId>,
+    wake: Wake,
+) -> Receiver<(AppId, Option<AppIconBitmap>)> {
+    let (tx, rx) = mpsc::channel();
+    let spawned = thread::Builder::new()
+        .name("ferrix-appd-icons".to_owned())
+        .spawn({
+            let ids = ids.clone();
+            let tx = tx.clone();
+            move || {
+                let mut client = Client::connect(&socket, ClientRole::Home, APPD_TIMEOUT).ok();
+                for id in ids {
+                    let icon = client
+                        .as_mut()
+                        .and_then(|client| client.app_icon(&id).ok().flatten());
+                    if tx.send((id, icon)).is_err() {
+                        return;
+                    }
+                }
+                wake();
+            }
+        });
+    if spawned.is_err() {
+        // No thread: resolve every id as "no icon" so none stays pending.
+        for id in ids {
+            let _ = tx.send((id, None));
+        }
+    }
+    rx
 }
 
 fn connect_subscription(socket: &Path) -> Result<Subscription, String> {
@@ -124,6 +170,7 @@ pub fn run(
         first_frame_extra: vec![("profile".to_owned(), profile.name.clone())],
     };
     let appd_socket = appd_socket.to_path_buf();
+    let initial_size = config.initial_size;
     ferrix_ui::client::run(config, move |wake| {
         // Redraw the status-bar clock at each local minute boundary.
         let tick = Arc::clone(&wake);
@@ -199,6 +246,7 @@ pub fn run(
             core_lost_reported: false,
             ui,
             input: Input::default(),
+            size: initial_size,
             wake,
             appd_socket,
             ferrix_appd,
@@ -210,6 +258,12 @@ pub fn run(
             network,
             net_state: None,
             network_socket,
+            icons: IconCache::default(),
+            icon_fetches: Vec::new(),
+        })
+        .map(|mut home| {
+            home.sync_icons();
+            home
         })
     })
 }
@@ -222,6 +276,59 @@ fn appd_connected_record(socket: &Path, apps: usize) -> String {
 }
 
 impl Home {
+    /// One record when a release starts the app list's glide (QEMU/phone
+    /// evidence that the fling ran; `apps-fling-end` closes it).
+    fn report_fling_start(&self) {
+        if let Some(velocity) = self.input.fling_velocity() {
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"apps-fling\",\"scroll\":{},\"velocity_px_s\":{}}}",
+                self.ui.apps_scroll,
+                (velocity * 1000.0).round()
+            ));
+        }
+    }
+
+    /// After the tiles changed: reapplies known bitmaps and starts fetching
+    /// the installed apps still without one.
+    fn sync_icons(&mut self) {
+        let fetch = self.icons.sync(&mut self.ui.tiles);
+        if fetch.is_empty() {
+            return;
+        }
+        self.icon_fetches.push(spawn_icon_fetch(
+            self.appd_socket.clone(),
+            fetch,
+            Arc::clone(&self.wake),
+        ));
+    }
+
+    /// Folds finished icon fetches into the tiles. Returns whether any
+    /// tile changed.
+    fn icons_wake(&mut self) -> bool {
+        let mut results = Vec::new();
+        self.icon_fetches.retain(|rx| {
+            loop {
+                match rx.try_recv() {
+                    Ok(result) => results.push(result),
+                    Err(TryRecvError::Empty) => break true,
+                    Err(TryRecvError::Disconnected) => break false,
+                }
+            }
+        });
+        let mut changed = false;
+        let mut received = 0;
+        for (id, icon) in results {
+            received += usize::from(icon.is_some());
+            changed |= self.icons.resolve(id, icon, &mut self.ui.tiles);
+        }
+        if changed {
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"home-app-icons\",\"received\":{received}}}"
+            ));
+        }
+        changed
+    }
+
     fn sync_controls(&mut self) {
         // The Wi-Fi toggle mirrors the network service when it is reachable.
         self.ui.wifi_on = match &self.net_state {
@@ -395,6 +502,7 @@ impl Home {
                     tiles.len()
                 ));
                 self.ui.set_tiles(tiles);
+                self.sync_icons();
                 true
             }
             Err(error) => {
@@ -419,7 +527,10 @@ impl Home {
                 event: AppEvent::CatalogChanged { .. },
             } => return self.refresh_catalog(),
             // `Activate` is a compositor directive; intents go to handlers.
-            Notification::Activate { .. } | Notification::Intent { .. } => return false,
+            Notification::Activate { .. }
+            | Notification::Withhold { .. }
+            | Notification::Close { .. }
+            | Notification::Intent { .. } => return false,
         };
         let Some(index) = self.ui.tile_index(&instance.app) else {
             return false;
@@ -489,6 +600,7 @@ impl Home {
                 let tiles = tiles_from_catalog(&subscription.apps, &subscription.instances);
                 emit(appd_connected_record(&self.appd_socket, tiles.len()));
                 self.ui.set_tiles(tiles);
+                self.sync_icons();
                 let (notifications, _reporter) = subscription.spawn(Arc::clone(&self.wake));
                 self.ferrix_appd = AppdLink::Connected(notifications);
                 self.appd_unavailable_reported = false;
@@ -636,6 +748,7 @@ impl Home {
 
 impl ClientHandler for Home {
     fn draw(&mut self, size: (u32, u32)) -> Canvas {
+        self.size = size;
         let frame = screen::compose(
             &self.hw,
             self.clock.minute(),
@@ -681,6 +794,7 @@ impl ClientHandler for Home {
     fn pointer_up(&mut self, position: (f64, f64), size: (u32, u32)) -> bool {
         let mut redraw = self.input.motion(0, position, &mut self.ui, size);
         redraw |= self.input.up(0, &mut self.ui, size);
+        self.report_fling_start();
         if redraw {
             self.after_input();
         }
@@ -709,6 +823,7 @@ impl ClientHandler for Home {
 
     fn touch_up(&mut self, id: i32, size: (u32, u32)) -> bool {
         let redraw = self.input.up(id, &mut self.ui, size);
+        self.report_fling_start();
         if redraw {
             self.after_input();
         }
@@ -727,12 +842,32 @@ impl ClientHandler for Home {
     fn wake(&mut self) -> bool {
         let hardware = self.hardware_wake();
         let ferrix_appd = self.appd_wake();
+        let icons = self.icons_wake();
         let services = self.services_wake();
         let clock = self.clock.refresh();
-        hardware || ferrix_appd || services || clock
+        hardware || ferrix_appd || icons || services || clock
     }
 
     fn page_name(&self) -> String {
         self.ui.page.name()
+    }
+
+    fn input_time(&mut self, time_ms: u32) {
+        self.input.set_time(time_ms, Instant::now());
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.input.deadline()
+    }
+
+    fn timer(&mut self, now: Instant) -> bool {
+        let redraw = self.input.tick(&mut self.ui, self.size, now);
+        if !self.input.flinging() {
+            emit(format!(
+                "{{\"evidence\":\"{EVIDENCE}\",\"event\":\"apps-fling-end\",\"scroll\":{}}}",
+                self.ui.apps_scroll
+            ));
+        }
+        redraw
     }
 }

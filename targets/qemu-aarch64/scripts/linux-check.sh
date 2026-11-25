@@ -35,6 +35,17 @@ docker run --rm --privileged --platform linux/arm64 \
   -w /src -e CARGO_TARGET_DIR=/build -e RUSTFLAGS='-C target-feature=-crt-static' -e "RUSTUP_TOOLCHAIN=$rust_toolchain" \
   -e FERRIX_LINUX_CHECK=1 -e FERRIX_SANDBOX_TESTS \
   "$rust_image" sh -ec 'apk add --no-cache gcc musl-dev pkgconf pixman-dev libinput-dev eudev-dev libseat-dev libdrm-dev libxkbcommon-dev mesa-dev >/dev/null
+# The container starts in the root of its own cgroup namespace with its
+# processes in it, and cgroup v2 refuses to enable controllers for children
+# of a group that holds processes. Move them into a leaf first (the usual
+# nested-container step) so the sandbox can create ferrix.slice with the
+# memory, pids and cpu controllers, as it does on the guest root.
+cg=/sys/fs/cgroup
+if [ -w "$cg/cgroup.subtree_control" ] && [ -f "$cg/cgroup.controllers" ]; then
+  mkdir -p "$cg/linux-check"
+  for pid in $(cat "$cg/cgroup.procs"); do echo "$pid" >"$cg/linux-check/cgroup.procs" 2>/dev/null || true; done
+  for controller in memory pids cpu; do echo "+$controller" >"$cg/cgroup.subtree_control" 2>/dev/null || true; done
+fi
 # The pinned image ships without clippy; add it only when asked for.
 case "$1" in clippy) rustup component add clippy >/dev/null 2>&1 ;; esac
 exec cargo "$@"' sh "$@"

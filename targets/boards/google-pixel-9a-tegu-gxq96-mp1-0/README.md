@@ -1,5 +1,12 @@
 # Google Pixel 9a — tegu / GXQ96 / MP1.0
 
+Stock recovery refresh (2026-11-04 UTC): the pinned Android 17
+`CP3A.260905.009` factory restore completed with exit 0 on slot B, wiped
+userdata/metadata, and requested reboot without relocking. Ignored evidence:
+`out/pixel-9a/restore/20261104T195914Z.txt`. Post-restore discovery at
+`20:06:14Z` returned `no-device`; fresh Android boot verification is pending.
+The Ferrix observations below describe earlier sessions.
+
 > **Current state (2026-10-10):** on the
 > [development flash route](#development-flash-route) Ferrix boots from slot b
 > and reaches home unattended under required app isolation. Power, display,
@@ -113,6 +120,20 @@ See also [`docs/pixel-9a-bt-wpa3-research.md`](../../../docs/pixel-9a-bt-wpa3-re
 | [`s5300-s2-active-blockers.md`](s5300-s2-active-blockers.md) | Stub; moved into `s5300-s2-preflight.md` | moved |
 | This README, [S5300 source partition inventory](#s5300-source-partition-inventory-issue-34) to [NV metadata preflight](#s5300-nv-metadata-preflight-issue-79) | Partition inventory, E1 inventory, service integration pointer, source mount proof and NV metadata workflows | live |
 | [`pmos/README.md#s5300-native-linux-package-boundary`](pmos/README.md#s5300-native-linux-package-boundary) | S5300 package boundary | live |
+
+### Sensors, power and thermal, camera, location, NFC and fingerprint
+
+These are read-only feasibility records (physical inventory plus offline
+source). Each ends in a GO/NO-GO decision. None of them changes
+`capabilities.toml`.
+
+| Document | Purpose | Status |
+| --- | --- | --- |
+| [`sensors-source-evidence.md`](sensors-source-evidence.md) | Spec 04.5: accelerometer, proximity and ALS sit behind the AoC sensor hub, with no IIO device. NO-GO for each. | reference |
+| [`power-thermal-source-evidence.md`](power-thermal-source-evidence.md) | Spec 05.1: `power_supply`, thermal zones, cooling devices and owners, compared with the stock thermal HAL. GO-with-conditions for attended sessions, NO-GO unattended. | reference |
+| [`camera-source-evidence.md`](camera-source-evidence.md) | Spec 07.3: LWIS-only CSIS/ISP, no V4L2 capture. NO-GO. | reference |
+| [`gnss-source-evidence.md`](gnss-source-evidence.md) | Spec 08.1: Samsung KEPLER over SPI plus CPIF boot, BETP and closed `gnssd`. NO-GO. | reference |
+| [`nfc-fingerprint-source-evidence.md`](nfc-fingerprint-source-evidence.md) | Spec 09: ST54L NFC (GO-with-conditions, kernel spike only) and Goodix UDFPS in Trusty (NO-GO) | reference |
 
 ### Firmware
 

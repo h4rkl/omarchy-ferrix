@@ -52,7 +52,13 @@ just qemu-check
 `qemu-check` uses portable TCG and is the CI contract (`.github/workflows/ci.yml`
 runs it unchanged on a Linux arm64 runner). It waits for the persistent
 `ferrix-core` daemon's `boot-health` record and init's `QEMU`-labelled
-`boot-health` that may only follow it, then for the `telephonyd-ready` and
+`boot-health` that may only follow it, then for init's sandbox negative
+proof (`initramfs/sandbox-selftest.sh`, issue #10: one
+`sandbox-denied{check,status,exit}` record per forbidden path, forbidden
+system calls, no network without the grant, `pids.max`, `memory.max`, and
+per-app uid, then a `sandbox-selftest` summary that must say `ok`; init
+also prints `cgroup-ready` once cgroup2 is mounted with `memory`, `pids`
+and `cpu` delegated), then for the `telephonyd-ready` and
 `networkd-ready` records of the two mock-backed service daemons (ADR-006),
 asserts the mock is still unplugged,
 sends `set-power charging=true` over the real host-to-guest mock-control
@@ -61,6 +67,17 @@ channel, waits for the `power-changed` event the core emits, then sends
 `check-failed` record; there is no fallback that prints success. Inspect the
 captured serial output at `out/qemu-aarch64/serial.log`.
 `FERRIX_QEMU_CHECK_TIMEOUT` (seconds, default 90) bounds the whole check.
+
+**Time budget (#14).** Image growth must keep the `qemu-check` wall-time
+median (five runs, TCG, Apple Silicon host) within **+1.0 s** of the
+previous image, and always far inside the 90 s timeout. Measured on
+2026-11-24 when the Noto fallback fonts joined the initramfs (+24.8 MB
+compressed): 5.84 s before, 6.17 s after (+0.33 s); the graphical agent start
+under TCG 8.63 s before, 8.94 s after; the first committed Contacts frame
+(which scans the guest fonts and shapes Arabic names) 0.96 s before, 0.95 s
+after. The check is headless and draws no text, so its cost is the larger
+initramfs; shaping cost shows in the agent-session numbers.
+
 `FERRIX_QEMU_REQUIRE_SERVICES=0` drops the two daemon assertions (the
 `check-passed` record then says `"services":"optional"`); it exists for
 integration work while a daemon is still a skeleton and is not the CI setting.
@@ -283,7 +300,7 @@ name = "incoming-call-answer-route-remote-hangup"
 description = "..."
 
 [[step]]
-service = "telephony"                    # telephony | network | core
+service = "telephony"                    # telephony | network | core | input
 command = { cmd = "incoming-call", number = "+15550100042" }
 expect = [ { event = "telephony-event", event_name = "call-changed", state = "ringing" } ]
 timeout_ms = 5000                        # bound only; default 5000; never asserted
@@ -291,6 +308,55 @@ ack = { status = "ok" }                  # optional JSON subset of the ack
 expect_ack_error = false                 # true when the command must be rejected
 note = "free text carried into result.json"
 ```
+
+`service = "input"` steps (guest agent sessions only) inject through QEMU's
+QMP socket, so the event takes the real virtio-input -> kernel -> libinput ->
+`ferrix-shell` path: `{ cmd = "key", key = "power", hold_ms = 1200 }` (a
+QEMU qcode, optional hold) and `{ cmd = "tap", x = 540, y = 2115 }` (display
+pixels of the session profile). They have no ack; only `expect` is checked.
+`display-power-key-blank-wake-menu` uses them for the power key, a dropped
+tap while the screen is off, and the power menu's Cancel button.
+
+Power key by hand: `just qemu-key power` is a short press (screen off/on);
+`just qemu-key-hold power 1000` holds it past the 600 ms long press and opens
+the power menu. QEMU's virtio-keyboard reports the `power` qcode as evdev
+`KEY_POWER` (116), the same code a phone's PMIC or gpio-keys button sends.
+While the screen is off QEMU's display shows its "Display output is not
+active" placeholder (the CRTC is disabled), and every contact is dropped
+(`input-dropped`). The QEMU profile never blanks on idle
+(`[display] idle_timeout_secs = 0`); set a timeout with
+`just qemu-mock set-idle-timeout idle_timeout_secs=15` (no argument: never),
+`just qemu-mock inhibit-blank reason=call holder=me` /
+`release-inhibit holder=me`, or in
+Settings > Display. Power off/Restart from the menu really power off or
+reboot the guest (ferrix-core hands the accepted action to init through
+`/run/ferrix/power-action`).
+
+Suspend policy (spec 04 deliverable 3). The profile ships
+`[lifecycle] suspend = "off"`, and the mock Lifecycle only simulates a
+sleep. It blocks for the mock delay, then reports a resume on a mock RTC
+alarm. Nothing is frozen. When the policy is on, ferrix-core suspends after
+the screen has been blanked for the delay with no inhibitor held. It
+re-arms after every resume while the screen stays off. Try it by hand:
+
+- `just qemu-mock set-suspend-policy mode=s2idle after_blank_secs=5` turns
+  it on. With no arguments it restores the profile values.
+- `just qemu-mock set-suspend-sleep sleep_ms=1500 wake=alarm` sets the mock
+  sleep length and wake source.
+- `just qemu-mock inhibit-blank reason=download holder=me` keeps the system
+  awake but lets the screen blank. `audio` does the same; `call`, `video`
+  and `navigation` hold the screen too.
+
+The `screen-policy` records carry `screen_off`, `suspend_mode` and
+`suspend_phase`. Each cycle is a `suspend-request` record, then
+`suspend-resumed`, then the shell's `resume` record (`reassert-off` while
+the screen stays off). A deadline that an inhibitor or the kill switch
+blocks is a `suspend-blocked` record. The
+`lifecycle-blank-suspend-resume-inhibit` scenario covers blank, delay,
+suspend, resume, an inhibitor blocking the next cycle, and its release.
+The kill switch (`/run/ferrix/no-suspend`) and the per-boot opt-in file
+(`/run/ferrix/suspend-opt-in`) are guest files, covered by ferrix-core unit
+tests rather than a scenario.
 
 Each step sends the command, requires a `"status":"ok"` ack (or an error when
 `expect_ack_error = true`, or the `ack` subset), then waits at most
@@ -516,7 +582,7 @@ remain profile pixels in both cases. The guest reports the chosen geometry as a
 `display-geometry` record on serial. The GTK backend path is unverified on this
 macOS host.
 
-The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `fontdue`) that software-renders the Omarchy Ferrix launcher — the black/amber/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
+The first visible surface is `ferrix-basic-screen`, the home surface: a fullscreen Rust Wayland client (crate `crates/ferrix-basic-screen`, built on the shared `crates/ferrix-ui` toolkit: `smithay-client-toolkit`, `tiny-skia`, `cosmic-text` with the embedded IBM Plex faces and the guest Noto fallback in `/usr/share/fonts`) that software-renders the Omarchy Ferrix launcher — the black/amber/rust palette and type rules in `docs/design.md`, a status bar following GrapheneOS conventions, a grid of tiles from the `ferrix-appd` catalog, and the gesture pill — with battery, network, and display state from `ferrix-core`. It is a reference home surface, not the final compositor-owned shell chrome. Preview it on any host without QEMU (tiles come from `apps/*.json` when no `ferrix-appd` is reachable):
 
 ```sh
 cargo run -p ferrix-basic-screen -- targets/qemu-aarch64/profile.toml --preview out/preview.ppm
@@ -919,7 +985,7 @@ and overlays:
 | --- | --- | --- |
 | Alpine smoke guest | `just qemu-run` | Small emulator/CI contract guest; not the full substrate and no Waydroid. |
 | postmarketOS product | `just pmos-run` | Full product substrate without the Android compatibility packages/images. |
-| postmarketOS + Android | `just pmos-android-run` | Separate image with Waydroid images and the pinned Fulguris APK; use this for Fulguris. |
+| postmarketOS + Android | `just pmos-android-run` | Separate image with the pinned Waydroid images (which include the Browser, LineageOS Jelly); use this for the Browser and other Android apps. |
 
 Use these variables with `just pmos-run` or `just pmos-android-run`; they are
 read by the checked-in runner, not by an application. The smoke route has its
@@ -1016,12 +1082,14 @@ state; inputs from
 `docs/android-runtime.md` §6). The default `pmos-build`, `pmos-check`, and
 CI never read that file. Steps:
 
-1. Acquire all pinned host inputs, then build. The Android build now refuses
-   to proceed if Fulguris is absent or fails its hash/signature/signer check:
+1. Acquire the pinned images, then build. No APK is fetched: the Browser
+   (LineageOS Jelly, `org.lineageos.jelly`, ADR-008) is part of the pinned
+   system image. On 2026-10-10 a byte search of the pinned
+   `out/android/waydroid/20260403/system.img` found
+   `/product/app/Jelly/Jelly.apk` and `org.lineageos.jelly.MainActivity`;
+   the image was not mounted and Jelly has not been booted on QEMU yet.
 
    ```sh
-   export APKSIGNER=/Library/Android/sdk/build-tools/36.0.0/apksigner
-   sh tools/android/fulguris-fetch.sh
    just waydroid-images-fetch
    just pmos-android-build
    ```
@@ -1036,20 +1104,19 @@ CI never read that file. Steps:
 2. `just pmos-android-build` mounts those images read-only into the finalize
    step, which installs them to `/etc/waydroid-extra/images/`, writes
    `/etc/ferrix/waydroid-properties.ini` (`ro.hardware.gralloc=default`,
-   `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=false`,
+   `ro.hardware.egl=swiftshader`, `persist.waydroid.multi_windows=true`,
+   `persist.waydroid.task_streams=true` (one window per Android task),
    `ro.sf.lcd_density=400`). The 400 dpi value is scoped to this QEMU
    Android image and gives the 1080-pixel panel an approximately 432 dp
    Pixel-class logical width; it is not read by the default pmOS image or any
    physical-target workflow.
    links `51_waydroid.nft` into `/etc/nftables.d/`, enables `cgroups` and
    `dbus` in the default runlevel, installs
-   `/etc/local.d/00-ferrix-android.start`, and stages
-   `/usr/share/ferrix/android/fulguris.apk` after requiring
-   `out/android/fulguris/<version>/net.slions.fulguris.full.fdroid_261.apk` to
-   pass `tools/android/fulguris-verify.sh`. Every
+   `/etc/local.d/00-ferrix-android.start` and the shared helper
+   `/usr/lib/ferrix/ferrix-waydroid.sh`. Every
    hash lands in `image-facts.json` / `manifest.json` under `guest.android`
-   (`waydroid_version`, image hashes, properties and init-script hashes,
-   `fulguris_apk_sha256`, `density_dpi`, `nftables_rule_linked`).
+   (`waydroid_version`, image hashes, properties, init-script and helper
+   hashes, `browser_package`, `density_dpi`, `nftables_rule_linked`).
 3. At first boot `00-ferrix-android.start` (before `00-ferrix-product.start`)
    records `android-binder-devices {binder, hwbinder, vndbinder, psi}`, runs
    `waydroid init -f -i /etc/waydroid-extra/images` offline (`waydroid-init
@@ -1062,36 +1129,41 @@ CI never read that file. Steps:
    a render node, a combination that made SurfaceFlinger abort with `output
    buffer not gpu writeable`.
 4. Once `ferrix-shell` has created the Wayland socket, the product bootstrap
-   starts the Waydroid session, waits for Android `sys.boot_completed=1`, and
-   installs the staged APK only when `pm path net.slions.fulguris.full.fdroid`
-   has no package result. It then assigns `android.app.role.BROWSER` to
-   Fulguris as Android's shell UID and verifies that an HTTPS intent resolves
-   to Fulguris. It records
-   `android-app-provision` with `browser_role:"default"`, as `installed` on
-   first boot and `present` on subsequent persistent-overlay boots.
+   starts the Waydroid session, waits for Android `sys.boot_completed=1`,
+   marks setup complete, disables the setup wizard and Android's home
+   launcher (`com.android.launcher3`, `org.lineageos.trebuchet`; recorded as
+   `android-setup {launcher}`), and checks `pm path org.lineageos.jelly`. It
+   then assigns `android.app.role.BROWSER` to Jelly as Android's shell UID and
+   verifies that an HTTPS intent resolves to Jelly. It records
+   `android-app-provision` with `status:"present"` and
+   `browser_role:"default"`, or `status:"failed"` with
+   `reason:"browser-package-missing"` when the image lacks Jelly. Nothing is
+   installed.
    `ferrix-appd` never installs packages; it launches the installed package
    through its private runtime adapter. An idle Waydroid container's `FROZEN`
    state is healthy and launchable; Waydroid's app command unfreezes it.
 5. `just pmos-android-check` additionally requires the
-   `android-binder-devices` and `waydroid-init` records and, when Fulguris was
-   staged, the `android-app-staged` record. The headless check deliberately
-   does not claim installation because no compositor/Wayland session exists.
+   `android-binder-devices`, `waydroid-init`, and `waydroid-renderer`
+   records. The headless check deliberately does not claim provisioning
+   because no compositor/Wayland session exists.
    `just android-bootstrap-test` exercises offline init, renderer
-   materialization, container startup, and staging without QEMU.
+   materialization, container startup, setup/launcher disable, and the
+   Browser role without QEMU.
 
 Historical Brave evidence (2026-09-21) on Apple Silicon/HVF with QEMU 11.1.1
 recorded `waydroid-properties {status:"materialized", renderer:"swiftshader"}`
 and `android-app-provision {status:"installed", package:"com.brave.browser",
-browser_role:"default"}`. That evidence predates the Fulguris replacement and
-does not validate Fulguris.
+browser_role:"default"}`. That evidence predates the Fulguris and then Jelly
+replacements and validates neither.
 Launching `org.ferrix.browser` through `ferrix-appd` recorded
 `android-app-launched`, `app-started`, and a mapped
 `waydroid.com.brave.browser` surface; the Cocoa framebuffer was captured and
 inspected showing Brave's first-run UI. After orderly power-off, a run without
 `FERRIX_PMOS_FRESH=1` recorded provisioning status `present`, proving the
 installation lives in the persistent overlay. This remains historical QEMU
-evidence only, not a physical-device claim. A fresh Fulguris QEMU run now
-reaches and has inspected its onboarding framebuffer; full Android
+evidence only, not a physical-device claim. A Fulguris QEMU run (history:
+Fulguris was the Browser before ADR-008) reached and inspected its onboarding
+framebuffer; Jelly has no QEMU framebuffer evidence yet, and full Android
 interaction remains bounded by the limitations recorded in `docs/status.md`.
 
 ### Limitations
@@ -1108,8 +1180,8 @@ interaction remains bounded by the limitations recorded in `docs/status.md`.
   compositor/client rather than a postmarketOS desktop package. The bounded
   pmOS check remains serial-only, but separate graphical QEMU runs have
   framebuffer-validated the normal Ferrix launcher. The Android-enabled Brave
-  capture is historical; a fresh Fulguris onboarding capture is recorded under
-  `out/qemu-aarch64/pmos-android/`. Those captures do not broaden the
+  capture is historical, as is the Fulguris onboarding capture (pre-ADR-008)
+  under `out/qemu-aarch64/pmos-android/`. Those captures do not broaden the
   headless contract or establish physical-device support.
 - The rootfs is what pmbootstrap installs from the pinned binary channel. The
   project binaries, profile, theme file, startup script, and readiness marker are injected

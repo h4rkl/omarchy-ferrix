@@ -5,7 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 . "$root/targets/qemu-aarch64/scripts/paths.sh"
 qmp_socket="$sock_agent/qmp.sock"
 [ -S "$qmp_socket" ] || { echo "QEMU agent session is not running; run: just qemu-agent-start" >&2; exit 2; }
-[ "$#" -ge 2 ] || { echo "usage: qemu-input.sh tap X Y | swipe X1 Y1 X2 Y2 | key QCODE" >&2; exit 2; }
+[ "$#" -ge 2 ] || { echo "usage: qemu-input.sh tap X Y | swipe X1 Y1 X2 Y2 | key QCODE [--hold-ms MS]" >&2; exit 2; }
 if [ "$1" = tap ] || [ "$1" = swipe ]; then
   if [ "$1" = tap ]; then
     [ "$#" -eq 3 ] || { echo "usage: qemu-input.sh tap X Y" >&2; exit 2; }

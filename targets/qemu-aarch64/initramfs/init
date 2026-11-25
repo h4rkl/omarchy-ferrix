@@ -3,6 +3,18 @@ mount -t devtmpfs devtmpfs /dev
 exec </dev/console >/dev/console 2>&1
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+# Unified cgroup v2 hierarchy for the per-application groups ferrix-sandbox
+# creates under /sys/fs/cgroup/ferrix.slice (issue #10). The root group may
+# hold processes and still enable controllers for its children.
+if mount -t cgroup2 -o nsdelegate cgroup2 /sys/fs/cgroup 2>/dev/null; then
+  for controller in memory pids cpu; do
+    echo "+$controller" >/sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
+  done
+  printf '{"evidence":"QEMU","event":"cgroup-ready","mode":"unified","controllers":"%s","subtree_control":"%s"}\n' \
+    "$(cat /sys/fs/cgroup/cgroup.controllers)" "$(cat /sys/fs/cgroup/cgroup.subtree_control)"
+else
+  printf '%s\n' '{"evidence":"QEMU","event":"cgroup-unavailable","reason":"mount -t cgroup2 failed"}'
+fi
 mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts
 mkdir -p /run /run/ferrix /etc/ferrix
@@ -29,7 +41,9 @@ modprobe virtio_console 2>/dev/null || true
 # The core writes its JSON records straight to the serial console (no log
 # relay, so records are never delayed). It binds the state socket immediately
 # before printing boot-health, so a live process plus the socket is readiness.
-/usr/bin/ferrix-core /etc/ferrix/profile.toml --socket /run/ferrix/core.sock --control auto --shutdown-marker /run/ferrix/shutdown &
+# --power-marker: a power-off/restart the core accepted from the shell's power
+# menu is handed to this init (the watcher at the end acts on it).
+/usr/bin/ferrix-core /etc/ferrix/profile.toml --socket /run/ferrix/core.sock --control auto --shutdown-marker /run/ferrix/shutdown --power-marker /run/ferrix/power-action &
 core_pid=$!
 core_ready=false
 for _ in $(seq 1 200); do
@@ -49,6 +63,17 @@ if [ "$core_ready" != true ]; then
 fi
 # Only now is the guest healthy: the core actually reported.
 printf '%s\n' '{"evidence":"QEMU","event":"boot-health","status":"ok","core":"ferrix-core","socket":"/run/ferrix/core.sock"}'
+# Sandbox negative proof (issue #10): forbidden path, forbidden system calls,
+# no network without the grant, pids/memory limits, per-app uid. Check mode
+# only; qemu-check requires its sandbox-selftest record. HOME as the
+# graphical session sets it, so the data directory lands under /root.
+if [ "$check_mode" = true ]; then
+  if [ -x /usr/lib/ferrix/sandbox-selftest.sh ]; then
+    HOME=/root /usr/lib/ferrix/sandbox-selftest.sh || true
+  else
+    printf '%s\n' '{"evidence":"QEMU","event":"sandbox-selftest","status":"failed","reason":"selftest-missing"}'
+  fi
+fi
 # --- Service daemons (ADR-001, 002, 003, 006) ------------------------------
 # ferrix-telephonyd and ferrix-networkd run their mock backends; each owns
 # one host mock-control channel (virtio-serial ports ferrix.telephony and
@@ -330,4 +355,17 @@ if [ "$check_mode" = true ]; then
   sleep 1
   poweroff -f
 fi
+# Power menu hand-off (interactive and agent sessions): ferrix-core writes
+# poweroff or reboot here once the shell's typed PowerAction was accepted.
+# This smoke guest has no service manager to stop, so after a moment for the
+# last records to reach serial it syncs and powers off or reboots directly.
+(
+  while [ ! -e /run/ferrix/power-action ]; do sleep 0.2; done
+  action=$(cat /run/ferrix/power-action 2>/dev/null)
+  case "$action" in reboot) ;; *) action=poweroff ;; esac
+  printf '{"evidence":"QEMU","event":"power-action-init","action":"%s","status":"executing"}\n' "$action"
+  sleep 1
+  sync
+  if [ "$action" = reboot ]; then reboot -f; else poweroff -f; fi
+) &
 exec /bin/sh

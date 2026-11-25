@@ -19,6 +19,14 @@ use std::sync::mpsc::Sender;
 
 use serde::{Deserialize, Serialize};
 
+mod camera;
+
+pub use camera::{
+    CAMERA_FRAME_EDGE_MAX, CAMERA_ID_MAX, CAMERA_PREVIEW_FPS_MAX, Camera, CameraFacing,
+    CameraFrame, CameraId, CameraInfo, CameraMode, CameraRotation, CameraStream, FrameSize,
+    PixelFormat, PreviewRequest, UnsupportedCamera, sort_cameras,
+};
+
 /// Current schema version of the serialized state and event types.
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -38,13 +46,15 @@ pub enum Capability {
     Audio,
     Telephony,
     Lifecycle,
+    /// Cameras: enumeration, preview, and stills (ADR-009).
+    Camera,
     /// Deterministic test control of mocked state. Only mocked targets provide it.
     MockControl,
 }
 
 impl Capability {
     /// All capabilities, in matrix order.
-    pub const ALL: [Capability; 9] = [
+    pub const ALL: [Capability; 10] = [
         Capability::Power,
         Capability::Display,
         Capability::Input,
@@ -53,6 +63,7 @@ impl Capability {
         Capability::Audio,
         Capability::Telephony,
         Capability::Lifecycle,
+        Capability::Camera,
         Capability::MockControl,
     ];
 
@@ -66,6 +77,7 @@ impl Capability {
             Capability::Audio => "audio",
             Capability::Telephony => "telephony",
             Capability::Lifecycle => "lifecycle",
+            Capability::Camera => "camera",
             Capability::MockControl => "mock-control",
         }
     }
@@ -116,6 +128,12 @@ pub enum HardwareError {
     Unsupported {
         capability: Capability,
     },
+    /// The capability exists but this one feature of it does not (camera
+    /// video, for example).
+    FeatureUnsupported {
+        capability: Capability,
+        feature: String,
+    },
     InvalidValue {
         capability: Capability,
         reason: String,
@@ -129,6 +147,13 @@ pub enum HardwareError {
 impl HardwareError {
     pub fn unsupported(capability: Capability) -> Self {
         HardwareError::Unsupported { capability }
+    }
+
+    pub fn feature_unsupported(capability: Capability, feature: impl Into<String>) -> Self {
+        HardwareError::FeatureUnsupported {
+            capability,
+            feature: feature.into(),
+        }
     }
 
     pub fn invalid(capability: Capability, reason: impl Into<String>) -> Self {
@@ -152,6 +177,10 @@ impl fmt::Display for HardwareError {
             HardwareError::Unsupported { capability } => {
                 write!(f, "{capability} is unsupported on this target")
             }
+            HardwareError::FeatureUnsupported {
+                capability,
+                feature,
+            } => write!(f, "{capability} {feature} is unsupported on this target"),
             HardwareError::InvalidValue { capability, reason } => {
                 write!(f, "invalid {capability} value: {reason}")
             }
@@ -215,6 +244,16 @@ pub struct DisplayState {
     /// state, not a target fact; absent in older snapshots means unlocked.
     #[serde(default)]
     pub rotation_locked: bool,
+}
+
+/// The lowest backlight level product code may request while the screen is
+/// on. Zero would leave a lit-but-black panel that looks like a dead phone;
+/// screen-off is the shell's DPMS blank, never brightness 0.
+pub const MIN_BRIGHTNESS_PERCENT: u8 = 5;
+
+/// Clamps a requested brightness into `MIN_BRIGHTNESS_PERCENT..=100`.
+pub fn clamp_brightness(percent: u8) -> u8 {
+    percent.clamp(MIN_BRIGHTNESS_PERCENT, 100)
 }
 
 pub trait Display: Send + Sync {
@@ -994,15 +1033,428 @@ impl SuspendOutcome {
     }
 }
 
+/// A Linux system sleep state (`Documentation/admin-guide/pm/sleep-states`).
+/// Which ones a target offers is its adapter's answer
+/// ([`Lifecycle::sleep_states`]); the policy never assumes one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SleepState {
+    /// Suspend-to-idle: tasks frozen, devices suspended, CPUs idle.
+    S2idle,
+    /// Suspend-to-RAM (`mem_sleep` `deep`; PSCI system suspend on arm64).
+    Deep,
+}
+
+impl SleepState {
+    pub fn name(self) -> &'static str {
+        match self {
+            SleepState::S2idle => "s2idle",
+            SleepState::Deep => "deep",
+        }
+    }
+}
+
+/// What ended a sleep, as far as the target can tell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WakeSource {
+    PowerKey,
+    /// An RTC alarm (a timer, or the mock's scheduled resume).
+    Alarm,
+    /// A radio's host-wake line (Wi-Fi, Bluetooth, modem).
+    Radio,
+    /// The target named a source this API does not classify.
+    Other,
+    /// The target cannot report wake sources.
+    Unknown,
+}
+
+impl WakeSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            WakeSource::PowerKey => "power-key",
+            WakeSource::Alarm => "alarm",
+            WakeSource::Radio => "radio",
+            WakeSource::Other => "other",
+            WakeSource::Unknown => "unknown",
+        }
+    }
+}
+
+/// One completed [`Lifecycle::suspend`] call.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SuspendReport {
+    pub state: SleepState,
+    /// `Resumed` after a real sleep; `Rejected` when the kernel refused to
+    /// enter it (a wakeup event was already pending).
+    pub outcome: SuspendOutcome,
+    pub wake: WakeSource,
+    /// The target's own wake description (the kernel wakeup reason):
+    /// evidence only, never parsed by product code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_detail: Option<String>,
+    /// Time spent asleep, when the target can measure it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slept_ms: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LifecycleState {
     pub suspend_count: u32,
     pub last_suspend: Option<SuspendOutcome>,
+    /// The sleep state of the last cycle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sleep_state: Option<SleepState>,
+    /// What ended the last cycle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_wake: Option<WakeSource>,
+}
+
+/// A user-requested whole-system power transition (the shell's trusted
+/// power menu). Distinct from suspend: neither returns to the session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PowerAction {
+    PowerOff,
+    Restart,
+}
+
+impl PowerAction {
+    pub fn name(self) -> &'static str {
+        match self {
+            PowerAction::PowerOff => "power-off",
+            PowerAction::Restart => "restart",
+        }
+    }
 }
 
 pub trait Lifecycle: Send + Sync {
     fn lifecycle_state(&self) -> LifecycleState;
-    fn suspend(&self) -> Result<SuspendOutcome, HardwareError>;
+    /// The sleep states this target can enter. Empty (the default) means
+    /// suspend is unsupported.
+    fn sleep_states(&self) -> Vec<SleepState> {
+        Vec::new()
+    }
+    /// Enters `state` and returns after resume, blocking for the whole
+    /// sleep. Only `ferrix-core`'s suspend policy calls this on a product
+    /// path, after checking the board flag, the kill switch, and the
+    /// inhibitors. A target without `state` reports
+    /// [`HardwareError::Unsupported`]; a failed entry is
+    /// [`HardwareError::Failed`].
+    fn suspend(&self, _state: SleepState) -> Result<SuspendReport, HardwareError> {
+        Err(HardwareError::unsupported(Capability::Lifecycle))
+    }
+    /// Starts an orderly power-off or restart. `Ok` means the target accepted
+    /// the request and the transition is under way (the call may return
+    /// before the system goes down). Targets that cannot do it report
+    /// [`HardwareError::Unsupported`]; nothing is imitated.
+    fn power_action(&self, _action: PowerAction) -> Result<(), HardwareError> {
+        Err(HardwareError::unsupported(Capability::Lifecycle))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Screen policy (owned by ferrix-core, enforced by the shell)
+// ---------------------------------------------------------------------------
+//
+// Not an adapter capability: no target implements these. `ferrix-core` owns
+// the policy (the idle timeout setting and the live inhibitors) and serves
+// it over `ferrix-protocol`; the shell blanks the output when the user has
+// been idle for the timeout and nothing inhibits it. The types live here so
+// the profile parser, the core, the shell, and applications share one
+// definition.
+
+/// Shortest idle timeout the policy accepts, in seconds.
+pub const MIN_IDLE_TIMEOUT_SECS: u32 = 5;
+/// Longest idle timeout the policy accepts, in seconds (one hour).
+pub const MAX_IDLE_TIMEOUT_SECS: u32 = 3600;
+/// Idle timeout when neither the user nor the target profile chose one.
+pub const DEFAULT_IDLE_TIMEOUT_SECS: u32 = 60;
+/// The choices Settings > Display offers, in order (`None` is "Never").
+pub const IDLE_TIMEOUT_CHOICES: [Option<u32>; 7] = [
+    Some(15),
+    Some(30),
+    Some(60),
+    Some(120),
+    Some(300),
+    Some(600),
+    None,
+];
+
+/// Validates an idle timeout (`None` = never blank on idle).
+pub fn validate_idle_timeout(secs: Option<u32>) -> Result<Option<u32>, HardwareError> {
+    match secs {
+        Some(s) if !(MIN_IDLE_TIMEOUT_SECS..=MAX_IDLE_TIMEOUT_SECS).contains(&s) => {
+            Err(HardwareError::invalid(
+                Capability::Lifecycle,
+                format!(
+                    "idle timeout must be {MIN_IDLE_TIMEOUT_SECS}..={MAX_IDLE_TIMEOUT_SECS} s or never (got {s})"
+                ),
+            ))
+        }
+        other => Ok(other),
+    }
+}
+
+/// Why something keeps the screen on or the system awake. Calls, video
+/// playback, and turn-by-turn navigation hold the screen (and so also keep
+/// the system out of suspend); audio playback and downloads only keep the
+/// system awake and let the screen blank. Nothing else may hold either.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InhibitReason {
+    Call,
+    Video,
+    Navigation,
+    /// Audio playing with the screen off (music, a podcast).
+    Audio,
+    /// A transfer that must finish (a download, a sync).
+    Download,
+}
+
+impl InhibitReason {
+    pub fn name(self) -> &'static str {
+        match self {
+            InhibitReason::Call => "call",
+            InhibitReason::Video => "video",
+            InhibitReason::Navigation => "navigation",
+            InhibitReason::Audio => "audio",
+            InhibitReason::Download => "download",
+        }
+    }
+
+    /// Whether this reason keeps the screen from blanking on idle. Every
+    /// reason keeps the system out of suspend.
+    pub fn holds_screen(self) -> bool {
+        matches!(
+            self,
+            InhibitReason::Call | InhibitReason::Video | InhibitReason::Navigation
+        )
+    }
+}
+
+/// The board's suspend flag (`[lifecycle] suspend` in the target profile).
+/// `Off` everywhere by default: suspend is opt-in per board and per run
+/// until resume is proven on that board.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuspendMode {
+    #[default]
+    Off,
+    S2idle,
+    Deep,
+}
+
+impl SuspendMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            SuspendMode::Off => "off",
+            SuspendMode::S2idle => "s2idle",
+            SuspendMode::Deep => "deep",
+        }
+    }
+
+    pub fn sleep_state(self) -> Option<SleepState> {
+        match self {
+            SuspendMode::Off => None,
+            SuspendMode::S2idle => Some(SleepState::S2idle),
+            SuspendMode::Deep => Some(SleepState::Deep),
+        }
+    }
+
+    /// Parses `off`, `s2idle`, or `deep` (the opt-in file's contents).
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim() {
+            "off" => Some(SuspendMode::Off),
+            "s2idle" => Some(SuspendMode::S2idle),
+            "deep" => Some(SuspendMode::Deep),
+            _ => None,
+        }
+    }
+}
+
+/// Shortest blank-to-suspend delay the policy accepts, in seconds.
+pub const MIN_SUSPEND_AFTER_BLANK_SECS: u32 = 5;
+/// Longest blank-to-suspend delay, in seconds (one hour).
+pub const MAX_SUSPEND_AFTER_BLANK_SECS: u32 = 3600;
+/// Blank-to-suspend delay when the profile does not set one.
+pub const DEFAULT_SUSPEND_AFTER_BLANK_SECS: u32 = 30;
+
+/// Validates a blank-to-suspend delay.
+pub fn validate_suspend_after_blank(secs: u32) -> Result<u32, HardwareError> {
+    if (MIN_SUSPEND_AFTER_BLANK_SECS..=MAX_SUSPEND_AFTER_BLANK_SECS).contains(&secs) {
+        Ok(secs)
+    } else {
+        Err(HardwareError::invalid(
+            Capability::Lifecycle,
+            format!(
+                "suspend delay must be {MIN_SUSPEND_AFTER_BLANK_SECS}..={MAX_SUSPEND_AFTER_BLANK_SECS} s (got {secs})"
+            ),
+        ))
+    }
+}
+
+/// Where the effective [`SuspendMode`] came from.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuspendSource {
+    /// The target profile's `[lifecycle]` section.
+    #[default]
+    Profile,
+    /// The per-boot opt-in file (`/run/ferrix/suspend-opt-in`).
+    OptIn,
+    /// The mock-control channel (mocked targets only).
+    Control,
+}
+
+impl SuspendSource {
+    pub fn name(self) -> &'static str {
+        match self {
+            SuspendSource::Profile => "profile",
+            SuspendSource::OptIn => "opt-in",
+            SuspendSource::Control => "control",
+        }
+    }
+}
+
+/// Where the suspend policy stands.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SuspendPhase {
+    /// Suspend is off: the mode is `off`, the target cannot enter its sleep
+    /// state, or the kill switch exists.
+    #[default]
+    Disabled,
+    /// The screen is on (or no shell reports it): nothing to do.
+    Awake,
+    /// The screen is blanked and nothing blocks: suspend at the deadline.
+    Armed,
+    /// The screen is blanked but an inhibitor keeps the system awake.
+    Inhibited,
+    /// A suspend call is in progress (the system is asleep).
+    Suspending,
+}
+
+impl SuspendPhase {
+    pub fn name(self) -> &'static str {
+        match self {
+            SuspendPhase::Disabled => "disabled",
+            SuspendPhase::Awake => "awake",
+            SuspendPhase::Armed => "armed",
+            SuspendPhase::Inhibited => "inhibited",
+            SuspendPhase::Suspending => "suspending",
+        }
+    }
+}
+
+/// The suspend half of the screen policy snapshot (what Settings shows and
+/// what the shell watches to learn about a resume).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SuspendStatus {
+    pub mode: SuspendMode,
+    pub source: SuspendSource,
+    /// Seconds the screen stays blanked, with nothing inhibiting, before
+    /// the core suspends.
+    pub after_blank_secs: u32,
+    /// Whether the target offers the mode's sleep state.
+    pub supported: bool,
+    /// The kill switch existed when last checked.
+    pub kill_switch: bool,
+    /// What the shell last reported (`false` when no shell reports).
+    pub screen_off: bool,
+    pub phase: SuspendPhase,
+    /// Suspend calls the policy has made (every outcome); increments once
+    /// per resume, so watchers re-run their wake logic on a change.
+    pub cycles: u32,
+    pub last: Option<SuspendReport>,
+}
+
+impl Default for SuspendStatus {
+    fn default() -> Self {
+        Self {
+            mode: SuspendMode::Off,
+            source: SuspendSource::Profile,
+            after_blank_secs: DEFAULT_SUSPEND_AFTER_BLANK_SECS,
+            supported: false,
+            kill_switch: false,
+            screen_off: false,
+            phase: SuspendPhase::Disabled,
+            cycles: 0,
+            last: None,
+        }
+    }
+}
+
+/// One live inhibitor. `holder` is the requester's self-description for
+/// evidence and the Settings caption, never an identity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScreenInhibitor {
+    pub id: u64,
+    pub reason: InhibitReason,
+    pub holder: String,
+}
+
+/// The policy the shell enforces.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScreenPolicy {
+    /// Seconds without input before the shell blanks the screen; `None`
+    /// means never on idle (the power key still blanks).
+    pub idle_timeout_secs: Option<u32>,
+    /// Live inhibitors. One whose reason [holds the
+    /// screen](InhibitReason::holds_screen) keeps the idle timeout from
+    /// blanking; any one keeps the system out of suspend.
+    #[serde(default)]
+    pub inhibitors: Vec<ScreenInhibitor>,
+    /// The core's suspend policy (absent from older cores: disabled).
+    #[serde(default)]
+    pub suspend: SuspendStatus,
+}
+
+impl Default for ScreenPolicy {
+    fn default() -> Self {
+        Self {
+            idle_timeout_secs: Some(DEFAULT_IDLE_TIMEOUT_SECS),
+            inhibitors: Vec::new(),
+            suspend: SuspendStatus::default(),
+        }
+    }
+}
+
+impl ScreenPolicy {
+    /// Whether an inhibitor holds the screen on.
+    pub fn inhibited(&self) -> bool {
+        self.inhibitors.iter().any(|i| i.reason.holds_screen())
+    }
+
+    /// Whether any inhibitor keeps the system out of suspend.
+    pub fn suspend_inhibited(&self) -> bool {
+        !self.inhibitors.is_empty()
+    }
+
+    /// Every distinct reason currently held, sorted.
+    pub fn reasons(&self) -> Vec<InhibitReason> {
+        let mut reasons: Vec<_> = self.inhibitors.iter().map(|i| i.reason).collect();
+        reasons.sort();
+        reasons.dedup();
+        reasons
+    }
+
+    /// The distinct reasons that hold the screen on, sorted.
+    pub fn screen_reasons(&self) -> Vec<InhibitReason> {
+        self.reasons()
+            .into_iter()
+            .filter(|r| r.holds_screen())
+            .collect()
+    }
+
+    /// The idle timeout the shell should run: none while inhibited.
+    pub fn effective_idle_timeout_secs(&self) -> Option<u32> {
+        if self.inhibited() {
+            None
+        } else {
+            self.idle_timeout_secs
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1096,6 +1548,9 @@ pub trait EventSource: Send + Sync {
 // Mock control (mocked targets only)
 // ---------------------------------------------------------------------------
 
+/// Longest simulated sleep a mock suspend accepts (one minute).
+pub const MAX_MOCK_SLEEP_MS: u32 = 60_000;
+
 /// Deterministic state mutations a mocked target accepts for tests. A real
 /// target does not provide this capability.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1128,6 +1583,12 @@ pub enum MockCommand {
     /// Outcome the next `Lifecycle::suspend` reports.
     SetSuspendOutcome {
         outcome: SuspendOutcome,
+    },
+    /// How long every following mock sleep lasts and what "wakes" it
+    /// (`sleep_ms` at most [`MAX_MOCK_SLEEP_MS`]).
+    SetSuspendSleep {
+        sleep_ms: u32,
+        wake: WakeSource,
     },
     /// Overrides how every following mock pairing ends (`None` restores
     /// each device's profile outcome).
@@ -1216,7 +1677,14 @@ pub enum HardwareCommand {
     SetAudioMuted {
         muted: bool,
     },
+    /// Suspend now with the board's mode. The core refuses it unless the
+    /// suspend policy is enabled, the kill switch is absent, and no
+    /// inhibitor is held; it never bypasses the board flag.
     Suspend,
+    /// Orderly power-off or restart (the shell's power menu).
+    PowerAction {
+        action: PowerAction,
+    },
 }
 
 #[cfg(test)]
@@ -1237,6 +1705,116 @@ mod tests {
         let back: HardwareEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, event);
         assert_eq!(event.name(), "power-changed");
+    }
+
+    #[test]
+    fn power_action_wire_form_and_brightness_floor() {
+        let command = HardwareCommand::PowerAction {
+            action: PowerAction::Restart,
+        };
+        assert_eq!(
+            serde_json::to_string(&command).unwrap(),
+            r#"{"command":"power-action","action":"restart"}"#
+        );
+        assert_eq!(clamp_brightness(0), MIN_BRIGHTNESS_PERCENT);
+        assert_eq!(clamp_brightness(40), 40);
+        assert_eq!(clamp_brightness(200), 100);
+        const { assert!(MIN_BRIGHTNESS_PERCENT > 0, "never fully dark while on") };
+    }
+
+    #[test]
+    fn screen_policy_inhibitors_suspend_the_idle_timeout() {
+        let mut policy = ScreenPolicy::default();
+        assert_eq!(policy.effective_idle_timeout_secs(), Some(60));
+        policy.inhibitors.push(ScreenInhibitor {
+            id: 1,
+            reason: InhibitReason::Video,
+            holder: "org.ferrix.browser".into(),
+        });
+        policy.inhibitors.push(ScreenInhibitor {
+            id: 2,
+            reason: InhibitReason::Call,
+            holder: "org.ferrix.phone".into(),
+        });
+        policy.inhibitors.push(ScreenInhibitor {
+            id: 3,
+            reason: InhibitReason::Call,
+            holder: "scenario".into(),
+        });
+        assert!(policy.inhibited());
+        assert_eq!(policy.effective_idle_timeout_secs(), None);
+        assert_eq!(
+            policy.reasons(),
+            [InhibitReason::Call, InhibitReason::Video]
+        );
+        let json = serde_json::to_value(&policy).unwrap();
+        assert_eq!(json["inhibitors"][1]["reason"], "call");
+        assert_eq!(validate_idle_timeout(None), Ok(None));
+        assert_eq!(validate_idle_timeout(Some(30)), Ok(Some(30)));
+        assert!(validate_idle_timeout(Some(1)).is_err());
+        assert!(validate_idle_timeout(Some(MAX_IDLE_TIMEOUT_SECS + 1)).is_err());
+        assert!(
+            IDLE_TIMEOUT_CHOICES
+                .iter()
+                .all(|c| validate_idle_timeout(*c).is_ok())
+        );
+    }
+
+    #[test]
+    fn suspend_only_reasons_let_the_screen_blank_but_keep_the_system_awake() {
+        let mut policy = ScreenPolicy::default();
+        assert!(!policy.suspend_inhibited());
+        policy.inhibitors.push(ScreenInhibitor {
+            id: 1,
+            reason: InhibitReason::Download,
+            holder: "files".into(),
+        });
+        assert!(!policy.inhibited(), "a download does not hold the screen");
+        assert!(policy.suspend_inhibited());
+        assert_eq!(policy.effective_idle_timeout_secs(), Some(60));
+        assert_eq!(policy.reasons(), [InhibitReason::Download]);
+        assert!(policy.screen_reasons().is_empty());
+        // An older core's snapshot has no suspend half: disabled.
+        let old: ScreenPolicy =
+            serde_json::from_str(r#"{"idle_timeout_secs":null,"inhibitors":[]}"#).unwrap();
+        assert_eq!(old.suspend, SuspendStatus::default());
+        assert_eq!(old.suspend.phase, SuspendPhase::Disabled);
+        assert_eq!(SuspendMode::default(), SuspendMode::Off);
+        assert_eq!(SuspendMode::parse(" deep\n"), Some(SuspendMode::Deep));
+        assert_eq!(SuspendMode::parse("mem"), None);
+        assert_eq!(SuspendMode::S2idle.sleep_state(), Some(SleepState::S2idle));
+        assert!(validate_suspend_after_blank(4).is_err());
+        assert!(validate_suspend_after_blank(DEFAULT_SUSPEND_AFTER_BLANK_SECS).is_ok());
+    }
+
+    #[test]
+    fn lifecycle_suspend_defaults_to_unsupported() {
+        struct Bare;
+        impl Lifecycle for Bare {
+            fn lifecycle_state(&self) -> LifecycleState {
+                LifecycleState::default()
+            }
+        }
+        assert!(Bare.sleep_states().is_empty());
+        assert_eq!(
+            Bare.suspend(SleepState::S2idle),
+            Err(HardwareError::unsupported(Capability::Lifecycle))
+        );
+        let report = SuspendReport {
+            state: SleepState::Deep,
+            outcome: SuspendOutcome::Resumed,
+            wake: WakeSource::PowerKey,
+            wake_detail: None,
+            slept_ms: Some(1200),
+        };
+        assert_eq!(
+            serde_json::to_string(&report).unwrap(),
+            r#"{"state":"deep","outcome":"resumed","wake":"power-key","slept_ms":1200}"#
+        );
+        // Older snapshots without the new lifecycle fields still parse.
+        let old: LifecycleState =
+            serde_json::from_str(r#"{"suspend_count":2,"last_suspend":"failed"}"#).unwrap();
+        assert_eq!(old.last_wake, None);
     }
 
     #[test]

@@ -24,6 +24,12 @@ pub enum Service {
     Telephony,
     Network,
     Core,
+    /// The guest's virtual input devices through QEMU's QMP socket
+    /// (virtio-keyboard keys, virtio-tablet taps): the real kernel ->
+    /// libinput -> compositor path, never a mock-control shortcut. Guest
+    /// agent sessions only. Commands: `key` (`key` = QEMU qcode, optional
+    /// `hold_ms`) and `tap` (`x`, `y` in display pixels).
+    Input,
 }
 
 impl Service {
@@ -33,6 +39,7 @@ impl Service {
             Service::Telephony => "telephony-control.sock",
             Service::Network => "network-control.sock",
             Service::Core => "control.sock",
+            Service::Input => "qmp.sock",
         }
     }
 
@@ -41,8 +48,56 @@ impl Service {
             Service::Telephony => "telephony",
             Service::Network => "network",
             Service::Core => "core",
+            Service::Input => "input",
         }
     }
+}
+
+/// Checks an `input` step's command shape.
+fn validate_input(index: usize, command: &Value) -> Result<(), ScenarioError> {
+    let invalid = |reason: String| ScenarioError::Invalid(format!("step {index}: {reason}"));
+    let int = |key: &str| command.get(key).and_then(Value::as_u64);
+    let keys: Vec<&str> = command
+        .as_object()
+        .map(|o| o.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    match command.get("cmd").and_then(Value::as_str) {
+        Some("key") => {
+            let qcode = command.get("key").and_then(Value::as_str).unwrap_or("");
+            if qcode.is_empty()
+                || !qcode
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                return Err(invalid("input key needs a QEMU qcode `key`".to_owned()));
+            }
+            if command.get("hold_ms").is_some()
+                && !int("hold_ms").is_some_and(|ms| (1..=10_000).contains(&ms))
+            {
+                return Err(invalid("input hold_ms must be 1..=10000".to_owned()));
+            }
+            if let Some(extra) = keys
+                .iter()
+                .find(|k| !matches!(**k, "cmd" | "key" | "hold_ms"))
+            {
+                return Err(invalid(format!("input key: unknown field `{extra}`")));
+            }
+        }
+        Some("tap") => {
+            if int("x").is_none() || int("y").is_none() {
+                return Err(invalid("input tap needs integer `x` and `y`".to_owned()));
+            }
+            if let Some(extra) = keys.iter().find(|k| !matches!(**k, "cmd" | "x" | "y")) {
+                return Err(invalid(format!("input tap: unknown field `{extra}`")));
+            }
+        }
+        other => {
+            return Err(invalid(format!(
+                "input commands are `key` and `tap`, not {other:?}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -199,6 +254,14 @@ impl Scenario {
                 _ => {
                     return Err(ScenarioError::Invalid(format!(
                         "step {index}: command needs a non-empty string `cmd`"
+                    )));
+                }
+            }
+            if step.service == Service::Input {
+                validate_input(index, &command)?;
+                if step.ack.is_some() || step.expect_ack_error {
+                    return Err(ScenarioError::Invalid(format!(
+                        "step {index}: input steps have no ack to check"
                     )));
                 }
             }
@@ -384,6 +447,39 @@ note = "two records, in order"
                 .unwrap_err()
                 .to_string()
                 .contains("inline table")
+        );
+    }
+
+    #[test]
+    fn input_steps_take_only_key_and_tap() {
+        let doc = |command: &str| {
+            format!(
+                "schema_version = 1\nname = \"input-shape\"\ndescription = \"input step shapes\"\n\n[[step]]\nservice = \"input\"\ncommand = {command}\nexpect = [ {{ event = \"power-key\" }} ]\n"
+            )
+        };
+        let ok = Scenario::parse(&doc("{ cmd = \"key\", key = \"power\", hold_ms = 1000 }"))
+            .expect("a held power key is valid");
+        assert_eq!(ok.steps[0].service, Service::Input);
+        assert_eq!(ok.steps[0].service.socket_name(), "qmp.sock");
+        Scenario::parse(&doc("{ cmd = \"tap\", x = 540, y = 1200 }")).expect("a tap is valid");
+        for bad in [
+            "{ cmd = \"swipe\", x = 1, y = 2 }",
+            "{ cmd = \"key\" }",
+            "{ cmd = \"key\", key = \"power; quit\" }",
+            "{ cmd = \"key\", key = \"power\", hold_ms = 0 }",
+            "{ cmd = \"tap\", x = 1 }",
+            "{ cmd = \"tap\", x = 1, y = 2, z = 3 }",
+        ] {
+            assert!(
+                Scenario::parse(&doc(bad)).is_err(),
+                "{bad} must be rejected"
+            );
+        }
+        let with_ack = doc("{ cmd = \"key\", key = \"power\" }")
+            .replace("expect =", "ack = { status = \"ok\" }\nexpect =");
+        assert!(
+            Scenario::parse(&with_ack).is_err(),
+            "input steps have no ack"
         );
     }
 

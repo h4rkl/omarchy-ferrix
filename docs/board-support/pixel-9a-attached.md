@@ -108,6 +108,7 @@ capability claims require separate, target-specific tests and remain
 
 | Date (UTC) | Result |
 | --- | --- |
+| 2026-11-04 | Exact single unlocked tegu / GXQ96 / MP1.0 admitted in ordinary Fastboot on slot B. Pinned CP3A.260905.009 stock factory restore completed with exit 0, wiped data, and requested reboot without relocking; ignored transcript `out/pixel-9a/restore/20261104T195914Z.txt`. Post-restore discovery at `20:06:14Z` returned `no-device`; fresh Android boot verification pending. |
 | 2026-09-30 | Owner-run discovery at `01:02:38Z` verified the restored pinned stock build on the same Pixel 9a GXQ96 / tegu / MP1.0, slot A, unlocked/orange. Recovery gate promoted to `tested`; no Ferrix capability promoted. |
 | 2026-09-30 | Owner-authorized pinned stock restore completed with exit 0, expected bootloader/baseband versions, and final reboot request. Discovery at `00:35:32Z` returned `no-device`; stock Android verification pending. |
 | 2026-09-28 | Proposal package recorded after the exact-target read-only discovery; discovery had completed on 2026-09-27. |

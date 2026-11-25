@@ -16,6 +16,7 @@ pmaports_pins="$pmos_dir/pins.env"
 channels_cfg="$pmos_dir/channels.cfg"
 exynos_package_dir="$pmos_dir/exynos-modem"
 modemmanager_package_dir="$pmos_dir/modemmanager-samsung-sit"
+waydroid_package_dir="$pmos_dir/waydroid"
 out_root=${FERRIX_OUT_DIR:-"$root/out"}
 rootfs_out=${FERRIX_PIXEL9A_ROOTFS_OUT:-"$out_root/pixel-9a/rootfs/tegu"}
 manifest=${FERRIX_PIXEL9A_ROOTFS_MANIFEST:-"$rootfs_out/manifest.tsv"}
@@ -236,7 +237,7 @@ check_static_inputs() {
 	esac
 	[ "${#radio_split_contract_hash}" -eq 64 ] || die 'radio route split_artifact_contract_sha256 must contain 64 hexadecimal characters'
 	[ "$(hash_file "$radio_split_contract")" = "$radio_split_contract_hash" ] || die 'radio split-artifact contract hash differs from the radio route'
-	for package_path in "$exynos_package_dir/APKBUILD" "$modemmanager_package_dir/APKBUILD" "$modemmanager_package_dir/modemmanager.initd" "$modemmanager_package_dir/modemmanager.rules"; do
+	for package_path in "$exynos_package_dir/APKBUILD" "$modemmanager_package_dir/APKBUILD" "$modemmanager_package_dir/modemmanager.initd" "$modemmanager_package_dir/modemmanager.rules" "$waydroid_package_dir/APKBUILD" "$waydroid_package_dir/waydroid.trigger" "$waydroid_package_dir/waydroid.post-upgrade" "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"; do
 		required_file "$package_path"
 	done
 	target_pmaports_commit=$(pinned_pmaports_commit) || die 'target pmOS package is missing PMAPORTS_COMMIT'
@@ -270,6 +271,7 @@ check_static_inputs() {
 	grep -q '^sha256 = "6c11c4de4926d2e928e86fd1c5fbcfeebb515c373ddc8a515ace62d35de391b2"$' "$package_dir/s5300-userspace-sources.toml" || die "SIT ModemManager archive hash is not pinned"
 	grep -q 'fa081999130a9775a9140fa16901d4dcc9a2733ebd9af1eb55b03717659a952' "$exynos_package_dir/APKBUILD" || die "exynos-modem recipe archive hash is not pinned"
 	grep -q '9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb97265' "$modemmanager_package_dir/APKBUILD" || die "SIT ModemManager recipe archive hash is not pinned"
+	grep -q '^e395b0eed9bfda3cb7b0ab8de5e8d69c57188c86b810c76fccd6a9dea2179acf219b41338382a923d0f4cfbb276064d7336c0771ba54c6ef14e8496250a3acfa  waydroid-1.6.3.tar.gz$' "$waydroid_package_dir/APKBUILD" || die "Waydroid 1.6.3 backport archive hash is not pinned"
 	grep -q '^modem_image_label = "modem_{androidboot.slot_suffix}"$' "$package_dir/s5300-userspace-sources.toml" || die "current-slot modem mount label is not pinned"
 	grep -q '^modem_image_label_policy = "exact-current-slot-only"$' "$package_dir/s5300-userspace-sources.toml" || die "current-slot modem mount policy is not fail-closed"
 	grep -q '^efs_label = "efs"$' "$package_dir/s5300-userspace-sources.toml" || die "efs mount label is not pinned"
@@ -304,6 +306,8 @@ preflight() {
 	manifest_artifact pmos/channels.cfg "$channels_cfg"
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
+	manifest_artifact waydroid/APKBUILD "$waydroid_package_dir/APKBUILD"
+	manifest_artifact waydroid/0001-app-ask-the-image-to-show-an-app.patch "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"
 	manifest_artifact profile.toml "$profile_path"
 	manifest_finish
 	if [ "$android" = 1 ]; then
@@ -504,7 +508,7 @@ validate_product_dir() {
 	awk -F '\t' '$1 == "rust_linker" && $2 != "" { found=1 } END { exit(found ? 0 : 1) }' "$product_manifest" ||
 		die 'native Pixel product manifest is missing its target Rust linker'
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files \
+		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files ferrix-camera \
 		profile.toml colors.toml; do
 		[ -f "$product/$name" ] || die "missing product input $product/$name"
 	done
@@ -513,7 +517,7 @@ validate_product_dir() {
 		[ -f "$descriptor" ] || die "missing product app descriptor under $product/apps"
 	done
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files \
+		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files ferrix-camera \
 		profile.toml colors.toml; do
 		verify_product_artifact "$name"
 	done
@@ -788,6 +792,8 @@ validate_inputs() {
 	manifest_artifact s5300-userspace-sources.toml "$package_dir/s5300-userspace-sources.toml"
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
+	manifest_artifact waydroid/APKBUILD "$waydroid_package_dir/APKBUILD"
+	manifest_artifact waydroid/0001-app-ask-the-image-to-show-an-app.patch "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"
 	manifest_artifact pmos/pins.env "$pmaports_pins"
 	manifest_artifact pmos/channels.cfg "$channels_cfg"
 	manifest_artifact profile.toml "$profile_path"
@@ -923,6 +929,8 @@ write_built_manifest() {
 	manifest_artifact s5300-userspace-sources.toml "$package_dir/s5300-userspace-sources.toml"
 	manifest_artifact exynos-modem/APKBUILD "$exynos_package_dir/APKBUILD"
 	manifest_artifact modemmanager-samsung-sit/APKBUILD "$modemmanager_package_dir/APKBUILD"
+	manifest_artifact waydroid/APKBUILD "$waydroid_package_dir/APKBUILD"
+	manifest_artifact waydroid/0001-app-ask-the-image-to-show-an-app.patch "$waydroid_package_dir/0001-app-ask-the-image-to-show-an-app.patch"
 	manifest_artifact profile.toml "$profile_path"
 	manifest_artifact firmware-manifest.tsv "$rootfs_out/firmware-manifest.tsv"
 	manifest_artifact radio-firmware-manifest.tsv "$rootfs_out/radio-firmware-manifest.tsv"
@@ -1045,9 +1053,12 @@ build_rootfs() {
 	# These are target-local external package recipes. Keep them alongside the
 	# copied device package so pmbootstrap cannot silently resolve generic
 	# ModemManager or an unreviewed modem helper from the host checkout.
-	rm -rf "$aports/device/testing/exynos-modem" "$aports/device/testing/modemmanager-samsung-sit"
+	rm -rf "$aports/device/testing/exynos-modem" "$aports/device/testing/modemmanager-samsung-sit" "$aports/device/testing/waydroid"
 	cp -R "$exynos_package_dir" "$aports/device/testing/exynos-modem"
 	cp -R "$modemmanager_package_dir" "$aports/device/testing/modemmanager-samsung-sit"
+	# Waydroid 1.6.3 backport (Android 15/16 service manager protocols); newer
+	# than the channel's 1.6.2, so apk selects it when the Android set is on.
+	cp -R "$waydroid_package_dir" "$aports/device/testing/waydroid"
 	pmb_work="$build_dir/pmbootstrap"
 	config="$build_dir/pmbootstrap.cfg"
 	sed -e "s#^work = .*#work = $pmb_work#" -e "s#^aports = .*#aports = $aports#" "$pmos_dir/pmbootstrap.cfg" >"$config"
@@ -1105,7 +1116,7 @@ build_rootfs() {
 	[ "$android" != 1 ] || verify_android_rootfs "$rootfs_dir/lib/apk/db/installed"
 	product=${FERRIX_PIXEL9A_PRODUCT_DIR:-"$out_root/pixel-9a/product/tegu"}
 	for name in ferrix-core ferrix-shell ferrix-basic-screen ferrix-appd ferrix-sandbox ferrix-terminal \
-		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files; do
+		ferrix-telephonyd ferrix-networkd ferrix-contactsd ferrix-phone ferrix-messages ferrix-contacts ferrix-settings ferrix-files ferrix-camera; do
 		stage_file "$product/$name" "$rootfs_dir/usr/bin/$name"
 		rootfs_chmod 0755 "$rootfs_dir/usr/bin/$name"
 	done

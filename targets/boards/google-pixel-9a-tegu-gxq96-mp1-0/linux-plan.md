@@ -13,8 +13,8 @@ services, compositor, and applications. It does not use the Android framework,
 Android system applications, Android HALs, Google RIL, or Waydroid as the
 operating environment. Owner request, 2026-10-09: the development route may
 optionally run Waydroid as a contained *application runtime* for the Browser
-tile (Fulguris; `pmos/README.md`, ADR-007). It is opt-in, has no physical
-evidence yet, and does not change this boundary for the OS itself.
+tile (LineageOS Jelly built into the Android image; `pmos/README.md`,
+ADR-008). It is opt-in and does not change this boundary for the OS itself.
 
 The existing boot ROM and unlocked Google bootloader still define the image
 container and partition interfaces. Device firmware remains necessary for
@@ -756,12 +756,13 @@ explicitly supplied IPC node:
 | channel / channel sequence | one byte each |
 | fragment config | bounded packet/frame flags |
 
-The userspace payload inside that link frame is the packed FMT envelope from
-the pinned S5300 `modem_prj.h`: a seven-byte header containing a little-endian
-`u16` total length followed by `msg_seq`, `ack_seq`, `main_cmd`, `sub_cmd`, and
-`cmd_type`. `ferrix-s5300-cpif::FmtCodec` bounds and validates this envelope,
-and `FmtTransport` applies it only to an explicitly supplied payload
-transport. The command tuple remains opaque; no Android RIL, HAL, or
+The kernel strips that 12-byte header and gives userspace an opaque SIT
+payload. In route A, the external `sit-proxy`/`samsung-sit` defines that
+payload's framing. The seven-byte `sipc_fmt_hdr` from the pinned
+`modem_prj.h` belongs to `PROTOCOL_SIPC` only (issue #76). The crate exposes
+it as `SipcFmtCodec`/`SipcFmtTransport`, which need a `SipcLink` proof that
+tegu's `TEGU_LINK_PROTOCOL` (`Sit`) cannot produce. See the
+[crate README](../../../crates/ferrix-s5300-cpif/README.md#tegu-uses-sit-not-sipc_fmt_hdr-issue-76) for the pinned source functions. No Android RIL, HAL, or
 firmware-specific modem command map is brought into Ferrix.
 
 The target-local `pmos/device-google-tegu/s5300-channels.toml` records the

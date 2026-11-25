@@ -8,8 +8,9 @@
 //! Both are versioned by [`ferrix_hardware_api::SCHEMA_VERSION`].
 
 use ferrix_hardware_api::{
-    AudioRoute, BluetoothCommand, BluetoothPin, HardwareState, MockPairingOutcome,
-    ModemRegistration, Orientation, SimState, SuspendOutcome, WifiState,
+    AudioRoute, BluetoothCommand, BluetoothPin, CameraFacing, HardwareState, InhibitReason,
+    MockPairingOutcome, ModemRegistration, Orientation, SimState, SuspendMode, SuspendOutcome,
+    WakeSource, WifiState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -92,8 +93,53 @@ pub enum ControlCommand {
     BluetoothForget {
         device: String,
     },
+    /// Camera client verbs (ADR-009): the same portable capability the
+    /// Camera app reaches over `camera.sock`. Records carry sizes,
+    /// sequence numbers and digests, never pixels.
+    CameraList,
+    CameraCapture {
+        facing: CameraFacing,
+    },
+    /// Samples `frames` (`1..=30`) preview frames.
+    CameraPreview {
+        facing: CameraFacing,
+        frames: u32,
+    },
+    /// Reserved; always a typed `feature-unsupported` error.
+    CameraVideo {
+        facing: CameraFacing,
+    },
     /// Ask the guest to power off once the host has finished a check.
     Shutdown,
+    /// The screen idle timeout, as Settings sets it (`null` = never).
+    SetIdleTimeout {
+        #[serde(default)]
+        idle_timeout_secs: Option<u32>,
+    },
+    /// Hold a blank inhibitor on behalf of `holder` until
+    /// [`ControlCommand::ReleaseInhibit`] names the same holder.
+    InhibitBlank {
+        reason: InhibitReason,
+        holder: String,
+    },
+    /// Release every inhibitor `holder` took over this channel.
+    ReleaseInhibit {
+        holder: String,
+    },
+    /// Overrides the board's suspend flag and delay (mocked targets only;
+    /// `null` restores the profile value). The kill switch still wins.
+    SetSuspendPolicy {
+        #[serde(default)]
+        mode: Option<SuspendMode>,
+        #[serde(default)]
+        after_blank_secs: Option<u32>,
+    },
+    /// How long each following mock sleep lasts and what wakes it
+    /// (mocked targets only).
+    SetSuspendSleep {
+        sleep_ms: u32,
+        wake: WakeSource,
+    },
     /// Fault injection (mocked targets only): SIGKILL the named supervised
     /// daemon so a test can watch init restart it. Only the names in
     /// `daemon_kill::KILLABLE` are accepted.
@@ -126,7 +172,16 @@ impl ControlCommand {
             ControlCommand::BluetoothConnect { .. } => "bluetooth-connect",
             ControlCommand::BluetoothDisconnect { .. } => "bluetooth-disconnect",
             ControlCommand::BluetoothForget { .. } => "bluetooth-forget",
+            ControlCommand::CameraList => "camera-list",
+            ControlCommand::CameraCapture { .. } => "camera-capture",
+            ControlCommand::CameraPreview { .. } => "camera-preview",
+            ControlCommand::CameraVideo { .. } => "camera-video",
             ControlCommand::Shutdown => "shutdown",
+            ControlCommand::SetIdleTimeout { .. } => "set-idle-timeout",
+            ControlCommand::InhibitBlank { .. } => "inhibit-blank",
+            ControlCommand::ReleaseInhibit { .. } => "release-inhibit",
+            ControlCommand::SetSuspendPolicy { .. } => "set-suspend-policy",
+            ControlCommand::SetSuspendSleep { .. } => "set-suspend-sleep",
             ControlCommand::KillDaemon { .. } => "kill-daemon",
         }
     }

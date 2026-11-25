@@ -18,6 +18,9 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+mod icon;
+pub use icon::{APP_ICON_MAX_SIDE, AppIconBitmap};
+
 /// Current schema version of every serialized type in this crate and of the
 /// `ferrix_appd` wire protocol built on it.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -32,6 +35,11 @@ pub const APP_ID_ENV: &str = "FERRIX_APP_ID";
 pub const APP_INSTANCE_ENV: &str = "FERRIX_APP_INSTANCE";
 /// Environment variable carrying the path of the `ferrix_appd` socket.
 pub const APPD_SOCKET_ENV: &str = "FERRIX_APPD_SOCKET";
+/// Environment variable carrying the application's private, persistent data
+/// directory (`$XDG_DATA_HOME/ferrix/<app-id>`, else
+/// `$HOME/.local/share/ferrix/<app-id>`), set by the native runtime. It is
+/// writable and visible inside the sandbox's minimal filesystem view.
+pub const APP_DATA_DIR_ENV: &str = "FERRIX_APP_DATA_DIR";
 /// Optional non-secret carrier APN passed only to applications granted
 /// `telephony-data`. The application service never records this value.
 pub const TELEPHONY_APN_ENV: &str = "FERRIX_TELEPHONY_APN";
@@ -236,11 +244,22 @@ pub enum AppCapability {
     NetworkState,
     /// Control radios, scan, and manage connections and profiles.
     NetworkControl,
+    /// Open sockets beyond the application's own loopback (internet and
+    /// local network). Without it the native sandbox gives the application
+    /// a network namespace holding only `lo`. Distinct from `network-state`
+    /// and `network-control`, which reach `ferrix-networkd`, not the network.
+    Network,
+    /// Read and write the user's home folder (documents, downloads). Without
+    /// it the native sandbox's minimal filesystem view shows the application
+    /// only its own data directory ([`APP_DATA_DIR_ENV`]).
+    FilesHome,
+    /// Enumerate cameras, stream a preview, and take stills (ADR-009).
+    Camera,
 }
 
 impl AppCapability {
     /// Every capability, in declaration order.
-    pub const ALL: [AppCapability; 13] = [
+    pub const ALL: [AppCapability; 16] = [
         AppCapability::CoreState,
         AppCapability::CoreControl,
         AppCapability::Shell,
@@ -254,6 +273,9 @@ impl AppCapability {
         AppCapability::ContactsWrite,
         AppCapability::NetworkState,
         AppCapability::NetworkControl,
+        AppCapability::Network,
+        AppCapability::FilesHome,
+        AppCapability::Camera,
     ];
 
     /// The kebab-case wire name (`telephony-call`).
@@ -272,6 +294,9 @@ impl AppCapability {
             AppCapability::ContactsWrite => "contacts-write",
             AppCapability::NetworkState => "network-state",
             AppCapability::NetworkControl => "network-control",
+            AppCapability::Network => "network",
+            AppCapability::FilesHome => "files-home",
+            AppCapability::Camera => "camera",
         }
     }
 }
@@ -321,6 +346,31 @@ pub struct IconRef {
     pub tone: IconTone,
 }
 
+/// Where a descriptor comes from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AppOrigin {
+    /// A checked-in descriptor file (`apps/`, `/usr/share/ferrix/apps`).
+    #[default]
+    Catalog,
+    /// Reported at run time by a runtime adapter: a package the user
+    /// installed into a compatibility runtime (an APK). Its id lives in the
+    /// reserved [`INSTALLED_APP_PREFIX`]; it is always untrusted and
+    /// declares no capabilities.
+    Installed,
+}
+
+impl AppOrigin {
+    pub fn is_catalog(&self) -> bool {
+        *self == AppOrigin::Catalog
+    }
+}
+
+/// First id segment reserved for runtime-reported installed applications
+/// ([`AppOrigin::Installed`], `apk.<package>`). A checked-in descriptor may
+/// not use it, so an installed package can never shadow a catalog entry.
+pub const INSTALLED_APP_PREFIX: &str = "apk";
+
 /// A versioned application descriptor. One file per application in the
 /// descriptor directory, serialized as JSON. Runtime-private launch data is
 /// deliberately not part of this public type.
@@ -349,6 +399,10 @@ pub struct AppDescriptor {
     /// handler from this set). Declaring a kind grants nothing.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub intents: BTreeSet<IntentKind>,
+    /// Checked-in catalog entry (default, omitted on the wire) or an
+    /// installed package reported by a runtime.
+    #[serde(default, skip_serializing_if = "AppOrigin::is_catalog")]
+    pub origin: AppOrigin,
 }
 
 fn default_true() -> bool {
@@ -394,6 +448,33 @@ impl AppDescriptor {
         if self.role == AppRole::Home && !self.launchable {
             return Err(invalid("the home surface must be launchable".to_owned()));
         }
+        let reserved = self.id.as_str().split('.').next() == Some(INSTALLED_APP_PREFIX);
+        match self.origin {
+            AppOrigin::Catalog if reserved => {
+                return Err(invalid(format!(
+                    "ids starting {INSTALLED_APP_PREFIX}. are reserved for installed packages"
+                )));
+            }
+            AppOrigin::Installed => {
+                if !reserved {
+                    return Err(invalid(format!(
+                        "an installed app id must start with {INSTALLED_APP_PREFIX}."
+                    )));
+                }
+                if self.role != AppRole::Application
+                    || self.trust != TrustLevel::Untrusted
+                    || self.autostart
+                    || !self.capabilities.is_empty()
+                    || !self.intents.is_empty()
+                {
+                    return Err(invalid(
+                        "an installed app is an untrusted application without autostart, capabilities, or intents"
+                            .to_owned(),
+                    ));
+                }
+            }
+            AppOrigin::Catalog => {}
+        }
         Ok(())
     }
 }
@@ -410,6 +491,7 @@ pub enum IntentKind {
     Compose,
     ShowCall,
     ShowBluetoothPairing,
+    ShowPictures,
 }
 
 impl IntentKind {
@@ -419,6 +501,7 @@ impl IntentKind {
             IntentKind::Compose => "compose",
             IntentKind::ShowCall => "show-call",
             IntentKind::ShowBluetoothPairing => "show-bluetooth-pairing",
+            IntentKind::ShowPictures => "show-pictures",
         }
     }
 }
@@ -448,6 +531,9 @@ pub enum AppIntent {
     /// services only). It carries nothing: the handler reads the request
     /// from the core, so no device name or code passes through here.
     ShowBluetoothPairing,
+    /// Show the user's `~/Pictures` folder (the Camera hand-off to Files).
+    /// It carries no path: the handler resolves the folder in its own home.
+    ShowPictures,
 }
 
 impl AppIntent {
@@ -457,6 +543,7 @@ impl AppIntent {
             AppIntent::Compose { .. } => IntentKind::Compose,
             AppIntent::ShowCall => IntentKind::ShowCall,
             AppIntent::ShowBluetoothPairing => IntentKind::ShowBluetoothPairing,
+            AppIntent::ShowPictures => IntentKind::ShowPictures,
         }
     }
 
@@ -464,7 +551,7 @@ impl AppIntent {
     pub fn number(&self) -> Option<&str> {
         match self {
             AppIntent::Dial { number } | AppIntent::Compose { number } => Some(number),
-            AppIntent::ShowCall | AppIntent::ShowBluetoothPairing => None,
+            AppIntent::ShowCall | AppIntent::ShowBluetoothPairing | AppIntent::ShowPictures => None,
         }
     }
 
@@ -1002,6 +1089,7 @@ mod tests {
             trust: TrustLevel::Untrusted,
             capabilities: [AppCapability::Shell].into_iter().collect(),
             intents: Default::default(),
+            origin: Default::default(),
         }
     }
 
@@ -1037,6 +1125,30 @@ mod tests {
             AppDescriptor::from_json("{"),
             Err(AppError::InvalidDescriptor { id: None, .. })
         ));
+    }
+
+    #[test]
+    fn the_installed_prefix_is_reserved_and_installed_apps_are_untrusted() {
+        // A checked-in descriptor cannot take an installed-app id.
+        let mut d = descriptor();
+        d.id = AppId::new("apk.org.example.app").unwrap();
+        d.capabilities.clear();
+        assert!(d.validate().is_err());
+        d.origin = AppOrigin::Installed;
+        assert_eq!(d.validate(), Ok(()));
+        // The origin is on the wire only for installed apps.
+        assert!(d.to_json().contains("\"origin\": \"installed\""));
+        assert!(!descriptor().to_json().contains("origin"));
+        // Installed apps declare nothing and are never privileged.
+        let mut privileged = d.clone();
+        privileged.trust = TrustLevel::Privileged;
+        assert!(privileged.validate().is_err());
+        let mut capable = d.clone();
+        capable.capabilities.insert(AppCapability::Background);
+        assert!(capable.validate().is_err());
+        let mut outside = d;
+        outside.id = AppId::new("org.example.app").unwrap();
+        assert!(outside.validate().is_err());
     }
 
     #[test]
@@ -1105,6 +1217,9 @@ mod tests {
             "contacts-write",
             "network-state",
             "network-control",
+            "network",
+            "files-home",
+            "camera",
         ];
         assert_eq!(AppCapability::ALL.len(), expected.len());
         for (capability, name) in AppCapability::ALL.into_iter().zip(expected) {

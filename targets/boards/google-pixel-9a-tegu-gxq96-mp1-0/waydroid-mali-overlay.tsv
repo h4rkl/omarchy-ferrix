@@ -1,0 +1,15 @@
+# Stock Mali graphics stack for the Waydroid (Android 14+) container on the
+# exact target. Read by tools/pixel-9a/waydroid-mali-overlay.sh.
+#
+# vendor.img source path	overlay destination under vendor/	closure
+# `closure` = 1: also copy every NEEDED library that exists in vendor.img
+# /lib64, except LL-NDK libraries the Android system provides. Bytes come
+# only from the hash-verified pinned factory archive and never enter Git.
+/lib64/egl/libGLES_mali.so	lib64/egl/libGLES_mali.so	1
+/lib64/hw/vulkan.mali.so	lib64/hw/vulkan.mali.so	1
+/lib64/hw/mapper.pixel.so	lib64/hw/mapper.pixel.so	1
+/lib64/hw/android.hardware.graphics.allocator-aidl-impl.so	lib64/hw/android.hardware.graphics.allocator-aidl-impl.so	1
+/bin/hw/android.hardware.graphics.allocator-V2-service	bin/hw/android.hardware.graphics.allocator-V2-service	1
+/etc/init/android.hardware.graphics.allocator2-aidl-service.rc	etc/init/android.hardware.graphics.allocator2-aidl-service.rc	0
+/etc/vintf/manifest/manifest_gralloc_aidl2.xml	etc/vintf/manifest/ferrix-pixel-gralloc-allocator.xml	0
+/etc/vintf/manifest/manifest.xml	etc/vintf/manifest/ferrix-pixel-gralloc-mapper.xml	0

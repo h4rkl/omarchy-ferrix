@@ -11,7 +11,9 @@
     ],
     "org.ferrix.terminal": [
       "shell",
-      "background"
+      "background",
+      "network",
+      "files-home"
     ],
     "org.ferrix.phone": [
       "telephony-state",
@@ -27,7 +29,11 @@
     ],
     "org.ferrix.contacts": [
       "contacts-read",
-      "contacts-write"
+      "contacts-write",
+      "files-home"
+    ],
+    "org.ferrix.files": [
+      "files-home"
     ],
     "org.ferrix.settings": [
       "network-state",
@@ -40,6 +46,10 @@
     ],
     "org.ferrix.browser": [
       "background"
+    ],
+    "org.ferrix.camera": [
+      "camera",
+      "files-home"
     ]
   }
 }

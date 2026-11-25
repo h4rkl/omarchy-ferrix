@@ -14,6 +14,9 @@ use ferrix_hardware_api::{
     Lifecycle, Network, Power, Telephony,
 };
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod sleep;
+
 /// Stable id of the exact admitted physical target.
 pub const TARGET_ID: &str = "google-pixel-9a-tegu-gxq96-mp1-0";
 /// Exact root compatible/model strings emitted by the pinned `zumapro-tegu-mp`
@@ -121,6 +124,7 @@ fn capability_key(capability: Capability) -> &'static str {
         Capability::Audio => "audio",
         Capability::Telephony => "telephony",
         Capability::Lifecycle => "lifecycle",
+        Capability::Camera => "camera",
         Capability::MockControl => "mock-control",
     }
 }
@@ -148,8 +152,9 @@ mod linux {
         Audio, AudioRoute, AudioRouteAvailability, AudioState, Bluetooth, BluetoothState,
         Capability, Display, DisplayState, EventSource, HardwareError, HardwareEvent, Input,
         InputState, Lifecycle, LifecycleState, ModemRegistration, Network,
-        NetworkState as HardwareNetworkState, Orientation, Power, SimState, SuspendOutcome,
-        Telephony, TelephonyState, WifiState,
+        NetworkState as HardwareNetworkState, Orientation, Power, PowerAction, SimState,
+        SleepState, SuspendOutcome, SuspendReport, Telephony, TelephonyState, WakeSource,
+        WifiState,
     };
     use ferrix_network_adapter_api::NetworkBackend;
     use ferrix_network_api::{
@@ -323,10 +328,6 @@ mod linux {
     impl Lifecycle for UnavailableHardware {
         fn lifecycle_state(&self) -> LifecycleState {
             LifecycleState::default()
-        }
-
-        fn suspend(&self) -> Result<SuspendOutcome, HardwareError> {
-            Err(HardwareError::unsupported(Capability::Lifecycle))
         }
     }
 
@@ -576,9 +577,10 @@ mod linux {
             let Some(backlight) = self.backlight.as_ref() else {
                 return Err(HardwareError::unsupported(Capability::Display));
             };
-            let value =
-                u32::try_from(u64::from(percent) * u64::from(backlight.max) / u64::from(100_u8))
-                    .unwrap_or(backlight.max);
+            // Never fully dark while on: screen-off is the shell's DPMS
+            // blank, so a lit panel always keeps a visible level.
+            let percent = ferrix_hardware_api::clamp_brightness(percent);
+            let value = backlight_raw(percent, backlight.max);
             fs::write(&backlight.brightness, value.to_string()).map_err(|error| {
                 HardwareError::failed(
                     Capability::Display,
@@ -665,6 +667,16 @@ mod linux {
             let max = fs::read_to_string(maximum).ok()?.trim().parse().ok()?;
             (max > 0 && brightness.is_file()).then_some(Backlight { brightness, max })
         })
+    }
+
+    /// Raw `brightness` value for a percentage of `max`: proportional, but
+    /// never 0 for a non-zero request (a coarse `max` would otherwise round
+    /// the floor level to an unlit panel).
+    fn backlight_raw(percent: u8, max: u32) -> u32 {
+        let value = u32::try_from(u64::from(percent.min(100)) * u64::from(max) / 100)
+            .unwrap_or(max)
+            .min(max);
+        if percent > 0 { value.max(1) } else { value }
     }
 
     fn read_brightness_percent(backlight: &Backlight) -> Option<u8> {
@@ -766,6 +778,11 @@ mod linux {
         }
     }
 
+    const POWER_STATE: &str = "/sys/power/state";
+    const POWER_MEM_SLEEP: &str = "/sys/power/mem_sleep";
+    /// The GKI's wakeup-reason report (absent on kernels without it).
+    const WAKEUP_REASON: &str = "/sys/kernel/wakeup_reasons/last_resume_reason";
+
     struct LinuxLifecycle {
         state: Mutex<LifecycleState>,
         events: Arc<EventHub>,
@@ -785,41 +802,108 @@ mod linux {
             *lock(&self.state)
         }
 
-        fn suspend(&self) -> Result<SuspendOutcome, HardwareError> {
-            // The target image uses OpenRC, so systemctl is neither required
-            // nor a valid lifecycle dependency. The kernel power-state ABI is
-            // the shared Linux interface and returns only after resume.
-            let states = fs::read_to_string("/sys/power/state").map_err(|error| {
-                HardwareError::failed(
-                    Capability::Lifecycle,
-                    format!("could not read /sys/power/state: {error}"),
-                )
-            })?;
-            let mode = states
-                .split_whitespace()
-                .find(|state| matches!(*state, "mem" | "freeze"))
-                .ok_or_else(|| {
+        fn sleep_states(&self) -> Vec<SleepState> {
+            match fs::read_to_string(POWER_STATE) {
+                Ok(state) => super::sleep::offered(
+                    &state,
+                    fs::read_to_string(POWER_MEM_SLEEP).ok().as_deref(),
+                ),
+                Err(_) => Vec::new(),
+            }
+        }
+
+        /// The only writer of `/sys/power/mem_sleep` and `/sys/power/state`
+        /// in Ferrix. The target image uses OpenRC, so systemctl is neither
+        /// required nor a valid lifecycle dependency; the kernel power-state
+        /// ABI is the shared Linux interface and the write returns only
+        /// after resume. `ferrix-core`'s suspend policy gates every call
+        /// (board flag, kill switch, inhibitors).
+        fn suspend(&self, state: SleepState) -> Result<SuspendReport, HardwareError> {
+            if !self.sleep_states().contains(&state) {
+                return Err(HardwareError::unsupported(Capability::Lifecycle));
+            }
+            let (mem_sleep, word) = super::sleep::entry(state);
+            if let Some(choice) = mem_sleep {
+                fs::write(POWER_MEM_SLEEP, format!("{choice}\n")).map_err(|error| {
                     HardwareError::failed(
                         Capability::Lifecycle,
-                        format!("/sys/power/state exposes no supported suspend mode: {states:?}"),
+                        format!("could not select mem_sleep {choice}: {error}"),
                     )
                 })?;
-            fs::write("/sys/power/state", format!("{mode}\n")).map_err(|error| {
-                HardwareError::failed(
-                    Capability::Lifecycle,
-                    format!("could not enter Linux suspend mode {mode}: {error}"),
-                )
-            })?;
-            let outcome = SuspendOutcome::Resumed;
+            }
+            // CLOCK_MONOTONIC (Instant) stops while asleep; the wall clock
+            // does not. Their difference is the time asleep (approximate:
+            // a wall-clock step during the call distorts it).
+            let wall = std::time::SystemTime::now();
+            let mono = std::time::Instant::now();
+            let entered = fs::write(POWER_STATE, format!("{word}\n"));
+            let slept_ms = wall.elapsed().ok().map(|wall| {
+                u64::try_from(wall.saturating_sub(mono.elapsed()).as_millis()).unwrap_or(u64::MAX)
+            });
+            let outcome = match &entered {
+                Ok(()) => SuspendOutcome::Resumed,
+                // EBUSY: a wakeup event was pending, the kernel aborted entry.
+                Err(error) if error.kind() == std::io::ErrorKind::ResourceBusy => {
+                    SuspendOutcome::Rejected
+                }
+                Err(_) => SuspendOutcome::Failed,
+            };
+            let reason = fs::read_to_string(WAKEUP_REASON).unwrap_or_default();
+            let wake = match outcome {
+                SuspendOutcome::Resumed => super::sleep::classify_wake(&reason),
+                _ => WakeSource::Unknown,
+            };
             let lifecycle = {
-                let mut state = lock(&self.state);
-                state.suspend_count = state.suspend_count.saturating_add(1);
-                state.last_suspend = Some(outcome);
-                *state
+                let mut lifecycle = lock(&self.state);
+                lifecycle.suspend_count = lifecycle.suspend_count.saturating_add(1);
+                lifecycle.last_suspend = Some(outcome);
+                lifecycle.last_sleep_state = Some(state);
+                lifecycle.last_wake = Some(wake);
+                *lifecycle
             };
             self.events
                 .publish(HardwareEvent::Suspended { outcome, lifecycle });
-            Ok(outcome)
+            match entered {
+                Err(error) if outcome == SuspendOutcome::Failed => Err(HardwareError::failed(
+                    Capability::Lifecycle,
+                    format!("could not enter {} ({word}): {error}", state.name()),
+                )),
+                _ => Ok(SuspendReport {
+                    state,
+                    outcome,
+                    wake,
+                    wake_detail: super::sleep::wake_detail(&reason),
+                    slept_ms: (outcome == SuspendOutcome::Resumed)
+                        .then_some(slept_ms)
+                        .flatten(),
+                }),
+            }
+        }
+
+        /// Orderly OpenRC transition: `poweroff`/`reboot` without `-f` ask
+        /// init to run the shutdown runlevel (services, Waydroid, unmounts)
+        /// before the kernel call. They return once init has the request.
+        fn power_action(&self, action: PowerAction) -> Result<(), HardwareError> {
+            let program = match action {
+                PowerAction::PowerOff => "/sbin/poweroff",
+                PowerAction::Restart => "/sbin/reboot",
+            };
+            let status = std::process::Command::new(program)
+                .status()
+                .map_err(|error| {
+                    HardwareError::failed(
+                        Capability::Lifecycle,
+                        format!("could not run {program}: {error}"),
+                    )
+                })?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(HardwareError::failed(
+                    Capability::Lifecycle,
+                    format!("{program} exited with {status}"),
+                ))
+            }
         }
     }
 
@@ -935,6 +1019,16 @@ mod linux {
         }
 
         #[test]
+        fn backlight_floor_never_rounds_a_lit_panel_to_zero() {
+            assert_eq!(backlight_raw(100, 4095), 4095);
+            assert_eq!(backlight_raw(50, 4095), 2047);
+            assert_eq!(backlight_raw(5, 10), 1, "5% of a coarse rail is still lit");
+            assert_eq!(backlight_raw(1, 255), 2);
+            assert_eq!(backlight_raw(200, 255), 255);
+            assert_eq!(backlight_raw(0, 255), 0);
+        }
+
+        #[test]
         fn modes_with_refresh_suffixes_parse() {
             assert_eq!(parse_mode("1080x2424@60:60"), Some((1080, 2424)));
             assert_eq!(parse_mode("4096x2160"), Some((4096, 2160)));
@@ -1023,6 +1117,11 @@ mod tests {
         assert_eq!(m.status(Capability::Power), CapabilityStatus::Supported);
         assert_eq!(m.status(Capability::Audio), CapabilityStatus::Unsupported);
         assert_eq!(m.status(Capability::Display), CapabilityStatus::Unsupported);
+        // No camera adapter or physical Linux evidence yet.
+        assert_eq!(
+            capability_matrix().status(Capability::Camera),
+            CapabilityStatus::Unsupported
+        );
         // A physical target never claims the mock test seam.
         assert_eq!(
             capability_matrix().status(Capability::MockControl),

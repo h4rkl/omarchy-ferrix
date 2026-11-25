@@ -7,12 +7,14 @@ use serde::{Deserialize, Serialize};
 /// `launch` object of an `android` descriptor.
 ///
 /// ```json
-/// {
-///   "package": "net.slions.fulguris.full.fdroid",
-///   "activity": null,
-///   "apk": { "pins": "tools/android/fulguris.pins", "path": null }
-/// }
+/// { "package": "org.lineageos.jelly", "activity": null }
 /// ```
+///
+/// A package built into the Android image (the Browser, LineageOS Jelly) or
+/// installed by the user needs nothing else. `apk` is optional metadata for
+/// a workflow that installs a verified APK explicitly
+/// (`{ "pins": "<pins file>", "path": "<verified apk>" }`); no checked-in
+/// descriptor uses it today.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AndroidLaunch {
@@ -120,12 +122,7 @@ mod tests {
 
     #[test]
     fn valid_packages_pass() {
-        for ok in [
-            "net.slions.fulguris.full.fdroid",
-            "org.example_1.App2",
-            "a.b",
-            "_x.y_",
-        ] {
+        for ok in ["org.lineageos.jelly", "org.example_1.App2", "a.b", "_x.y_"] {
             assert_eq!(validate_package(ok), Ok(()), "{ok}");
         }
     }
@@ -134,16 +131,16 @@ mod tests {
     fn invalid_packages_fail() {
         for bad in [
             "",
-            "fulguris",
-            "com..fulguris",
-            ".com.fulguris",
-            "com.fulguris.",
-            "com.1fulguris",
-            "com.fulguris browser",
-            "com.fulguris;rm",
-            "com.ful-guris",
-            "com/fulguris",
-            "com.fulgurïs",
+            "jelly",
+            "com..jelly",
+            ".com.jelly",
+            "com.jelly.",
+            "com.1jelly",
+            "com.jelly browser",
+            "com.jelly;rm",
+            "com.jel-ly",
+            "com/jelly",
+            "com.jellÿ",
         ] {
             assert!(validate_package(bad).is_err(), "{bad:?} should fail");
         }
@@ -165,34 +162,34 @@ mod tests {
     #[test]
     fn launch_config_parses_and_rejects_unknown_fields() {
         let launch: AndroidLaunch = serde_json::from_str(
-            r#"{"package":"net.slions.fulguris.full.fdroid","activity":null,"apk":{"pins":"tools/android/fulguris.pins"}}"#,
+            r#"{"package":"org.lineageos.jelly","activity":null,"apk":{"pins":"tools/android/example.pins"}}"#,
         )
         .unwrap();
-        assert_eq!(launch.package, "net.slions.fulguris.full.fdroid");
+        assert_eq!(launch.package, "org.lineageos.jelly");
         assert_eq!(launch.activity, None);
         assert_eq!(launch.component(), None);
         assert_eq!(
             launch.apk.as_ref().unwrap().pins,
-            "tools/android/fulguris.pins"
+            "tools/android/example.pins"
         );
         assert_eq!(launch.validate(), Ok(()));
 
         let with_activity: AndroidLaunch = serde_json::from_str(
-            r#"{"package":"net.slions.fulguris.full.fdroid","activity":"com.google.android.apps.chrome.Main"}"#,
+            r#"{"package":"org.lineageos.jelly","activity":"com.google.android.apps.chrome.Main"}"#,
         )
         .unwrap();
         assert_eq!(
             with_activity.component().as_deref(),
-            Some("net.slions.fulguris.full.fdroid/com.google.android.apps.chrome.Main")
+            Some("org.lineageos.jelly/com.google.android.apps.chrome.Main")
         );
 
         assert!(
             serde_json::from_str::<AndroidLaunch>(
-                r#"{"package":"net.slions.fulguris.full.fdroid","exec":["x"]}"#
+                r#"{"package":"org.lineageos.jelly","exec":["x"]}"#
             )
             .is_err()
         );
-        let bad: AndroidLaunch = serde_json::from_str(r#"{"package":"fulguris"}"#).unwrap();
+        let bad: AndroidLaunch = serde_json::from_str(r#"{"package":"jelly"}"#).unwrap();
         assert!(bad.validate().is_err());
     }
 }

@@ -26,10 +26,29 @@ struct Fixture {
 }
 
 fn fixture(name: &str) -> Fixture {
+    fixture_with(name, false)
+}
+
+/// `placeholder` adds a synthetic non-launchable catalog entry beside the
+/// checked-in descriptors (every checked-in app is launchable now).
+fn fixture_with(name: &str, placeholder: bool) -> Fixture {
     let dir = std::env::temp_dir().join(format!("ferrix-appd-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let socket = dir.join("ferrix-appd.sock");
-    let apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
+    let mut apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
+    if placeholder {
+        let catalog = dir.join("apps");
+        std::fs::create_dir_all(&catalog).unwrap();
+        for entry in std::fs::read_dir(&apps).unwrap().flatten() {
+            std::fs::copy(entry.path(), catalog.join(entry.file_name())).unwrap();
+        }
+        std::fs::write(
+            catalog.join("org.ferrix.placeholder.json"),
+            r#"{"schema_version":1,"id":"org.ferrix.placeholder","runtime":"native","name":"Placeholder","icon":{"glyph":"?","tone":"neutral"},"launchable":false}"#,
+        )
+        .unwrap();
+        apps = catalog;
+    }
     let runtime = FakeRuntime::native();
     let tree = FakeProcessTree::default();
     let (recorder, _records) = Recorder::capturing("mock");
@@ -62,7 +81,10 @@ fn next_app_event(rx: &Receiver<Notification>) -> AppEvent {
     loop {
         match rx.recv_timeout(TIMEOUT).expect("notification") {
             Notification::App { event } => return event,
-            Notification::Activate { .. } | Notification::Intent { .. } => continue,
+            Notification::Activate { .. }
+            | Notification::Withhold { .. }
+            | Notification::Close { .. }
+            | Notification::Intent { .. } => continue,
         }
     }
 }
@@ -73,17 +95,20 @@ fn id(text: &str) -> AppId {
 
 #[test]
 fn hello_catalog_and_typed_errors_over_the_socket() {
-    let f = fixture("catalog");
+    let f = fixture_with("catalog", true);
     let mut home = Client::connect(&f.socket, ClientRole::Home, TIMEOUT).unwrap();
     let apps = home.catalog().unwrap();
     assert!(apps.len() >= 2);
     assert!(apps.iter().any(|d| d.id.as_str() == "org.ferrix.home"));
     assert!(apps.iter().any(|d| d.id.as_str() == "org.ferrix.terminal"));
     assert!(home.instances().unwrap().is_empty());
+    // First-party apps never carry a bitmap icon; the request is public.
+    assert_eq!(home.app_icon(&id("org.ferrix.terminal")), Ok(None));
+    assert_eq!(home.app_icon(&id("apk.org.example.absent")), Ok(None));
 
     // A reference entry is not launchable: typed error, not a protocol error.
-    // Which entries are illustrative changes as apps land, so pick one from
-    // the catalog instead of naming it.
+    // Which entries are illustrative changes as apps land, so the fixture
+    // adds one and the test picks it from the catalog.
     let reference = apps
         .iter()
         .find(|d| !d.launchable)
@@ -149,6 +174,7 @@ fn compositor_role_is_gated_and_associates_surfaces() {
         pid: sandbox_pid + 2,
         app_id: Some("org.ferrix.terminal".to_owned()),
         title: None,
+        surface: None,
     })
     .unwrap();
     // Reports are fire-and-forget; a request afterwards proves the stream is fine.
@@ -165,11 +191,13 @@ fn compositor_role_is_gated_and_associates_surfaces() {
             pid: sandbox_pid + 2,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: Some("Terminal".to_owned()),
+            surface: None,
         })
         .unwrap();
     compositor
         .report(&Report::FocusChanged {
             pid: Some(sandbox_pid + 2),
+            surface: None,
         })
         .unwrap();
     assert!(ferrix_appd::testing::wait_for(TIMEOUT, || {
@@ -200,9 +228,14 @@ fn service_role_identifies_launched_pids_over_the_socket() {
     assert_eq!(identity.trust, Some(TrustLevel::Untrusted));
     assert_eq!(
         identity.granted,
-        [AppCapability::Shell, AppCapability::Background]
-            .into_iter()
-            .collect()
+        [
+            AppCapability::Shell,
+            AppCapability::Background,
+            AppCapability::Network,
+            AppCapability::FilesHome
+        ]
+        .into_iter()
+        .collect()
     );
     assert!(!identity.has(AppCapability::TelephonyCall));
 
@@ -216,7 +249,7 @@ fn service_role_identifies_launched_pids_over_the_socket() {
     );
     assert_eq!(
         raw,
-        r#"{"reply":"identity","schema_version":1,"app":"org.ferrix.terminal","trust":"untrusted","granted":["shell","background"]}"#
+        r#"{"reply":"identity","schema_version":1,"app":"org.ferrix.terminal","trust":"untrusted","granted":["shell","background","network","files-home"]}"#
     );
 
     // Unknown pid: `app: null`, no trust, no grants.
@@ -319,6 +352,7 @@ fn subscribers_receive_catalog_and_lifecycle_notifications() {
             pid: client_pid,
             app_id: Some("org.ferrix.terminal".to_owned()),
             title: Some("Terminal".to_owned()),
+            surface: None,
         })
         .unwrap();
     let compositor = compositor.subscribe().unwrap();
@@ -330,6 +364,7 @@ fn subscribers_receive_catalog_and_lifecycle_notifications() {
         Notification::Activate {
             pid: client_pid,
             app_id: terminal.clone(),
+            surface: None,
         }
     );
 

@@ -798,14 +798,28 @@ fn display(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model, input: &Input) 
             pressed,
         );
     }
-    error_notice(c, ty, l, model, 900);
+    let value = model.screen_timeout_value();
+    list_row(
+        c,
+        ty,
+        l.screen_timeout_rect(),
+        "Screen timeout",
+        &model.screen_timeout_sub(),
+        Some(match value.as_deref() {
+            Some(label) => (label, Tone::Neutral),
+            None => ("unknown", Tone::Warn),
+        }),
+        input.pressed == Some(Target::ScreenTimeout),
+    );
+    error_notice(c, ty, l, model, 1060);
     caption(
         c,
         ty,
         l,
-        "Brightness and rotation go through ferrix-core; off pins portrait, on follows \
-         the rotation sensor.",
-        1060,
+        "Brightness, rotation, and the screen timeout go through ferrix-core; off pins \
+         portrait, on follows the rotation sensor. Calls and video keep the screen on; the \
+         power key turns it off.",
+        1220,
     );
 }
 
@@ -1244,16 +1258,21 @@ fn about(c: &mut Canvas, ty: &Type, l: &Layout, model: &Model) {
     for (i, line) in lines.iter().enumerate() {
         ty.text(c, footer, line, s(96), s(1330) + i as i32 * s(39));
     }
-    // Third-party notice for the UI glyphs; the licence text is installed
-    // under /usr/share/licenses/ferrix/ (docs/licensing.md).
-    let notice = ellipsize(ty, footer, ferrix_ui::icons::ATTRIBUTION, max);
-    ty.text(
-        c,
-        footer,
-        &notice,
-        s(96),
-        s(1330) + (lines.len() as i32 + 1) * s(39),
-    );
+    // Third-party notices for the UI glyphs and the type; the licence texts
+    // are installed under /usr/share/licenses/ferrix/ (docs/licensing.md).
+    for (i, attribution) in [ferrix_ui::icons::ATTRIBUTION, ferrix_ui::text::ATTRIBUTION]
+        .into_iter()
+        .enumerate()
+    {
+        let notice = ellipsize(ty, footer, attribution, max);
+        ty.text(
+            c,
+            footer,
+            &notice,
+            s(96),
+            s(1330) + (lines.len() + 1 + i) as i32 * s(39),
+        );
+    }
 }
 
 /// Lines of the About footer at `size`, as drawn.
@@ -1352,7 +1371,7 @@ mod tests {
             let l = Layout::new(size);
             let style = Style::regular(l.s(26) as f32, theme::get().fg_dim);
             let lines = about_footer_lines(&ty, size);
-            assert!(lines.len() > 1, "footer wraps at {size:?}");
+            assert!(!lines.is_empty(), "footer drawn at {size:?}");
             for line in &lines {
                 assert!(
                     l.s(96) + ty.width(style, line) <= size.0 as i32 - l.s(96),

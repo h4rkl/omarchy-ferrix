@@ -1,7 +1,9 @@
 //! Omarchy Ferrix's shared software-rendering toolkit for the reference surfaces.
 //!
-//! - [`draw`]: a thin `tiny-skia` + `fontdue` canvas with the embedded
-//!   JetBrains Mono faces.
+//! - [`draw`]: a thin `tiny-skia` canvas.
+//! - [`text`]: the shared text path: embedded IBM Plex Sans Condensed and
+//!   Plex Mono, Noto fallback from the guest fonts, `cosmic-text` shaping
+//!   and bidi, `swash` rasterisation.
 //! - [`theme`]: the Ferrix palette (black surfaces, amber type, rust accent)
 //!   and the `colors.toml` loader behind [`theme::get`].
 //! - [`osk`] and [`keymap`]: the touch keyboard geometry and the evdev keymap
@@ -10,8 +12,11 @@
 //!   `keyboard.toml` (layout, repeat timing), and the key-repeat timer.
 //! - [`widgets`] and [`gesture`]: shared chips, rows, fields, keypad, and
 //!   keyboard drawing plus the touch tracker every app surface reuses.
-//! - [`icons`]: the pinned Remix Icon (Apache-2.0) glyph subset, compiled to
-//!   outlines at build time and filled at the requested pixel size.
+//! - [`fling`]: release-velocity estimation and the decelerating glide for
+//!   touch-scrolled lists (time-injected, no Wayland).
+//! - [`icons`]: the pinned Google Material Symbols (Apache-2.0) glyph subset,
+//!   compiled to outlines at build time, rasterised once per pixel size and
+//!   tinted with theme colours.
 //! - [`evidence`]: single-line JSON evidence records on stdout and the
 //!   session evidence label.
 //! - [`clock`]: the local wall-clock minute every status bar shows and a
@@ -26,11 +31,13 @@
 pub mod clock;
 pub mod draw;
 pub mod evidence;
+pub mod fling;
 pub mod gesture;
 pub mod icons;
 pub mod keyboard;
 pub mod keymap;
 pub mod osk;
+pub mod text;
 pub mod theme;
 pub mod widgets;
 

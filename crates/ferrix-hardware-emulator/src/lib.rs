@@ -8,17 +8,21 @@
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 mod bluetooth;
+mod camera;
 
 pub use bluetooth::{MOCK_PAIR_STEP_MS, MOCK_REMOTE_TIMEOUT_MS, MOCK_REMOTE_TYPING_MS};
+pub use camera::{MockCamera, render as render_camera_pattern};
 
 use ferrix_hardware_api::{
     Audio, AudioState, Bluetooth, BluetoothDevice, BluetoothPin, BluetoothSession, BluetoothState,
     Capability, CapabilityMatrix, CapabilityStatus, Display, DisplayState, EventSource,
     HardwareError, HardwareEvent, HardwareState, Input, InputState, Lifecycle, LifecycleState,
-    MockCommand, MockControl, MockPairingOutcome, ModemRegistration, Network, NetworkState,
-    Orientation, Power, PowerState, SimState, SuspendOutcome, Telephony, TelephonyState, WifiState,
+    MAX_MOCK_SLEEP_MS, MockCommand, MockControl, MockPairingOutcome, ModemRegistration, Network,
+    NetworkState, Orientation, Power, PowerAction, PowerState, SimState, SleepState,
+    SuspendOutcome, SuspendReport, Telephony, TelephonyState, WakeSource, WifiState,
 };
 use ferrix_target_profile::Profile;
 
@@ -29,6 +33,11 @@ pub const TARGET_ID: &str = "qemu-aarch64";
 /// brightness field because it is runtime UI state, not a target fact.
 const DEFAULT_BRIGHTNESS: u8 = 72;
 
+/// How long a mock suspend "sleeps" before it resumes on a mock RTC alarm,
+/// unless [`MockCommand::SetSuspendSleep`] chose otherwise. Long enough for
+/// a scenario to see the `suspending` phase, short enough for CI.
+pub const DEFAULT_MOCK_SLEEP: Duration = Duration::from_millis(1500);
+
 #[derive(Debug)]
 struct Inner {
     state: HardwareState,
@@ -38,6 +47,8 @@ struct Inner {
     /// The mock controller's devices, discovery, and pairing.
     bt: bluetooth::MockBluetooth,
     next_suspend: SuspendOutcome,
+    /// How long a mock sleep lasts and what ends it.
+    sleep: (Duration, WakeSource),
     subscribers: Vec<Sender<HardwareEvent>>,
 }
 
@@ -96,6 +107,7 @@ impl Emulator {
                 sensor_orientation: profile.display.orientation,
                 bt: bluetooth::MockBluetooth::from_profile(profile),
                 next_suspend: SuspendOutcome::Resumed,
+                sleep: (DEFAULT_MOCK_SLEEP, WakeSource::Alarm),
                 subscribers: Vec::new(),
             })),
         }
@@ -249,6 +261,18 @@ impl Emulator {
     /// event by itself.
     pub fn set_suspend_outcome(&self, outcome: SuspendOutcome) {
         self.lock().next_suspend = outcome;
+    }
+
+    /// Chooses how long every following mock sleep lasts and what wakes it.
+    pub fn set_suspend_sleep(&self, sleep_ms: u32, wake: WakeSource) -> Result<(), HardwareError> {
+        if sleep_ms > MAX_MOCK_SLEEP_MS {
+            return Err(HardwareError::invalid(
+                Capability::Lifecycle,
+                format!("mock sleep must be at most {MAX_MOCK_SLEEP_MS} ms (got {sleep_ms})"),
+            ));
+        }
+        self.lock().sleep = (Duration::from_millis(u64::from(sleep_ms)), wake);
+        Ok(())
     }
 }
 
@@ -464,20 +488,56 @@ impl Lifecycle for Emulator {
         self.lock().state.lifecycle
     }
 
-    fn suspend(&self) -> Result<SuspendOutcome, HardwareError> {
+    /// The virtual phone offers both states; neither is real.
+    fn sleep_states(&self) -> Vec<SleepState> {
+        vec![SleepState::S2idle, SleepState::Deep]
+    }
+
+    /// Simulated: nothing is frozen. A resumed cycle blocks for the mock
+    /// sleep (the caller sees a real suspend's shape: the call returns
+    /// after "resume"), then records the cycle and publishes `suspended`.
+    /// The lock is not held while "asleep".
+    fn suspend(&self, state: SleepState) -> Result<SuspendReport, HardwareError> {
+        let (outcome, (sleep, wake)) = {
+            let mut inner = self.lock();
+            let outcome = std::mem::replace(&mut inner.next_suspend, SuspendOutcome::Resumed);
+            (outcome, inner.sleep)
+        };
+        if outcome == SuspendOutcome::Resumed {
+            std::thread::sleep(sleep);
+        }
+        let wake = match outcome {
+            SuspendOutcome::Resumed => wake,
+            _ => WakeSource::Unknown,
+        };
         let mut inner = self.lock();
-        let outcome = std::mem::replace(&mut inner.next_suspend, SuspendOutcome::Resumed);
         let mut lifecycle = inner.state.lifecycle;
         lifecycle.suspend_count += 1;
         lifecycle.last_suspend = Some(outcome);
+        lifecycle.last_sleep_state = Some(state);
+        lifecycle.last_wake = Some(wake);
         Self::publish(&mut inner, HardwareEvent::Suspended { outcome, lifecycle });
         match outcome {
             SuspendOutcome::Failed => Err(HardwareError::failed(
                 Capability::Lifecycle,
                 "mock suspend outcome is failed",
             )),
-            other => Ok(other),
+            other => Ok(SuspendReport {
+                state,
+                outcome: other,
+                wake,
+                wake_detail: Some("mock".to_owned()),
+                slept_ms: (other == SuspendOutcome::Resumed)
+                    .then(|| u64::try_from(sleep.as_millis()).unwrap_or(u64::MAX)),
+            }),
         }
+    }
+
+    /// Accepted: the virtual phone has no power rail of its own. The core
+    /// hands the accepted action to the QEMU init (its `--power-marker`),
+    /// which really powers the guest off or reboots it.
+    fn power_action(&self, _action: PowerAction) -> Result<(), HardwareError> {
+        Ok(())
     }
 }
 
@@ -509,6 +569,10 @@ impl MockControl for Emulator {
             MockCommand::SetOrientation { orientation } => Some(self.set_orientation(orientation)),
             MockCommand::SetSuspendOutcome { outcome } => {
                 self.set_suspend_outcome(outcome);
+                None
+            }
+            MockCommand::SetSuspendSleep { sleep_ms, wake } => {
+                self.set_suspend_sleep(sleep_ms, wake)?;
                 None
             }
             MockCommand::SetBluetoothPairingOutcome { outcome } => {
@@ -975,16 +1039,28 @@ passkey = 205718
     #[test]
     fn suspend_outcome_is_controlled() {
         let (e, rx) = emulator();
-        assert_eq!(e.suspend().unwrap(), SuspendOutcome::Resumed);
-        e.set_suspend_outcome(SuspendOutcome::Failed);
-        assert!(e.suspend().is_err());
-        assert_eq!(e.lifecycle_state().suspend_count, 2);
-        assert_eq!(
-            e.lifecycle_state().last_suspend,
-            Some(SuspendOutcome::Failed)
+        e.set_suspend_sleep(5, WakeSource::PowerKey).unwrap();
+        assert!(
+            e.set_suspend_sleep(MAX_MOCK_SLEEP_MS + 1, WakeSource::Alarm)
+                .is_err()
         );
+        assert_eq!(e.sleep_states(), [SleepState::S2idle, SleepState::Deep]);
+        let report = e.suspend(SleepState::Deep).unwrap();
+        assert_eq!(report.outcome, SuspendOutcome::Resumed);
+        assert_eq!(report.wake, WakeSource::PowerKey);
+        assert_eq!(report.slept_ms, Some(5));
+        e.set_suspend_outcome(SuspendOutcome::Failed);
+        assert!(e.suspend(SleepState::S2idle).is_err());
+        let lifecycle = e.lifecycle_state();
+        assert_eq!(lifecycle.suspend_count, 2);
+        assert_eq!(lifecycle.last_suspend, Some(SuspendOutcome::Failed));
+        assert_eq!(lifecycle.last_sleep_state, Some(SleepState::S2idle));
+        assert_eq!(lifecycle.last_wake, Some(WakeSource::Unknown));
         assert_eq!(rx.try_iter().count(), 2);
-        assert_eq!(e.suspend().unwrap(), SuspendOutcome::Resumed);
+        assert_eq!(
+            e.suspend(SleepState::S2idle).unwrap().outcome,
+            SuspendOutcome::Resumed
+        );
     }
 
     #[test]

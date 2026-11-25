@@ -8,7 +8,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 target="$root/targets/boards/google-pixel-9a-tegu-gxq96-mp1-0"
-pins="$target/recovery.pins"
+pins=${FERRIX_PIXEL9A_PINS:-"$target/recovery.pins"}
 out="$target/recovery"
 
 need() {

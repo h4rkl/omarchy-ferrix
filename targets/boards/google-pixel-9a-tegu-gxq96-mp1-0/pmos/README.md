@@ -8,7 +8,7 @@ does not install Android or Waydroid.
 
 Boundary change (owner request, 2026-10-09): the **development route only**
 may optionally carry Waydroid as an *application runtime* for the Browser tile
-(Fulguris, ADR-005/ADR-007). It is never the operating environment. Opt in
+(LineageOS Jelly built into the Android image, ADR-005/ADR-008). It is never the operating environment. Opt in
 with `FERRIX_PIXEL9A_ANDROID=1` for `tools/pixel-9a/rootfs.sh`, which appends
 the package set in `android/packages` (Waydroid, LXC, dnsmasq, iptables plus iptables-legacy;
 deliberately no `nftables`/`waydroid-nftrules`, because the
@@ -17,7 +17,8 @@ pinned GKI has no `CONFIG_NF_TABLES`) and refuses a result containing
 GKI `nft list ruleset` fails, so `waydroid-net.sh` uses `iptables-legacy`
 (Alpine's plain `iptables` is the nft backend and would fail too). `tools/pixel-9a/dev-compose.py --android` then grows the rootfs
 (default 8 GiB) and stages the QEMU route's pinned LineageOS Waydroid images
-and Fulguris APK (verified against `tools/android/*.pins`), the shared guest
+(verified against `tools/android/waydroid.pins`) or a verified local
+LineageOS 23.2 build (`--waydroid-built`), the shared guest
 bootstrap `tools/android/guest/ferrix-waydroid.sh`, the renderer properties in
 `android/waydroid-properties.ini` (SwiftShader, `gralloc=default`, 400 dpi),
 and the `ferrix-android` runlevel link. The package installs
@@ -124,9 +125,10 @@ guest.
 Build steps on the Linux build host. Each output directory must be new:
 
 1. Host inputs, the same pins as the QEMU route: run `just waydroid-images-fetch`
-   and `sh tools/android/fulguris-fetch.sh` (needs `apksigner`). Or copy an
-   already verified `out/android/` tree; `dev-compose` re-verifies size and
-   SHA-256 against `tools/android/*.pins`.
+   (or build LineageOS 23.2 with `tools/android/waydroid-lineage-build.sh`).
+   Or copy an already verified `out/android/` tree; `dev-compose` re-verifies
+   size and SHA-256 against `tools/android/waydroid.pins` or the build
+   manifest. No APK is needed: the Browser (Jelly) is part of the image.
 2. Base rootfs with the package set:
    `FERRIX_PIXEL9A_ANDROID=1 FERRIX_PIXEL9A_ROOTFS_BUILD=… tools/pixel-9a/native-builder.sh run rootfs build`,
    with the usual product, firmware and pmaports inputs and a fresh
@@ -155,10 +157,12 @@ On first boot, the background `ferrix-android` service does the following
 - as `user`, starts a session bus at `/run/user/1000/bus` and
   `waydroid session start` (no pulse socket, so Android has no audio yet);
 - waits for Android `sys.boot_completed`;
-- installs Fulguris as `user`;
-- assigns the browser role.
+- marks Android setup complete and disables the setup wizard and Android's
+  home launcher (`com.android.launcher3`/`org.lineageos.trebuchet`);
+- verifies the built-in Browser (`org.lineageos.jelly`) and assigns it the
+  browser role.
 
-Later boots skip the init and the install. ferrix-appd then launches the
+Later boots skip the init. ferrix-appd then launches the
 Browser tile through the unchanged `ferrix-runtime-android` adapter.
 
 ## S5300 native-Linux package boundary

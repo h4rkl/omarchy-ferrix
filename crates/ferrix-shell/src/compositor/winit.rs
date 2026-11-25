@@ -7,7 +7,7 @@ use ferrix_protocol::Subscription;
 
 use smithay::{
     backend::{
-        renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer},
+        renderer::{ImportDma, ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent},
     },
     output::{Output, PhysicalProperties, Scale, Subpixel},
@@ -26,6 +26,7 @@ use crate::{
     config::ShellConfig,
     evidence::{self, Evidence, Value},
     layout::OutputLayout,
+    power::Screen,
 };
 
 pub fn run(
@@ -87,6 +88,7 @@ pub fn run(
     shell
         .shm_state
         .update_formats(backend.renderer().shm_formats());
+    shell.enable_dmabuf(backend.renderer().dmabuf_formats());
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 
     let (logical_w, logical_h) = shell.plan.logical_size();
@@ -123,8 +125,43 @@ pub fn run(
             .map_err(|e| ("event-loop", e.to_string()))?;
         shell.dispatch_clients(&mut display)?;
         shell.cleanup();
+        shell.lifecycle_tick();
 
-        if shell.take_redraw() {
+        // A host window has no DPMS: "off" is one black frame, then no
+        // rendering (and no frame callbacks) until the screen is back on.
+        let blank_now = match shell.take_display_power() {
+            Some(Screen::Off) => {
+                shell.emit(
+                    "drm-dpms",
+                    &[("state", "off".into()), ("status", "nested-black".into())],
+                );
+                true
+            }
+            Some(Screen::On) => {
+                damage_tracker = OutputDamageTracker::from_output(&output);
+                shell.request_redraw();
+                false
+            }
+            None => false,
+        };
+        if blank_now {
+            let (renderer, mut framebuffer) = backend
+                .bind()
+                .map_err(|e| ("render", format!("bind: {e}")))?;
+            let none: Vec<render::ShellRenderElement<GlesRenderer>> = Vec::new();
+            let _ = damage_tracker.render_output(
+                renderer,
+                &mut framebuffer,
+                0,
+                &none,
+                smithay::backend::renderer::Color32F::new(0.0, 0.0, 0.0, 1.0),
+            );
+            drop(framebuffer);
+            let _ = backend.submit(None);
+        }
+
+        if !shell.life.screen_off() && shell.take_redraw() {
+            shell.prepare_menu();
             let age = backend.buffer_age().unwrap_or(0);
             let (renderer, mut framebuffer) = backend
                 .bind()

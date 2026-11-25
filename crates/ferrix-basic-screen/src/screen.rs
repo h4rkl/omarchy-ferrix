@@ -1,6 +1,6 @@
 //! Composition of the basic screen in the Omarchy Ferrix visual system
 //! (`docs/design.md`): dark slate surfaces, steel type, one rust accent per
-//! region, hairline borders, tight radii, JetBrains Mono. GrapheneOS-style
+//! region, hairline borders, tight radii, IBM Plex. GrapheneOS-style
 //! status bar, minimal launcher grid, and bottom gesture pill where mobile UX
 //! is needed. Colors come from `ferrix_ui::theme::get()` so a loaded
 //! `colors.toml` restyles every surface. This is a reference surface
@@ -12,7 +12,10 @@ use ferrix_ui::icons::{self, Icon};
 use ferrix_ui::{theme, widgets};
 
 use crate::catalog::{Tile, tone_color};
-use crate::interaction::{Page, Target, UiState, tile_rects};
+use crate::interaction::{
+    Page, Target, TileParts, UiState, app_row_rects, apps_max_scroll, apps_viewport, home_grid,
+    tile_parts,
+};
 
 /// Footer caption of the launcher. Says what this surface is, not what it
 /// wants to be.
@@ -284,7 +287,7 @@ fn status_bar(
     // Clock on the left, GrapheneOS style.
     ty.text(c, Style::bold(px, t.fg), clock, pad, baseline);
 
-    // Right-aligned: signal bars, wifi arcs, battery percent and gauge.
+    // Right-aligned: cellular, Wi-Fi, battery percent and battery glyph.
     let mid = bar_h / 2;
     let pct = format!("{}%", p.power.battery_percent);
     let batt_color = if p.power.charging {
@@ -311,13 +314,20 @@ fn status_bar(
     ty.text(c, pct_style, &pct, x, baseline);
     x -= bar_h / 4 + glyph;
     icons::draw(c, wifi_glyph(state), x, glyph_y, glyph, wifi_color(state));
-    x -= bar_h / 4;
-    signal_bars(c, x, mid + bar_h / 4, bar_h / 2, state.tele.bars);
+    x -= bar_h / 8 + glyph;
+    icons::draw(
+        c,
+        Icon::cellular(state.tele.bars),
+        x,
+        glyph_y,
+        glyph,
+        cellular_color(state.tele.bars),
+    );
 }
 
-/// Wi-Fi status glyph: Remix's filled Wi-Fi levels follow the connectivity
-/// check (`local`/`portal` one, `limited` two, `full` all); a radio that is
-/// off or not linked shows the crossed glyph.
+/// Wi-Fi status glyph: the Material Symbols Wi-Fi levels follow the
+/// connectivity check (`local`/`portal` one bar, `limited` two, `full` all
+/// four); a radio that is off or not linked shows the crossed glyph.
 fn wifi_glyph(state: &UiState) -> Icon {
     Icon::wifi(state.net.reach.arcs())
 }
@@ -333,26 +343,12 @@ fn wifi_color(state: &UiState) -> u32 {
     }
 }
 
-/// `bars` (0..=4) lit of four; the daemon's signal when reachable. Remix Icon
-/// 4.7.0 has no cellular signal-level glyphs, so this meter stays drawn
-/// (documented exception in `docs/design.md`).
-fn signal_bars(c: &mut Canvas, right: i32, base: i32, size: i32, bars: u8) {
+/// Cellular glyph colour: steel (the secondary accent, never rust) while any
+/// bar is lit, `fg_dim` with no signal. The glyph itself shows the lit bars
+/// solid and the unlit ones as an outline (`signal_cellular_N_bar`).
+fn cellular_color(bars: u8) -> u32 {
     let t = theme::get();
-    let bw = size / 4;
-    let gap = 4;
-    for i in 0..4 {
-        let bh = size * (i + 1) / 4 + 4;
-        let on = i < i32::from(bars.min(4));
-        c.fill_rect(
-            Rect {
-                x: right - (4 - i) * (bw + gap),
-                y: base - bh,
-                w: bw,
-                h: bh,
-            },
-            if on { t.steel } else { t.surface_hi },
-        );
-    }
+    if bars > 0 { t.steel } else { t.fg_dim }
 }
 
 /// A card: slate surface, hairline border, tight radius. Pressed raises the
@@ -511,16 +507,9 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
     let width = design_width(c);
     let s = |v: i32| scale(v, width);
     let size = (c.width() as u32, c.height() as u32);
-    let landscape = c.width() > c.height();
-    for (index, (tile, r)) in state
-        .tiles
-        .iter()
-        .zip(tile_rects(size, state.tiles.len()))
-        .enumerate()
-    {
-        if r.y >= c.height() {
-            break;
-        }
+    let grid = home_grid(state, size);
+    for (index, r) in grid.tiles {
+        let tile = &state.tiles[index];
         let accent = tone_color(tile.icon.tone);
         let pressed = state.pressed == Some(Target::App(index));
         // Terminal is Ferrix's terminal-first anchor: its deep rust panel is
@@ -534,18 +523,12 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
         } else {
             t.surface
         };
-        c.fill_rounded(r, s(10), fill);
-        c.stroke_rounded(
-            r,
-            s(10),
-            if pressed { s(3) } else { hairline(width) },
-            if pressed { t.rust } else { t.border },
-        );
+        tile_frame(c, r, fill, pressed);
         // A low-luminance oxidized-orange rule gives the Terminal a durable
         // place in the launcher without turning the whole grid into a bright
         // alert surface. It is decorative only; the tile rect stays the hit
         // target.
-        if tile.kind() == "terminal" {
+        if terminal {
             c.fill_rounded(
                 Rect {
                     x: r.x + s(10),
@@ -557,47 +540,236 @@ fn launcher_grid(c: &mut Canvas, ty: &Type, state: &UiState) {
                 t.rust_hi,
             );
         }
-        let icx = r.x + r.w / 2;
-        let icy = r.y + s(if landscape { 105 } else { 118 });
-        app_icon(c, ty, tile, accent, icx, icy);
+        let parts = tile_parts(r, size);
+        let (icx, icy) = (
+            parts.icon.x + parts.icon.w / 2,
+            parts.icon.y + parts.icon.h / 2,
+        );
+        app_icon(c, ty, tile, accent, icx, icy, parts.icon.w);
         let (label, color) = if tile.starting {
             ("starting".to_owned(), t.fg_dim)
         } else {
             (tile.name.clone(), t.fg)
         };
-        let label_style = Style::regular(s(if landscape { 28 } else { 30 }) as f32, color);
-        let lw = ty.width(label_style, &label);
-        ty.text(
-            c,
-            label_style,
-            &label,
-            icx - lw / 2,
-            r.y + r.h - s(if landscape { 38 } else { 44 }),
-        );
+        tile_label(c, ty, &label, color, parts);
         if tile.running {
             c.fill_circle(r.x + r.w - s(34), r.y + s(34), s(9), t.rust);
         }
     }
+    if let Some(r) = grid.apps {
+        let pressed = state.pressed == Some(Target::AllApps);
+        tile_frame(
+            c,
+            r,
+            if pressed { t.surface_hi } else { t.surface },
+            pressed,
+        );
+        let parts = tile_parts(r, size);
+        icons::draw(
+            c,
+            Icon::Apps,
+            parts.icon.x,
+            parts.icon.y,
+            parts.icon.w,
+            t.fg_dim,
+        );
+        tile_label(c, ty, "Apps", t.fg, parts);
+    }
 }
 
-/// Tile artwork: first-party applications use their filled Remix glyph
-/// (`ferrix_ui::icons`), 96 design px, in the descriptor tone. Any other app
+fn tile_frame(c: &mut Canvas, r: Rect, fill: u32, pressed: bool) {
+    let t = theme::get();
+    let width = design_width(c);
+    let s = |v: i32| scale(v, width);
+    c.fill_rounded(r, s(10), fill);
+    c.stroke_rounded(
+        r,
+        s(10),
+        if pressed { s(3) } else { hairline(width) },
+        if pressed { t.rust } else { t.border },
+    );
+}
+
+/// One centred label line inside the tile's label box, ellipsized so it
+/// never runs past the tile edges or into a neighbour.
+fn tile_label(c: &mut Canvas, ty: &Type, label: &str, color: u32, parts: TileParts) {
+    let style = Style::regular(parts.label_px as f32, color);
+    let text = widgets::ellipsize(ty, style, label, parts.label.w);
+    let lw = ty.width(style, &text);
+    ty.text(
+        c,
+        style,
+        &text,
+        parts.label.x + (parts.label.w - lw) / 2,
+        parts.label_baseline,
+    );
+}
+
+/// The app list: every catalog entry, sorted by label, as rows with the
+/// tile's glyph (or letter) and the label. Android apps carry a quiet
+/// "Android" line so an APK named like a first-party app stays
+/// distinguishable. Rows scroll under the header; the viewport ends above
+/// the home zone.
+fn apps_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: &UiState) {
+    let t = theme::get();
+    let width = design_width(c);
+    let s = |v: i32| scale(v, width);
+    let size = (c.width() as u32, c.height() as u32);
+    let viewport = apps_viewport(size);
+    let entries = state.list_entries();
+    let rows = app_row_rects(size, entries.len(), state.apps_scroll);
+    for (r, index) in rows.iter().zip(&entries) {
+        if r.y + r.h <= viewport.y || r.y >= viewport.y + viewport.h {
+            continue;
+        }
+        let tile = &state.tiles[*index];
+        let pressed = state.pressed == Some(Target::App(*index));
+        c.fill_rounded(*r, s(10), if pressed { t.surface_hi } else { t.surface });
+        c.stroke_rounded(
+            *r,
+            s(10),
+            if pressed { s(3) } else { hairline(width) },
+            if pressed { t.rust } else { t.border },
+        );
+        let glyph = s(64);
+        let cx = r.x + s(32) + glyph / 2;
+        app_icon(
+            c,
+            ty,
+            tile,
+            tone_color(tile.icon.tone),
+            cx,
+            r.y + r.h / 2,
+            glyph,
+        );
+        let text_x = r.x + s(32) + glyph + s(28);
+        let mut right = r.x + r.w - s(32);
+        if tile.running {
+            c.fill_circle(right - s(9), r.y + r.h / 2, s(9), t.rust);
+            right -= s(40);
+        }
+        let max = right - text_x;
+        let title_style = Style::bold(s(34) as f32, if tile.starting { t.fg_dim } else { t.fg });
+        let title = if tile.starting {
+            "starting"
+        } else {
+            tile.name.as_str()
+        };
+        let subtitle = tile.installed.then_some("Android");
+        let title_base = if subtitle.is_some() {
+            r.y + r.h / 2 - s(4)
+        } else {
+            r.y + r.h / 2 + s(12)
+        };
+        ty.text(
+            c,
+            title_style,
+            &widgets::ellipsize(ty, title_style, title, max),
+            text_x,
+            title_base,
+        );
+        if let Some(subtitle) = subtitle {
+            let sub_style = Style::regular(s(26) as f32, t.fg_dim);
+            ty.text(c, sub_style, subtitle, text_x, r.y + r.h / 2 + s(36));
+        }
+    }
+    // Clip: rows scroll under the header and stop above the home zone.
+    c.fill_rect(
+        Rect {
+            x: 0,
+            y: 0,
+            w: c.width(),
+            h: viewport.y,
+        },
+        t.bg,
+    );
+    let bottom = viewport.y + viewport.h;
+    c.fill_rect(
+        Rect {
+            x: 0,
+            y: bottom,
+            w: c.width(),
+            h: c.height() - bottom,
+        },
+        t.bg,
+    );
+    status_bar(c, p, ty, clock, s(72), s(40), state);
+    let count = format!("{}", entries.len());
+    widgets::page_header(
+        c,
+        ty,
+        "Apps",
+        Some(&count),
+        state.pressed == Some(Target::Back),
+    );
+    // A quiet scroll thumb when the list is longer than the viewport.
+    let max = apps_max_scroll(size, entries.len());
+    if max > 0 && viewport.h > 0 {
+        let content = viewport.h + max;
+        let thumb_h = (viewport.h * viewport.h / content).max(s(48));
+        let travel = viewport.h - thumb_h;
+        let offset = state.apps_scroll.clamp(0, max) * travel / max;
+        c.fill_rounded(
+            Rect {
+                x: c.width() - s(18),
+                y: viewport.y + offset,
+                w: s(6),
+                h: thumb_h,
+            },
+            s(3),
+            t.border,
+        );
+    }
+}
+
+/// Tile artwork: first-party applications use their filled Material glyph
+/// (`ferrix_ui::icons`) at `size` (96 design px on a tile, 64 in a list
+/// row), in the descriptor tone. An installed app (APK) shows its Android
+/// launcher bitmap when `ferrix_appd` provided one, scaled into the same
+/// box. Any other app, or an APK without a usable bitmap,
 /// shows its descriptor glyph when the face has it, else the first letter of
 /// its name (never a tofu box). The label under the tile always stays.
-fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32) {
-    let width = design_width(c);
-    let u = |v: i32| scale(v, width);
+fn app_icon(c: &mut Canvas, ty: &Type, tile: &Tile, accent: u32, cx: i32, cy: i32, size: i32) {
     if let Some(icon) = Icon::for_app(tile.kind()) {
-        icons::draw_centered(c, icon, cx, cy, u(96), accent);
+        icons::draw_centered(c, icon, cx, cy, size, accent);
         return;
     }
+    if tile.installed
+        && let Some(bitmap) = &tile.bitmap
+        && draw_bitmap(c, bitmap, cx, cy, size)
+    {
+        return;
+    }
+    // Letter glyphs keep their 96 px proportions at any glyph size.
     let glyph = tile_glyph(ty, tile);
-    let style = Style::bold(
-        u(if glyph.chars().count() > 1 { 40 } else { 56 }) as f32,
-        accent,
-    );
+    let px = size * if glyph.chars().count() > 1 { 40 } else { 56 } / 96;
+    let style = Style::bold(px as f32, accent);
     let gw = ty.width(style, &glyph);
-    ty.text(c, style, &glyph, cx - gw / 2, cy + u(20));
+    ty.text(c, style, &glyph, cx - gw / 2, cy + size * 20 / 96);
+}
+
+/// Draws `bitmap` fitted (aspect kept) into the `size` box centred on
+/// `(cx, cy)`. False when nothing could be drawn.
+fn draw_bitmap(
+    c: &mut Canvas,
+    bitmap: &ferrix_app_api::AppIconBitmap,
+    cx: i32,
+    cy: i32,
+    size: i32,
+) -> bool {
+    let (w, h) = (bitmap.width() as i32, bitmap.height() as i32);
+    let (dw, dh) = if w >= h {
+        (size, (size * h / w).max(1))
+    } else {
+        ((size * w / h).max(1), size)
+    };
+    let dest = Rect {
+        x: cx - dw / 2,
+        y: cy - dh / 2,
+        w: dw,
+        h: dh,
+    };
+    c.draw_rgba(dest, bitmap.width(), bitmap.height(), bitmap.rgba())
 }
 
 /// The descriptor glyph when every character exists in the bold face, else
@@ -647,6 +819,7 @@ fn shell_page(c: &mut Canvas, p: &HardwareState, ty: &Type, clock: &str, state: 
     status_bar(c, p, ty, clock, s(72), s(40), state);
     match state.page {
         Page::Launcher => {}
+        Page::Apps => apps_page(c, p, ty, clock, state),
         Page::Reference(index) => reference_page(c, ty, state.tiles.get(index), state),
         Page::QuickSettings => quick_settings(c, ty, state),
         Page::Notifications => notifications(c, ty, state),
@@ -663,24 +836,15 @@ fn reference_page(c: &mut Canvas, ty: &Type, tile: Option<&Tile>, state: &UiStat
     let name = tile.map_or("Unknown", |t| t.name.as_str());
     widgets::page_header(c, ty, name, None, state.pressed == Some(Target::Back));
     let fallback_title = format!("{name} \u{b7} not installed");
-    // Phone, Messages, Contacts, Settings, and Files are real applications
-    // launched by `ferrix-appd`; only camera keeps an illustrative page. The
-    // hardware API defines no camera capability, so the page says that about
-    // whichever target is connected.
-    let (accent, eyebrow, title, detail) = match tile.map_or("", Tile::kind) {
-        "camera" => (
-            t.fg_dim,
-            "CAMERA",
-            "No camera capability",
-            "The hardware API defines no camera capability on any target yet.",
-        ),
-        _ => (
-            tile.map_or(t.fg_dim, |t| tone_color(t.icon.tone)),
-            "APP",
-            fallback_title.as_str(),
-            "No runtime provides this application. The catalog entry is a placeholder.",
-        ),
-    };
+    // Every checked-in first-party entry (Camera included, ADR-009) is a
+    // real application launched by `ferrix-appd`; a non-launchable entry
+    // gets this generic placeholder page.
+    let (accent, eyebrow, title, detail) = (
+        tile.map_or(t.fg_dim, |t| tone_color(t.icon.tone)),
+        "APP",
+        fallback_title.as_str(),
+        "No runtime provides this application. The catalog entry is a placeholder.",
+    );
     let panel = Rect {
         x: s(72),
         y: s(360),
@@ -976,7 +1140,7 @@ fn wrap_text(c: &mut Canvas, ty: &Type, text: &str, x: i32, y: i32, max_width: i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interaction::CrashNotice;
+    use crate::interaction::{CrashNotice, tile_rects};
     use crate::status::Reach;
     use crate::test_tiles;
 
@@ -1091,7 +1255,7 @@ mod tests {
         let state = state();
         assert!(
             state.tiles.len() >= 7,
-            "phone, messages, contacts, settings, terminal, camera, files"
+            "phone, messages, contacts, settings, terminal, files, placeholder"
         );
         let c = compose(
             &p,
@@ -1178,6 +1342,87 @@ mod tests {
         state.page = Page::Reference(99);
         let c = compose(&p, 600, &ty, 1080, 2340, &state);
         assert_ne!(c.get(300, 500), t.bg);
+    }
+
+    #[test]
+    fn installed_apks_leave_the_home_frame_unchanged_and_fill_the_app_list() {
+        let t = theme::get();
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        for (w, h) in [(1080, 2340), (830, 1800)] {
+            let plain = state();
+            let mut apks = state();
+            apks.set_tiles({
+                let mut tiles = apks.tiles.clone();
+                tiles.extend(crate::catalog::sample_installed_tiles());
+                tiles
+            });
+            let home = compose(&p, 600, &ty, w, h, &plain);
+            let home_apks = compose(&p, 600, &ty, w, h, &apks);
+            assert!(
+                home.xrgb_bytes() == home_apks.xrgb_bytes(),
+                "{w}x{h}: APKs must not touch the home grid"
+            );
+            let mut list = apks.clone();
+            list.page = Page::Apps;
+            let c = compose(&p, 600, &ty, w, h, &list);
+            let viewport = apps_viewport((w, h));
+            // The first row's surface, the header rule, and a clipped strip
+            // under the viewport (rows never draw into the home zone).
+            let row = app_row_rects((w, h), list.tiles.len(), 0)[0];
+            assert_eq!(c.get(row.x + row.w / 2, row.y + s_at(8, w, h)), t.surface);
+            assert_eq!(c.get(w as i32 / 2, scale(230, w.min(h) as i32)), t.rust_dim);
+            assert_eq!(
+                c.get(w as i32 / 4, viewport.y + viewport.h + 2),
+                t.bg,
+                "{w}x{h}"
+            );
+            list.apps_scroll = i32::MAX;
+            let end = compose(&p, 600, &ty, w, h, &list);
+            assert!(
+                end.xrgb_bytes() != c.xrgb_bytes(),
+                "scrolling moves the rows"
+            );
+        }
+    }
+
+    #[test]
+    fn installed_apps_draw_their_bitmap_and_fall_back_to_the_letter() {
+        let ty = Type::load().expect("embedded fonts load");
+        let p = profile();
+        let (w, h) = (1080, 2340);
+        let red = ferrix_app_api::AppIconBitmap::new(2, 2, [0xff, 0, 0, 0xff].repeat(4)).unwrap();
+        let render = |bitmap: Option<&ferrix_app_api::AppIconBitmap>, installed: bool| {
+            let mut ui = state();
+            let mut tiles = ui.tiles.clone();
+            let mut apk = crate::catalog::sample_installed_tiles().remove(0);
+            apk.installed = installed;
+            apk.bitmap = bitmap.cloned().map(std::sync::Arc::new);
+            tiles.push(apk);
+            ui.set_tiles(tiles);
+            ui.page = Page::Apps;
+            let index = ui.tiles.len() - 1;
+            let row = ui.list_entries().iter().position(|&i| i == index).unwrap();
+            let r = app_row_rects((w, h), ui.tiles.len(), 0)[row];
+            let c = compose(&p, 600, &ty, w, h, &ui);
+            // The icon box centre and a point near its corner (where a
+            // letter glyph never reaches).
+            let cx = r.x + s_at(32, w, h) + s_at(64, w, h) / 2;
+            let corner = (cx - s_at(28, w, h), r.y + r.h / 2 - s_at(28, w, h));
+            (c.get(cx, r.y + r.h / 2), c.get(corner.0, corner.1))
+        };
+        let (centre, corner) = render(Some(&red), true);
+        assert_eq!(centre, 0xff0000, "the bitmap fills the icon box");
+        assert_eq!(corner, 0xff0000);
+        let (_, letter_corner) = render(None, true);
+        assert_ne!(letter_corner, 0xff0000, "no bitmap: the letter glyph");
+        // A first-party tile never draws a bitmap, even if one were set.
+        let (_, first_party) = render(Some(&red), false);
+        assert_ne!(first_party, 0xff0000);
+    }
+
+    fn s_at(v: i32, w: u32, h: u32) -> i32 {
+        scale(v, w.min(h) as i32)
     }
 
     #[test]
@@ -1282,7 +1527,9 @@ mod tests {
 
     #[test]
     fn glyph_falls_back_to_the_first_letter_when_the_face_lacks_it() {
-        let ty = Type::load().expect("embedded fonts load");
+        // Embedded faces only: a host with a colour emoji face installed would
+        // otherwise resolve the phone emoji.
+        let ty = Type::embedded().expect("embedded fonts load");
         let mut tile = test_tiles().remove(0);
         tile.icon.glyph = ">_".to_owned();
         assert_eq!(tile_glyph(&ty, &tile), ">_");
@@ -1308,19 +1555,27 @@ mod tests {
         weak.net.connected = false;
         let faint = compose(&p, 600, &ty, 1080, 2340, &weak);
         let bar_h = scale(72, 1080);
-        // Somewhere in the right third of the strip the strong frame shows
-        // steel where the weak one shows the dim track.
-        let region = (700..1080).flat_map(|x| (0..bar_h).map(move |y| (x, y)));
-        let mut steel_to_track = 0;
+        // In the right part of the strip the strong frame shows solid steel
+        // (four lit cellular bars, full Wi-Fi) where the weak one shows only
+        // the strip background: unlit bars are outlines and the Wi-Fi glyph
+        // is the dim crossed one.
+        let region = (600..1080).flat_map(|x| (0..bar_h).map(move |y| (x, y)));
+        let mut steel_to_empty = 0;
+        let mut weak_steel = 0;
         for (x, y) in region {
-            if strong.get(x, y) == t.steel && faint.get(x, y) == t.surface_hi {
-                steel_to_track += 1;
+            if strong.get(x, y) == t.steel && faint.get(x, y) == t.bg_dark {
+                steel_to_empty += 1;
+            }
+            if faint.get(x, y) == t.steel {
+                weak_steel += 1;
             }
         }
         assert!(
-            steel_to_track > 20,
-            "signal bars and wifi arcs dim with the summary"
+            steel_to_empty > 200,
+            "cellular and Wi-Fi glyphs fill with the summary ({steel_to_empty})"
         );
+        // One lit bar is still steel; the crossed Wi-Fi glyph is not.
+        assert!(weak_steel > 0, "one lit cellular bar stays steel");
     }
 
     #[test]

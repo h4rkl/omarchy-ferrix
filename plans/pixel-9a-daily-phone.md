@@ -158,6 +158,10 @@ Bluetooth discovery are `supported`; **audio, telephony and lifecycle are
   four jobs ([run](https://github.com/h4rkl/omarchy-ferrix/actions/runs/38213896048)).
   None of this is Pixel evidence.
 
+Per-workstream work specs live in [`todos/`](todos/README.md): one file
+per gate, with deliverables, acceptance and owner gates. They are written
+from the issues and must be corrected when an issue changes.
+
 ## Working structure
 
 | Role | Responsibility | Handoff |

@@ -32,6 +32,9 @@ pub const TELEPHONYD_SOCKET_FILE: &str = "telephonyd.sock";
 pub const NETWORKD_SOCKET_FILE: &str = "networkd.sock";
 /// `ferrix-contactsd` socket file (`contacts-*`).
 pub const CONTACTSD_SOCKET_FILE: &str = "contactsd.sock";
+/// `ferrix-core` camera socket file (`camera`, ADR-009). Separate from
+/// [`CORE_SOCKET_FILE`] so a camera grant never reaches core control.
+pub const CAMERA_SOCKET_FILE: &str = "camera.sock";
 
 /// The socket directory: `FERRIX_RUN_DIR` when set and non-empty, else
 /// [`RUN_DIR`].
@@ -42,8 +45,8 @@ pub fn run_dir() -> PathBuf {
     }
 }
 
-/// The daemon socket a capability is served through, if any (`shell` and
-/// `background` need none).
+/// The daemon socket a capability is served through, if any (`shell`,
+/// `background`, `network` and `files-home` need none).
 pub fn socket_file_for(capability: AppCapability) -> Option<&'static str> {
     match capability {
         AppCapability::CoreState | AppCapability::CoreControl => Some(CORE_SOCKET_FILE),
@@ -54,7 +57,11 @@ pub fn socket_file_for(capability: AppCapability) -> Option<&'static str> {
         | AppCapability::TelephonyRadio => Some(TELEPHONYD_SOCKET_FILE),
         AppCapability::NetworkState | AppCapability::NetworkControl => Some(NETWORKD_SOCKET_FILE),
         AppCapability::ContactsRead | AppCapability::ContactsWrite => Some(CONTACTSD_SOCKET_FILE),
-        AppCapability::Shell | AppCapability::Background => None,
+        AppCapability::Camera => Some(CAMERA_SOCKET_FILE),
+        AppCapability::Shell
+        | AppCapability::Background
+        | AppCapability::Network
+        | AppCapability::FilesHome => None,
     }
 }
 
@@ -126,6 +133,12 @@ mod tests {
         assert_eq!(
             sockets_for_grants(&home),
             vec![APPD_SOCKET_FILE, CORE_SOCKET_FILE, NETWORKD_SOCKET_FILE]
+        );
+        let camera: BTreeSet<AppCapability> = [AppCapability::Camera].into_iter().collect();
+        assert_eq!(
+            sockets_for_grants(&camera),
+            vec![APPD_SOCKET_FILE, CAMERA_SOCKET_FILE],
+            "a camera grant never exposes core.sock"
         );
         for capability in AppCapability::ALL {
             let name = socket_file_for(capability);

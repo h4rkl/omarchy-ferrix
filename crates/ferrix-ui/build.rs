@@ -1,14 +1,21 @@
-//! Build-time icon compiler for the vendored Remix Icon subset.
+//! Build-time icon compiler for the vendored Material Symbols subset, and
+//! the hash gate for the vendored IBM Plex faces.
 //!
-//! Inputs are pinned and checked in: `assets/icons/remixicon/*.svg` plus the
-//! upstream `License`, each listed with its SHA-256 in
-//! `assets/icons/remixicon/SHA256SUMS` (Remix Icon v4.7.0, Apache-2.0; see
+//! The Plex faces under `assets/fonts/ibm-plex/` (IBM/plex at the commit in
+//! `tools/fonts/ibm-plex.pins`, SIL OFL 1.1) are checked against their
+//! `SHA256SUMS` the same way before `src/text.rs` can embed them.
+//!
+//! Inputs are pinned and checked in: `assets/icons/material-symbols/*.svg`
+//! plus the upstream `LICENSE`, each listed with its SHA-256 in
+//! `assets/icons/material-symbols/SHA256SUMS` (google/material-design-icons at
+//! the commit in `tools/icons/material-symbols.pins`, Apache-2.0; see
 //! `docs/licensing.md`). The build refuses any file whose hash does not match
-//! and any `.svg` that is not listed.
+//! and any `.svg` that is not listed. `just icons-verify` re-derives the files
+//! from the pinned commit; the build itself never uses the network.
 //!
-//! Each SVG is parsed and normalised by `usvg` (arcs become cubics, transforms
-//! are applied) and emitted into `$OUT_DIR/icons.rs` as flat outline data in
-//! the 24x24 icon grid. At run time `ferrix_ui::icons` fills those outlines
+//! Each SVG is parsed and normalised by `usvg` (the `0 -960 960 960` viewBox
+//! and any transforms are applied, arcs become cubics) and emitted into
+//! `$OUT_DIR/icons.rs` as flat outline data in a 24x24 unit grid. At run time `ferrix_ui::icons` fills those outlines
 //! through the same `tiny-skia` software rasteriser as every other shape, at
 //! the exact pixel size requested. Nothing parses SVG, reads a file, or needs
 //! a font or the network at run time.
@@ -18,12 +25,16 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-const DIR: &str = "assets/icons/remixicon";
+const DIR: &str = "assets/icons/material-symbols";
+const FONT_DIR: &str = "assets/fonts/ibm-plex";
 
-fn main() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(DIR);
-    println!("cargo:rerun-if-changed={DIR}");
-    let sums_path = dir.join("SHA256SUMS");
+/// Checks every file listed in `<dir>/SHA256SUMS` against its pinned hash,
+/// refuses any vendored `*.<ext>` that is not listed, and requires the
+/// upstream licence file `licence` to be vendored and pinned too.
+fn verify_pinned(dir: &str, ext: &str, licence: &str) -> Vec<(String, Vec<u8>)> {
+    let dir_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+    println!("cargo:rerun-if-changed={dir}");
+    let sums_path = dir_path.join("SHA256SUMS");
     println!("cargo:rerun-if-changed={}", sums_path.display());
     let sums = std::fs::read_to_string(&sums_path)
         .unwrap_or_else(|e| panic!("{}: {e}", sums_path.display()));
@@ -33,7 +44,7 @@ fn main() {
         let (hash, name) = line
             .split_once("  ")
             .unwrap_or_else(|| panic!("SHA256SUMS: malformed line {line:?}"));
-        let path = dir.join(name);
+        let path = dir_path.join(name);
         println!("cargo:rerun-if-changed={}", path.display());
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let actual = hex(&Sha256::digest(&bytes));
@@ -44,24 +55,38 @@ fn main() {
         listed.push((name.to_owned(), bytes));
     }
 
-    // Every vendored SVG must be pinned; an unlisted file is a review gap.
-    for entry in std::fs::read_dir(&dir).expect("icon directory") {
-        let name = entry.expect("icon entry").file_name();
+    // Every vendored file of the kind must be pinned; an unlisted file is a
+    // review gap.
+    for entry in std::fs::read_dir(&dir_path).expect("vendored directory") {
+        let name = entry.expect("vendored entry").file_name();
         let name = name.to_string_lossy();
-        if name.ends_with(".svg") {
+        if name.ends_with(ext) {
             assert!(
                 listed.iter().any(|(n, _)| *n == name),
-                "{name} is vendored but not pinned in SHA256SUMS"
+                "{dir}/{name} is vendored but not pinned in SHA256SUMS"
             );
         }
     }
     assert!(
-        listed.iter().any(|(n, _)| n == "License"),
-        "the upstream License must be vendored and pinned with the icons"
+        listed.iter().any(|(n, _)| n == licence),
+        "{dir}: the upstream {licence} must be vendored and pinned"
+    );
+    listed
+}
+
+fn main() {
+    // IBM Plex faces (SIL OFL 1.1): `src/text.rs` compiles them in with
+    // include_bytes!, so a changed or unpinned face fails here first.
+    let faces = verify_pinned(FONT_DIR, ".ttf", "LICENSE.txt");
+    assert!(
+        faces.iter().filter(|(n, _)| n.ends_with(".ttf")).count() == 4,
+        "{FONT_DIR}: expected the four pinned Plex faces"
     );
 
+    let listed = verify_pinned(DIR, ".svg", "LICENSE");
+
     let mut out = String::from(
-        "// @generated by crates/ferrix-ui/build.rs from the pinned Remix Icon v4.7.0 subset.\n\
+        "// @generated by crates/ferrix-ui/build.rs from the pinned Material Symbols Rounded (FILL 1) subset.\n\
          // Ops: 0 move(x,y) 1 line(x,y) 2 quad(x1,y1,x,y) 3 cubic(x1,y1,x2,y2,x,y) 4 close.\n\
          // Coordinates are data; a value near TAU is not the constant.\n\
          #[allow(clippy::approx_constant)]\n\
@@ -78,7 +103,7 @@ fn main() {
         assert!(
             (size.width() - 24.0).abs() < f32::EPSILON
                 && (size.height() - 24.0).abs() < f32::EPSILON,
-            "{name}: expected the 24x24 Remix grid, got {}x{}",
+            "{name}: expected a 24x24 px Material Symbols file, got {}x{}",
             size.width(),
             size.height()
         );
@@ -97,7 +122,8 @@ fn main() {
             if i > 0 {
                 out.push(',');
             }
-            // Four decimals keep every Remix source coordinate exact.
+            // Material coordinates are whole or tenth units of a 960 grid;
+            // four decimals keep them exact after scaling to 24.
             let _ = write!(out, "{p:.4}");
         }
         out.push_str("] },\n");
@@ -107,7 +133,7 @@ fn main() {
     std::fs::write(&dest, out).unwrap_or_else(|e| panic!("{}: {e}", dest.display()));
 }
 
-/// Walks the normalised tree. Remix glyphs are single-colour filled paths;
+/// Walks the normalised tree. Material Symbols are single-colour filled paths;
 /// strokes, images, text, or mixed fill rules would not survive a tinted
 /// mask, so they fail the build instead of rendering wrongly.
 fn collect(

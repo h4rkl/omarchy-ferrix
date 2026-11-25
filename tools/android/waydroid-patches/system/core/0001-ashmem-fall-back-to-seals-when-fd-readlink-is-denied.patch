@@ -1,0 +1,23 @@
+diff --git a/libcutils/ashmem-dev.cpp b/libcutils/ashmem-dev.cpp
+--- a/libcutils/ashmem-dev.cpp
++++ b/libcutils/ashmem-dev.cpp
+@@ -202,11 +202,14 @@ static bool is_memfd_fd(int fd) {
+     std::string fd_path = android::base::StringPrintf("/proc/self/fd/%d", fd);
+     std::string result;
+     if (!android::base::Readlink(fd_path, &result)) {
+-        ALOGE("readlink(%s) failed: %m", fd_path.c_str());
+-        return false;
+-    }
+-
+-    if (!result.starts_with("/memfd:")) {
++        // Waydroid/Ferrix: inside a container readlink of /proc/self/fd can
++        // fail with EPERM. Without the name, rely on the seal check below,
++        // which only a sealed memfd passes (F_GET_SEALS fails otherwise).
++        if (errno != EPERM || !has_memfd_support()) {
++            ALOGE("readlink(%s) failed: %m", fd_path.c_str());
++            return false;
++        }
++    } else if (!result.starts_with("/memfd:")) {
+         return false;
+     }
+ 

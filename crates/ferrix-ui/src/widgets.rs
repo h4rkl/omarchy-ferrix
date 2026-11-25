@@ -126,7 +126,7 @@ pub fn page_header(
             t.surface_hi,
         );
     }
-    // The back affordance is the filled Remix chevron; the hit target is
+    // The back affordance is the Material chevron_left glyph; the hit target is
     // `back_rect`, and "back" stays the accessible name in `ui-state`.
     icons::draw(
         c,
@@ -171,18 +171,29 @@ pub fn section_label(c: &mut Canvas, ty: &Type, text: &str, x: i32, baseline: i3
 
 /// Shortens `text` with `…` until it fits `max_width`.
 pub fn ellipsize(ty: &Type, style: Style, text: &str, max_width: i32) -> String {
+    use unicode_segmentation::UnicodeSegmentation as _;
     if ty.width(style, text) <= max_width {
         return text.to_owned();
     }
-    let mut chars: Vec<char> = text.chars().collect();
-    while !chars.is_empty() {
-        chars.pop();
-        let candidate: String = chars.iter().collect::<String>() + "\u{2026}";
-        if ty.width(style, &candidate) <= max_width {
-            return candidate;
+    // Cut only at grapheme-cluster boundaries, so a Devanagari conjunct or a
+    // combining mark is never split, and binary-search the longest prefix
+    // that fits: each probe is a shape, which is the expensive step.
+    let cuts: Vec<usize> = text.grapheme_indices(true).map(|(i, _)| i).collect();
+    let fits = |n: usize| ty.width(style, &format!("{}\u{2026}", &text[..cuts[n]])) <= max_width;
+    // `cuts[0]` is 0, the empty prefix: only the ellipsis.
+    if !fits(0) {
+        return String::new();
+    }
+    let (mut lo, mut hi) = (0, cuts.len());
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
         }
     }
-    String::new()
+    format!("{}\u{2026}", &text[..cuts[lo]])
 }
 
 /// Word-wraps `text` at `max_width`, returning the lines.
@@ -757,6 +768,12 @@ pub fn keyboard(c: &mut Canvas, ty: &Type, state: &OskState, pressed: Option<Key
                 },
                 color,
             );
+        }
+        // Backspace is the vendored Material Symbols glyph: neither IBM Plex
+        // nor the Noto fallback set carries U+232B.
+        if key == Key::Backspace {
+            icons::draw_in(c, Icon::Backspace, r, px.round() as i32, color);
+            continue;
         }
         let style = if function {
             Style::bold(px, color)

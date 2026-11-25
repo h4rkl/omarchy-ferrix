@@ -97,7 +97,7 @@ pub fn terminal_metrics(ty: &Type, width: u32, height: u32) -> TermMetrics {
     let w = width as i32;
     let area = osk::terminal_area((width, height));
     let px = (scale(30, w) as f32).max(12.0);
-    let style = Style::regular(px, theme::get().fg);
+    let style = Style::mono(px, theme::get().fg);
     let cell_w = (ty.advance(style, 'M').round() as i32).max(1);
     let cell_h = ty.line_height(style).max(1);
     let pad = scale(16, w);
@@ -141,7 +141,7 @@ fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snaps
     let m = terminal_metrics(ty, c.width() as u32, c.height() as u32);
     c.fill_rounded(m.area, s(8), t.bg_dark);
     c.stroke_rounded(m.area, s(8), hairline(width), t.border);
-    let regular = Style::regular(m.px, t.fg);
+    let regular = Style::mono(m.px, t.fg);
     let ascent = ty.ascent(regular);
     let cell_rect = |col: usize, row: usize| Rect {
         x: m.origin.0 + col as i32 * m.cell_w,
@@ -171,6 +171,7 @@ fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snaps
                         continue;
                     };
                     let r = cell_rect(col, row);
+                    let span = i32::from(cell.width.max(1));
                     let in_selection = state.selection.is_some_and(|sel| {
                         sel.contains(Point::from_viewport(row, col, snap.scrollback))
                     });
@@ -181,11 +182,13 @@ fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snaps
                     }
                     if cell.c != ' ' {
                         let style = if cell.bold {
-                            Style::bold(m.px, cell.fg)
+                            Style::mono_bold(m.px, cell.fg)
                         } else {
-                            Style::regular(m.px, cell.fg)
+                            Style::mono(m.px, cell.fg)
                         };
-                        ty.char(c, style, cell.c, r.x, r.y + ascent);
+                        let mut cluster = String::from(cell.c);
+                        cluster.push_str(snap.marks(col, row).unwrap_or_default());
+                        ty.cell(c, style, &cluster, r.x, r.y + ascent, m.cell_w * span);
                     }
                 }
             }
@@ -195,22 +198,31 @@ fn terminal_page(c: &mut Canvas, ty: &Type, state: &UiState, term: Option<&Snaps
                 && col < cols
                 && row < rows
             {
-                let r = cell_rect(col, row);
+                let cell = snap.cell(col, row);
+                // The block covers both columns of a wide character.
+                let span = cell.map_or(1, |cell| i32::from(cell.width.max(1)));
+                let r = Rect {
+                    w: m.cell_w * span,
+                    ..cell_rect(col, row)
+                };
                 let color = if snap.exited.is_some() || state.selection.is_some() {
                     t.fg_dim
                 } else {
                     t.rust
                 };
                 c.fill_rect(r, color);
-                if let Some(cell) = snap.cell(col, row)
+                if let Some(cell) = cell
                     && cell.c != ' '
                 {
-                    ty.char(
+                    let mut cluster = String::from(cell.c);
+                    cluster.push_str(snap.marks(col, row).unwrap_or_default());
+                    ty.cell(
                         c,
-                        Style::regular(m.px, t.bg_dark),
-                        cell.c,
+                        Style::mono(m.px, t.bg_dark),
+                        &cluster,
                         r.x,
                         r.y + ascent,
+                        r.w,
                     );
                 }
             }
@@ -395,6 +407,18 @@ fn keyboard(c: &mut Canvas, ty: &Type, state: &UiState) {
             t.fg
         };
         let px = s(if label.chars().count() > 1 { 24 } else { 40 }) as f32;
+        // Backspace is the vendored Material Symbols glyph: neither IBM Plex
+        // nor the Noto fallback set carries U+232B.
+        if key == Key::Backspace {
+            ferrix_ui::icons::draw_in(
+                c,
+                ferrix_ui::icons::Icon::Backspace,
+                r,
+                px.round() as i32,
+                color,
+            );
+            continue;
+        }
         let style = if function {
             Style::bold(px, color)
         } else {

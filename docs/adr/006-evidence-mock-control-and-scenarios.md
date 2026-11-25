@@ -73,7 +73,7 @@ schema_version = 1
 name = "incoming-call-answer-hangup"
 description = "..."
 [[step]]
-service = "telephony"                   # telephony | network | core
+service = "telephony"                   # telephony | network | core | input (QMP, guest only)
 command = { cmd = "incoming-call", number = "+15550100042" }
 expect = [ { event = "call-changed", state = "ringing" } ]
 timeout_ms = 5000

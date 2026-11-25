@@ -16,6 +16,30 @@ local-init:
 license-check:
     @sh "{{root}}/tools/dev/license-check.sh"
 
+# Re-derive the vendored Material Symbols UI glyphs from the commit pinned in
+# tools/icons/material-symbols.pins (network). `icons-fetch` rewrites
+# crates/ferrix-ui/assets/icons/material-symbols/ for review; `icons-verify`
+# only compares. The build itself never downloads anything.
+[group('host-dev')]
+icons-fetch:
+    @sh "{{root}}/tools/icons/material-symbols-fetch.sh"
+
+[group('host-dev')]
+icons-verify:
+    @sh "{{root}}/tools/icons/material-symbols-fetch.sh" --verify
+
+# Re-derive the vendored IBM Plex faces (SIL OFL 1.1) from the commit pinned in
+# tools/fonts/ibm-plex.pins (network). `fonts-fetch` rewrites
+# crates/ferrix-ui/assets/fonts/ibm-plex/ for review; `fonts-verify` only
+# compares. The build itself never downloads anything.
+[group('host-dev')]
+fonts-fetch:
+    @sh "{{root}}/tools/fonts/ibm-plex-fetch.sh"
+
+[group('host-dev')]
+fonts-verify:
+    @sh "{{root}}/tools/fonts/ibm-plex-fetch.sh" --verify
+
 # Explicit, opt-in host package installation. See AGENT_INSTALL.md.
 [group('host-dev')]
 dev-setup:
@@ -285,11 +309,20 @@ pixel-9a-boot-test:
 pixel-9a-dev-compose *args:
     @python3 "{{root}}/tools/pixel-9a/dev-compose.py" "$@"
 
-# Offline contract for dev-compose's opt-in Android (Waydroid + Fulguris)
-# staging; on a host with e2fsprogs it also stages into a scratch ext4 image.
+# Fixed APK benchmark on the attached Pixel 9a (Ferrix running, devtest
+# injector staged): launch-to-first-frame, scroll jank/percentiles, CPU, PSS.
+# Records land in ignored out/pixel-9a/bench/. Spec 10 deliverable 1.
+[group('devices')]
+pixel-9a-apk-bench label="":
+    @sh "{{root}}/tools/pixel-9a/devtest/apk-bench.sh" {{label}}
+
+# Offline contract for dev-compose's opt-in Android (Waydroid; the Browser is
+# LineageOS Jelly, built into the Android image) staging; on a host with
+# e2fsprogs it also stages into a scratch ext4 image.
 [group('tests')]
 pixel-9a-dev-compose-test:
     @PYTHONDONTWRITEBYTECODE=1 python3 "{{root}}/tools/pixel-9a/tests/dev-compose-android-contract.py"
+    @sh "{{root}}/tools/pixel-9a/tests/waydroid-codec2-xml.sh"
 
 # Device-free boot composition for the independent radio-first kernel route.
 # Its output directory is separate from the canonical Google Kleaf route and
@@ -861,6 +894,13 @@ qemu-swipe x1 y1 x2 y2:
 qemu-key key:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}"
 
+# Hold a key (QEMU qcode) for MS milliseconds, e.g. the power menu:
+#   just qemu-key-hold power 1000
+# `just qemu-key power` is a short press (screen off/on).
+[group('qemu')]
+qemu-key-hold key ms="1000":
+    @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" key "{{key}}" --hold-ms "{{ms}}"
+
 [group('qemu')]
 qemu-type text:
     @"{{root}}/targets/qemu-aarch64/scripts/qemu-input.sh" type "{{text}}"
@@ -965,11 +1005,17 @@ pmos-check:
 waydroid-images-fetch:
     @sh "{{root}}/tools/android/waydroid-images-fetch.sh"
 
-# Host-only deterministic test of the guest's staged-APK bootstrap. It uses a
-# fake Waydroid CLI and never starts a container, QEMU, or a physical device.
+# Host-only deterministic test of the guest's Android bootstrap (setup,
+# launcher disable, built-in Browser role). It uses a fake Waydroid CLI and
+# never starts a container, QEMU, or a physical device.
 [group('tests')]
 android-bootstrap-test:
     @sh "{{root}}/targets/qemu-aarch64/scripts/android-bootstrap-test.sh"
+
+# Host-only tests of the Waydroid image pin handling (no network).
+[group('tests')]
+android-tools-test:
+    @sh "{{root}}/tools/android/tests/run.sh"
 
 [group('android')]
 pmos-android-build:

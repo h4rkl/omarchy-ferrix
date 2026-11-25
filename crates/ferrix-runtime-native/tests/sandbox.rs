@@ -8,8 +8,11 @@
 //! into a failure so the gate cannot pass without exercising the sandbox.
 #![cfg(target_os = "linux")]
 
+use std::io::Write as _;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,10 +22,11 @@ use ferrix_app_api::{
 };
 use ferrix_app_runtime_api::{LaunchContext, RunningApp, Runtime};
 use ferrix_runtime_native::{
-    APPD_SOCKET_FILE, ISOLATION_UNAVAILABLE_STATUS, IsolationMode, IsolationPolicy, NativeLaunch,
-    NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV, RunDirMode, RunDirPolicy, SandboxReady,
-    TELEPHONYD_SOCKET_FILE, UserNamespace, emit, find_record, probe_sandbox_with, sandbox_plan,
-    skipped_record,
+    APPD_SOCKET_FILE, FsViewMode, FsViewPolicy, ISOLATION_UNAVAILABLE_STATUS, IdentityOutcome,
+    IsolationMode, IsolationPolicy, NativeLaunch, NativeRuntime, NativeRuntimeOptions, RUN_DIR_ENV,
+    ResourcePolicy, RunDirMode, RunDirPolicy, SandboxReady, SeccompPolicy, SeccompProfile,
+    TELEPHONYD_SOCKET_FILE, UidMode, UserNamespace, app_subuid, emit, find_record,
+    probe_sandbox_with, sandbox_plan, skipped_record,
 };
 
 const SANDBOX: &str = env!("CARGO_BIN_EXE_ferrix-sandbox");
@@ -45,6 +49,7 @@ fn descriptor() -> AppDescriptor {
         trust: TrustLevel::Untrusted,
         capabilities: Default::default(),
         intents: Default::default(),
+        origin: Default::default(),
     }
 }
 
@@ -239,6 +244,11 @@ fn readiness_report_confirms_the_default_policy() {
     assert!(report.applied.pid_namespace && report.applied.mount_namespace);
     assert!(report.applied.ipc_namespace && report.applied.uts_namespace);
     assert!(report.applied.private_tmp && report.applied.no_new_privs);
+    assert!(report.applied.cgroup.applied(), "{report:?}");
+    assert_eq!(
+        running.cgroup_path(),
+        report.applied.cgroup.path.map(PathBuf::from)
+    );
     assert_eq!(report.requested, IsolationPolicy::default());
     assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
 }
@@ -272,6 +282,10 @@ fn sandbox_ready_record_proves_namespaces() {
     assert!(ready.init_pid > 0);
     assert!(ready.namespaces.pid && ready.namespaces.mount, "{ready:?}");
     assert!(ready.namespaces.ipc && ready.namespaces.uts, "{ready:?}");
+    assert!(
+        ready.namespaces.net && ready.network.loopback_up,
+        "{ready:?}"
+    );
     assert!(
         ready.private_tmp && ready.no_new_privs && !ready.degraded,
         "{ready:?}"
@@ -613,4 +627,626 @@ impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// cgroups v2 (issue #10, increment 1)
+// ---------------------------------------------------------------------------
+
+/// Waits until `path` exists (the application signals a phase with a file).
+fn wait_for_file(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    path.exists()
+}
+
+fn cgroup_value(group: &Path, file: &str) -> String {
+    std::fs::read_to_string(group.join(file))
+        .unwrap_or_else(|e| panic!("read {}/{file}: {e}", group.display()))
+        .trim()
+        .to_owned()
+}
+
+/// The `key value` counter from a cgroup `*.events` file.
+fn cgroup_event(group: &Path, file: &str, key: &str) -> u64 {
+    cgroup_value(group, file)
+        .lines()
+        .find_map(|line| line.strip_prefix(key)?.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// These tests signal phases through files in the host scratch directory,
+/// so the application keeps the launcher's filesystem.
+fn limited(memory_max: Option<u64>, pids_max: Option<u64>) -> IsolationPolicy {
+    IsolationPolicy {
+        resources: ResourcePolicy {
+            cgroup: true,
+            memory_max,
+            pids_max,
+            cpu_weight: Some(50),
+        },
+        fs_view: FsViewPolicy::inherit(),
+        ..IsolationPolicy::default()
+    }
+}
+
+#[test]
+fn cgroup_limits_are_written_and_the_group_is_removed_after_exit() {
+    let policy = limited(Some(64 << 20), Some(64));
+    if !available(&policy) {
+        return;
+    }
+    let ready = scratch("ferrix-cgroup-ready");
+    let mut running = launch(
+        &[
+            "sh",
+            "-c",
+            "touch \"$1\"; sleep 30",
+            "sh",
+            ready.to_str().unwrap(),
+        ],
+        policy,
+    );
+    let group = running
+        .cgroup_path()
+        .expect("the sandbox reports its cgroup");
+    assert!(
+        group.starts_with(ferrix_runtime_native::cgroup_slice()),
+        "{}",
+        group.display()
+    );
+    assert!(wait_for_file(&ready, Duration::from_secs(10)));
+    assert_eq!(
+        cgroup_value(&group, "memory.max"),
+        (64u64 << 20).to_string()
+    );
+    assert_eq!(cgroup_value(&group, "pids.max"), "64");
+    assert_eq!(cgroup_value(&group, "cpu.weight"), "50");
+    // Stage 1, stage 2 and the application are all in the group.
+    let procs = cgroup_value(&group, "cgroup.procs");
+    assert!(procs.lines().count() >= 3, "{procs}");
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.cgroup.path.as_deref(),
+        group.to_str(),
+        "{report:?}"
+    );
+    assert!(!report.degraded, "{report:?}");
+    running.terminate(Duration::from_secs(5)).unwrap();
+    assert!(!group.exists(), "{} survived the exit", group.display());
+    assert!(running.cgroup_path().is_none());
+    let _ = std::fs::remove_file(ready);
+}
+
+#[test]
+fn pids_limit_stops_a_fork_bomb() {
+    let policy = limited(None, Some(16));
+    if !available(&policy) {
+        return;
+    }
+    let ready = scratch("ferrix-pids-ready");
+    // A child shell tries to start 64 background sleeps and dies at the
+    // first refused fork (ash treats that as fatal); the parent then signals
+    // and parks without forking, since no pid is left.
+    let script = r#"sh -c 'i=0; while [ $i -lt 64 ]; do sleep 30 & i=$((i+1)); done' 2>/dev/null; : >"$1"; exec sleep 30"#;
+    let mut running = launch(&["sh", "-c", script, "sh", ready.to_str().unwrap()], policy);
+    let group = running.cgroup_path().expect("cgroup");
+    assert!(wait_for_file(&ready, Duration::from_secs(20)));
+    let current: u64 = cgroup_value(&group, "pids.current").parse().unwrap();
+    assert!(current <= 16, "pids.current {current} above pids.max 16");
+    assert!(
+        cgroup_event(&group, "pids.events", "max") > 0,
+        "no fork was refused: {}",
+        cgroup_value(&group, "pids.events")
+    );
+    running.terminate(Duration::from_secs(5)).unwrap();
+    let _ = std::fs::remove_file(ready);
+}
+
+#[test]
+fn memory_limit_kills_the_whole_application_group() {
+    let policy = limited(Some(24 << 20), None);
+    if !available(&policy) {
+        return;
+    }
+    let go = scratch("ferrix-memory-go");
+    // tmpfs pages are charged to the writer's group and cannot be reclaimed
+    // without swap; 48 MiB in a 64 MiB private /tmp passes the 24 MiB limit.
+    let script = r#"while [ ! -e "$1" ]; do sleep 0.05; done; exec dd if=/dev/zero of=/tmp/fill bs=1M count=48"#;
+    let mut running = launch(&["sh", "-c", script, "sh", go.to_str().unwrap()], policy);
+    let group = running.cgroup_path().expect("cgroup");
+    // A host with swap would page the tmpfs out instead of killing; the
+    // test is about the limit, so take swap away from this group only.
+    let swap = group.join("memory.swap.max");
+    if swap.exists() {
+        std::fs::write(&swap, "0").unwrap();
+    }
+    std::fs::write(&go, "").unwrap();
+    let reason = running.wait().unwrap();
+    assert_eq!(
+        reason,
+        ExitReason::Signaled { signal: 9 },
+        "OOM kill expected"
+    );
+    assert!(!group.exists());
+    let _ = std::fs::remove_file(go);
+}
+
+#[test]
+fn cgroup_disabled_creates_no_group() {
+    let policy = IsolationPolicy {
+        resources: ResourcePolicy::none(),
+        ..IsolationPolicy::default()
+    };
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", "exit 0"], policy);
+    assert!(running.cgroup_path().is_none());
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(
+        !report.applied.cgroup.applied() && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Network namespace (issue #10, increment 2)
+// ---------------------------------------------------------------------------
+
+fn granted(capabilities: &[AppCapability]) -> LaunchContext {
+    let mut context = context();
+    context.granted = capabilities.iter().copied().collect();
+    context
+}
+
+/// A TCP service on 127.0.0.1 in the test's own (launcher) network
+/// namespace that counts the connections it accepts.
+struct HostService {
+    url: String,
+    accepted: Arc<AtomicU32>,
+}
+
+fn host_service() -> HostService {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind host service");
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let accepted = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&accepted);
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok");
+        }
+    });
+    HostService { url, accepted }
+}
+
+/// The app's own view: exactly `lo` in its network namespace, and that
+/// loopback is up (ICMP to 127.0.0.1 answers).
+const ONLY_LOOPBACK: &str = r#"[ "$(tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ')" = lo ] || exit 10; ping -c 1 -W 2 127.0.0.1 >/dev/null 2>&1 || exit 11"#;
+
+#[test]
+fn without_the_network_grant_the_application_has_only_loopback() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let service = host_service();
+    // Reaching a service on the launcher's loopback must fail.
+    let script = format!(r#"{ONLY_LOOPBACK}; wget -q -T 3 -O /dev/null "$1" && exit 12; exit 0"#);
+    let mut running = launch_with(
+        &["sh", "-c", &script, "sh", &service.url],
+        policy,
+        &granted(&[AppCapability::NetworkState]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(report.applied.net_namespace, "{report:?}");
+    assert_eq!(report.applied.network.interfaces, ["lo"], "{report:?}");
+    assert!(
+        report.applied.network.loopback_up && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    assert_eq!(service.accepted.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn the_network_grant_keeps_the_launcher_network() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let service = host_service();
+    let mut running = launch_with(
+        &[
+            "sh",
+            "-c",
+            r#"wget -q -T 5 -O /dev/null "$1""#,
+            "sh",
+            &service.url,
+        ],
+        policy,
+        &granted(&[AppCapability::Network]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(
+        !report.applied.net_namespace && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    assert_eq!(service.accepted.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_manifest_cannot_opt_out_of_the_network_namespace() {
+    let policy = IsolationPolicy {
+        net_namespace: false,
+        ..IsolationPolicy::default()
+    };
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", ONLY_LOOPBACK], policy);
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+#[test]
+fn readiness_still_arrives_from_inside_a_network_namespace() {
+    // The runtime's listener is an abstract socket in the launcher's network
+    // namespace; stage 1 connects before it unshares. Without that the
+    // report would be lost and the launch reported `unverified`.
+    if !available(&IsolationPolicy::default()) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", "exit 0"], IsolationPolicy::default());
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(
+        report
+            .reason
+            .as_deref()
+            .is_none_or(|r| !r.contains("unverified")),
+        "{report:?}"
+    );
+    assert!(
+        report.applied.net_namespace && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem view (issue #10, increment 3)
+// ---------------------------------------------------------------------------
+
+/// A scratch home folder holding a private document; removed on drop.
+struct ScratchHome(PathBuf);
+
+impl ScratchHome {
+    fn new() -> Self {
+        Self::at(scratch("ferrix-home"))
+    }
+
+    /// Under `/home` (the container's own filesystem, and not a reserved
+    /// directory a home may never be in), for tests that check ownership on
+    /// the host side.
+    fn local() -> Self {
+        Self::at(Path::new("/home").join(unique("ferrix-home")))
+    }
+
+    fn at(home: PathBuf) -> Self {
+        std::fs::create_dir_all(home.join("Documents")).unwrap();
+        std::fs::write(home.join("Documents/secret.txt"), "secret").unwrap();
+        Self(home)
+    }
+
+    fn document(&self) -> PathBuf {
+        self.0.join("Documents/secret.txt")
+    }
+
+    fn data_dir(&self) -> PathBuf {
+        self.0.join(".local/share/ferrix/org.ferrix.test")
+    }
+
+    fn context(&self, capabilities: &[AppCapability]) -> LaunchContext {
+        let mut context = granted(capabilities);
+        context
+            .env
+            .push(("HOME".to_owned(), self.0.display().to_string()));
+        context
+    }
+}
+
+impl Drop for ScratchHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn minimal_root_hides_the_host_and_keeps_the_system_read_only() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let home = ScratchHome::new();
+    let host_file = scratch("ferrix-host-file");
+    std::fs::write(&host_file, "host").unwrap();
+    let _host_file = RemoveOnDrop(host_file.clone());
+    // Each forbidden action that succeeds is its own exit code.
+    let script = r#"
+        [ -e "$1" ] && exit 10                                   # host scratch file
+        [ -e "$2" ] && exit 11                                   # home document without files-home
+        [ -x /bin/sh ] && [ -r /etc/passwd ] || exit 12          # system directories present
+        touch /usr/ferrix-probe 2>/dev/null && exit 13           # /usr read-only
+        touch /etc/ferrix-probe 2>/dev/null && exit 14           # /etc read-only
+        echo $$ > /sys/fs/cgroup/cgroup.procs 2>/dev/null && exit 15   # no cgroup escape
+        [ -c /dev/null ] && [ -c /dev/pts/ptmx ] || exit 16      # minimal /dev
+        [ -e /dev/kmsg ] || [ -e /dev/mem ] && exit 17           # nothing else from the host /dev
+        [ "$HOME" = "$3" ] && [ -d "$HOME" ] || exit 18          # an empty stand-in home
+        echo kept > "$FERRIX_APP_DATA_DIR/note" || exit 19       # writable data directory
+        exit 0
+    "#;
+    let mut running = launch_with(
+        &[
+            "sh",
+            "-c",
+            script,
+            "sh",
+            host_file.to_str().unwrap(),
+            home.document().to_str().unwrap(),
+            home.0.to_str().unwrap(),
+        ],
+        policy,
+        &home.context(&[]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    let view = &report.applied.fs_view;
+    assert_eq!(view.mode, FsViewMode::Minimal, "{report:?}");
+    assert_eq!(view.root.as_deref(), Some("pivot_root"), "{report:?}");
+    assert!(view.read_only.iter().any(|d| d == "/usr"), "{report:?}");
+    assert!(view.home.is_none() && !report.degraded, "{report:?}");
+    assert_eq!(
+        view.data_dir.as_deref(),
+        home.data_dir().to_str(),
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    // The data directory is the host's and survives the launch.
+    assert_eq!(
+        std::fs::read_to_string(home.data_dir().join("note")).unwrap(),
+        "kept\n"
+    );
+}
+
+#[test]
+fn files_home_grant_shows_the_home_folder_read_write() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let home = ScratchHome::new();
+    let script = r#"[ "$(cat "$1")" = secret ] && echo made > "$HOME/Documents/new.txt""#;
+    let mut running = launch_with(
+        &["sh", "-c", script, "sh", home.document().to_str().unwrap()],
+        policy,
+        &home.context(&[AppCapability::FilesHome]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.fs_view.home.as_deref(),
+        home.0.to_str(),
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    assert_eq!(
+        std::fs::read_to_string(home.0.join("Documents/new.txt")).unwrap(),
+        "made\n"
+    );
+}
+
+#[test]
+fn a_reserved_directory_is_never_exposed_as_the_home_folder() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let mut context = granted(&[AppCapability::FilesHome]);
+    context.env.push(("HOME".to_owned(), "/etc".to_owned()));
+    let config = serde_json::to_value(NativeLaunch {
+        exec: vec!["true".to_owned()],
+        isolation: policy,
+    })
+    .unwrap();
+    // Required: an unmet grant is a failed launch, not a silent widening.
+    assert!(matches!(
+        runtime().launch(&descriptor(), &config, &context),
+        Err(ferrix_app_api::AppError::IsolationUnavailable { .. })
+    ));
+}
+
+#[test]
+fn inherit_keeps_the_launcher_filesystem_and_still_sets_the_data_dir() {
+    let policy = IsolationPolicy {
+        fs_view: FsViewPolicy::inherit(),
+        ..IsolationPolicy::default()
+    };
+    if !available(&policy) {
+        return;
+    }
+    let home = ScratchHome::new();
+    let script = r#"[ -e "$1" ] && [ -d "$FERRIX_APP_DATA_DIR" ]"#;
+    let mut running = launch_with(
+        &["sh", "-c", script, "sh", home.document().to_str().unwrap()],
+        policy,
+        &home.context(&[]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(report.applied.fs_view.mode, FsViewMode::Inherit);
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// seccomp (issue #10, increment 4)
+// ---------------------------------------------------------------------------
+
+/// Actions a root application inside its own namespaces could take without
+/// the filter; each that succeeds is its own exit code.
+const FORBIDDEN_SYSCALLS: &str = r#"
+    mkdir -p /tmp/m
+    mount -t tmpfs none /tmp/m 2>/dev/null && exit 20        # mount
+    mount -o remount,rw /usr 2>/dev/null && exit 21          # undo the read-only view
+    unshare -n true 2>/dev/null && exit 22                   # new namespaces
+    unshare -U true 2>/dev/null && exit 23
+    chroot / true 2>/dev/null && exit 24                     # chroot (escape primitive)
+    grep -q '^Seccomp:[[:space:]]*2' /proc/self/status || exit 25
+    exit 0
+"#;
+
+fn seccomp(policy: SeccompPolicy) -> IsolationPolicy {
+    IsolationPolicy {
+        seccomp: policy,
+        ..IsolationPolicy::default()
+    }
+}
+
+#[test]
+fn default_seccomp_profile_refuses_dangerous_system_calls() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", FORBIDDEN_SYSCALLS], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    let filter = &report.applied.seccomp;
+    assert_eq!(filter.profile, Some(SeccompProfile::Default), "{report:?}");
+    // The deny list plus the clone-with-namespace-flags rule.
+    assert_eq!(
+        filter.denied,
+        ferrix_runtime_native::seccomp::denied_for_target().len() + 1
+    );
+    assert!(!report.degraded, "{report:?}");
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+#[test]
+fn without_the_filter_the_same_mount_succeeds() {
+    // The control for the test above: the refusal comes from seccomp, not
+    // from missing privilege.
+    let policy = seccomp(SeccompPolicy::unconfined());
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", FORBIDDEN_SYSCALLS], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert!(!report.applied.seccomp.applied(), "{report:?}");
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 20 });
+}
+
+#[test]
+fn the_escape_hatch_relaxes_only_the_named_calls() {
+    let policy = seccomp(SeccompPolicy {
+        allow: vec!["mount".to_owned(), "umount2".to_owned()],
+        ..SeccompPolicy::default()
+    });
+    if !available(&policy) {
+        return;
+    }
+    let script = r#"mkdir -p /tmp/m && mount -t tmpfs none /tmp/m && umount /tmp/m || exit 30
+        unshare -n true 2>/dev/null && exit 31
+        exit 0"#;
+    let mut running = launch(&["sh", "-c", script], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(report.applied.seccomp.allowed, ["mount", "umount2"]);
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+}
+
+// ---------------------------------------------------------------------------
+// Per-application uid (issue #10, increment 5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn per_app_uid_runs_the_application_as_its_own_subuid() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let policy = IsolationPolicy {
+        uid: UidMode::PerApp,
+        ..IsolationPolicy::default()
+    };
+    if !available(&policy) {
+        return;
+    }
+    // A container-local directory: the cargo target directory may be a host
+    // share (macOS through OrbStack) that does not keep foreign owners.
+    let home = ScratchHome::local();
+    let uid = app_subuid("org.ferrix.test");
+    // /etc/shadow is root-only (0640 root:shadow): the launcher can read it,
+    // the application must not, although it is "root-like" in nothing.
+    let script = r#"
+        [ "$(id -u)" = "$1" ] && [ "$(id -g)" = "$1" ] || exit 40
+        [ "$(id -G)" = "$1" ] || exit 41                     # no supplementary groups
+        [ -e /etc/shadow ] || exit 42
+        cat /etc/shadow >/dev/null 2>&1 && exit 43           # forbidden path
+        grep -q '^CapEff:[[:space:]]*0*$' /proc/self/status || exit 44   # no capabilities at all
+        echo mine > "$FERRIX_APP_DATA_DIR/f" || exit 45      # its data directory
+        [ "$(stat -c %u:%g "$FERRIX_APP_DATA_DIR/f")" = "$1:$1" ] || exit 46
+        touch "$HOME/x" || exit 47                           # its stand-in home
+        exit 0
+    "#;
+    let mut running = launch_with(
+        &["sh", "-c", script, "sh", &uid.to_string()],
+        policy,
+        &home.context(&[]),
+    );
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(
+        report.applied.identity,
+        IdentityOutcome {
+            mode: UidMode::PerApp,
+            uid: Some(uid),
+            gid: Some(uid),
+        },
+        "{report:?}"
+    );
+    assert!(
+        report.applied.user_namespace && !report.degraded,
+        "{report:?}"
+    );
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
+    // On the host the files belong to the subuid, and the directory is
+    // owner-only.
+    let data = std::fs::metadata(home.data_dir()).unwrap();
+    assert_eq!((data.uid(), data.gid()), (uid, uid));
+    assert_eq!(data.permissions().mode() & 0o777, 0o700);
+    let file = std::fs::metadata(home.data_dir().join("f")).unwrap();
+    assert_eq!(file.uid(), uid);
+}
+
+#[test]
+fn launcher_identity_is_the_default() {
+    let policy = IsolationPolicy::default();
+    if !available(&policy) {
+        return;
+    }
+    let mut running = launch(&["sh", "-c", "exit 0"], policy);
+    let report: ferrix_runtime_native::IsolationReport =
+        serde_json::from_value(running.diagnostics()).unwrap();
+    assert_eq!(report.applied.identity, IdentityOutcome::default());
+    assert_eq!(running.wait().unwrap(), ExitReason::Exited { code: 0 });
 }

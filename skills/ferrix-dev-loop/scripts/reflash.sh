@@ -31,11 +31,28 @@ token=$(just pixel-9a-dev-flash flash "$@" 2>&1 | sed -n 's/^confirm_token=//p')
 [ -n "$token" ] || { just pixel-9a-dev-flash flash "$@" 2>&1 | tail -5; echo 'STOP: flash plan refused'; exit 1; }
 just pixel-9a-dev-flash flash --confirm "$token" "$@" 2>&1 | grep -q '^result=flashed' || { echo 'STOP: flash failed'; exit 1; }
 
+select_slot() {
+	token=$(just pixel-9a-dev-flash set-active "$1" 2>&1 | sed -n 's/^confirm_token=//p')
+	just pixel-9a-dev-flash set-active --confirm "$token" "$1" 2>&1 | grep -q '^result=slot-selected' ||
+		{ echo "STOP: set-active $1 failed"; exit 1; }
+}
 if [ "$(fastboot getvar current-slot 2>&1 | sed -n 's/^current-slot: *_*//p')" != b ]; then
-	token=$(just pixel-9a-dev-flash set-active b 2>&1 | sed -n 's/^confirm_token=//p')
-	just pixel-9a-dev-flash set-active --confirm "$token" b 2>&1 | grep -q '^result=slot-selected' ||
-		{ echo 'STOP: set-active failed'; exit 1; }
+	select_slot b
 fi
+# Ferrix never marks slot b boot-successful (#175), so the bootloader allows
+# only 3 boots per set_active and stops in Fastboot at retry-count 1. If any
+# retry is spent, reset the counter the only sanctioned way: set-active a
+# (flashes the pinned stock bootloader and radio to a; a is never booted),
+# then set-active b.
+retries=$(fastboot getvar slot-retry-count:b 2>&1 | sed -n 's/^slot-retry-count:b: *//p')
+case "$retries" in
+	''|*[!0-9]*) echo "note: slot-retry-count:b unreadable ('$retries'); not resetting" ;;
+	*) if [ "$retries" -lt 3 ]; then
+		echo "slot b retry-count $retries < 3; resetting via set-active a, then b"
+		select_slot a
+		select_slot b
+	fi ;;
+esac
 just pixel-9a-dev-flash reboot 2>&1 | grep -q '^result=rebooted' || { echo 'STOP: reboot failed'; exit 1; }
 
 start=$(date +%s)

@@ -1,8 +1,13 @@
 # Target-local native-Linux ModemManager fork with Samsung SIT support.
+# The hash-pinned target-local patch 0001 binds the Google Kleaf CPIF SIT
+# ports (umts_ipc0/1, through the sit-proxy sockets only) and rmnet0 into one
+# modem; 0002 and 0003 let that SIT-only modem (no AT port) initialize and
+# enable, with its SIT port as the primary port.
+# The WWAN route is unchanged. See ../../s5300-s3-mm-binding.md.
 maintainer="Omarchy Ferrix <maintainers@omarchy.invalid>"
 pkgname=modemmanager-samsung-sit
 pkgver=1.25.95_git20260731
-pkgrel=3
+pkgrel=6
 pkgdesc="ModemManager with Samsung SIT support for the Exynos S5300"
 url="https://git.deusch.me/pixel-mainline/ModemManager"
 arch="aarch64"
@@ -51,6 +56,9 @@ _commit=14a0013a28e5d5eec513c65e75d7549678ecc61e
 source="modemmanager-$_commit.tar.gz::https://git.deusch.me/pixel-mainline/ModemManager/archive/$_commit.tar.gz
 	modemmanager.rules
 	modemmanager.initd
+	0001-samsung-sit-google-kleaf-cpif-binding.patch
+	0002-samsung-sit-sit-only-modem-without-at-port.patch
+	0003-iface-modem-sit-port-as-primary.patch
 	"
 builddir="$srcdir/modemmanager"
 
@@ -143,4 +151,7 @@ sha512sums="
 9add05d1a18a662cb0c0f6b9048279355a8d1b2933263df0f74fbb791cb972653c182fb994521e0f64602a00b22c54f0e83f282f11322b856978a9355ccfd8ea  modemmanager-14a0013a28e5d5eec513c65e75d7549678ecc61e.tar.gz
 2be18878972bee9924cdf28d2f124e126c30c02da4e96f0567acbea2f5a84278f116cf08f644499b10b82eb9baedabcfb62ad4c1e010f3afa82c8b403a922e59  modemmanager.rules
 7dbde2b0bdceb482e66605cd98c8f384a1d6f169148c409aa66a6263dab6e4996f61fa4bb9d6a8390b63c474a08df1477fea79ecb7c029a578dba9faa801feef  modemmanager.initd
+c1907676fd4a3c9bc88e31e28c99231461c88b642693ad3bb2372f65c655afc171e448b234b2c89ccfff0d2af9b1917eb97c042e8e687f718c6f1635c9f7e057  0001-samsung-sit-google-kleaf-cpif-binding.patch
+7151e69a0462236a89cc952881c1e577a3a36030de132f7ae84ed93e52c3c2a86c9a813fa2f060dcb8a87ddd0ba13a6cbe49f59a727715a60caaaeed6da99fb9  0002-samsung-sit-sit-only-modem-without-at-port.patch
+6d0d604096139b97888d5152f74429491ade54442d591bcab4a8e1cc9a74bd300a0ea1f849092c85cd566dad6c978568a36334980879b4f3c2f4b025898020be  0003-iface-modem-sit-port-as-primary.patch
 "

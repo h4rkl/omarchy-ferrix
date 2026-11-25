@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 ferrix-mock-control = { path = "../ferrix-mock-control" }
+# Display geometry for `input` taps, through the one strict profile parser.
+ferrix-target-profile = { path = "../ferrix-target-profile" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 # The scenario file schema (ADR-006). This is the one TOML schema besides the

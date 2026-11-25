@@ -1,0 +1,44 @@
+# Stock Codec2 video services for the Waydroid (Android 14+) container on the
+# exact target: Samsung Exynos MFC (AIDL IComponentStore/default) and Google
+# BigWave AV1 (IComponentStore/default1). Read by
+# tools/pixel-9a/waydroid-codec2-overlay.sh.
+#
+# vendor.img source path	overlay destination under vendor/	kind
+# kind 1:   copy, plus every NEEDED library that exists in vendor.img /lib64
+#           (minus LL-NDK) into the private lib64/ferrix-codec2/;
+# kind 0:   copy only;
+# kind rc:  copy, with `setenv LD_LIBRARY_PATH /vendor/lib64/ferrix-codec2`
+#           added to its one service, so only these services see the stock
+#           runtime and no Waydroid vendor library is shadowed;
+# kind xml: stock media_codecs input to tools/pixel-9a/waydroid-codec2-xml.py;
+#           rows sharing a destination merge, in order, into one generated
+#           XML without `.secure` codecs. Never copied verbatim.
+# The component stores dlopen their per-codec libraries, so those are roots
+# here, not NEEDED edges. Exynos_C2.rc is left out: it only chowns a sysfs CMA
+# knob, and /sys is read-only in the container. The stock monolithic VINTF
+# manifest is replaced by a generated Ferrix fragment. Bytes come only from
+# the hash-verified pinned factory archive and never enter Git.
+/bin/hw/samsung.hardware.media.c2@1.2-service	bin/hw/samsung.hardware.media.c2@1.2-service	1
+/bin/hw/google.hardware.media.c2@2.0-service	bin/hw/google.hardware.media.c2@2.0-service	1
+/lib64/libExynosC2H263Dec.so	lib64/ferrix-codec2/libExynosC2H263Dec.so	1
+/lib64/libExynosC2H263Enc.so	lib64/ferrix-codec2/libExynosC2H263Enc.so	1
+/lib64/libExynosC2H264Dec.so	lib64/ferrix-codec2/libExynosC2H264Dec.so	1
+/lib64/libExynosC2H264Enc.so	lib64/ferrix-codec2/libExynosC2H264Enc.so	1
+/lib64/libExynosC2HevcDec.so	lib64/ferrix-codec2/libExynosC2HevcDec.so	1
+/lib64/libExynosC2HevcEnc.so	lib64/ferrix-codec2/libExynosC2HevcEnc.so	1
+/lib64/libExynosC2Mpeg4Dec.so	lib64/ferrix-codec2/libExynosC2Mpeg4Dec.so	1
+/lib64/libExynosC2Mpeg4Enc.so	lib64/ferrix-codec2/libExynosC2Mpeg4Enc.so	1
+/lib64/libExynosC2Vp8Dec.so	lib64/ferrix-codec2/libExynosC2Vp8Dec.so	1
+/lib64/libExynosC2Vp8Enc.so	lib64/ferrix-codec2/libExynosC2Vp8Enc.so	1
+/lib64/libExynosC2Vp9Dec.so	lib64/ferrix-codec2/libExynosC2Vp9Dec.so	1
+/lib64/libExynosC2Vp9Enc.so	lib64/ferrix-codec2/libExynosC2Vp9Enc.so	1
+/lib64/libacryl_hdr_plugin.so	lib64/ferrix-codec2/libacryl_hdr_plugin.so	1
+/lib64/libgc2_bw_av1_dec.so	lib64/ferrix-codec2/libgc2_bw_av1_dec.so	1
+/lib64/libgc2_bw_av1_enc.so	lib64/ferrix-codec2/libgc2_bw_av1_enc.so	1
+/etc/init/samsung.hardware.media.c2@1.2-service.rc	etc/init/samsung.hardware.media.c2@1.2-service.rc	rc
+/etc/init/google.hardware.media.c2@2.0-service.rc	etc/init/google.hardware.media.c2@2.0-service.rc	rc
+/etc/seccomp_policy/codec2.vendor.base.policy	etc/seccomp_policy/codec2.vendor.base.policy	0
+/etc/seccomp_policy/codec2.vendor.ext.policy	etc/seccomp_policy/codec2.vendor.ext.policy	0
+/etc/media_codecs_aosp_c2.xml	etc/media_codecs_c2.xml	xml
+/etc/media_codecs_c2.xml	etc/media_codecs_c2.xml	xml
+/etc/media_codecs_performance_c2.xml	etc/media_codecs_performance_c2.xml	xml

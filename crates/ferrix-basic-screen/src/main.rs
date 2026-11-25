@@ -22,11 +22,16 @@
 //!   ferrix-basic-screen [profile.toml] [--core /run/ferrix/core.sock]
 //!                       [--ferrix_appd /run/ferrix/ferrix_appd.sock]   # guest: connect to Wayland
 //!   ferrix-basic-screen [profile.toml] --preview p.ppm [--page PAGE] [--size WxH]
-//!                                                        # any host: render PPM
+//!                       [--sample-apks]                  # any host: render PPM
 //!
-//! `PAGE` is `launcher` (default), `quick-settings`, `notifications`,
+//! `PAGE` is `launcher` (default), `apps` (the app list), `apps-end` (the
+//! app list scrolled to its end), `quick-settings`, `notifications`,
 //! `notifications-empty`, or the kind of a non-launchable catalog entry
-//! (`camera`) for its reference page. Launchable entries (Phone, Messages,
+//! for its reference page (none is checked in today). `--sample-apks` appends the ten
+//! installed-APK labels seen on the Pixel 9a as mock installed entries, so a
+//! host preview shows a catalog with APKs (mock evidence, no Android); all
+//! but Calculator carry a synthetic launcher bitmap standing in for
+//! Waydroid's PNG, so the icon and the letter fallback both show. Launchable entries (Phone, Messages,
 //! Contacts, Settings, Files, Terminal) are real apps started by
 //! `ferrix-appd`, not pages of this surface. `--size` overrides the
 //! profile's panel size, e.g. `830x1800` for the narrow QEMU display window.
@@ -86,6 +91,19 @@ pub(crate) fn test_tiles() -> Vec<catalog::Tile> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps");
     let (apps, errors) = catalog::load_descriptor_dir(&dir).expect("apps dir");
     assert!(errors.is_empty(), "{errors:?}");
+    // Every checked-in entry is launchable; a synthetic placeholder in
+    // Camera's slot keeps the reference-page path covered at the same tile
+    // count (the grid tests depend on it).
+    let mut apps: Vec<_> = apps
+        .into_iter()
+        .filter(|d| d.id.as_str() != "org.ferrix.camera")
+        .collect();
+    apps.push(
+        ferrix_app_api::AppDescriptor::from_json(
+            r#"{"schema_version":1,"id":"org.ferrix.placeholder","runtime":"native","name":"Placeholder","icon":{"glyph":"?","tone":"neutral"},"launchable":false}"#,
+        )
+        .expect("placeholder descriptor"),
+    );
     catalog::tiles_from_catalog(&apps, &[])
 }
 
@@ -110,6 +128,8 @@ struct Args {
     page: String,
     /// Preview-only panel size override (`WxH`).
     size: Option<(u32, u32)>,
+    /// Preview-only: append [`catalog::sample_installed_tiles`].
+    sample_apks: bool,
 }
 
 fn parse_size(text: &str) -> Result<(u32, u32), String> {
@@ -127,6 +147,11 @@ fn parse_size(text: &str) -> Result<(u32, u32), String> {
 fn preview_page(name: &str, state: &mut interaction::UiState) -> Result<Page, String> {
     match name {
         "launcher" => Ok(Page::Launcher),
+        "apps" => Ok(Page::Apps),
+        "apps-end" => {
+            state.apps_scroll = i32::MAX;
+            Ok(Page::Apps)
+        }
         "quick-settings" => Ok(Page::QuickSettings),
         "notifications" => Ok(Page::Notifications),
         "notifications-empty" => {
@@ -146,7 +171,7 @@ fn preview_page(name: &str, state: &mut interaction::UiState) -> Result<Page, St
                     .map(catalog::Tile::kind)
                     .collect();
                 format!(
-                    "unknown --page {name:?}; use launcher, quick-settings, notifications, notifications-empty, or a reference kind ({})",
+                    "unknown --page {name:?}; use launcher, apps, apps-end, quick-settings, notifications, notifications-empty, or a reference kind ({})",
                     kinds.join(", ")
                 )
             }),
@@ -166,6 +191,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
         preview: None,
         page: "launcher".to_owned(),
         size: None,
+        sample_apks: false,
     };
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -174,6 +200,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 parsed.preview = Some(it.next().ok_or("--preview requires an output path")?);
             }
             "--page" => parsed.page = it.next().ok_or("--page requires a page name")?,
+            "--sample-apks" => parsed.sample_apks = true,
             "--size" => {
                 parsed.size = Some(parse_size(&it.next().ok_or("--size requires WxH")?)?);
             }
@@ -207,7 +234,10 @@ fn run() -> Result<(), String> {
         let hw = session.services.snapshot();
         let ty = Type::load()?;
         let (wifi_on, bt_on) = ui_toggles(&hw);
-        let (app_dir, tiles) = catalog::load_descriptor_tiles()?;
+        let (app_dir, mut tiles) = catalog::load_descriptor_tiles()?;
+        if args.sample_apks {
+            tiles.extend(catalog::sample_installed_tiles());
+        }
         let mut state = interaction::UiState::new(wifi_on, bt_on, tiles);
         state.brightness = hw.display.brightness_percent;
         state.set_session(&session.target_id, session.capabilities.clone());
@@ -218,6 +248,9 @@ fn run() -> Result<(), String> {
         let (width, height) = args
             .size
             .unwrap_or((profile.display.width, profile.display.height));
+        if state.apps_scroll == i32::MAX {
+            state.apps_scroll = interaction::apps_max_scroll((width, height), state.tiles.len());
+        }
         let canvas = screen::compose(&hw, minute, &ty, width, height, &state);
         std::fs::write(&path, canvas.ppm_bytes()).map_err(|e| e.to_string())?;
         emit(format!(
@@ -300,6 +333,18 @@ mod tests {
     fn preview_pages_resolve_by_name_and_reference_kind() {
         let mut state = interaction::UiState::new(true, true, test_tiles());
         assert_eq!(preview_page("launcher", &mut state), Ok(Page::Launcher));
+        assert_eq!(preview_page("apps", &mut state), Ok(Page::Apps));
+        assert_eq!(preview_page("apps-end", &mut state), Ok(Page::Apps));
+        assert_eq!(
+            state.apps_scroll,
+            i32::MAX,
+            "resolved against the size later"
+        );
+        assert!(
+            parse_args(["--sample-apks".to_owned()])
+                .unwrap()
+                .sample_apks
+        );
         assert_eq!(
             preview_page("quick-settings", &mut state),
             Ok(Page::QuickSettings)
@@ -314,15 +359,17 @@ mod tests {
             Ok(Page::Notifications)
         );
         assert!(!state.notification_visible);
-        let camera = state.tile_index(&ferrix_app_api::AppId::new("org.ferrix.camera").unwrap());
+        let placeholder =
+            state.tile_index(&ferrix_app_api::AppId::new("org.ferrix.placeholder").unwrap());
+        assert!(placeholder.is_some());
         assert_eq!(
-            preview_page("camera", &mut state).ok(),
-            camera.map(Page::Reference)
+            preview_page("placeholder", &mut state).ok(),
+            placeholder.map(Page::Reference)
         );
         for launchable in ["terminal", "settings", "phone"] {
             let error = preview_page(launchable, &mut state).unwrap_err();
             assert!(
-                error.contains("camera"),
+                error.contains("placeholder"),
                 "launchable kinds are not pages: {error}"
             );
         }

@@ -14,9 +14,11 @@ use std::time::{Duration, Instant};
 
 use ferrix_hardware_api::{
     BluetoothCommand, BluetoothDevice, BluetoothSession, CapabilityMatrix, HardwareCommand,
-    HardwareError, HardwareEvent, HardwareState, SCHEMA_VERSION,
+    HardwareError, HardwareEvent, HardwareState, InhibitReason, SCHEMA_VERSION, ScreenPolicy,
 };
 use serde::{Deserialize, Serialize};
+
+pub mod camera;
 
 pub const DEFAULT_SOCKET: &str = "/run/ferrix/core.sock";
 
@@ -39,6 +41,40 @@ pub enum Request {
     Bluetooth {
         command: BluetoothCommand,
     },
+    /// The current screen policy (idle timeout and inhibitors).
+    ScreenPolicy,
+    /// Answered with the policy, then every change on the same connection
+    /// as a [`PolicyUpdate`] line until the client hangs up.
+    WatchScreenPolicy,
+    /// The user's idle timeout (`null` = never); answered with the policy.
+    SetIdleTimeout {
+        idle_timeout_secs: Option<u32>,
+    },
+    /// Keep the screen from blanking on idle. The inhibitor lives until
+    /// [`Request::ReleaseInhibit`] or until this connection closes, so a
+    /// crashed holder can never leave the screen on forever.
+    InhibitBlank {
+        reason: InhibitReason,
+        holder: String,
+    },
+    /// Release an inhibitor this connection holds.
+    ReleaseInhibit {
+        id: u64,
+    },
+    /// The shell's screen power state, the suspend policy's input; answered
+    /// with the policy. The report lives as long as this connection: when
+    /// it closes the core treats the screen as on and never suspends.
+    ReportScreen {
+        off: bool,
+    },
+}
+
+/// A pushed screen policy change on a [`Request::WatchScreenPolicy`]
+/// connection.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "kebab-case")]
+pub enum PolicyUpdate {
+    ScreenPolicyChanged { policy: ScreenPolicy },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,6 +98,16 @@ pub enum Reply {
     BluetoothSession {
         schema_version: u32,
         session: BluetoothSession,
+    },
+    ScreenPolicy {
+        schema_version: u32,
+        policy: ScreenPolicy,
+    },
+    /// An [`Request::InhibitBlank`] was granted.
+    Inhibited {
+        schema_version: u32,
+        id: u64,
+        policy: ScreenPolicy,
     },
     Error {
         error: HardwareError,
@@ -339,6 +385,243 @@ pub fn bluetooth_command(
     bluetooth_session_request(path, &Request::Bluetooth { command }, timeout)
 }
 
+fn policy_from(reply: Reply) -> Result<ScreenPolicy, String> {
+    match reply {
+        Reply::ScreenPolicy {
+            schema_version,
+            policy,
+        } if schema_version == SCHEMA_VERSION => Ok(policy),
+        Reply::ScreenPolicy { schema_version, .. } => Err(format!(
+            "ferrix-core schema {schema_version} is incompatible with client schema {SCHEMA_VERSION}"
+        )),
+        Reply::Error { error } => Err(error.to_string()),
+        Reply::ProtocolError { reason } => Err(reason),
+        other => Err(format!("unexpected core screen-policy reply: {other:?}")),
+    }
+}
+
+fn policy_request(path: &Path, request: &Request, timeout: Duration) -> Result<Reply, String> {
+    let mut stream = connect_stream(path, timeout)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| format!("set core timeout: {e}"))?;
+    write_request(&mut stream, request)?;
+    read_reply(&mut BufReader::new(stream))
+}
+
+/// The current screen policy.
+pub fn screen_policy(path: &Path, timeout: Duration) -> Result<ScreenPolicy, String> {
+    policy_from(policy_request(path, &Request::ScreenPolicy, timeout)?)
+}
+
+/// Sets the user's idle timeout (`None` = never); returns the new policy.
+pub fn set_idle_timeout(
+    path: &Path,
+    idle_timeout_secs: Option<u32>,
+    timeout: Duration,
+) -> Result<ScreenPolicy, String> {
+    policy_from(policy_request(
+        path,
+        &Request::SetIdleTimeout { idle_timeout_secs },
+        timeout,
+    )?)
+}
+
+/// A held screen-blank inhibitor. The core releases it when this value is
+/// dropped (the connection closes) or [`BlankInhibitor::release`] is called,
+/// so a holder that crashes cannot keep the screen on.
+pub struct BlankInhibitor {
+    stream: UnixStream,
+    id: u64,
+    reason: InhibitReason,
+}
+
+impl BlankInhibitor {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn reason(&self) -> InhibitReason {
+        self.reason
+    }
+
+    /// Releases explicitly and waits for the core to confirm.
+    pub fn release(mut self, timeout: Duration) -> Result<ScreenPolicy, String> {
+        self.stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|e| format!("set core timeout: {e}"))?;
+        write_request(&mut self.stream, &Request::ReleaseInhibit { id: self.id })?;
+        let reader = self
+            .stream
+            .try_clone()
+            .map_err(|e| format!("core socket clone: {e}"))?;
+        policy_from(read_reply(&mut BufReader::new(reader))?)
+    }
+}
+
+/// Keeps the screen from blanking on idle for `reason` (an active call,
+/// video playback, navigation) until the returned handle is dropped.
+pub fn inhibit_blank(
+    path: &Path,
+    reason: InhibitReason,
+    holder: &str,
+    timeout: Duration,
+) -> Result<BlankInhibitor, String> {
+    let mut stream = connect_stream(path, timeout)?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|e| format!("set core timeout: {e}"))?;
+    write_request(
+        &mut stream,
+        &Request::InhibitBlank {
+            reason,
+            holder: holder.to_owned(),
+        },
+    )?;
+    let reader = stream
+        .try_clone()
+        .map_err(|e| format!("core socket clone: {e}"))?;
+    match read_reply(&mut BufReader::new(reader))? {
+        Reply::Inhibited {
+            schema_version, id, ..
+        } if schema_version == SCHEMA_VERSION => Ok(BlankInhibitor { stream, id, reason }),
+        Reply::Error { error } => Err(error.to_string()),
+        Reply::ProtocolError { reason } => Err(reason),
+        other => Err(format!("unexpected core inhibit reply: {other:?}")),
+    }
+}
+
+/// Keeps the core told whether the screen is off. Send the state on the
+/// returned channel at every change, and again after the core came back
+/// (a new core has no report). The worker holds one connection (the core
+/// forgets the report when it closes), coalesces states it has not sent
+/// yet, and retries an undelivered one every `retry`. Dropping the sender
+/// ends the worker and closes the connection, which the core reads as
+/// "screen on".
+pub fn report_screen(path: PathBuf, timeout: Duration, retry: Duration) -> mpsc::Sender<bool> {
+    let (tx, rx) = mpsc::channel::<bool>();
+    let _ = thread::Builder::new()
+        .name("core-screen-report".to_owned())
+        .spawn(move || {
+            let mut pending: Option<bool> = None;
+            let mut link: Option<(UnixStream, BufReader<UnixStream>)> = None;
+            loop {
+                let next = if pending.is_some() {
+                    match rx.recv_timeout(retry) {
+                        Ok(v) => Some(v),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                } else {
+                    match rx.recv() {
+                        Ok(v) => Some(v),
+                        Err(_) => return,
+                    }
+                };
+                pending = next.or(pending);
+                while let Ok(v) = rx.try_recv() {
+                    pending = Some(v);
+                }
+                let Some(off) = pending else { continue };
+                if link.is_none() {
+                    link = connect_stream(&path, timeout).ok().and_then(|stream| {
+                        stream.set_read_timeout(Some(timeout)).ok()?;
+                        let reader = BufReader::new(stream.try_clone().ok()?);
+                        Some((stream, reader))
+                    });
+                }
+                let delivered = link.as_mut().is_some_and(|(stream, reader)| {
+                    write_request(stream, &Request::ReportScreen { off }).is_ok()
+                        && read_reply(reader).and_then(policy_from).is_ok()
+                });
+                if delivered {
+                    pending = None;
+                } else {
+                    link = None;
+                }
+            }
+        });
+    tx
+}
+
+/// What a [`watch_screen_policy`] subscriber receives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PolicyFeed {
+    /// The policy after a (re)connection or a change: replace local state.
+    Policy(ScreenPolicy),
+    /// The core went away; reported once per loss. Keep the last policy.
+    Disconnected { reason: String },
+}
+
+/// Follows the screen policy across core restarts, like
+/// [`spawn_reconnecting`] does for hardware state.
+pub fn watch_screen_policy(
+    path: PathBuf,
+    timeout: Duration,
+    retry: Duration,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) -> Receiver<PolicyFeed> {
+    let (tx, rx) = mpsc::channel();
+    let spawned = thread::Builder::new()
+        .name("core-policy-watch".to_owned())
+        .spawn(move || {
+            let mut lost_reported = false;
+            loop {
+                let reason = match watch_once(&path, timeout, &tx, &wake, &mut lost_reported) {
+                    Ok(()) => return,
+                    Err(reason) => reason,
+                };
+                if !lost_reported {
+                    lost_reported = true;
+                    if tx.send(PolicyFeed::Disconnected { reason }).is_err() {
+                        return;
+                    }
+                    wake();
+                }
+                thread::sleep(retry);
+            }
+        });
+    if let Err(error) = spawned {
+        let (dead_tx, dead_rx) = mpsc::channel();
+        let _ = dead_tx.send(PolicyFeed::Disconnected {
+            reason: format!("cannot spawn policy watcher: {error}"),
+        });
+        return dead_rx;
+    }
+    rx
+}
+
+/// One watch connection. `Ok` only when the receiver is gone (stop);
+/// `Err` is a lost or failed connection (retry).
+fn watch_once(
+    path: &Path,
+    timeout: Duration,
+    tx: &mpsc::Sender<PolicyFeed>,
+    wake: &Arc<dyn Fn() + Send + Sync>,
+    lost_reported: &mut bool,
+) -> Result<(), String> {
+    let mut stream = connect_stream(path, timeout)?;
+    write_request(&mut stream, &Request::WatchScreenPolicy)?;
+    let mut reader = BufReader::new(stream);
+    let policy = policy_from(read_reply(&mut reader)?)?;
+    *lost_reported = false;
+    if tx.send(PolicyFeed::Policy(policy)).is_err() {
+        return Ok(());
+    }
+    wake();
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("read policy update: {e}"))?;
+        if let Ok(PolicyUpdate::ScreenPolicyChanged { policy }) = serde_json::from_str(line.trim())
+        {
+            if tx.send(PolicyFeed::Policy(policy)).is_err() {
+                return Ok(());
+            }
+            wake();
+        }
+    }
+    Err("ferrix-core closed the policy watch".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,6 +645,58 @@ mod tests {
             })
             .unwrap(),
             r#"{"request":"bluetooth","command":{"command":"reply-pairing","accept":false}}"#
+        );
+    }
+
+    #[test]
+    fn screen_policy_requests_use_the_documented_wire_form() {
+        let cases = [
+            (
+                Request::InhibitBlank {
+                    reason: InhibitReason::Video,
+                    holder: "org.ferrix.browser".into(),
+                },
+                r#"{"request":"inhibit-blank","reason":"video","holder":"org.ferrix.browser"}"#,
+            ),
+            (
+                Request::ReleaseInhibit { id: 7 },
+                r#"{"request":"release-inhibit","id":7}"#,
+            ),
+            (
+                Request::SetIdleTimeout {
+                    idle_timeout_secs: None,
+                },
+                r#"{"request":"set-idle-timeout","idle_timeout_secs":null}"#,
+            ),
+            (
+                Request::WatchScreenPolicy,
+                r#"{"request":"watch-screen-policy"}"#,
+            ),
+            (
+                Request::ReportScreen { off: true },
+                r#"{"request":"report-screen","off":true}"#,
+            ),
+        ];
+        for (request, wire) in cases {
+            assert_eq!(serde_json::to_string(&request).unwrap(), wire);
+            assert_eq!(serde_json::from_str::<Request>(wire).unwrap(), request);
+        }
+        let update = PolicyUpdate::ScreenPolicyChanged {
+            policy: ScreenPolicy::default(),
+        };
+        assert_eq!(
+            serde_json::to_string(&update).unwrap(),
+            concat!(
+                r#"{"event":"screen-policy-changed","policy":{"idle_timeout_secs":60,"inhibitors":[],"#,
+                r#""suspend":{"mode":"off","source":"profile","after_blank_secs":30,"supported":false,"#,
+                r#""kill_switch":false,"screen_off":false,"phase":"disabled","cycles":0,"last":null}}}"#
+            )
+        );
+        // A hardware event line is not a policy update, and vice versa, so
+        // neither stream's parser mistakes the other's lines.
+        assert!(
+            serde_json::from_str::<HardwareEvent>(&serde_json::to_string(&update).unwrap())
+                .is_err()
         );
     }
 

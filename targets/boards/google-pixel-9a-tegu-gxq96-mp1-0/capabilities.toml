@@ -6,23 +6,23 @@ target_id = "google-pixel-9a-tegu-gxq96-mp1-0"
 # ferrix-target-pixel9a compiles this file into its capability matrix.
 [power]
 status = "supported"
-evidence = "UPower battery and charger state through ferrix-power-upower reached ferrix-core and the home surface. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
+evidence = "UPower battery and charger state through ferrix-power-upower reached ferrix-core and the home surface. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); re-verified 2026-11-24 on the reviewed-main image, see docs/status-log/2026-11.md."
 
 [display]
 status = "supported"
-evidence = "ferrix-shell scans out 1080x2424 portrait on the DSI panel with profile byte order and safe area; scanout read back via DRM GETFB2 and checked on camera. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
+evidence = "ferrix-shell scans out 1080x2424 portrait on the DSI panel with profile byte order and safe area; scanout read back via DRM GETFB2 and checked on camera. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); re-verified 2026-11-24 on the reviewed-main image, see docs/status-log/2026-11.md."
 
 [input]
 status = "supported"
-evidence = "synaptics_tcm_touch and uinput test touch/keyboard devices reach ferrix-shell through libinput; taps launch apps and drive the on-screen keyboard. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
+evidence = "synaptics_tcm_touch and uinput test touch/keyboard devices reach ferrix-shell through libinput; taps launch apps and drive the on-screen keyboard. 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); re-verified 2026-11-24 on the reviewed-main image, see docs/status-log/2026-11.md."
 
 [network]
 status = "supported"
-evidence = "bcm4383 Wi-Fi scans and joins a WPA2/WPA3 transition AP with WPA3-SAE (driver patched for NL80211 WPA version 3) and WPA2-PSK through NetworkManager and ferrix-networkd (DHCP, ping). 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); see docs/status.md."
+evidence = "bcm4383 Wi-Fi scans and joins a WPA2/WPA3 transition AP with WPA3-SAE (driver patched for NL80211 WPA version 3) and WPA2-PSK through NetworkManager and ferrix-networkd (DHCP, ping). 2026-10-09 Kleaf dev route (slot b, images composed by tools/pixel-9a/dev-compose.py); re-verified 2026-11-24 on the reviewed-main image, see docs/status-log/2026-11.md."
 
 [bluetooth]
 status = "supported"
-evidence = "ferrix-bluetooth-uart attaches the BCM4383 controller (btattach -P bcm on ttySAC18, brcm/BCM.hcd); ferrix-core reports present/enabled through ferrix-bluetooth-bluez and BlueZ scans find devices. Pairing UI discovery verified; pairing not exercised on hardware; link runs at 115200 baud. 2026-10-09 Kleaf dev route; see docs/status.md."
+evidence = "ferrix-bluetooth-uart attaches the BCM4383 controller (btattach -P bcm on ttySAC18, brcm/BCM.hcd); ferrix-core reports present/enabled through ferrix-bluetooth-bluez and BlueZ scans find devices. Pairing UI discovery verified; pairing not exercised on hardware; link runs at 115200 baud. 2026-10-09 Kleaf dev route; re-verified 2026-11-24 on the reviewed-main image, see docs/status-log/2026-11.md."
 
 [audio]
 status = "unsupported"
@@ -33,6 +33,10 @@ status = "unsupported"
 evidence = "No Ferrix adapter or physical Linux evidence."
 
 [lifecycle]
+status = "unsupported"
+evidence = "No Ferrix adapter or physical Linux evidence."
+
+[camera]
 status = "unsupported"
 evidence = "No Ferrix adapter or physical Linux evidence."
 
