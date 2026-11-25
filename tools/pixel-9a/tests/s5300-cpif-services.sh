@@ -141,6 +141,35 @@ printf '%s\n' "$rules" | grep -Eq 'umts_boot|umts_rfs|oem_ipc|umts_ipc\*|rmnet\*
 	fail 'static: udev rule tags a CPIF node other than umts_ipc0/1 or rmnet0' || true
 grep -Fq '0001-samsung-sit-google-kleaf-cpif-binding.patch' "$mm/APKBUILD" &&
 	ok 'static: ModemManager carries the CPIF binding patch' || fail 'static: ModemManager lacks the CPIF binding patch'
+# 0002 (physical S3 result 2026-11-24): a SIT-only modem must initialize
+# without a primary AT port, and only that case may bypass the parent.
+p2="$mm/0002-samsung-sit-sit-only-modem-without-at-port.patch"
+grep -Fq '0002-samsung-sit-sit-only-modem-without-at-port.patch' "$mm/APKBUILD" &&
+	[ "$(grep -o '000[1-9]-[a-z-]*\.patch' "$mm/APKBUILD" | head -3 | tr '\n' ' ')" = '0001-samsung-sit-google-kleaf-cpif-binding.patch 0002-samsung-sit-sit-only-modem-without-at-port.patch 0003-iface-modem-sit-port-as-primary.patch ' ] &&
+	grep -q '^+    broadband_modem_class->initialization_started = initialization_started;$' "$p2" &&
+	grep -q '^+    broadband_modem_class->enabling_started = enabling_started;$' "$p2" &&
+	grep -q '^+    iface->load_current_capabilities = load_current_capabilities;$' "$p2" &&
+	[ "$(grep -c '^+    if (has_primary_at_port (self))' "$p2")" -eq 2 ] &&
+	! grep -E '^\+.*(mm_sit_|SIT_MESSAGE|0x[0-9a-fA-F]{4})' "$p2" >/dev/null &&
+	ok 'static: ModemManager carries 0002 after 0001 (SIT-only init, no new SIT messages)' ||
+	fail 'static: ModemManager 0002 SIT-only init patch missing or changed'
+# 0003 (physical r5 result 2026-11-25): the Modem interface takes a SIT port
+# as primary only when there is no AT, QMI or MBIM port; it touches nothing else.
+p3="$mm/0003-iface-modem-sit-port-as-primary.patch"
+[ "$(grep -c '^diff ' "$p3")" -eq 1 ] && grep -q '^diff -ruN a/src/mm-iface-modem.c b/src/mm-iface-modem.c$' "$p3" &&
+	grep -q '^+                                                      MM_PORT_TYPE_SIT);$' "$p3" &&
+	grep -q '^+            if (!primary) {$' "$p3" &&
+	grep -Eq '^ +"Primary port initialization failed: none found"\);$' "$p3" &&
+	[ "$(grep -c '^-' "$p3" | tr -d ' ')" -eq 1 ] &&
+	! grep -E '^\+.*(mm_sit_|SIT_MESSAGE|0x[0-9a-fA-F]{4})' "$p3" >/dev/null &&
+	ok 'static: ModemManager 0003 only adds the SIT-primary fallback to mm-iface-modem.c' ||
+	fail 'static: ModemManager 0003 SIT-primary patch missing or changed'
+sh -n "$root/tools/pixel-9a/s5300-mm-hotswap.sh" && sh -n "$root/tools/pixel-9a/s5300-mm-hotswap/abuild.sh" &&
+	sh -n "$root/tools/pixel-9a/s5300-mm-hotswap/sim.sh" &&
+	grep -q 'abuild -F -r' "$root/tools/pixel-9a/s5300-mm-hotswap/abuild.sh" &&
+	! grep -Eq '\b(adb|fastboot)\b|/dev/cu\.' "$root/tools/pixel-9a/s5300-mm-hotswap.sh" "$root/tools/pixel-9a/s5300-mm-hotswap/abuild.sh" "$root/tools/pixel-9a/s5300-mm-hotswap/sim.sh" &&
+	ok 'static: the native ModemManager build/emulation helper builds the recipe and never touches a device' ||
+	fail 'static: s5300-mm-hotswap helper changed'
 
 # Version and kernel pins in the library follow the recipe and the workflows.
 modem_ver=$(sed -n 's/^pkgver=//p' "$board/pmos/exynos-modem/APKBUILD")-r$(sed -n 's/^pkgrel=//p' "$board/pmos/exynos-modem/APKBUILD")

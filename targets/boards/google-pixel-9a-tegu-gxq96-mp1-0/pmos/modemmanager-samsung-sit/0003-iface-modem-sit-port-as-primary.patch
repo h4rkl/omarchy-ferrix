@@ -1,0 +1,59 @@
+Subject: [PATCH] iface-modem: use the SIT port as primary for a SIT-only modem
+
+Target-local patch for the Pixel 9a (google-pixel-9a-tegu-gxq96-mp1-0) on
+the Google Kleaf CPIF route, applied after 0001 and 0002. See
+targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s3-mm-binding.md.
+
+Physical result with 0001+0002 (r5, 2026-11-25): initialization got past
+initialization_started() ("no primary AT port: initializing over SIT only")
+and then failed in the Modem interface's first step with "Primary port
+initialization failed: none found". That step publishes the D-Bus
+PrimaryPort and accepts only a QMI, MBIM or AT primary.
+
+When none of those exists, this patch uses the lowest-named non-ignored SIT
+port (umts_ipc0) as the primary port. Modems with an AT, QMI or MBIM port
+are unaffected.
+
+An audit of the rest of initialization and enabling (Modem, 3GPP, SIM,
+firmware, location, messaging, voice, signal, time, SAR) found no other
+step that fails fatally without an AT port: the remaining AT-based steps
+log and continue, and the fatal ones are SIT-implemented. No SIT protocol
+behaviour changes.
+
+diff -ruN a/src/mm-iface-modem.c b/src/mm-iface-modem.c
+--- a/src/mm-iface-modem.c	2026-11-25 13:41:34
++++ b/src/mm-iface-modem.c	2026-11-25 13:41:34
+@@ -5757,6 +5757,33 @@
+             if (!primary)
+                 primary = MM_PORT (mm_base_modem_peek_port_primary (MM_BASE_MODEM (self)));
+ 
++            /* A SIT-only modem (Samsung S5300 on Google's CPIF) has no AT,
++             * QMI or MBIM control port; its SIT control port is the primary
++             * one. Pick the lowest-named non-ignored SIT port so the choice
++             * is stable (umts_ipc0 before umts_ipc1). */
++            if (!primary) {
++                g_autoptr(GList)  sit_ports = NULL;
++                GList            *l;
++
++                sit_ports = mm_base_modem_find_ports (MM_BASE_MODEM (self),
++                                                      MM_PORT_SUBSYS_UNKNOWN,
++                                                      MM_PORT_TYPE_SIT);
++                for (l = sit_ports; l; l = g_list_next (l)) {
++                    MMPort *candidate = MM_PORT (l->data);
++
++                    if (mm_port_get_port_group (candidate) == MM_PORT_GROUP_IGNORED)
++                        continue;
++                    if (!primary ||
++                        g_strcmp0 (mm_port_get_device (candidate), mm_port_get_device (primary)) < 0)
++                        primary = candidate;
++                }
++                /* The modem keeps its own reference to every port. */
++                g_list_foreach (sit_ports, (GFunc) g_object_unref, NULL);
++                if (primary)
++                    mm_obj_dbg (self, "no AT, QMI or MBIM port: using SIT port %s as primary",
++                                mm_port_get_device (primary));
++            }
++
+             if (!primary) {
+                 g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                          "Primary port initialization failed: none found");

@@ -1,0 +1,209 @@
+Subject: [PATCH] samsung-sit: initialize and enable a SIT-only modem without an AT port
+
+Target-local patch for the Pixel 9a (google-pixel-9a-tegu-gxq96-mp1-0) on
+the Google Kleaf CPIF route, applied after 0001. See
+targets/boards/google-pixel-9a-tegu-gxq96-mp1-0/s5300-s3-mm-binding.md.
+
+Physical result with 0001 alone (2026-11-24): the modem object is created
+from umts_ipc0/1 and rmnet0, then initialization fails with "Couldn't open
+ports during modem initialization: Couldn't get primary port" and the modem
+is marked unusable. MMBroadbandModem's initialization_started() and
+enabling_started() open the primary AT port, and its generic
+load_current_capabilities() asks the modem over AT or QCDM (a fatal step in
+the Modem interface). CPIF exposes no Shannon AT port to ModemManager.
+
+When the modem has no primary AT port, this patch:
+
+- returns no ports context from initialization_started() and succeeds in
+  enabling_started() without opening ports (the MBIM modem does the same);
+- reports GSM_UMTS | LTE | 5GNR from load_current_capabilities(), matching
+  the plugin's existing 2G/3G/4G/5G modes and PS/EPS/5GS network flags.
+
+With an AT port (the WWAN route) every call goes to the parent unchanged.
+No SIT protocol behaviour changes.
+
+diff -ruN a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c
+--- a/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-25 12:56:32
++++ b/src/plugins/samsung-sit/mm-broadband-modem-samsung-sit.c	2026-11-25 12:56:33
+@@ -3049,9 +3049,171 @@
+                                             (GAsyncReadyCallback) set_current_modes_ready, task);
+ }
+ 
++/*****************************************************************************/
++/* SIT-only modems (no AT port)
++ *
++ * On Google's Kleaf CPIF the S5300 exposes only the SIT FMT channels to
++ * ModemManager; there is no Shannon AT port. MMBroadbandModem's generic
++ * initialization and enabling open the primary AT port and fail with
++ * "Couldn't get primary port", and its generic capability loader asks the
++ * modem over AT or QCDM, a failure the Modem interface treats as fatal. When
++ * the modem has no primary AT port, skip the AT-only steps and report the
++ * capabilities this plugin already declares (2G/3G/4G/5G modes; PS, EPS and
++ * 5GS networks). With an AT port nothing changes. */
++
++static MMIfaceModemInterface *iface_modem_parent = NULL;
++
++static gboolean
++has_primary_at_port (gpointer self)
++{
++    return !!mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
++}
++
++static MMModemCapability
++load_current_capabilities_finish (MMIfaceModem  *self,
++                                  GAsyncResult  *res,
++                                  GError       **error)
++{
++    GError *inner = NULL;
++    gssize  value;
++
++    value = g_task_propagate_int (G_TASK (res), &inner);
++    if (inner) {
++        g_propagate_error (error, inner);
++        return MM_MODEM_CAPABILITY_NONE;
++    }
++    return (MMModemCapability) value;
++}
++
+ static void
++parent_load_current_capabilities_ready (MMIfaceModem *self,
++                                        GAsyncResult *res,
++                                        GTask        *task)
++{
++    GError            *error = NULL;
++    MMModemCapability  caps;
++
++    caps = iface_modem_parent->load_current_capabilities_finish (self, res, &error);
++    if (error)
++        g_task_return_error (task, error);
++    else
++        g_task_return_int (task, caps);
++    g_object_unref (task);
++}
++
++static void
++load_current_capabilities (MMIfaceModem        *self,
++                           GAsyncReadyCallback  callback,
++                           gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    if (has_primary_at_port (self) ||
++        mm_base_modem_peek_port_qcdm (MM_BASE_MODEM (self))) {
++        iface_modem_parent->load_current_capabilities (
++            self, (GAsyncReadyCallback) parent_load_current_capabilities_ready, task);
++        return;
++    }
++    mm_obj_dbg (self, "no AT or QCDM port: reporting the SIT 3GPP capabilities");
++    g_task_return_int (task, (gssize) (MM_MODEM_CAPABILITY_GSM_UMTS |
++                                       MM_MODEM_CAPABILITY_LTE |
++                                       MM_MODEM_CAPABILITY_5GNR));
++    g_object_unref (task);
++}
++
++static gpointer
++initialization_started_finish (MMBroadbandModem  *self,
++                               GAsyncResult      *res,
++                               GError           **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++parent_initialization_started_ready (MMBroadbandModem *self,
++                                     GAsyncResult     *res,
++                                     GTask            *task)
++{
++    GError   *error = NULL;
++    gpointer  ports_ctx;
++
++    ports_ctx = MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_samsung_sit_parent_class)->initialization_started_finish (
++        self, res, &error);
++    if (error)
++        g_task_return_error (task, error);
++    else
++        /* The parent's context, released by its initialization_stopped(). */
++        g_task_return_pointer (task, ports_ctx, NULL);
++    g_object_unref (task);
++}
++
++static void
++initialization_started (MMBroadbandModem    *self,
++                        GAsyncReadyCallback  callback,
++                        gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    if (has_primary_at_port (self)) {
++        MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_samsung_sit_parent_class)->initialization_started (
++            self, (GAsyncReadyCallback) parent_initialization_started_ready, task);
++        return;
++    }
++    mm_obj_dbg (self, "no primary AT port: initializing over SIT only");
++    g_task_return_pointer (task, NULL, NULL);
++    g_object_unref (task);
++}
++
++static gboolean
++enabling_started_finish (MMBroadbandModem  *self,
++                         GAsyncResult      *res,
++                         GError           **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++parent_enabling_started_ready (MMBroadbandModem *self,
++                               GAsyncResult     *res,
++                               GTask            *task)
++{
++    GError *error = NULL;
++
++    if (!MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_samsung_sit_parent_class)->enabling_started_finish (
++            self, res, &error))
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++enabling_started (MMBroadbandModem    *self,
++                  GAsyncReadyCallback  callback,
++                  gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    if (has_primary_at_port (self)) {
++        MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_samsung_sit_parent_class)->enabling_started (
++            self, (GAsyncReadyCallback) parent_enabling_started_ready, task);
++        return;
++    }
++    mm_obj_dbg (self, "no primary AT port: enabling over SIT only");
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
+ iface_modem_init (MMIfaceModemInterface *iface)
+ {
++    iface_modem_parent = g_type_interface_peek_parent (iface);
++
++    iface->load_current_capabilities = load_current_capabilities;
++    iface->load_current_capabilities_finish = load_current_capabilities_finish;
+     iface->load_power_state = load_power_state;
+     iface->load_power_state_finish = load_power_state_finish;
+     iface->load_signal_quality = load_signal_quality;
+@@ -3691,4 +3853,9 @@
+     broadband_modem_class->create_sms = create_sms;
+     broadband_modem_class->enabling_modem_init = NULL;
+     broadband_modem_class->enabling_modem_init_finish = NULL;
++    /* SIT-only modems: see initialization_started(). */
++    broadband_modem_class->initialization_started = initialization_started;
++    broadband_modem_class->initialization_started_finish = initialization_started_finish;
++    broadband_modem_class->enabling_started = enabling_started;
++    broadband_modem_class->enabling_started_finish = enabling_started_finish;
+ }
